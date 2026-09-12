@@ -37,16 +37,19 @@ export class MemoryCortex {
     private aiClient: GoogleGenAI;
     private collectionName: string;
     private initialized: boolean = false;
+    private embeddingModel: string;
 
     constructor(
         qdrantUrl: string,
         qdrantApiKey: string,
         aiClient: GoogleGenAI,
-        collectionName: string = "pwa_swarm_dev_cortex_v2" // Changed to a specific dev collection to prevent cross-contamination
+        collectionName: string = "pwa_swarm_dev_cortex_v2", // Changed to a specific dev collection to prevent cross-contamination
+        embeddingModel: string = "text-embedding-004"
     ) {
         this.qdrant = new QdrantClient({ url: qdrantUrl, apiKey: qdrantApiKey });
         this.aiClient = aiClient;
         this.collectionName = collectionName;
+        this.embeddingModel = embeddingModel;
     }
 
     /**
@@ -124,7 +127,7 @@ export class MemoryCortex {
      */
     private async getEmbedding(text: string): Promise<number[]> {
         const response = await this.aiClient.models.embedContent({
-            model: 'text-embedding-004',
+            model: this.embeddingModel,
             contents: text,
         });
         return response.embeddings?.[0]?.values || [];

@@ -8,6 +8,7 @@ export interface RouteConfig {
     role: string;
     systemInstruction: string;
     apiKey: string;
+    modelName?: string;
     aiClient?: GoogleGenAI;
 }
 
@@ -22,18 +23,18 @@ export class ModelRouter {
         switch (config.complexity) {
             case 'simple':
                 // Simple edits, data extraction
-                modelName = 'gemini-2.5-flash-8b';
+                modelName = config.modelName || 'default-simple-model';
                 break;
             case 'formatting':
                 // Formatting, structuring, moderate data tasks
-                modelName = 'gemini-2.5-flash';
+                modelName = config.modelName || 'default-formatting-model';
                 break;
             case 'complex':
                 // Complex reasoning, deep analysis
-                modelName = 'gemini-2.5-pro';
+                modelName = config.modelName || 'default-complex-model';
                 break;
             default:
-                modelName = 'gemini-2.5-flash';
+                modelName = config.modelName || 'default-model';
         }
 
         const agent = new Agent(

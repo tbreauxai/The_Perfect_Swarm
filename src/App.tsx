@@ -55,10 +55,14 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'keys'|'swarm'>('keys');
 
   const updateAgent = (id: string, field: string, value: string) => {
-    setSettings(prev => ({
-        ...prev,
-        agents: prev.agents.map(a => a.id === id ? { ...a, [field]: value } : a)
-    }));
+    setSettings(prev => {
+        const newSettings = {
+            ...prev,
+            agents: prev.agents.map(a => a.id === id ? { ...a, [field]: value } : a)
+        };
+        localStorage.setItem('swarm_settings', JSON.stringify(newSettings));
+        return newSettings;
+    });
   };
 
   // Load settings on mount

@@ -30,11 +30,7 @@ const defaultAi = new GoogleGenAI({
   }
 });
 
-// The Swarm configuration
-const models = {
-  default: "gemini-2.5-flash",
-  complex: "gemini-2.5-pro",
-};
+
 
 
 app.get('/api/config/status', (req, res) => {
