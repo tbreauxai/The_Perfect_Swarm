@@ -1,0 +1,40 @@
+{
+  "activeGoalId": "G2",
+  "goals": [
+    {
+      "id": "G1",
+      "description": "Purge irrelevant files & obsolete patch scripts from root and src directories",
+      "status": "completed",
+      "verificationCriteria": "All one-off ad-hoc scripts (*.cjs, test_*.js, *.backup) removed; core application files preserved and intact",
+      "evidence": "97 obsolete files deleted in git commit 571d287; tsc --noEmit and vite build passed."
+    },
+    {
+      "id": "G2",
+      "description": "Audit application logic, backend endpoints, and type definitions for errors",
+      "status": "in-progress",
+      "verificationCriteria": "Dependencies installed; TypeScript typecheck (tsc --noEmit) passes without errors; server/swarm error handling verified",
+      "evidence": null
+    },
+    {
+      "id": "G3",
+      "description": "Deduplicate logic and modularize backend services (swarm engine, providers, memory cortex)",
+      "status": "todo",
+      "verificationCriteria": "Clean separation of concerns across server.ts, swarm.ts, and helper modules with zero redundant prompt/provider boilerplate",
+      "evidence": null
+    },
+    {
+      "id": "G4",
+      "description": "Decompose monolithic App.tsx into modular frontend components",
+      "status": "todo",
+      "verificationCriteria": "App.tsx refactored into dedicated modules (SettingsModal, SwarmEventTimeline, AgentConfigurator, AnalysisViewer) with clean imports",
+      "evidence": null
+    },
+    {
+      "id": "G5",
+      "description": "End-to-end build verification, linter checks, and final validation",
+      "status": "todo",
+      "verificationCriteria": "Vite build (npm run build) succeeds; lint checks pass; verified clean workspace structure",
+      "evidence": null
+    }
+  ]
+}
