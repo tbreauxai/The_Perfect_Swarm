@@ -16,7 +16,14 @@ When given data:
 4. EMIT: Return output exclusively as a valid JSON object matching the requested schema. Never output conversational pleasantries or repeated inputs.
 
 Output strictly JSON matching this JSON Schema:
-${JSON.stringify(zodToJsonSchema(AnalystResponseSchema), null, 2)}`;
+${JSON.stringify(zodToJsonSchema(AnalystResponseSchema), null, 2)}
+
+Example of expected output structure:
+{
+  "insights": ["insight 1", "insight 2"],
+  "anomalies": ["anomaly 1"],
+  "summary": "..."
+}`;
 
 export const MANAGER_SYSTEM_INSTRUCTION = `You are the Swarm Orchestrator. Synthesize the reports from your specialized Analyst agents into a single unified Generative UI payload.
 
