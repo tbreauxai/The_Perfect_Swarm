@@ -6,11 +6,11 @@
   - [x] Implementation: Create a new file (e.g., `src/schemas.ts` or add to `server.ts`) defining the Zod schemas for Analyst and Manager nodes.
 - [x] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
-## Phase 2: Update Agent Prompts
-- [ ] Task: Integrate JSON schema instructions into system prompts
-  - [ ] Write Tests: Ensure prompt generation functions (if applicable) include the stringified schema or strict JSON requirements.
-  - [ ] Implementation: Update the `System Orchestrator`, `Analyst`, and `Manager` prompts in `swarm.ts` to strictly require JSON format matching the defined Zod schemas.
-- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+## Phase 2: Update Agent Prompts [checkpoint: 4861079]
+- [x] Task: Integrate JSON schema instructions into system prompts 4861079
+  - [x] Write Tests: Ensure prompt generation functions (if applicable) include the stringified schema or strict JSON requirements.
+  - [x] Implementation: Update the `System Orchestrator`, `Analyst`, and `Manager` prompts in `swarm.ts` to strictly require JSON format matching the defined Zod schemas.
+- [x] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
 ## Phase 3: Implement Runtime Validation
 - [ ] Task: Validate and handle LLM responses
