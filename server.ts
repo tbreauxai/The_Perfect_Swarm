@@ -80,14 +80,14 @@ app.post('/api/swarm/analyze', async (req, res) => {
         let key = '';
         let client = undefined;
         if (provider === 'gemini') {
-            key = settings?.geminiApiKey || process.env.GEMINI_API_KEY || '';
+            key = (settings?.geminiApiKey || process.env.GEMINI_API_KEY || '').trim();
             client = key ? new GoogleGenAI({ apiKey: key, httpOptions: { headers: { 'User-Agent': 'aistudio-build' } } }) : defaultAi;
         } else if (provider === 'groq') {
-            key = settings?.groqApiKey || process.env.GROQ_API_KEY || '';
+            key = (settings?.groqApiKey || process.env.GROQ_API_KEY || '').trim();
         } else if (provider === 'openrouter') {
-            key = settings?.openRouterApiKey || process.env.OPENROUTER_API_KEY || '';
+            key = (settings?.openRouterApiKey || process.env.OPENROUTER_API_KEY || '').trim();
         } else if (provider === 'mistral') {
-            key = settings?.mistralApiKey || process.env.MISTRAL_API_KEY || '';
+            key = (settings?.mistralApiKey || process.env.MISTRAL_API_KEY || '').trim();
         }
         return { key, client };
     }

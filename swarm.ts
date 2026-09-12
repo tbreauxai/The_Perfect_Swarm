@@ -84,7 +84,7 @@ export class Agent {
                     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
                         method: 'POST',
                         headers: {
-                            'Authorization': `Bearer ${this.apiKey}`,
+                            'Authorization': `Bearer ${this.apiKey.trim()}`,
                             'Content-Type': 'application/json',
                             'Accept': 'application/json'
                         },
@@ -123,7 +123,7 @@ export class Agent {
                     const response = await fetch(endpoint, {
                         method: 'POST',
                         headers: {
-                            'Authorization': `Bearer ${this.apiKey}`,
+                            'Authorization': `Bearer ${this.apiKey.trim()}`,
                             'Content-Type': 'application/json',
                             'Accept': 'application/json'
                         },
@@ -173,7 +173,7 @@ export class Agent {
                     const response = await fetch('https://models.github.ai/inference/chat/completions', {
                         method: 'POST',
                         headers: {
-                            'Authorization': `Bearer ${this.apiKey}`,
+                            'Authorization': `Bearer ${this.apiKey.trim()}`,
                             'Content-Type': 'application/json',
                             'Accept': 'application/json'
                         },
@@ -198,9 +198,11 @@ export class Agent {
                     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
                         method: 'POST',
                         headers: {
-                            'Authorization': `Bearer ${this.apiKey}`,
+                            'Authorization': `Bearer ${this.apiKey.trim()}`,
                             'Content-Type': 'application/json',
-                            'Accept': 'application/json'
+                            'Accept': 'application/json',
+                            'HTTP-Referer': 'http://localhost:3000',
+                            'X-Title': 'The Perfect Swarm'
                         },
                         body: JSON.stringify({
                             model: this.modelName,
