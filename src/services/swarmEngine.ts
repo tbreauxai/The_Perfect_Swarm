@@ -158,6 +158,18 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 const analystPrompt = `Task: ${task}\nMetadata: ${JSON.stringify(profile)}\nHistorical Baselines: ${historicalContext}\nData Chunk [${i + 1}/${chunks.length}]:\n${chunk}`;
 
                 return analyst.run(analystPrompt, context, { responseMimeType: "application/json" })
+                    .then(rawOutput => {
+                        const parsed = AnalystResponseSchema.safeParse(rawOutput);
+                        if (!parsed.success) {
+                            console.warn(`[${analyst.role}] Output failed Zod schema validation:`, parsed.error);
+                            return {
+                                insights: [`${analyst.role} provided invalid schema. Validation errors: ${parsed.error.errors.map(e => e.message).join(', ')}`],
+                                anomalies: [],
+                                summary: "Schema validation failed."
+                            };
+                        }
+                        return parsed.data;
+                    })
                     .catch(err => ({
                         insights: [`${analyst.role} was unable to process this chunk due to API constraints.`],
                         anomalies: [],
@@ -197,15 +209,39 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         });
 
         try {
+            let parsedManagerOutput = orchestratorPlan;
             if (typeof orchestratorPlan === "string") {
                 const cleanPlan = orchestratorPlan.replace(/^\`\`\`json\s*/, '').replace(/\s*\`\`\`$/, '').replace(/^\`\`\`\s*/, '');
-                finalAnalysis = JSON.parse(cleanPlan);
+                parsedManagerOutput = JSON.parse(cleanPlan);
+            }
+            
+            const parsed = ManagerResponseSchema.safeParse(parsedManagerOutput);
+            if (!parsed.success) {
+                console.warn("[Manager] Output failed Zod schema validation:", parsed.error);
+                finalAnalysis = { 
+                    ui_title: "Validation Error",
+                    components: [
+                        {
+                            id: "error1",
+                            type: "InsightList",
+                            props: {
+                                title: "Schema Validation Failed",
+                                insights: parsed.error.errors.map(e => ({ type: "error", message: e.message }))
+                            }
+                        }
+                    ]
+                };
             } else {
-                finalAnalysis = orchestratorPlan;
+                finalAnalysis = parsed.data;
             }
         } catch (e) {
             console.error("JSON Parse error:", e);
-            finalAnalysis = { error: "Failed to generate structured UI payload.", raw: orchestratorPlan };
+            finalAnalysis = { 
+                ui_title: "JSON Parse Error", 
+                components: [
+                    { id: "e1", type: "InsightList", props: { title: "Error", insights: [{ type: "error", message: "Failed to parse orchestrator output as JSON." }] } }
+                ] 
+            };
         }
     } catch (swarmErr) {
         console.error("Swarm execution failed:", swarmErr);
