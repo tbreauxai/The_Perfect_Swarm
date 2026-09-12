@@ -1,0 +1,6 @@
+{
+  "name": "AI Swarm Data Analyzer",
+  "description": "An AI swarm controller to parse and analyze complex data using specialized LLM agents.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
