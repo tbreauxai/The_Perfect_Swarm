@@ -1,7 +1,7 @@
 # Implementation Plan: Structured JSON Schemas
 
 ## Phase 1: Define Zod Schemas
-- [ ] Task: Define schemas in shared types
+- [x] Task: Define schemas in shared types 9b95e1c
   - [ ] Write Tests: Create unit tests for Zod schema validation (e.g. testing valid/invalid Analyst outputs).
   - [ ] Implementation: Create a new file (e.g., `src/schemas.ts` or add to `server.ts`) defining the Zod schemas for Analyst and Manager nodes.
 - [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
