@@ -24,9 +24,13 @@ test('AnalystResponseSchema rejects invalid output', () => {
 
 test('ManagerResponseSchema validates correct output', () => {
   const validOutput = {
-    synthesis: 'A synthesized report',
-    action_plan: [
-      { step: 'Step 1', description: 'Description 1' }
+    ui_title: 'Dashboard',
+    components: [
+      {
+        id: '1',
+        type: 'MetricCard',
+        props: { title: 'T', value: 'V', trend: 'up' }
+      }
     ]
   };
   

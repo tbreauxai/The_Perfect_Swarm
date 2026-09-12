@@ -7,13 +7,48 @@ export const AnalystResponseSchema = z.object({
 });
 
 export const ManagerResponseSchema = z.object({
-  synthesis: z.string().describe("The final synthesized markdown report combining insights from all analysts"),
-  action_plan: z.array(
-    z.object({
-      step: z.string(),
-      description: z.string()
-    })
-  ).describe("A list of actionable steps derived from the analysis")
+  ui_title: z.string().describe("Dashboard Title"),
+  components: z.array(
+    z.discriminatedUnion("type", [
+      z.object({
+        id: z.string(),
+        type: z.literal("MetricCard"),
+        props: z.object({
+          title: z.string(),
+          value: z.string(),
+          subtitle: z.string().optional(),
+          trend: z.enum(["up", "down", "neutral"]).optional()
+        })
+      }),
+      z.object({
+        id: z.string(),
+        type: z.literal("InsightList"),
+        props: z.object({
+          title: z.string(),
+          insights: z.array(
+            z.object({
+              type: z.enum(["success", "warning", "info", "error"]),
+              message: z.string()
+            })
+          )
+        })
+      }),
+      z.object({
+        id: z.string(),
+        type: z.literal("DataTable"),
+        props: z.object({
+          title: z.string(),
+          columns: z.array(
+            z.object({
+              key: z.string(),
+              header: z.string()
+            })
+          ),
+          rows: z.array(z.record(z.string(), z.any()))
+        })
+      })
+    ])
+  ).describe("Array of UI components to render the analysis")
 });
 
 export type AnalystResponse = z.infer<typeof AnalystResponseSchema>;
