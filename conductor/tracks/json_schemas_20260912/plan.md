@@ -13,8 +13,5 @@
 - [x] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
 ## Phase 3: Implement Runtime Validation
-- [ ] Task: Validate and handle LLM responses
-  - [ ] Write Tests: Mock LLM responses (valid, invalid JSON, hallucinated text) and test that the execution trace handles errors gracefully without crashing.
-  - [ ] Implementation: Use Zod `.safeParse()` on the parsed JSON output from providers in `swarm.ts`.
-  - [ ] Implementation: If parsing fails, construct an error object and append it to the trace instead of throwing a fatal error.
+- [x] Task: Validate and handle LLM responses 36d99d7
 - [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
