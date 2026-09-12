@@ -22,7 +22,29 @@ export const MANAGER_SYSTEM_INSTRUCTION = `You are the Swarm Orchestrator. Synth
 
 Instead of outputting raw text, you MUST output a Generative UI payload.
 Output strict JSON matching this JSON Schema:
-${JSON.stringify(zodToJsonSchema(ManagerResponseSchema), null, 2)}`;
+${JSON.stringify(zodToJsonSchema(ManagerResponseSchema), null, 2)}
+
+Example of expected output structure:
+{
+  "ui_title": "Dashboard Title",
+  "components": [
+    {
+      "id": "c1",
+      "type": "MetricCard",
+      "props": { "title": "...", "value": "...", "subtitle": "...", "trend": "up" }
+    },
+    {
+      "id": "c2",
+      "type": "InsightList",
+      "props": { "title": "...", "insights": [{ "type": "info", "message": "..." }] }
+    },
+    {
+      "id": "c3",
+      "type": "DataTable",
+      "props": { "title": "...", "columns": [{ "key": "c1", "header": "H1" }], "rows": [{ "c1": "v1" }] }
+    }
+  ]
+}`;
 
 export interface SwarmWorkflowParams {
     task: string;
@@ -211,8 +233,13 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         try {
             let parsedManagerOutput = orchestratorPlan;
             if (typeof orchestratorPlan === "string") {
-                const cleanPlan = orchestratorPlan.replace(/^\`\`\`json\s*/, '').replace(/\s*\`\`\`$/, '').replace(/^\`\`\`\s*/, '');
-                parsedManagerOutput = JSON.parse(cleanPlan);
+                let cleanText = (orchestratorPlan || "").replace(/\`\`\`(?:json)?/gi, '').trim();
+                const startIdx = cleanText.indexOf('{');
+                const endIdx = cleanText.lastIndexOf('}');
+                if (startIdx !== -1 && endIdx !== -1) {
+                    cleanText = cleanText.substring(startIdx, endIdx + 1);
+                }
+                parsedManagerOutput = JSON.parse(cleanText || "{}");
             }
             
             const parsed = ManagerResponseSchema.safeParse(parsedManagerOutput);
@@ -236,10 +263,11 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             }
         } catch (e) {
             console.error("JSON Parse error:", e);
+            console.error("Raw orchestratorPlan was:", orchestratorPlan);
             finalAnalysis = { 
                 ui_title: "JSON Parse Error", 
                 components: [
-                    { id: "e1", type: "InsightList", props: { title: "Error", insights: [{ type: "error", message: "Failed to parse orchestrator output as JSON." }] } }
+                    { id: "e1", type: "InsightList", props: { title: "Error", insights: [{ type: "error", message: "Failed to parse orchestrator output as JSON. Check console for raw output." }] } }
                 ] 
             };
         }
