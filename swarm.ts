@@ -94,7 +94,7 @@ export class Agent {
                             max_tokens: 1500,
                             response_format: config?.responseMimeType === 'application/json' ? { type: 'json_object' } : undefined
                         }),
-                        signal: AbortSignal.timeout(45000)
+                        signal: AbortSignal.timeout(300000)
                     });
                     
                     if (!response.ok) {
@@ -134,7 +134,7 @@ export class Agent {
                             max_tokens: 1500,
                             response_format: config?.responseMimeType === 'application/json' ? { type: 'json_object' } : undefined
                         }),
-                        signal: AbortSignal.timeout(45000)
+                        signal: AbortSignal.timeout(300000)
                     });
                     
                     // Diagnostic Logs for the user
@@ -180,7 +180,7 @@ export class Agent {
                             'Accept': 'application/json'
                         },
                         body: JSON.stringify(bodyParams),
-                        signal: AbortSignal.timeout(45000)
+                        signal: AbortSignal.timeout(300000)
                     });
 
                     if (!response.ok) {
@@ -226,7 +226,7 @@ export class Agent {
                             max_tokens: 1500,
                             response_format: config?.responseMimeType === 'application/json' ? { type: 'json_object' } : undefined
                         }),
-                        signal: AbortSignal.timeout(45000)
+                        signal: AbortSignal.timeout(300000)
                     });
                     
                     if (!response.ok) {
