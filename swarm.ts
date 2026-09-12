@@ -189,6 +189,19 @@ export class Agent {
                     textOutput = data?.choices?.[0]?.message?.content || '';
                 }
                 else if (this.provider === 'openrouter') {
+                    const cleanKey = (this.apiKey || '')
+                        .replace(/^(?:Bearer\s*:?|Token\s*:?)+/i, '')
+                        .replace(/["'`<>]/g, '')
+                        .trim();
+
+                    if (!cleanKey) {
+                        throw new Error(`Missing OpenRouter API key for ${this.role}. Please configure an OpenRouter API key starting with 'sk-or-v1-' in settings.`);
+                    }
+
+                    if (!cleanKey.startsWith('sk-or-v1-')) {
+                        throw new Error(`Invalid OpenRouter key format for ${this.role}. OpenRouter keys must begin with 'sk-or-v1-'. If you entered an OpenAI key (sk-...), please obtain a valid OpenRouter key from openrouter.ai/keys.`);
+                    }
+
                     const messages: any[] = [];
                     if (this.systemInstruction) {
                         messages.push({ role: 'system', content: this.systemInstruction });
@@ -198,7 +211,7 @@ export class Agent {
                     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
                         method: 'POST',
                         headers: {
-                            'Authorization': `Bearer ${this.apiKey.trim()}`,
+                            'Authorization': `Bearer ${cleanKey}`,
                             'Content-Type': 'application/json',
                             'Accept': 'application/json',
                             'HTTP-Referer': 'http://localhost:3000',
