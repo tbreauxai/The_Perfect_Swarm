@@ -184,8 +184,9 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                         const parsed = AnalystResponseSchema.safeParse(rawOutput);
                         if (!parsed.success) {
                             console.warn(`[${analyst.role}] Output failed Zod schema validation:`, parsed.error);
+                            const issues = parsed.error.errors || parsed.error.issues || [];
                             return {
-                                insights: [`${analyst.role} provided invalid schema. Validation errors: ${parsed.error.errors.map(e => e.message).join(', ')}`],
+                                insights: [`${analyst.role} provided invalid schema. Validation errors: ${issues.map((e: any) => e.message).join(', ')}`],
                                 anomalies: [],
                                 summary: "Schema validation failed."
                             };
@@ -245,6 +246,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             const parsed = ManagerResponseSchema.safeParse(parsedManagerOutput);
             if (!parsed.success) {
                 console.warn("[Manager] Output failed Zod schema validation:", parsed.error);
+                const issues = parsed.error.errors || parsed.error.issues || [];
                 finalAnalysis = { 
                     ui_title: "Validation Error",
                     components: [
@@ -253,7 +255,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                             type: "InsightList",
                             props: {
                                 title: "Schema Validation Failed",
-                                insights: parsed.error.errors.map(e => ({ type: "error", message: e.message }))
+                                insights: issues.map((e: any) => ({ type: "error", message: e.message }))
                             }
                         }
                     ]
