@@ -76,18 +76,23 @@ app.post('/api/swarm/analyze', async (req, res) => {
     // Extract dynamic agents from settings payload
     const rawAgents = settings?.agents || [];
     
+    function sanitizeKey(k: string | undefined): string {
+        if (!k) return '';
+        return k.replace(/^Bearer\s+/i, '').replace(/["']/g, '').trim();
+    }
+
     function resolveProvider(provider: string) {
         let key = '';
         let client = undefined;
         if (provider === 'gemini') {
-            key = (settings?.geminiApiKey || process.env.GEMINI_API_KEY || '').trim();
+            key = sanitizeKey(settings?.geminiApiKey || process.env.GEMINI_API_KEY);
             client = key ? new GoogleGenAI({ apiKey: key, httpOptions: { headers: { 'User-Agent': 'aistudio-build' } } }) : defaultAi;
         } else if (provider === 'groq') {
-            key = (settings?.groqApiKey || process.env.GROQ_API_KEY || '').trim();
+            key = sanitizeKey(settings?.groqApiKey || process.env.GROQ_API_KEY);
         } else if (provider === 'openrouter') {
-            key = (settings?.openRouterApiKey || process.env.OPENROUTER_API_KEY || '').trim();
+            key = sanitizeKey(settings?.openRouterApiKey || process.env.OPENROUTER_API_KEY);
         } else if (provider === 'mistral') {
-            key = (settings?.mistralApiKey || process.env.MISTRAL_API_KEY || '').trim();
+            key = sanitizeKey(settings?.mistralApiKey || process.env.MISTRAL_API_KEY);
         }
         return { key, client };
     }
