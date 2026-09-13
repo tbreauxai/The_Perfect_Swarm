@@ -1,40 +1,20 @@
-{
-  "activeGoalId": null,
-  "goals": [
-    {
-      "id": "P5-G1",
-      "description": "Critic Context Awareness & Historical Baseline Enforcement in AnalysisLifecycle",
-      "status": "completed",
-      "verificationCriteria": "AnalysisLifecycle passes historicalBaselines and few-shot exemplars to Critic prompt; Critic audits compliance against past lessons and flags violations",
-      "evidence": "AnalysisLifecycle extracts historicalBaselines and injects explicit [Historical Baselines & Past Lessons] section before [Raw Data]; verified via Step 26d in test-portable-swarm.ts"
-    },
-    {
-      "id": "P5-G2",
-      "description": "Extended Zero-Dependency Analysis Tools (data_filter, string_similarity, date_math)",
-      "status": "completed",
-      "verificationCriteria": "src/swarm/tools/ contains data_filter, string_similarity, and date_math; registered in globalToolRegistry and exported via ./tools subpath",
-      "evidence": "dataFilterTool, stringSimilarityTool, and dateMathTool added to src/swarm/tools/builtin.ts, registered in standardBuiltinTools, exported via ./tools; verified via Step 26a-26c in test-portable-swarm.ts"
-    },
-    {
-      "id": "P5-G3",
-      "description": "Transparent Local File Persistence in MemoryCortex (persistPath)",
-      "status": "completed",
-      "verificationCriteria": "MemoryCortexConfig supports optional persistPath to transparently load and persist the fallbackStore across process lifecycles when Qdrant is offline",
-      "evidence": "MemoryCortexConfig supports persistPath and autoSave; auto-loads snapshots on initialize(); auto-saves on store, rateMemory, consolidate, and import; saveToFile/loadFromFile implemented; verified via Step 26e in test-portable-swarm.ts"
-    },
-    {
-      "id": "P5-G4",
-      "description": "End-to-End Validation Suite (Step 26 in test-portable-swarm.ts)",
-      "status": "completed",
-      "verificationCriteria": "Step 26 in test-portable-swarm.ts verifies extended tools, critic historical baseline enforcement, and transparent persistPath operation",
-      "evidence": "Step 26 in test-portable-swarm.ts verifies all 5 aspects with zero failures; all 26 steps pass cleanly"
-    },
-    {
-      "id": "P5-G5",
-      "description": "Full Dual Build, Typecheck, Distribution Verification, and Git Release",
-      "status": "completed",
-      "verificationCriteria": "Clean tsc --noEmit, Vite dual build generates all ESM/CJS bundles + declarations, npm test passes 100%, changes committed and pushed to origin/main",
-      "evidence": "Clean tsc --noEmit (0 errors), npm run build:swarm generated all ESM/CJS bundles and .d.ts declarations, npm test passed all 5 test suites (portable, simulation, dist, cli, server)"
-    }
-  ]
-}
+[
+  {
+    "id": "goal-api-logic",
+    "description": "Implement the API fetching logic in providerService.ts for all 5 providers (OpenRouter, Groq, Gemini, Mistral, GitHub Models) to retrieve available models.",
+    "status": "completed",
+    "verification": "Functions are implemented and exported, correctly hitting the respective endpoints and returning an array of model names."
+  },
+  {
+    "id": "goal-ui-state",
+    "description": "Add React state to SettingsModal.tsx to manage the dynamic model lists, loading states, and error messages for each provider.",
+    "status": "completed",
+    "verification": "React state hooks are present and wired up to the API functions."
+  },
+  {
+    "id": "goal-ui-dropdown",
+    "description": "Replace the free-text model input with a <select> dropdown in SettingsModal.tsx that populates with the fetched models.",
+    "status": "completed",
+    "verification": "The UI successfully displays a dropdown menu containing the dynamically fetched models for the selected provider."
+  }
+]
