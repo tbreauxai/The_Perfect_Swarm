@@ -1,5 +1,7 @@
 import { QdrantClient } from '@qdrant/js-client-rest';
 import { GoogleGenAI } from '@google/genai';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 export interface MemoryMetadata {
     appId?: string;
@@ -218,6 +220,8 @@ export interface MemoryCortexConfig {
     isolatedStore?: boolean;
     autoConsolidateThreshold?: number;
     autoConsolidationOptions?: ConsolidationOptions;
+    persistPath?: string;
+    autoSave?: boolean;
 }
 
 /**
@@ -242,6 +246,9 @@ export class MemoryCortex {
     private storesSinceConsolidation: number = 0;
     private autoConsolidateThreshold: number = 50;
     private autoConsolidationOptions?: ConsolidationOptions;
+    private persistPath?: string;
+    private autoSave: boolean = true;
+    private isAutoLoading: boolean = false;
 
     static clearFallbackStore(collectionName: string = "pwa_swarm_dev_cortex_v2"): void {
         const store = MemoryCortex.globalFallbackStores.get(collectionName);
@@ -255,6 +262,8 @@ export class MemoryCortex {
         this.defaultAppId = config.defaultAppId || "default";
         this.autoConsolidateThreshold = config.autoConsolidateThreshold !== undefined ? config.autoConsolidateThreshold : 50;
         this.autoConsolidationOptions = config.autoConsolidationOptions;
+        this.persistPath = config.persistPath;
+        this.autoSave = config.autoSave !== false;
 
         if (config.isolatedStore) {
             this.fallbackStore = [];
@@ -304,6 +313,7 @@ export class MemoryCortex {
         if (this.initialized) return true;
         if (!this.qdrant || !this.isAvailable) {
             this.initialized = true;
+            await this.loadPersistFileIfConfigured();
             return true;
         }
 
@@ -357,12 +367,42 @@ export class MemoryCortex {
             await this.ensurePayloadIndex("verified", "bool");
 
             this.initialized = true;
+            await this.loadPersistFileIfConfigured();
             return true;
         } catch (error: any) {
             console.warn(`[MemoryCortex] Initialization failed: ${error.message || error}. Falling back to ephemeral in-memory vector store.`);
             this.isAvailable = false;
             this.initialized = true;
+            await this.loadPersistFileIfConfigured();
             return true;
+        }
+    }
+
+    private async loadPersistFileIfConfigured(): Promise<void> {
+        if (!this.persistPath) return;
+        try {
+            if (fs.existsSync(this.persistPath)) {
+                const raw = fs.readFileSync(this.persistPath, 'utf-8');
+                if (raw.trim().length > 0) {
+                    this.isAutoLoading = true;
+                    try {
+                        await this.importMemories(raw, { deduplicate: true, recomputeVectors: false });
+                    } finally {
+                        this.isAutoLoading = false;
+                    }
+                }
+            }
+        } catch (err: any) {
+            console.warn(`[MemoryCortex] Auto-load from '${this.persistPath}' failed: ${err.message || err}`);
+        }
+    }
+
+    private async savePersistFileIfConfigured(): Promise<void> {
+        if (!this.persistPath || !this.autoSave || this.isAutoLoading) return;
+        try {
+            await this.saveToFile(this.persistPath);
+        } catch (err: any) {
+            console.warn(`[MemoryCortex] Auto-save to '${this.persistPath}' failed: ${err.message || err}`);
         }
     }
 
@@ -534,6 +574,7 @@ export class MemoryCortex {
                 this.storesSinceConsolidation = 0;
                 await this.consolidateMemories(this.autoConsolidationOptions);
             }
+            await this.savePersistFileIfConfigured();
         }
 
         return storedId;
@@ -586,6 +627,7 @@ export class MemoryCortex {
                     await this.consolidateMemories(this.autoConsolidationOptions);
                 }
 
+                await this.savePersistFileIfConfigured();
                 return points.map(p => p.id as string);
             } catch (err: any) {
                 console.warn(`[MemoryCortex] StoreBatch Qdrant error: ${err.message || err}. Falling back to in-memory store.`);
@@ -625,6 +667,7 @@ export class MemoryCortex {
                         ratedAt: new Date().toISOString()
                     }
                 });
+                await this.savePersistFileIfConfigured();
                 return true;
             } catch (err: any) {
                 console.warn(`[MemoryCortex] RateMemory Qdrant error: ${err.message || err}`);
@@ -638,6 +681,7 @@ export class MemoryCortex {
             point.payload.verified = normalizedRating >= 0.8;
             point.payload.feedback = feedback || undefined;
             point.payload.ratedAt = new Date().toISOString();
+            await this.savePersistFileIfConfigured();
             return true;
         }
 
@@ -903,6 +947,10 @@ export class MemoryCortex {
             }
         }
 
+        if (prunedIds.length > 0) {
+            await this.savePersistFileIfConfigured();
+        }
+
         return {
             inspected,
             pruned: prunedIds.length,
@@ -1009,6 +1057,39 @@ export class MemoryCortex {
     async exportJsonl(options?: ExportMemoriesOptions): Promise<string> {
         const snapshot = await this.exportMemories(options);
         return snapshot.memories.map(m => JSON.stringify(m)).join('\n');
+    }
+
+    /**
+     * Saves all cortex memories to a local snapshot file (JSON or JSONL based on extension).
+     */
+    async saveToFile(filePath?: string): Promise<string> {
+        const targetPath = filePath || this.persistPath;
+        if (!targetPath) {
+            throw new Error("[MemoryCortex] saveToFile requires a filePath or configured persistPath");
+        }
+        const dir = path.dirname(targetPath);
+        if (dir && !fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
+        const isJsonl = targetPath.endsWith('.jsonl');
+        const content = isJsonl ? await this.exportJsonl() : await this.exportJson();
+        fs.writeFileSync(targetPath, content, 'utf-8');
+        return targetPath;
+    }
+
+    /**
+     * Loads memories from a local snapshot file (JSON or JSONL) into the cortex.
+     */
+    async loadFromFile(filePath?: string, options?: ImportMemoriesOptions): Promise<ImportMemoriesResult> {
+        const targetPath = filePath || this.persistPath;
+        if (!targetPath) {
+            throw new Error("[MemoryCortex] loadFromFile requires a filePath or configured persistPath");
+        }
+        if (!fs.existsSync(targetPath)) {
+            throw new Error(`[MemoryCortex] Snapshot file not found: ${targetPath}`);
+        }
+        const raw = fs.readFileSync(targetPath, 'utf-8');
+        return await this.importMemories(raw, options);
     }
 
     /**
@@ -1162,6 +1243,10 @@ export class MemoryCortex {
             }
         }
 
+        if (!this.isAutoLoading && imported > 0) {
+            await this.savePersistFileIfConfigured();
+        }
+
         return {
             imported,
             skipped,
@@ -1176,6 +1261,11 @@ export class MemoryCortex {
     async wipeCollection(): Promise<boolean> {
         this.fallbackStore.length = 0;
         this.storesSinceConsolidation = 0;
+        if (this.persistPath && fs.existsSync(this.persistPath)) {
+            try {
+                fs.unlinkSync(this.persistPath);
+            } catch {}
+        }
         if (!this.qdrant) {
             this.initialized = false;
             return true;

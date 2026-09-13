@@ -187,19 +187,27 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     // Unconditionally bind MemoryCortex with fallback to process-level in-memory learning
     let memoryCortex: MemoryCortex = params.cortex || settings?.cortex;
     if (!memoryCortex) {
+        const persistPath = settings?.persistPath;
+        const autoSave = settings?.autoSave;
         if (qdrantUrl) {
             try {
                 memoryCortex = new MemoryCortex({
                     url: qdrantUrl,
                     apiKey: qdrantApiKey,
                     aiClient: defaultAi,
-                    defaultAppId: targetAppId
+                    defaultAppId: targetAppId,
+                    persistPath,
+                    autoSave
                 });
             } catch {
-                memoryCortex = getOrCreateDefaultCortex(targetAppId, defaultAi);
+                memoryCortex = persistPath
+                    ? new MemoryCortex({ defaultAppId: targetAppId, aiClient: defaultAi, persistPath, autoSave })
+                    : getOrCreateDefaultCortex(targetAppId, defaultAi);
             }
         } else {
-            memoryCortex = getOrCreateDefaultCortex(targetAppId, defaultAi);
+            memoryCortex = persistPath
+                ? new MemoryCortex({ defaultAppId: targetAppId, aiClient: defaultAi, persistPath, autoSave })
+                : getOrCreateDefaultCortex(targetAppId, defaultAi);
         }
     }
 
@@ -397,18 +405,19 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                         task,
                         fastPath: true
                     };
-                    memoryCortex.store(content, meta)
-                        .then(storedId => {
-                            if (params.onMemoryLearned) {
-                                params.onMemoryLearned({
-                                    appId: targetAppId,
-                                    content,
-                                    id: storedId,
-                                    metadata: meta
-                                });
-                            }
-                        })
-                        .catch(() => {});
+                    try {
+                        const storedId = await memoryCortex.store(content, meta);
+                        if (params.onMemoryLearned) {
+                            params.onMemoryLearned({
+                                appId: targetAppId,
+                                content,
+                                id: storedId,
+                                metadata: meta
+                            });
+                        }
+                    } catch (err: any) {
+                        console.warn(`[Fast-Path] Memory storage failed:`, err);
+                    }
                 }
             }
 
@@ -593,10 +602,15 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             });
 
             lifecycleResult = await lifecycle.executeAndVerify(
-                { task, dataSample: rawInput.substring(0, 3000), analystReports: compiledReports },
+                {
+                    task,
+                    dataSample: rawInput.substring(0, 3000),
+                    analystReports: compiledReports,
+                    historicalBaselines: historicalContext
+                },
                 context,
                 dynamicPrompt,
-                "Verify whether this analysis faithfully represents the analyst reports and data without hallucinations or missing key metrics."
+                "Verify whether this analysis faithfully represents the analyst reports and data, and strictly complies with all historical baselines and past lessons without hallucinations or omissions."
             );
 
             parsedManagerOutput = lifecycleResult.finalProposal;
@@ -629,18 +643,19 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 fastPath: false
             };
 
-            memoryCortex.store(content, meta)
-                .then(storedId => {
-                    if (params.onMemoryLearned) {
-                        params.onMemoryLearned({
-                            appId: targetAppId,
-                            content,
-                            id: storedId,
-                            metadata: meta
-                        });
-                    }
-                })
-                .catch(() => {});
+            try {
+                const storedId = await memoryCortex.store(content, meta);
+                if (params.onMemoryLearned) {
+                    params.onMemoryLearned({
+                        appId: targetAppId,
+                        content,
+                        id: storedId,
+                        metadata: meta
+                    });
+                }
+            } catch (err: any) {
+                console.warn(`[Swarm] Memory storage failed:`, err);
+            }
         }
     } catch (swarmErr) {
         console.error("Swarm execution failed:", swarmErr);

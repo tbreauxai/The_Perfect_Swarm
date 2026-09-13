@@ -42,4 +42,14 @@
 | P4-G4 | End-to-End Test Suite Validation (Step 25 in `test-portable-swarm.ts` & `test-cli.mjs`) | completed | Step 25 in `test-portable-swarm.ts` verifies client/presets; `test-cli.mjs` verifies snapshot commands; all 5 suites in `npm test` pass 100% |
 | P4-G5 | Full Dual Build, Typecheck, Distribution Verification, and Git Release | completed | Clean `tsc --noEmit` (0 errors), Vite dual build generates all ESM/CJS bundles + declarations, all 5 test suites pass |
 
+## Track: Phase 5 - Cognitive Refinement, Advanced Deterministic Tooling & Context-Aware Critic Verification
+
+| Goal ID | Description | Status | Verification |
+| --- | --- | --- | --- |
+| P5-G1 | Critic Context Awareness & Historical Baseline Enforcement in `AnalysisLifecycle` | completed | `AnalysisLifecycle` passes `historicalBaselines` to Critic prompt and audits compliance; verified via Step 26d in `test-portable-swarm.ts` |
+| P5-G2 | Extended Zero-Dependency Analysis Tools (`data_filter`, `string_similarity`, `date_math`) | completed | `src/swarm/tools/` extended tools registered in `globalToolRegistry` and exported via `./tools`; verified via Step 26a-26c in `test-portable-swarm.ts` |
+| P5-G3 | Transparent Local File Persistence in `MemoryCortex` (`persistPath`) | completed | `MemoryCortexConfig` supports `persistPath` and `autoSave`; auto-hydrates and auto-persists; `saveToFile`/`loadFromFile` available; verified via Step 26e in `test-portable-swarm.ts` |
+| P5-G4 | End-to-End Validation Suite (Step 26 in `test-portable-swarm.ts`) | completed | Step 26 verifies extended tools, critic baseline enforcement, and transparent file persistence; all 26 steps pass |
+| P5-G5 | Full Dual Build, Typecheck, Distribution Verification, and Git Release | completed | Clean `tsc --noEmit` (0 errors), Vite dual build generates all ESM/CJS bundles + declarations, all 5 test suites pass |
+
 

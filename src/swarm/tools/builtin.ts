@@ -280,9 +280,330 @@ export const jsonExtractTool: SwarmTool<
     }
 };
 
+/**
+ * Built-in data filtering and querying tool.
+ */
+export const dataFilterTool: SwarmTool<
+    { items?: any[]; data?: any[]; field?: string; filter?: { field?: string; operator?: string; value?: any }; operator?: '==' | '!=' | '>' | '>=' | '<' | '<=' | 'contains' | 'in'; value?: any; limit?: number; sortBy?: string; sortOrder?: 'asc' | 'desc' },
+    { matchedCount: number; totalCount: number; results: any[]; data: any[] }
+> = {
+    name: 'data_filter',
+    description: 'Filters an array of JSON objects based on condition operators (==, !=, >, >=, <, <=, contains, in).',
+    parameters: {
+        items: {
+            type: 'array',
+            description: 'Array of objects to filter',
+            required: true
+        },
+        field: {
+            type: 'string',
+            description: 'Field path to test (e.g. "status", "metrics.cpu")',
+            required: true
+        },
+        operator: {
+            type: 'string',
+            description: 'Comparison operator: "==", "!=", ">", ">=", "<", "<=", "contains", "in" (default: "==")',
+            required: false
+        },
+        value: {
+            type: 'string',
+            description: 'Value to compare against',
+            required: true
+        },
+        limit: {
+            type: 'number',
+            description: 'Maximum number of items to return',
+            required: false
+        }
+    },
+    execute(rawParams: any) {
+        const items = rawParams.items || rawParams.data;
+        const field = rawParams.field || rawParams.filter?.field;
+        const operator = rawParams.operator || rawParams.filter?.operator || '==';
+        const value = rawParams.value !== undefined ? rawParams.value : rawParams.filter?.value;
+        const limit = rawParams.limit;
+        const sortBy = rawParams.sortBy;
+        const sortOrder = rawParams.sortOrder || 'asc';
+
+        let array = items;
+        if (typeof items === 'string') {
+            try {
+                array = JSON.parse(items);
+            } catch {
+                throw new Error('data_filter: items must be an array of objects.');
+            }
+        }
+        if (!Array.isArray(array)) {
+            throw new Error('data_filter requires an array of items.');
+        }
+
+        let filtered = array.filter(item => {
+            const { found, value: itemVal } = extractJsonPath(item, field);
+            if (!found) return operator === '!=' || (operator === '==' && value === undefined);
+
+            switch (operator) {
+                case '==':
+                    return itemVal == value;
+                case '!=':
+                    return itemVal != value;
+                case '>':
+                    return Number(itemVal) > Number(value);
+                case '>=':
+                    return Number(itemVal) >= Number(value);
+                case '<':
+                    return Number(itemVal) < Number(value);
+                case '<=':
+                    return Number(itemVal) <= Number(value);
+                case 'contains':
+                    return String(itemVal).toLowerCase().includes(String(value).toLowerCase());
+                case 'in':
+                    return Array.isArray(value) ? value.includes(itemVal) : String(value).split(',').map((s: string) => s.trim()).includes(String(itemVal));
+                default:
+                    return itemVal == value;
+            }
+        });
+
+        if (sortBy) {
+            filtered.sort((a, b) => {
+                const valA = extractJsonPath(a, sortBy).value;
+                const valB = extractJsonPath(b, sortBy).value;
+                if (typeof valA === 'number' && typeof valB === 'number') {
+                    return sortOrder === 'desc' ? valB - valA : valA - valB;
+                }
+                return sortOrder === 'desc'
+                    ? String(valB).localeCompare(String(valA))
+                    : String(valA).localeCompare(String(valB));
+            });
+        }
+
+        const results = typeof limit === 'number' && limit > 0 ? filtered.slice(0, limit) : filtered;
+        return {
+            matchedCount: filtered.length,
+            totalCount: array.length,
+            results,
+            data: results
+        };
+    }
+};
+
+/**
+ * Computes Levenshtein edit distance between two strings.
+ */
+export function computeLevenshteinDistance(a: string, b: string): number {
+    const matrix: number[][] = [];
+    for (let i = 0; i <= b.length; i++) matrix[i] = [i];
+    for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
+
+    for (let i = 1; i <= b.length; i++) {
+        for (let j = 1; j <= a.length; j++) {
+            if (b.charAt(i - 1) === a.charAt(j - 1)) {
+                matrix[i][j] = matrix[i - 1][j - 1];
+            } else {
+                matrix[i][j] = Math.min(
+                    matrix[i - 1][j - 1] + 1,
+                    matrix[i][j - 1] + 1,
+                    matrix[i - 1][j] + 1
+                );
+            }
+        }
+    }
+    return matrix[b.length][a.length];
+}
+
+/**
+ * Built-in string similarity tool.
+ */
+export const stringSimilarityTool: SwarmTool<
+    any,
+    { similarity: number; metric: string; identical: boolean; jaccardSimilarity?: number; levenshteinSimilarity?: number }
+> = {
+    name: 'string_similarity',
+    description: 'Calculates text similarity score (0.0 to 1.0) using Jaccard word token overlap or normalized Levenshtein distance.',
+    parameters: {
+        string1: {
+            type: 'string',
+            description: 'First string to compare (or stringA)',
+            required: true
+        },
+        string2: {
+            type: 'string',
+            description: 'Second string to compare (or stringB)',
+            required: true
+        },
+        metric: {
+            type: 'string',
+            description: 'Similarity metric: "jaccard", "levenshtein", or "all" (default: "jaccard")',
+            required: false
+        }
+    },
+    execute(rawParams: any) {
+        const string1 = rawParams.string1 || rawParams.stringA || rawParams.a || rawParams.str1;
+        const string2 = rawParams.string2 || rawParams.stringB || rawParams.b || rawParams.str2;
+        const metric = rawParams.metric || 'jaccard';
+
+        if (typeof string1 !== 'string' || typeof string2 !== 'string') {
+            throw new Error('string_similarity requires two strings to compare.');
+        }
+
+        const maxLen = Math.max(string1.length, string2.length);
+        const dist = maxLen === 0 ? 0 : computeLevenshteinDistance(string1, string2);
+        const levSim = maxLen === 0 ? 1.0 : Number((1 - dist / maxLen).toFixed(4));
+
+        const tokenize = (s: string) => new Set(s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').trim().split(/\s+/).filter(Boolean));
+        const setA = tokenize(string1);
+        const setB = tokenize(string2);
+
+        let jaccardSim = 1.0;
+        if (setA.size === 0 && setB.size === 0) {
+            jaccardSim = 1.0;
+        } else if (setA.size === 0 || setB.size === 0) {
+            jaccardSim = 0.0;
+        } else {
+            let intersection = 0;
+            for (const token of setA) {
+                if (setB.has(token)) intersection++;
+            }
+            const union = new Set([...setA, ...setB]).size;
+            jaccardSim = Number((intersection / union).toFixed(4));
+        }
+
+        const identical = dist === 0;
+        let mainSim = jaccardSim;
+        if (metric === 'levenshtein') {
+            mainSim = levSim;
+        } else if (metric === 'all') {
+            mainSim = Number(((jaccardSim + levSim) / 2).toFixed(4));
+        }
+
+        return {
+            similarity: mainSim,
+            metric,
+            identical,
+            jaccardSimilarity: jaccardSim,
+            levenshteinSimilarity: levSim
+        };
+    }
+};
+
+/**
+ * Built-in date and duration calculator tool.
+ */
+export const dateMathTool: SwarmTool<
+    any,
+    any
+> = {
+    name: 'date_math',
+    description: 'Calculates the duration/difference between two dates or performs date arithmetic (add/subtract).',
+    parameters: {
+        startDate: {
+            type: 'string',
+            description: 'Starting date/timestamp in ISO or parseable format (or dateA)',
+            required: true
+        },
+        endDate: {
+            type: 'string',
+            description: 'Ending date/timestamp (or dateB)',
+            required: false
+        },
+        operation: {
+            type: 'string',
+            description: 'Operation: "diff", "add", or "subtract" (default: "diff")',
+            required: false
+        },
+        amount: {
+            type: 'number',
+            description: 'Amount to add or subtract when operation is "add" or "subtract"',
+            required: false
+        },
+        unit: {
+            type: 'string',
+            description: 'Unit: "seconds", "minutes", "hours", "days", "milliseconds" (default: "seconds")',
+            required: false
+        }
+    },
+    execute(rawParams: any) {
+        const operation = rawParams.operation || 'diff';
+        const rawStart = rawParams.startDate || rawParams.dateA || rawParams.start || rawParams.date;
+        const rawEnd = rawParams.endDate || rawParams.dateB || rawParams.end;
+        const unit = rawParams.unit || 'seconds';
+        const amount = rawParams.amount ?? 0;
+
+        const start = new Date(rawStart);
+        if (isNaN(start.getTime())) throw new Error(`date_math: Invalid startDate '${rawStart}'`);
+
+        if (operation === 'add' || operation === 'subtract') {
+            const multiplier = operation === 'subtract' ? -1 : 1;
+            let msOffset = 0;
+            switch (unit) {
+                case 'milliseconds':
+                    msOffset = amount;
+                    break;
+                case 'seconds':
+                    msOffset = amount * 1000;
+                    break;
+                case 'minutes':
+                    msOffset = amount * 60000;
+                    break;
+                case 'hours':
+                    msOffset = amount * 3600000;
+                    break;
+                case 'days':
+                default:
+                    msOffset = amount * 86400000;
+                    break;
+            }
+            const resDate = new Date(start.getTime() + (msOffset * multiplier));
+            return {
+                operation,
+                resultDate: resDate.toISOString(),
+                startIso: start.toISOString(),
+                amount,
+                unit
+            };
+        }
+
+        const end = rawEnd ? new Date(rawEnd) : new Date();
+        if (isNaN(end.getTime())) throw new Error(`date_math: Invalid endDate '${rawEnd}'`);
+
+        const diffMs = Math.abs(end.getTime() - start.getTime());
+        let difference: number;
+
+        switch (unit) {
+            case 'milliseconds':
+                difference = diffMs;
+                break;
+            case 'minutes':
+                difference = Number((diffMs / 60000).toFixed(2));
+                break;
+            case 'hours':
+                difference = Number((diffMs / 3600000).toFixed(2));
+                break;
+            case 'days':
+                difference = Number((diffMs / 86400000).toFixed(2));
+                break;
+            case 'seconds':
+            default:
+                difference = Number((diffMs / 1000).toFixed(2));
+                break;
+        }
+
+        return {
+            difference,
+            diff: difference,
+            unit,
+            isPast: (end.getTime() - start.getTime()) < 0,
+            startIso: start.toISOString(),
+            endIso: end.toISOString()
+        };
+    }
+};
+
 export const standardBuiltinTools: SwarmTool[] = [
     calculatorTool,
     statsSummaryTool,
     regexMatchTool,
-    jsonExtractTool
+    jsonExtractTool,
+    dataFilterTool,
+    stringSimilarityTool,
+    dateMathTool
 ];

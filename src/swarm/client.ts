@@ -14,6 +14,8 @@ export interface SwarmClientConfig {
     qdrantUrl?: string;
     qdrantApiKey?: string;
     enableDeepAnalysis?: boolean;
+    persistPath?: string;
+    autoSave?: boolean;
 }
 
 export interface AnalyzeRequest {
@@ -55,10 +57,20 @@ export class SwarmClient {
         this.defaultSettings = {
             appId: this.appId,
             enableDeepAnalysis: config.enableDeepAnalysis,
+            persistPath: config.persistPath,
+            autoSave: config.autoSave,
             ...(config.settings || {})
         };
 
-        if (config.qdrantUrl) {
+        if (config.persistPath) {
+            this.cortex = new MemoryCortex({
+                url: config.qdrantUrl,
+                apiKey: config.qdrantApiKey,
+                defaultAppId: this.appId,
+                persistPath: config.persistPath,
+                autoSave: config.autoSave
+            });
+        } else if (config.qdrantUrl) {
             this.cortex = new MemoryCortex({
                 url: config.qdrantUrl,
                 apiKey: config.qdrantApiKey,
@@ -274,6 +286,8 @@ export class SwarmClient {
             exportJson: (options?: ExportMemoriesOptions) => this.cortex.exportJson({ appId: this.appId, ...options }),
             exportJsonl: (options?: ExportMemoriesOptions) => this.cortex.exportJsonl({ appId: this.appId, ...options }),
             importSnapshot: (snapshot: MemorySnapshot | string, options?: ImportMemoriesOptions) => this.cortex.importMemories(snapshot, { targetAppId: this.appId, ...options }),
+            saveToFile: (filePath?: string) => this.cortex.saveToFile(filePath),
+            loadFromFile: (filePath?: string, options?: ImportMemoriesOptions) => this.cortex.loadFromFile(filePath, { targetAppId: this.appId, ...options }),
             consolidate: () => this.cortex.consolidateMemories({ appId: this.appId })
         };
     }

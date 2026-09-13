@@ -19,8 +19,10 @@
 - ⚡ **Zero-Qdrant In-Memory Persistence**: Unconditional MemoryCortex binding with fallback store sharing per collection, semantic deduplication, and few-shot exemplar distillation working 100% offline without external infrastructure.
 - 🔄 **Cross-Provider Critic & RLAIF Feedback Loop**: Automated verification loops dynamically select alternative provider analysts as critics to eliminate LLM self-affirmation bias, scores agent outputs, and captures verified feedback across multi-session executions.
 - 🏎️ **Fast-Path & Zero-Drift LRU Caching**: Instant sub-millisecond classification and caching for trivial or recurring payloads, saving 100% of LLM tokens and auto-persisting validated heuristics.
-- 🛠️ **Zero-Dependency Free Tool & Function Calling**: Deterministic tool execution engine (`calculator`, `stats_summary`, `regex_match`, `json_extract`, plus custom tools) without any external libraries.
-- 💾 **Portable Memory Snapshots & Cross-App Hydration**: One-line `exportMemories` and `importMemories` supporting JSON/JSONL format, target app ID remapping, vector preservation, and semantic deduplication.
+- 🛠️ **Zero-Dependency Free Tool & Function Calling**: Deterministic tool execution engine (`calculator`, `stats_summary`, `regex_match`, `json_extract`, `data_filter`, `string_similarity`, `date_math`) without any external libraries.
+- 🎯 **Critic Context Awareness & Historical Baseline Enforcement**: Automatic injection of past verified lessons and SLA baselines directly into the Critic prompt to prevent regression and drift.
+- 📁 **Transparent Local File Persistence (`persistPath`)**: Point `MemoryCortex` to a local file path (`.json` or `.jsonl`) for zero-configuration, auto-persisting vector memory across restarts.
+- 💾 **Portable Memory Snapshots & Cross-App Hydration**: One-line `exportMemories`, `importMemories`, `saveToFile`, and `loadFromFile` supporting JSON/JSONL format, target app ID remapping, vector preservation, and semantic deduplication.
 - 🛡️ **Resilient Zero-Drift AI JSON Repair & Schema Guard**: Zero-crash parsing engine (`repairJson`, `parseJsonSafe`, domain schema guards) immune to markdown fences, reasoning `<think>` tags, unquoted keys, Python literals, trailing commas, comments, and truncated outputs.
 - 📦 **Dual ESM & CommonJS Bundles**: Seamless imports across modern ESM (`import`) and legacy CommonJS (`require`), complete with TypeScript declaration (`.d.ts`) files.
 - 💻 **CLI Utility**: `npx perfect-swarm doctor`, `init <appName>`, and `run "<task>"` for instant scaffolding and headless execution.
@@ -143,39 +145,71 @@ const memories = await cortex.retrieve('chargeback spikes', {
 ### 4. Zero-Dependency Free Tool & Function Calling
 
 ```typescript
-import { ToolRegistry, calculatorTool, statsSummaryTool, regexMatchTool, jsonExtractTool } from '@perfect-swarm/core/tools';
+import { 
+  ToolRegistry, 
+  calculatorTool, 
+  statsSummaryTool, 
+  regexMatchTool, 
+  jsonExtractTool,
+  dataFilterTool,
+  stringSimilarityTool,
+  dateMathTool
+} from '@perfect-swarm/core/tools';
 
-const registry = new ToolRegistry();
-registry.register(calculatorTool);
-registry.register(statsSummaryTool);
+const registry = new ToolRegistry([
+  calculatorTool,
+  statsSummaryTool,
+  dataFilterTool,
+  stringSimilarityTool,
+  dateMathTool
+]);
 
-// Execute tool directly
-const stats = await registry.execute('stats_summary', { values: [10, 25, 45, 90, 110] });
-console.log(stats.result); // { count: 5, sum: 280, mean: 56, median: 45, min: 10, max: 110, ... }
+// Execute deterministic filtering and sorting on datasets:
+const filtered = await registry.execute('data_filter', {
+  items: [{ id: 1, latency: 120 }, { id: 2, latency: 450 }],
+  field: 'latency',
+  operator: '>',
+  value: 100,
+  sortBy: 'latency',
+  sortOrder: 'desc'
+});
 
-// SwarmEngine automatically parses and executes tool calls emitted by LLM agents:
-// ```tool_call
-// {"tool": "calculator", "parameters": {"expression": "((150 * 4) / 2) + 25"}}
-// ```
+// Compute string similarity across metrics (Jaccard and Levenshtein):
+const sim = await registry.execute('string_similarity', {
+  stringA: 'redis cache timeout',
+  stringB: 'redis connection timeout',
+  metric: 'all'
+});
+
+// Perform date and duration math:
+const diff = await registry.execute('date_math', {
+  startDate: '2026-09-13T12:00:00Z',
+  endDate: '2026-09-13T10:00:00Z',
+  unit: 'hours'
+});
 ```
 
-### 5. Portable Memory Snapshots & Cross-App Hydration
+### 5. Transparent File Persistence & Portable Memory Snapshots
 
 ```typescript
 import { MemoryCortex } from '@perfect-swarm/core/memory';
 
-const sourceCortex = new MemoryCortex({ defaultAppId: 'app-source' });
-
-// Export verified baselines and high-quality exemplars (JSON or JSONL)
-const snapshot = await sourceCortex.exportMemories({ minRating: 0.8 });
-const jsonlData = await sourceCortex.exportJsonl({ minRating: 0.8 });
-
-// Transplant and hydrate into another app with automatic appId remapping & deduplication
-const targetCortex = new MemoryCortex({ defaultAppId: 'app-target' });
-await targetCortex.importMemories(jsonlData, {
-  targetAppId: 'app-target',
-  deduplicate: true
+// 1. Transparent local auto-persistence across restarts:
+const cortex = new MemoryCortex({
+  defaultAppId: 'my-app',
+  persistPath: './data/cortex-memory.json',
+  autoSave: true // automatically saves on store, rate, consolidate, and import
 });
+await cortex.initialize(); // auto-loads existing snapshots on disk
+
+// 2. Direct snapshot export and import:
+await cortex.saveToFile('./backups/snapshot.jsonl');
+await cortex.loadFromFile('./backups/snapshot.jsonl', { deduplicate: true });
+
+// 3. In-memory programmatic transfer between apps:
+const jsonlData = await cortex.exportJsonl({ minRating: 0.8 });
+const targetCortex = new MemoryCortex({ defaultAppId: 'downstream-app' });
+await targetCortex.importMemories(jsonlData, { targetAppId: 'downstream-app', deduplicate: true });
 ```
 
 ### 6. Resilient Zero-Drift AI JSON Repair & Schema Guards
@@ -283,7 +317,7 @@ The repository contains a full battery of automated tests:
 npm test
 
 # Run specific suites
-npm run test:portable     # 25 portability, tool execution, snapshot, & JSON repair tests
+npm run test:portable     # 26 portability, extended tools, critic baselines, & file persistence tests
 npm run test:simulation   # 7-phase multi-app stress test
 npm run test:dist         # ESM and CommonJS bundle checks
 npm run test:cli          # CLI utility tests

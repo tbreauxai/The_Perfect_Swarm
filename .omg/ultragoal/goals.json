@@ -2,39 +2,39 @@
   "activeGoalId": null,
   "goals": [
     {
-      "id": "P4-G1",
-      "description": "Pre-Calibrated RRF Retrieval Profiles (RRF_PRESETS) & Learning Hooks (onMemoryLearned)",
+      "id": "P5-G1",
+      "description": "Critic Context Awareness & Historical Baseline Enforcement in AnalysisLifecycle",
       "status": "completed",
-      "verificationCriteria": "MemoryCortex supports profile-based RRF retrieval ('semantic', 'lexical', 'balanced', 'hybrid') and SwarmEngine emits onMemoryLearned lifecycle callback",
-      "evidence": "RRF_PRESETS and onMemoryLearned verified in Step 25a and 25b in test-portable-swarm.ts"
+      "verificationCriteria": "AnalysisLifecycle passes historicalBaselines and few-shot exemplars to Critic prompt; Critic audits compliance against past lessons and flags violations",
+      "evidence": "AnalysisLifecycle extracts historicalBaselines and injects explicit [Historical Baselines & Past Lessons] section before [Raw Data]; verified via Step 26d in test-portable-swarm.ts"
     },
     {
-      "id": "P4-G2",
-      "description": "Unified Multi-App Swarm Client SDK (src/swarm/client.ts & ./client subpath)",
+      "id": "P5-G2",
+      "description": "Extended Zero-Dependency Analysis Tools (data_filter, string_similarity, date_math)",
       "status": "completed",
-      "verificationCriteria": "createSwarmClient provides unified API for both embedded engine execution and remote HTTP/SSE streaming server with identical async iterator stream() and analyze() methods",
-      "evidence": "createSwarmClient verified across embedded analyze, live streaming, memory methods, and remote config in Step 25c of test-portable-swarm.ts, test-dist-import.mjs, and test-dist-import.cjs"
+      "verificationCriteria": "src/swarm/tools/ contains data_filter, string_similarity, and date_math; registered in globalToolRegistry and exported via ./tools subpath",
+      "evidence": "dataFilterTool, stringSimilarityTool, and dateMathTool added to src/swarm/tools/builtin.ts, registered in standardBuiltinTools, exported via ./tools; verified via Step 26a-26c in test-portable-swarm.ts"
     },
     {
-      "id": "P4-G3",
-      "description": "CLI Memory Snapshot Management (export-memory and import-memory commands)",
+      "id": "P5-G3",
+      "description": "Transparent Local File Persistence in MemoryCortex (persistPath)",
       "status": "completed",
-      "verificationCriteria": "bin/cli.js supports export-memory and import-memory commands for backing up, exporting, and hydrating memory snapshots between apps from terminal",
-      "evidence": "bin/cli.js export-memory and import-memory verified in CLI Test 5 in test-cli.mjs with roundtrip JSONL and JSON export/import and offline persistence fallback"
+      "verificationCriteria": "MemoryCortexConfig supports optional persistPath to transparently load and persist the fallbackStore across process lifecycles when Qdrant is offline",
+      "evidence": "MemoryCortexConfig supports persistPath and autoSave; auto-loads snapshots on initialize(); auto-saves on store, rateMemory, consolidate, and import; saveToFile/loadFromFile implemented; verified via Step 26e in test-portable-swarm.ts"
     },
     {
-      "id": "P4-G4",
-      "description": "End-to-End Test Suite Validation (Step 25 in test-portable-swarm.ts & test-cli.mjs)",
+      "id": "P5-G4",
+      "description": "End-to-End Validation Suite (Step 26 in test-portable-swarm.ts)",
       "status": "completed",
-      "verificationCriteria": "Step 25 in test-portable-swarm.ts verifies RRF presets and unified client; test-cli.mjs verifies memory snapshot export/import CLI commands",
-      "evidence": "All 25 steps in test-portable-swarm.ts and all 5 CLI test suites passing with 100% assertions"
+      "verificationCriteria": "Step 26 in test-portable-swarm.ts verifies extended tools, critic historical baseline enforcement, and transparent persistPath operation",
+      "evidence": "Step 26 in test-portable-swarm.ts verifies all 5 aspects with zero failures; all 26 steps pass cleanly"
     },
     {
-      "id": "P4-G5",
+      "id": "P5-G5",
       "description": "Full Dual Build, Typecheck, Distribution Verification, and Git Release",
       "status": "completed",
-      "verificationCriteria": "tsc --noEmit clean, npm run build generates ESM/CJS bundles and .d.ts files for all subpaths, npm test passes 100%, changes committed and pushed",
-      "evidence": "tsc --noEmit clean, npm run build:swarm generates all bundles and declarations, npm test runs all 5 suites with 0 failures"
+      "verificationCriteria": "Clean tsc --noEmit, Vite dual build generates all ESM/CJS bundles + declarations, npm test passes 100%, changes committed and pushed to origin/main",
+      "evidence": "Clean tsc --noEmit (0 errors), npm run build:swarm generated all ESM/CJS bundles and .d.ts declarations, npm test passed all 5 test suites (portable, simulation, dist, cli, server)"
     }
   ]
 }

@@ -21,6 +21,9 @@ import {
     statsSummaryTool,
     regexMatchTool,
     jsonExtractTool,
+    dataFilterTool,
+    stringSimilarityTool,
+    dateMathTool,
     repairJson,
     parseJsonSafe,
     guardAnalystResponse,
@@ -31,6 +34,8 @@ import {
     SwarmClient,
     RRF_PRESETS
 } from './swarm.ts';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 async function runPortableValidation() {
     console.log('=== Step 1: Provider Registry Verification ===');
@@ -1383,6 +1388,170 @@ Anomalies:
         throw new Error('Step 25c: SwarmClient remote configuration failed');
     }
     console.log('✓ Unified SwarmClient SDK verified (embedded analyze, streaming, memory, and remote config)');
+
+    console.log('\n=== Step 26: Extended Analysis Tools, Critic Baselines & Memory File Persistence ===');
+
+    // 26a: Extended Tools - data_filter
+    const sampleData = [
+        { id: 1, name: 'Service A', latencyMs: 120, status: 'active', tags: ['core', 'auth'] },
+        { id: 2, name: 'Service B', latencyMs: 450, status: 'degraded', tags: ['billing'] },
+        { id: 3, name: 'Service C', latencyMs: 85, status: 'active', tags: ['cache'] },
+        { id: 4, name: 'Service D', latencyMs: 620, status: 'offline', tags: ['search'] }
+    ];
+
+    const filteredResult = await dataFilterTool.execute({
+        data: sampleData,
+        filter: {
+            field: 'latencyMs',
+            operator: '>',
+            value: 100
+        },
+        sortBy: 'latencyMs',
+        sortOrder: 'desc',
+        limit: 2
+    });
+    console.log('dataFilterTool result count:', filteredResult.matchedCount, 'top item:', filteredResult.data[0]?.name);
+    if (filteredResult.matchedCount !== 3 || filteredResult.data[0]?.name !== 'Service D' || filteredResult.data.length !== 2) {
+        throw new Error('Step 26a: dataFilterTool failed to filter, sort, and limit items correctly');
+    }
+
+    // 26b: Extended Tools - string_similarity
+    const simResult = await stringSimilarityTool.execute({
+        stringA: 'redis cache connection timeout error',
+        stringB: 'redis connection timeout failure',
+        metric: 'all'
+    });
+    console.log('stringSimilarityTool result:', simResult);
+    if (simResult.jaccardSimilarity < 0.4 || simResult.levenshteinSimilarity < 0.5) {
+        throw new Error('Step 26b: stringSimilarityTool computed unexpected low similarity scores');
+    }
+
+    // 26c: Extended Tools - date_math
+    const dateMathDiff = await dateMathTool.execute({
+        operation: 'diff',
+        dateA: '2026-09-13T12:00:00Z',
+        dateB: '2026-09-13T10:00:00Z',
+        unit: 'hours'
+    });
+    console.log('dateMathTool diff result:', dateMathDiff);
+    if (dateMathDiff.diff !== 2) {
+        throw new Error(`Step 26c: dateMathTool diff expected 2 hours, got ${dateMathDiff.diff}`);
+    }
+
+    const dateMathAdd = await dateMathTool.execute({
+        operation: 'add',
+        dateA: '2026-09-01T00:00:00Z',
+        amount: 5,
+        unit: 'days'
+    });
+    console.log('dateMathTool add result:', dateMathAdd.resultDate);
+    if (!dateMathAdd.resultDate.startsWith('2026-09-06')) {
+        throw new Error('Step 26c: dateMathTool add days failed');
+    }
+
+    // 26d: Critic Context Awareness & Historical Baseline Verification
+    const criticMockProvider = {
+        providerName: 'critic-baseline-verifier',
+        async call(opts: any) {
+            if (opts.systemInstruction?.includes('CRITIC') || opts.prompt?.includes('Evaluate this proposal')) {
+                if (!opts.prompt.includes('[Historical Baselines & Past Lessons]')) {
+                    throw new Error('Critic prompt failed to include [Historical Baselines & Past Lessons]');
+                }
+                if (!opts.prompt.includes('Baseline Lesson: Latency above 200ms violates enterprise SLA')) {
+                    throw new Error('Critic prompt missing injected historical baseline content');
+                }
+                return JSON.stringify({
+                    pass: true,
+                    feedback: 'Historical baselines strictly satisfied and verified.'
+                });
+            }
+            return JSON.stringify({
+                insights: ['Latency measured at 95ms'],
+                anomalies: [],
+                summary: 'Nominal'
+            });
+        }
+    };
+    ProviderRegistry.register(criticMockProvider);
+
+    const criticTestAgent = new Agent('Data Analyst', 'test-model', 'critic-baseline-verifier', 'test-key');
+    const criticVerifierAgent = new Agent('Quality Critic', 'test-model', 'critic-baseline-verifier', 'test-key');
+    const baselineLifecycle = new AnalysisLifecycle(criticTestAgent, criticVerifierAgent, 2);
+
+    const criticLifecycleResult = await baselineLifecycle.executeAndVerify(
+        {
+            rawData: 'Current p95 latency = 95ms',
+            historicalBaselines: 'Baseline Lesson: Latency above 200ms violates enterprise SLA'
+        },
+        context,
+        'Assess customer API latency',
+        'Verify this proposal against baselines.'
+    );
+    console.log('Critic baseline verification result:', criticLifecycleResult.criticFeedback);
+    if (!criticLifecycleResult.success || !criticLifecycleResult.criticFeedback?.includes('strictly satisfied')) {
+        throw new Error('Step 26d: Critic historical baseline verification failed');
+    }
+
+    // 26e: Transparent Local File Persistence (persistPath)
+    const testPersistPath = path.resolve(process.cwd(), 'temp_test_cortex_persist.json');
+    if (fs.existsSync(testPersistPath)) fs.unlinkSync(testPersistPath);
+
+    const persistingCortex = new MemoryCortex({
+        persistPath: testPersistPath,
+        autoSave: true,
+        isolatedStore: true,
+        defaultAppId: 'persist-test-app'
+    });
+    await persistingCortex.initialize();
+
+    const pId = await persistingCortex.store('Durable persistent memory: PostgreSQL connection pool tuning optimal at 25.', {
+        domain: 'database',
+        qualityRating: 0.95,
+        verified: true
+    });
+    if (!fs.existsSync(testPersistPath)) {
+        throw new Error('Step 26e: MemoryCortex failed to auto-save snapshot to persistPath');
+    }
+    const savedContent = fs.readFileSync(testPersistPath, 'utf-8');
+    if (!savedContent.includes('PostgreSQL connection pool tuning optimal at 25')) {
+        throw new Error('Step 26e: Persisted file does not contain expected memory content');
+    }
+    console.log('✓ Auto-persistence to disk verified at:', testPersistPath);
+
+    const reloadedCortex = new MemoryCortex({
+        persistPath: testPersistPath,
+        autoSave: true,
+        isolatedStore: true,
+        defaultAppId: 'persist-test-app'
+    });
+    await reloadedCortex.initialize();
+
+    const loadedMemories = await reloadedCortex.retrieve('PostgreSQL connection pool', { appId: 'persist-test-app' });
+    console.log('Reloaded memories from disk:', loadedMemories.map(m => m.content));
+    if (loadedMemories.length === 0 || !loadedMemories[0].content.includes('PostgreSQL connection pool')) {
+        throw new Error('Step 26e: Fresh MemoryCortex failed to auto-load memories from persistPath');
+    }
+    console.log('✓ Auto-load from disk upon initialize() verified');
+
+    const explicitJsonlPath = path.resolve(process.cwd(), 'temp_test_cortex_explicit.jsonl');
+    if (fs.existsSync(explicitJsonlPath)) fs.unlinkSync(explicitJsonlPath);
+
+    await persistingCortex.saveToFile(explicitJsonlPath);
+    if (!fs.existsSync(explicitJsonlPath)) {
+        throw new Error('Step 26e: saveToFile failed to write JSONL file');
+    }
+    const explicitImport = await persistingCortex.loadFromFile(explicitJsonlPath);
+    console.log('Explicit loadFromFile result:', explicitImport);
+    if (explicitImport.imported + explicitImport.deduplicated < 1) {
+        throw new Error('Step 26e: loadFromFile failed to load JSONL snapshot');
+    }
+
+    await persistingCortex.wipeCollection();
+    if (fs.existsSync(testPersistPath)) {
+        throw new Error('Step 26e: wipeCollection failed to unlink persistPath file');
+    }
+    if (fs.existsSync(explicitJsonlPath)) fs.unlinkSync(explicitJsonlPath);
+    console.log('✓ wipeCollection and cleanup verified');
 
     console.log('\n=== Step 16: Context Event Log Summary ===');
     console.log(`Total events recorded in SwarmContext: ${recordedEvents.length}`);

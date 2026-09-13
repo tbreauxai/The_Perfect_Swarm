@@ -87,7 +87,15 @@ export class AnalysisLifecycle {
                 prompt: "[Internal Verification]"
             });
             
-            const verifyPrompt = `${criticPrompt}\n\n[Raw Data]:\n${JSON.stringify(rawData)}\n\n[Proposed Analysis]:\n${JSON.stringify(currentProposal, null, 2)}\n\nEvaluate this proposal. You MUST output strict JSON in this format: { "pass": boolean, "feedback": "Detailed string explaining flaws, or confirming success" }.`;
+            let baselineSection = "";
+            let cleanedRawData = rawData;
+            if (rawData && typeof rawData === 'object' && rawData.historicalBaselines) {
+                baselineSection = `\n\n[Historical Baselines & Past Lessons]:\n${rawData.historicalBaselines}`;
+                const { historicalBaselines, ...rest } = rawData;
+                cleanedRawData = rest;
+            }
+
+            const verifyPrompt = `${criticPrompt}${baselineSection}\n\n[Raw Data]:\n${JSON.stringify(cleanedRawData)}\n\n[Proposed Analysis]:\n${JSON.stringify(currentProposal, null, 2)}\n\nEvaluate this proposal. Ensure it strictly respects the Historical Baselines and accurate data facts. You MUST output strict JSON in this format: { "pass": boolean, "feedback": "Detailed string explaining flaws, or confirming success" }.`;
             
             const verificationRaw = await this.critic.run(verifyPrompt, context, { responseMimeType: 'application/json' });
             
