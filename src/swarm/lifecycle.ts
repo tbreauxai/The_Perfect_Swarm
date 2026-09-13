@@ -6,6 +6,14 @@ export interface VerificationResult {
     feedback?: string;
 }
 
+export interface LifecycleExecutionResult {
+    success: boolean;
+    attempts: number;
+    finalProposal: any;
+    criticFeedback?: string;
+    computedRating: number;
+}
+
 export class AnalysisLifecycle {
     private proposer: Agent;
     private critic: Agent;
@@ -22,6 +30,22 @@ export class AnalysisLifecycle {
     }
 
     /**
+     * Computes a continuous reinforcement learning rating based on critic verification and attempt count:
+     * - Passed on Attempt 1: 0.98 (flawless first-shot execution)
+     * - Passed on Attempt 2: 0.88 (successful critic-guided self-correction)
+     * - Passed on Attempt 3+: 0.78 (iterative convergence)
+     * - Failed after max retries: 0.35 (penalized, prevents poisoning few-shot exemplar cortex)
+     */
+    static computeReinforcementScore(success: boolean, attempts: number, maxRetries: number = 3): number {
+        if (success) {
+            if (attempts === 1) return 0.98;
+            if (attempts === 2) return 0.88;
+            return Math.max(0.70, Number((0.98 - (attempts - 1) * 0.10).toFixed(2)));
+        }
+        return Math.max(0.20, Number((0.50 - (attempts / maxRetries) * 0.15).toFixed(2)));
+    }
+
+    /**
      * Executes the Red Team / Blue Team analysis loop.
      * The proposer generates an analysis/hypothesis.
      * The critic verifies it against the raw data.
@@ -32,7 +56,7 @@ export class AnalysisLifecycle {
         context: SwarmContext,
         proposerPrompt: string,
         criticPrompt: string
-    ): Promise<any> {
+    ): Promise<LifecycleExecutionResult> {
         let attempt = 0;
         let currentProposal: any = null;
         let feedback = "";
@@ -45,7 +69,12 @@ export class AnalysisLifecycle {
                 ? `${proposerPrompt}\n\n[Previous Feedback to Address]:\n${feedback}\n\n[Raw Data]:\n${JSON.stringify(rawData)}`
                 : `${proposerPrompt}\n\n[Raw Data]:\n${JSON.stringify(rawData)}`;
 
-            context.addEvent({ agentRole: this.proposer.role, action: `Executing proposal (Attempt ${attempt})`, modelName: this.proposer.modelName, prompt: executePrompt });
+            context.addEvent({
+                agentRole: this.proposer.role,
+                action: `Executing proposal (Attempt ${attempt})`,
+                modelName: this.proposer.modelName,
+                prompt: executePrompt
+            });
             
             const proposalRaw = await this.proposer.run(executePrompt, context, { responseMimeType: 'application/json' });
             
@@ -66,7 +95,12 @@ export class AnalysisLifecycle {
             }
 
             // 2. Critic verifies
-            context.addEvent({ agentRole: this.critic.role, action: `Verifying proposal from attempt ${attempt}`, modelName: this.critic.modelName, prompt: "[Internal Verification]" });
+            context.addEvent({
+                agentRole: this.critic.role,
+                action: `Verifying proposal from attempt ${attempt}`,
+                modelName: this.critic.modelName,
+                prompt: "[Internal Verification]"
+            });
             
             const verifyPrompt = `${criticPrompt}\n\n[Raw Data]:\n${JSON.stringify(rawData)}\n\n[Proposed Analysis]:\n${JSON.stringify(currentProposal, null, 2)}\n\nEvaluate this proposal. You MUST output strict JSON in this format: { "pass": boolean, "feedback": "Detailed string explaining flaws, or confirming success" }.`;
             
@@ -91,12 +125,20 @@ export class AnalysisLifecycle {
 
             // 3. Pass/Fail evaluation
             if (verification.pass) {
-                context.addEvent({ agentRole: this.critic.role, action: `Verification PASSED on attempt ${attempt}.`, modelName: this.critic.modelName, prompt: "[Internal Verification Result]" });
+                const computedRating = AnalysisLifecycle.computeReinforcementScore(true, attempt, this.maxRetries);
+                context.addEvent({
+                    agentRole: this.critic.role,
+                    action: `Verification PASSED on attempt ${attempt} (RLAIF Rating: ${(computedRating * 100).toFixed(0)}%).`,
+                    modelName: this.critic.modelName,
+                    prompt: "[Internal Verification Result]",
+                    output: { attempts: attempt, computedRating, feedback: verification.feedback }
+                });
                 return {
                     success: true,
                     attempts: attempt,
                     finalProposal: currentProposal,
-                    criticFeedback: verification.feedback
+                    criticFeedback: verification.feedback,
+                    computedRating
                 };
             } else {
                 feedback = verification.feedback || "Proposal failed verification without specific feedback.";
@@ -110,13 +152,21 @@ export class AnalysisLifecycle {
         }
 
         // If we exhaust retries without passing
-        context.addEvent({ agentRole: 'system', action: `Exhausted ${this.maxRetries} retries. Proposer failed to pass verification.`, modelName: 'system', prompt: "[System Error]" });
+        const computedRating = AnalysisLifecycle.computeReinforcementScore(false, attempt, this.maxRetries);
+        context.addEvent({
+            agentRole: 'system',
+            action: `Exhausted ${this.maxRetries} retries. Proposer failed to pass verification (RLAIF Rating: ${(computedRating * 100).toFixed(0)}%).`,
+            modelName: 'system',
+            prompt: "[System Error]",
+            output: { attempts: attempt, computedRating, feedback }
+        });
         
         return {
             success: false,
             attempts: attempt,
             finalProposal: currentProposal,
-            criticFeedback: feedback
+            criticFeedback: feedback,
+            computedRating
         };
     }
 }

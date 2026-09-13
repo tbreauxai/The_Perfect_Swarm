@@ -1,27 +1,101 @@
 {
-  "name": "react-example",
-  "private": true,
-  "version": "0.0.0",
+  "name": "@perfect-swarm/core",
+  "version": "1.0.0",
+  "description": "Modular, portable, zero-overhead AI Swarm with continuous Qdrant learning cortex and guaranteed free-tier LLM calibration",
   "type": "module",
+  "main": "./dist/swarm/index.cjs",
+  "module": "./dist/swarm/index.js",
+  "types": "./dist/swarm/index.d.ts",
+  "bin": {
+    "perfect-swarm": "./bin/cli.js"
+  },
+  "files": [
+    "dist/swarm",
+    "bin",
+    "src/swarm"
+  ],
   "exports": {
-    ".": "./src/swarm/index.ts",
-    "./core": "./src/swarm/index.ts",
-    "./memory": "./src/swarm/memory.ts",
-    "./router": "./src/swarm/router.ts",
-    "./lifecycle": "./src/swarm/lifecycle.ts",
-    "./cache": "./src/swarm/cache.ts",
-    "./hierarchy": "./src/swarm/hierarchy.ts",
-    "./loadBalancer": "./src/swarm/loadBalancer.ts"
+    ".": {
+      "types": "./dist/swarm/index.d.ts",
+      "import": "./dist/swarm/index.js",
+      "require": "./dist/swarm/index.cjs",
+      "default": "./src/swarm/index.ts"
+    },
+    "./core": {
+      "types": "./dist/swarm/index.d.ts",
+      "import": "./dist/swarm/index.js",
+      "require": "./dist/swarm/index.cjs",
+      "default": "./src/swarm/index.ts"
+    },
+    "./memory": {
+      "types": "./dist/swarm/memory.d.ts",
+      "import": "./dist/swarm/memory.js",
+      "require": "./dist/swarm/memory.cjs",
+      "default": "./src/swarm/memory.ts"
+    },
+    "./router": {
+      "types": "./dist/swarm/router.d.ts",
+      "import": "./dist/swarm/router.js",
+      "require": "./dist/swarm/router.cjs",
+      "default": "./src/swarm/router.ts"
+    },
+    "./lifecycle": {
+      "types": "./dist/swarm/lifecycle.d.ts",
+      "import": "./dist/swarm/lifecycle.js",
+      "require": "./dist/swarm/lifecycle.cjs",
+      "default": "./src/swarm/lifecycle.ts"
+    },
+    "./cache": {
+      "types": "./dist/swarm/cache.d.ts",
+      "import": "./dist/swarm/cache.js",
+      "require": "./dist/swarm/cache.cjs",
+      "default": "./src/swarm/cache.ts"
+    },
+    "./hierarchy": {
+      "types": "./dist/swarm/hierarchy.d.ts",
+      "import": "./dist/swarm/hierarchy.js",
+      "require": "./dist/swarm/hierarchy.cjs",
+      "default": "./src/swarm/hierarchy.ts"
+    },
+    "./loadBalancer": {
+      "types": "./dist/swarm/loadBalancer.d.ts",
+      "import": "./dist/swarm/loadBalancer.js",
+      "require": "./dist/swarm/loadBalancer.cjs",
+      "default": "./src/swarm/loadBalancer.ts"
+    },
+    "./engine": {
+      "types": "./dist/swarm/engine.d.ts",
+      "import": "./dist/swarm/engine.js",
+      "require": "./dist/swarm/engine.cjs",
+      "default": "./src/swarm/engine.ts"
+    },
+    "./profiler": {
+      "types": "./dist/swarm/profiler.d.ts",
+      "import": "./dist/swarm/profiler.js",
+      "require": "./dist/swarm/profiler.cjs",
+      "default": "./src/swarm/profiler.ts"
+    },
+    "./server": {
+      "types": "./dist/swarm/server.d.ts",
+      "import": "./dist/swarm/server.js",
+      "require": "./dist/swarm/server.cjs",
+      "default": "./src/swarm/server.ts"
+    }
   },
   "scripts": {
     "dev": "tsx watch server.ts",
-    "build": "vite build",
+    "build:client": "vite build",
+    "build:swarm": "tsx scripts/build-swarm.ts",
+    "build": "npm run build:client && npm run build:swarm",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "test:portable": "node --experimental-strip-types test-portable-swarm.ts",
     "test:simulation": "node --experimental-strip-types test-multi-app-simulation.ts",
-    "test": "npm run test:portable && npm run test:simulation",
+    "test:dist": "node test-dist-import.mjs && node test-dist-import.cjs",
+    "test:cli": "node test-cli.mjs",
+    "test:server": "node test-sse-server.mjs",
+    "test": "npm run test:portable && npm run test:simulation && npm run test:dist && npm run test:cli && npm run test:server",
     "start": "node --experimental-strip-types server.ts"
   },
   "dependencies": {

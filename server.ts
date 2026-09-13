@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { executeSwarmWorkflow } from './src/services/swarmEngine.ts';
+import { handleSwarmSse } from './src/swarm/server.ts';
 
 dotenv.config();
 
@@ -66,6 +67,34 @@ async function startServer() {
     } catch (error: any) {
       console.error("Swarm Error:", error);
       res.status(500).json({ error: error.message || 'Internal Server Error' });
+    }
+  });
+
+  app.all('/api/swarm/stream', async (req, res) => {
+    try {
+      const task = (req.method === 'POST' ? req.body.task : req.query.task) as string;
+      const data = (req.method === 'POST' ? req.body.data : req.query.data) as string;
+      const settings = (req.method === 'POST' ? req.body.settings : {}) || {};
+      const enableDeepAnalysis = req.method === 'POST' ? req.body.enableDeepAnalysis : req.query.enableDeepAnalysis === 'true';
+      const complexityOverride = req.method === 'POST' ? req.body.complexityOverride : req.query.complexityOverride;
+
+      if (!task) {
+        return res.status(400).json({ error: 'Task is required.' });
+      }
+
+      await handleSwarmSse(req, res, {
+        task,
+        data,
+        settings,
+        defaultAi,
+        enableDeepAnalysis,
+        complexityOverride
+      });
+    } catch (error: any) {
+      console.error("Swarm Stream Error:", error);
+      if (!res.headersSent) {
+        res.status(500).json({ error: error.message || 'Internal Server Error' });
+      }
     }
   });
 

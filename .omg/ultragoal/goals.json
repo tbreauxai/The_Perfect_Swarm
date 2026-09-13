@@ -3,38 +3,59 @@
   "goals": [
     {
       "id": "G1",
-      "description": "Implement Low-Complexity Intent Pre-Filtering & Fast-Path Short-Circuiting in router and swarm engine to bypass heavy profiling, vector cortex, and critique loops for trivial tasks",
+      "description": "Port headless SwarmEngine workflow into src/swarm/engine.ts with subpath exports and backward-compatible shims",
       "status": "completed",
-      "verificationCriteria": "ModelRouter.isFastPathEligible detects low-complexity intents (<25 tokens, basic lookups); swarmEngine short-circuits directly to single fast analyst, skipping chunking, Qdrant retrieval, and verification lifecycle",
-      "evidence": "Implemented ModelRouter.evaluateFastPath and isFastPathEligible; added instant complexity tier with lightweight models (llama-3.1-8b-instant, gpt-4o-mini); short-circuited swarmEngine directly to fast analyst for low-complexity tasks (<35 tokens, <256 bytes); verified with edge-case tests in test-portable-swarm.ts."
+      "verificationCriteria": "SwarmEngine is fully self-contained inside src/swarm/ with zero UI/server dependencies; package.json exports ./engine and ./profiler; src/services/swarmEngine.ts acts as clean consumer/re-exporter",
+      "evidence": "Ported headless SwarmEngine workflow to src/swarm/engine.ts; added root shim src/engine.ts; added package.json subpath exports ./engine and ./profiler; re-exported from src/services/swarmEngine.ts and src/services/providerService.ts; verified headless execution via Step 15 in test-portable-swarm.ts; tsc --noEmit passed (0 errors); vite build succeeded (2.51s)."
     },
     {
       "id": "G2",
-      "description": "Implement Structured Deterministic Payload Caching & Context Drift Prevention with LRU eviction and TTL hashing in src/swarm/cache.ts",
+      "description": "Align ModelRouter and Provider Adapters to guaranteed free-tier endpoints with OpenRouter :free suffix resolution",
       "status": "completed",
-      "verificationCriteria": "PayloadCache generates deterministic SHA-256 fingerprints of task+data; returns cached analysis with sub-millisecond latency; enforces LRU bounds and configurable TTL to eliminate redundant LLM calls and context drift",
-      "evidence": "Built PayloadCache with deterministic 64-char hex fingerprinting, LRU eviction, and configurable TTL; integrated globalPayloadCache into swarmEngine.ts for instant zero-drift cache hits; verified via Step 12 in test-portable-swarm.ts."
+      "verificationCriteria": "ModelRouter defaults to active free-tier models (gemini-2.5-flash, llama-3.3-70b-versatile, deepseek-r1:free, mistral-small-latest); OpenRouter adapter automatically appends :free when running on free tier",
+      "evidence": "ModelRouter.getRecommendedModel calibrated to guaranteed free tier endpoints (gemini-2.5-flash with 15 RPM/1M tokens, llama-3.3-70b-versatile, deepseek-r1:free, mistral-small-latest, gpt-4o-mini); OpenRouterAdapter.resolveFreeModel automatically appends :free to prevent 402 errors on zero-balance accounts; verified via Step 4b in test-portable-swarm.ts."
     },
     {
       "id": "G3",
-      "description": "Establish Hierarchical Agent Communication Layers (L1 Fast Triage -> L2 Specialist Analysts -> L3 Manager Synthesis) with Scoped Event Broadcasting in src/swarm/hierarchy.ts",
+      "description": "Implement Autonomous Reinforcement Learning from AI Feedback (RLAIF) connecting AnalysisLifecycle to MemoryCortex",
       "status": "completed",
-      "verificationCriteria": "SwarmHierarchy orchestrates tiered message dispatch; L1 filters and distributes sub-tasks only to relevant L2 specialists; selectively scopes event logs to prevent broadcast overhead",
-      "evidence": "Implemented SwarmHierarchy with tiered L1 Triage -> L2 Specialists -> L3 Synthesis; selective task routing bypassing unneeded specialists; scoped event filtering for milestones/triage/specialists/synthesis; verified via Step 13 in test-portable-swarm.ts."
+      "verificationCriteria": "Critic pass/fail and attempt count dynamically compute and reinforce qualityRating in MemoryCortex; critic critique strings persist as exemplar feedback for future prompt distillation",
+      "evidence": "AnalysisLifecycle upgraded with computeReinforcementScore and LifecycleExecutionResult; critic pass/fail and attempt count dynamically calculate qualityRating (attempt 1 pass = 0.98, attempt 2 pass = 0.88, failure = 0.35); dynamic RLAIF score and critic feedback automatically wire into MemoryCortex.store in SwarmEngine; verified via Step 6 in test-portable-swarm.ts."
     },
     {
       "id": "G4",
-      "description": "Deploy Real-Time Adaptive Load Balancer with Latency EMA, In-Flight Concurrency Tracking, and Health Feedback Loops in src/swarm/loadBalancer.ts",
+      "description": "Optimize Qdrant Cortex with Verified Payload Indexing, Memory Pruning/Consolidation, and Ephemeral In-Memory Vector Fallback",
       "status": "completed",
-      "verificationCriteria": "AdaptiveLoadBalancer tracks active requests and calculates exponential moving average latency per provider; auto-downweights providers on 429/timeout errors; routes agent tasks to optimal healthy free-tier provider",
-      "evidence": "Created AdaptiveLoadBalancer tracking in-flight concurrency, latency EMAs, and 429 cooldowns; dynamic health scoring prioritizes healthy low-latency providers; integrated into Agent.run fallback ordering; verified via Step 14 in test-portable-swarm.ts."
+      "verificationCriteria": "ensurePayloadIndex includes verified (bool); MemoryCortex.consolidateMemories prunes memories with qualityRating < 0.4; in-memory fallback enables dense+sparse vector search and exemplar distillation when Qdrant is unreachable",
+      "evidence": "Added ensurePayloadIndex('verified', 'bool') in MemoryCortex.initialize(); implemented MemoryCortex.consolidateMemories() pruning memories with qualityRating < 0.40 in Qdrant and in-memory fallback; implemented ephemeral in-memory vector fallback enabling dense+sparse hybrid RRF retrieval, semantic deduplication, cross-app shared learning baselines (includeShared), and few-shot exemplar distillation with zero Qdrant dependencies; verified via Step 11f and Step 17 in test-portable-swarm.ts; tsc --noEmit passed (0 errors); vite build succeeded (2.54s)."
     },
     {
       "id": "G5",
-      "description": "End-to-End Performance Benchmarking, Typecheck, Build, and Stress Testing across multi-app scenarios",
+      "description": "Comprehensive End-to-End Multi-App Verification, Typecheck, Vite Build, and Stress Testing",
       "status": "completed",
-      "verificationCriteria": "tsc --noEmit passes cleanly (0 errors); vite build succeeds; comprehensive test suite verifies fast-path short-circuiting, payload cache hits, hierarchical triage, and adaptive load balancing under node --experimental-strip-types",
-      "evidence": "Verified comprehensive end-to-end performance suite: tsc --noEmit (0 errors); vite build succeeded (2.47s); test-portable-swarm.ts passed all 15 validation steps; test-multi-app-simulation.ts passed all 7 phases validating multi-tenant isolation, continuous learning few-shot distillation, fast-path intent pre-filtering, 0.007ms deterministic payload cache hits, hierarchical multi-specialist dispatch with 50% broadcast reduction, and adaptive load balancing with real-time 429 cooldown failover."
+      "verificationCriteria": "tsc --noEmit passes (0 errors); vite build succeeds; test:portable and test:simulation scripts pass all validation steps and phases under node --experimental-strip-types",
+      "evidence": "tsc --noEmit passed cleanly (0 errors); vite build succeeded (2.56s, 1681 modules); test-portable-swarm.ts passed all 17 steps covering headless engine, free-tier routing, RLAIF reinforcement, verified index, memory pruning, and ephemeral in-memory vector fallback; test-multi-app-simulation.ts passed all 7 phases validating multi-tenant isolation, 429 failover recovery, 12-task parallel stress test, sub-millisecond payload caching, hierarchical dispatch, and adaptive load balancing."
+    },
+    {
+      "id": "T1",
+      "description": "Dual ESM/CJS Distribution Packaging & TypeScript Declaration Emit",
+      "status": "completed",
+      "verificationCriteria": "dist/swarm/ contains ESM (.js), CommonJS (.cjs), and TypeScript declaration (.d.ts) files; test-dist-import.mjs and test-dist-import.cjs pass",
+      "evidence": "Created vite.config.swarm.ts and scripts/build-swarm.ts; built all modules to dist/swarm/ with full TypeScript type declarations; verified dual ESM and CJS imports via test-dist-import.mjs and test-dist-import.cjs."
+    },
+    {
+      "id": "T2",
+      "description": "Portable Swarm CLI Executable Utility",
+      "status": "completed",
+      "verificationCriteria": "perfect-swarm bin works with doctor, init, and run commands",
+      "evidence": "Created bin/cli.js with commands doctor, init, and run; wired package.json bin; tested all commands in test-cli.mjs."
+    },
+    {
+      "id": "T3",
+      "description": "Zero-Dependency HTTP & SSE Streaming Server Module",
+      "status": "completed",
+      "verificationCriteria": "Standalone server handles CORS, health, JSON analysis, and SSE event streaming; verified via test-sse-server.mjs",
+      "evidence": "Implemented src/swarm/server.ts with createSwarmServer, handleSwarmSse, and parseJsonBody; re-exported in src/swarm/index.ts and ./server subpath; wired into root server.ts; tested health, CORS, error handling, JSON analysis, and real HTTP SSE event streaming in test-sse-server.mjs."
     }
   ]
 }

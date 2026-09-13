@@ -124,15 +124,22 @@ export class ModelRouter {
         const p = (provider || 'gemini').toLowerCase();
         switch (p) {
             case 'gemini':
-                return complexity === 'complex' ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
+                // gemini-2.5-flash offers 15 RPM / 1M token window on free tier
+                return 'gemini-2.5-flash';
             case 'groq':
                 return complexity === 'instant' ? 'llama-3.1-8b-instant' : 'llama-3.3-70b-versatile';
             case 'openrouter':
-                return complexity === 'complex' ? 'deepseek/deepseek-r1' : 'google/gemini-2.5-flash';
+                return complexity === 'complex'
+                    ? 'deepseek/deepseek-r1:free'
+                    : complexity === 'instant'
+                    ? 'meta-llama/llama-3.1-8b-instruct:free'
+                    : 'google/gemini-2.0-flash-exp:free';
             case 'mistral':
-                return complexity === 'complex' ? 'mistral-large-latest' : 'mistral-small-latest';
+                // mistral-small-latest is available on Mistral free API tier
+                return 'mistral-small-latest';
             case 'github':
-                return complexity === 'instant' ? 'gpt-4o-mini' : 'gpt-4o';
+                // gpt-4o-mini has higher RPM allowance on GitHub Models free tier
+                return 'gpt-4o-mini';
             default:
                 return 'gemini-2.5-flash';
         }

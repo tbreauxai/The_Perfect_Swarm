@@ -1,11 +1,14 @@
 # OmA Taskboard
 
-## Track: Swarm Dynamic Pre-Filtering, Hierarchical Caching & Adaptive Load Balancing
+## Track: Modular AI Swarm Foundation, Free-Tier AI & Qdrant Learning Cortex Optimization
 
 | Goal ID | Description | Status | Verification |
 | --- | --- | --- | --- |
-| G1 | Implement Low-Complexity Intent Pre-Filtering & Fast-Path Short-Circuiting in router and swarm engine | completed | `ModelRouter.evaluateFastPath` & `isFastPathEligible` short-circuit trivial tasks (<35 tokens, <256 bytes) directly to fast analyst; verified via `test-portable-swarm.ts` |
-| G2 | Implement Structured Deterministic Payload Caching & Context Drift Prevention with LRU eviction and TTL hashing in `src/swarm/cache.ts` | completed | `PayloadCache` deterministic 64-char fingerprinting, LRU bound, and TTL expiration verified via Step 12 in `test-portable-swarm.ts` |
-| G3 | Establish Hierarchical Agent Communication Layers (L1 Triage -> L2 Specialist Analysts -> L3 Manager Synthesis) with Scoped Event Broadcasting in `src/swarm/hierarchy.ts` | completed | `SwarmHierarchy` L1 triage planning, selective L2 worker routing, and scoped event filtering verified via Step 13 in `test-portable-swarm.ts` |
-| G4 | Deploy Real-Time Adaptive Load Balancer with Latency EMA, In-Flight Concurrency Tracking, and Health Feedback Loops in `src/swarm/loadBalancer.ts` | completed | Dynamic health scoring, EMA latency tracking, and automatic 429 rate limit cooldown recovery verified via Step 14 in `test-portable-swarm.ts` |
-| G5 | End-to-End Performance Benchmarking, Typecheck, Build, and Stress Testing across multi-app scenarios | completed | `tsc --noEmit` (0 errors), `vite build` (2.47s), `test:portable` (15 steps passed), `test:simulation` (7 phases passed including 0.007ms cache hits and dynamic 429 failover) |
+| G1 | Port headless SwarmEngine workflow into `src/swarm/engine.ts` with subpath exports and backward-compatible shims | completed | `src/swarm/engine.ts` executes standalone without UI/server dependencies; `package.json` exports `./engine` and `./profiler`; verified via Step 15 in `test-portable-swarm.ts` |
+| G2 | Align ModelRouter and Provider Adapters to guaranteed free-tier endpoints with OpenRouter `:free` suffix resolution | completed | Free-tier models mapped across all providers; OpenRouter automatically maps `:free` models to prevent 402 errors; verified via Step 4b in `test-portable-swarm.ts` |
+| G3 | Implement Autonomous Reinforcement Learning from AI Feedback (RLAIF) connecting `AnalysisLifecycle` to `MemoryCortex` | completed | Dynamic qualityRating calculation based on critic pass/fail and attempt count; critique feedback saved to exemplars; verified via Step 6 in `test-portable-swarm.ts` |
+| G4 | Optimize Qdrant Cortex with Verified Payload Indexing, Memory Pruning/Consolidation, and Ephemeral In-Memory Vector Fallback | completed | Verified bool indexing; low-rating pruning (<0.40); offline hybrid RRF vector fallback, cross-app shared learning baselines, and exemplar distillation; verified via Steps 11f and 17 in `test-portable-swarm.ts` |
+| G5 | Comprehensive End-to-End Multi-App Verification, Typecheck, Vite Build, and Stress Testing | completed | `tsc --noEmit` clean (0 errors), `vite build` clean (2.56s), all 17 portable steps and 7 simulation phases passed under `node --experimental-strip-types` |
+| T1 | Dual ESM/CJS Distribution Packaging & Declaration Generation (`@perfect-swarm/core`) | completed | `scripts/build-swarm.ts` & `vite.config.swarm.ts` emit ESM (`.js`), CJS (`.cjs`), and `.d.ts` into `dist/swarm/`; verified via `test-dist-import.mjs` and `test-dist-import.cjs` |
+| T2 | Portable Swarm CLI Executable (`bin/cli.js`) | completed | CLI binary `perfect-swarm` registered in `package.json`; commands `doctor`, `init`, and `run` verified via `test-cli.mjs` |
+| T3 | Zero-Dependency HTTP & Server-Sent Events (SSE) Streaming Server (`src/swarm/server.ts`) | completed | Standalone `createSwarmServer` & `handleSwarmSse` with CORS, health, and live event streaming; verified via `test-sse-server.mjs` |

@@ -1,25 +1,24 @@
-# Ultragoal Brief: Swarm Dynamic Pre-Filtering, Hierarchical Caching & Adaptive Load Balancing
+# Ultragoal Brief: Modular AI Swarm Foundation, Free-Tier AI & Qdrant Learning Cortex Optimization
 
 ## Core Objective
-Maximize swarm efficiency, minimize token waste, and eliminate latency bottlenecks across free-tier AI APIs through:
-1. Low-complexity intent pre-filtering and fast-path short-circuiting to bypass heavy sub-modules for trivial tasks.
-2. Hierarchical communication layers (L1 Triage -> L2 Specialist Analysts -> L3 Manager Synthesis) with structured deterministic payload caching to prevent context window drift and broadcast overhead.
-3. Real-time adaptive load balancing leveraging latency exponential moving averages (EMA), in-flight concurrency tracking, and continuous health feedback loops.
+Optimize and harden the modular AI swarm codebase into a refined, zero-leak, portable foundation capable of continuous learning across multiple target applications. The swarm operates strictly on free-tier AI APIs (Gemini, Groq, OpenRouter, Mistral, GitHub) and Qdrant vector memory.
 
-## Constraints & Architecture Boundaries
-1. **Zero-Leak Swarm Architecture**:
-   - All modules (`cache.ts`, `hierarchy.ts`, `loadBalancer.ts`, enhancements to `router.ts`) must reside in `src/swarm/`.
-   - Zero React/Vite/Express dependencies in `src/swarm/`.
-   - Node native type stripping compliance (`node --experimental-strip-types`): no constructor parameter properties, no TypeScript enums, explicit type imports.
-2. **Deterministic Payload Caching**:
-   - Implement memory-bounded LRU + TTL cache with SHA-256 / Murmur content hashing of task + data payload.
-   - Prevent context window drift and redundant token expenditure for identical or repetitive analyses.
-3. **Intent Pre-Filtering & Fast-Path Routing**:
-   - Short-circuit tasks under 25 tokens or matching basic metadata queries directly to a single fast node, bypassing data profiling, chunk splitting, Qdrant cortex queries, and critique lifecycle loops.
-4. **Adaptive Load Balancing & Real-Time Capacity Tracking**:
-   - Maintain rolling latency EMAs per provider.
-   - Track active in-flight requests per provider to prevent free-tier concurrency throttling.
-   - Auto-downweight providers exhibiting recent 429 rate limits or latency spikes.
-5. **Verification**:
-   - Clean `tsc --noEmit` and `vite build`.
-   - Automated benchmarking and validation test suite runnable via `npm test`.
+## Architectural Focus Areas
+1. **File Structure & Portability**:
+   - Relocate the core orchestration workflow into a headless, self-contained `src/swarm/engine.ts`.
+   - Ensure `src/swarm/` has zero dependencies on client/UI/server code, allowing turnkey transplantation to any Node/Next.js/Bun/Express app.
+   - Provide clean package.json subpath exports (`./engine`, `./profiler`, `./cache`, `./hierarchy`, etc.).
+2. **AI Structure & Free-Tier Resilience**:
+   - Align default model router mappings with guaranteed free-tier endpoints (e.g., auto `:free` suffix on OpenRouter, free-tier Mistral/Gemini quotas).
+   - Implement autonomous reinforcement learning (RLAIF) connecting `AnalysisLifecycle` critic verification directly into `MemoryCortex` quality scores.
+   - Robust structured JSON output recovery with fallback schema parsing.
+3. **Qdrant Utilization & Continuous Learning Cortex**:
+   - Complete Qdrant payload indexes (add `verified` bool index).
+   - Implement ephemeral in-memory vector fallback when Qdrant is unavailable, enabling offline learning.
+   - Implement automated memory pruning and consolidation for stale/low-rated memories.
+   - Support cross-app shared learning baselines (`includeShared` option).
+
+## Verification Criteria
+- `tsc --noEmit` passes with 0 errors.
+- `vite build` succeeds.
+- Comprehensive portable and multi-app simulation tests verify headless engine execution, continuous learning score propagation, Qdrant fallback, and free-tier resilience under `node --experimental-strip-types`.

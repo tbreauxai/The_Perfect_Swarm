@@ -3,6 +3,33 @@ import { cleanToken, sanitizeModelOutput, type ProviderAdapter, type ProviderCal
 export class OpenRouterAdapter implements ProviderAdapter {
     readonly providerName = 'openrouter';
 
+    /**
+     * Resolves the canonical free-tier model identifier on OpenRouter.
+     * Ensures endpoints append ':free' suffix to prevent 402/400 errors for zero-balance free accounts.
+     */
+    static resolveFreeModel(modelName: string): string {
+        const clean = (modelName || '').trim();
+        if (!clean) return 'deepseek/deepseek-r1:free';
+        if (clean.endsWith(':free')) return clean;
+
+        const knownFreeMappings: Record<string, string> = {
+            'deepseek/deepseek-r1': 'deepseek/deepseek-r1:free',
+            'meta-llama/llama-3.3-70b-instruct': 'meta-llama/llama-3.3-70b-instruct:free',
+            'meta-llama/llama-3.1-8b-instruct': 'meta-llama/llama-3.1-8b-instruct:free',
+            'meta-llama/llama-3-8b-instruct': 'meta-llama/llama-3-8b-instruct:free',
+            'google/gemini-2.0-flash-exp': 'google/gemini-2.0-flash-exp:free',
+            'google/gemini-2.5-flash': 'google/gemini-2.0-flash-exp:free',
+            'mistralai/mistral-7b-instruct': 'mistralai/mistral-7b-instruct:free',
+            'qwen/qwen-2.5-coder-32b-instruct': 'qwen/qwen-2.5-coder-32b-instruct:free'
+        };
+
+        if (knownFreeMappings[clean]) {
+            return knownFreeMappings[clean];
+        }
+
+        return `${clean}:free`;
+    }
+
     async call(options: ProviderCallOptions): Promise<string> {
         const key = cleanToken(options.apiKey);
         if (!key) {
@@ -21,6 +48,9 @@ export class OpenRouterAdapter implements ProviderAdapter {
 
         const isJson = options.config?.responseMimeType === 'application/json';
         const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 30000;
+        const effectiveModel = options.config?.paidMode
+            ? options.modelName
+            : OpenRouterAdapter.resolveFreeModel(options.modelName);
 
         let response: Response;
         try {
@@ -34,7 +64,7 @@ export class OpenRouterAdapter implements ProviderAdapter {
                     'X-Title': 'The Perfect Swarm'
                 },
                 body: JSON.stringify({
-                    model: options.modelName,
+                    model: effectiveModel,
                     messages,
                     max_tokens: options.config?.maxTokens || 1500,
                     response_format: isJson ? { type: 'json_object' } : undefined

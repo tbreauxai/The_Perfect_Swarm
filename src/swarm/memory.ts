@@ -23,6 +23,36 @@ export interface RetrievalOptions {
     minRating?: number;
     verifiedOnly?: boolean;
     agentRole?: string;
+    includeShared?: boolean;
+}
+
+export interface ConsolidationOptions {
+    appId?: string;
+    minRating?: number;
+    maxAgeDays?: number;
+    pruneLowQuality?: boolean;
+}
+
+export interface ConsolidationResult {
+    inspected: number;
+    pruned: number;
+    retained: number;
+    prunedIds: string[];
+}
+
+export interface StoredMemoryPoint {
+    id: string;
+    denseVector: number[];
+    sparseVector: SparseVector;
+    payload: MemoryMetadata & {
+        content: string;
+        appId: string;
+        frequency: number;
+        qualityRating: number;
+        verified: boolean;
+        timestamp: string;
+        lastSeen: string;
+    };
 }
 
 export interface SparseVector {
@@ -145,6 +175,7 @@ export class MemoryCortex {
     private defaultAppId: string;
     private initialized: boolean = false;
     private isAvailable: boolean = false;
+    private fallbackStore: StoredMemoryPoint[] = [];
 
     constructor(config: MemoryCortexConfig) {
         const url = config.url || process.env.QDRANT_URL;
@@ -188,8 +219,11 @@ export class MemoryCortex {
      * Initializes the collection in Qdrant with compliant dense/sparse schemas and compound indexes.
      */
     async initialize(): Promise<boolean> {
-        if (this.initialized) return this.isAvailable;
-        if (!this.qdrant || !this.isAvailable) return false;
+        if (this.initialized) return true;
+        if (!this.qdrant || !this.isAvailable) {
+            this.initialized = true;
+            return true;
+        }
 
         try {
             const collections = await this.qdrant.getCollections();
@@ -238,14 +272,46 @@ export class MemoryCortex {
             await this.ensurePayloadIndex("appId", "keyword");
             await this.ensurePayloadIndex("agentRole", "keyword");
             await this.ensurePayloadIndex("qualityRating", "float");
+            await this.ensurePayloadIndex("verified", "bool");
 
             this.initialized = true;
             return true;
         } catch (error: any) {
-            console.warn(`[MemoryCortex] Initialization failed: ${error.message || error}`);
+            console.warn(`[MemoryCortex] Initialization failed: ${error.message || error}. Falling back to ephemeral in-memory vector store.`);
             this.isAvailable = false;
-            return false;
+            this.initialized = true;
+            return true;
         }
+    }
+
+    private cosineSimilarity(a: number[], b: number[]): number {
+        if (!a || !b || a.length !== b.length || a.length === 0) return 0;
+        let dot = 0;
+        let normA = 0;
+        let normB = 0;
+        for (let i = 0; i < a.length; i++) {
+            dot += a[i] * b[i];
+            normA += a[i] * a[i];
+            normB += b[i] * b[i];
+        }
+        if (normA === 0 || normB === 0) return 0;
+        return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+    }
+
+    private sparseDotProduct(query: SparseVector, target: SparseVector): number {
+        if (!query || !target) return 0;
+        const targetMap = new Map<number, number>();
+        for (let i = 0; i < target.indices.length; i++) {
+            targetMap.set(target.indices[i], target.values[i]);
+        }
+        let score = 0;
+        for (let i = 0; i < query.indices.length; i++) {
+            const targetVal = targetMap.get(query.indices[i]);
+            if (targetVal !== undefined) {
+                score += query.values[i] * targetVal;
+            }
+        }
+        return score;
     }
 
     /**
@@ -253,123 +319,183 @@ export class MemoryCortex {
      * If a memory with >= 0.92 cosine similarity exists in the same appId, updates frequency and merges feedback.
      */
     async store(content: string, metadata: MemoryMetadata, deduplicate: boolean = true): Promise<string | null> {
-        const ready = await this.initialize();
-        if (!ready || !this.qdrant) return null;
+        await this.initialize();
+        const appId = metadata.appId || this.defaultAppId;
+        const now = new Date().toISOString();
 
+        if (this.qdrant && this.isAvailable) {
+            try {
+                const denseVector = await this.embeddingProvider.embed(content);
+                const sparseVector = SparseTokenizer.encode(content);
+
+                if (deduplicate) {
+                    const existing = await this.qdrant.query(this.collectionName, {
+                        query: denseVector,
+                        using: "dense",
+                        limit: 1,
+                        score_threshold: 0.92,
+                        filter: {
+                            must: [{ key: "appId", match: { value: appId } }]
+                        },
+                        with_payload: true
+                    });
+
+                    if (existing.points.length > 0 && (existing.points[0].score ?? 0) >= 0.92) {
+                        const matched = existing.points[0];
+                        const existingPayload = (matched.payload || {}) as Record<string, any>;
+                        const newFreq = ((existingPayload.frequency as number) || 1) + 1;
+                        const mergedRating = metadata.qualityRating !== undefined
+                            ? Math.max(metadata.qualityRating, (existingPayload.qualityRating as number) || 0)
+                            : existingPayload.qualityRating;
+
+                        await this.qdrant.setPayload(this.collectionName, {
+                            wait: false,
+                            points: [matched.id],
+                            payload: {
+                                frequency: newFreq,
+                                lastSeen: now,
+                                qualityRating: mergedRating,
+                                verified: metadata.verified ?? existingPayload.verified
+                            }
+                        });
+
+                        return String(matched.id);
+                    }
+                }
+
+                const id = crypto.randomUUID();
+                await this.qdrant.upsert(this.collectionName, {
+                    wait: false,
+                    points: [
+                        {
+                            id,
+                            vector: {
+                                dense: denseVector,
+                                sparse: sparseVector
+                            },
+                            payload: {
+                                content,
+                                appId,
+                                frequency: 1,
+                                qualityRating: metadata.qualityRating ?? 0.5,
+                                verified: metadata.verified ?? false,
+                                timestamp: now,
+                                lastSeen: now,
+                                ...metadata
+                            }
+                        }
+                    ]
+                });
+
+                return id;
+            } catch (err: any) {
+                console.warn(`[MemoryCortex] Qdrant store error: ${err.message || err}. Falling back to in-memory store.`);
+            }
+        }
+
+        // Ephemeral in-memory fallback
         try {
             const denseVector = await this.embeddingProvider.embed(content);
             const sparseVector = SparseTokenizer.encode(content);
-            const appId = metadata.appId || this.defaultAppId;
-            const now = new Date().toISOString();
 
             if (deduplicate) {
-                // Check if semantically identical memory already exists
-                const existing = await this.qdrant.query(this.collectionName, {
-                    query: denseVector,
-                    using: "dense",
-                    limit: 1,
-                    score_threshold: 0.92,
-                    filter: {
-                        must: [{ key: "appId", match: { value: appId } }]
-                    },
-                    with_payload: true
-                });
-
-                if (existing.points.length > 0 && (existing.points[0].score ?? 0) >= 0.92) {
-                    const matched = existing.points[0];
-                    const existingPayload = (matched.payload || {}) as Record<string, any>;
-                    const newFreq = ((existingPayload.frequency as number) || 1) + 1;
-                    const mergedRating = metadata.qualityRating !== undefined
-                        ? Math.max(metadata.qualityRating, (existingPayload.qualityRating as number) || 0)
-                        : existingPayload.qualityRating;
-
-                    await this.qdrant.setPayload(this.collectionName, {
-                        wait: false,
-                        points: [matched.id],
-                        payload: {
-                            frequency: newFreq,
-                            lastSeen: now,
-                            qualityRating: mergedRating,
-                            verified: metadata.verified ?? existingPayload.verified
+                for (const existing of this.fallbackStore) {
+                    if (existing.payload.appId === appId) {
+                        const sim = this.cosineSimilarity(denseVector, existing.denseVector);
+                        if (sim >= 0.92) {
+                            existing.payload.frequency = (existing.payload.frequency || 1) + 1;
+                            existing.payload.lastSeen = now;
+                            if (metadata.qualityRating !== undefined) {
+                                existing.payload.qualityRating = Math.max(metadata.qualityRating, existing.payload.qualityRating || 0);
+                            }
+                            if (metadata.verified !== undefined) {
+                                existing.payload.verified = metadata.verified;
+                            }
+                            return existing.id;
                         }
-                    });
-
-                    return String(matched.id);
+                    }
                 }
             }
 
             const id = crypto.randomUUID();
-            await this.qdrant.upsert(this.collectionName, {
-                wait: false,
-                points: [
-                    {
-                        id,
-                        vector: {
-                            dense: denseVector,
-                            sparse: sparseVector
-                        },
-                        payload: {
-                            content,
-                            appId,
-                            frequency: 1,
-                            qualityRating: metadata.qualityRating ?? 0.5,
-                            verified: metadata.verified ?? false,
-                            timestamp: now,
-                            lastSeen: now,
-                            ...metadata
-                        }
-                    }
-                ]
+            this.fallbackStore.push({
+                id,
+                denseVector,
+                sparseVector,
+                payload: {
+                    content,
+                    appId,
+                    frequency: 1,
+                    qualityRating: metadata.qualityRating ?? 0.5,
+                    verified: metadata.verified ?? false,
+                    timestamp: now,
+                    lastSeen: now,
+                    ...metadata
+                }
             });
 
             return id;
         } catch (err: any) {
-            console.warn(`[MemoryCortex] Store error: ${err.message || err}`);
+            console.warn(`[MemoryCortex] In-memory store error: ${err.message || err}`);
             return null;
         }
     }
 
     /**
-     * Stores a batch of analysis experiences into Qdrant.
+     * Stores a batch of analysis experiences into Qdrant, falling back to in-memory store if offline.
      */
     async storeBatch(memories: { content: string; metadata: MemoryMetadata }[]): Promise<string[]> {
-        const ready = await this.initialize();
-        if (!ready || !this.qdrant || memories.length === 0) return [];
+        await this.initialize();
+        if (memories.length === 0) return [];
+        const now = new Date().toISOString();
 
+        if (this.qdrant && this.isAvailable) {
+            try {
+                const points = await Promise.all(
+                    memories.map(async (memory) => {
+                        const denseVector = await this.embeddingProvider.embed(memory.content);
+                        const sparseVector = SparseTokenizer.encode(memory.content);
+                        const id = crypto.randomUUID();
+
+                        return {
+                            id,
+                            vector: {
+                                dense: denseVector,
+                                sparse: sparseVector
+                            },
+                            payload: {
+                                content: memory.content,
+                                appId: memory.metadata.appId || this.defaultAppId,
+                                frequency: 1,
+                                qualityRating: memory.metadata.qualityRating ?? 0.5,
+                                verified: memory.metadata.verified ?? false,
+                                timestamp: now,
+                                lastSeen: now,
+                                ...memory.metadata
+                            }
+                        };
+                    })
+                );
+
+                await this.qdrant.upsert(this.collectionName, {
+                    wait: false,
+                    points
+                });
+
+                return points.map(p => p.id as string);
+            } catch (err: any) {
+                console.warn(`[MemoryCortex] StoreBatch Qdrant error: ${err.message || err}. Falling back to in-memory store.`);
+            }
+        }
+
+        // Ephemeral in-memory fallback
         try {
-            const now = new Date().toISOString();
-            const points = await Promise.all(
-                memories.map(async (memory) => {
-                    const denseVector = await this.embeddingProvider.embed(memory.content);
-                    const sparseVector = SparseTokenizer.encode(memory.content);
-                    const id = crypto.randomUUID();
-
-                    return {
-                        id,
-                        vector: {
-                            dense: denseVector,
-                            sparse: sparseVector
-                        },
-                        payload: {
-                            content: memory.content,
-                            appId: memory.metadata.appId || this.defaultAppId,
-                            frequency: 1,
-                            qualityRating: memory.metadata.qualityRating ?? 0.5,
-                            verified: memory.metadata.verified ?? false,
-                            timestamp: now,
-                            lastSeen: now,
-                            ...memory.metadata
-                        }
-                    };
-                })
-            );
-
-            await this.qdrant.upsert(this.collectionName, {
-                wait: false,
-                points
-            });
-
-            return points.map(p => p.id as string);
+            const ids: string[] = [];
+            for (const mem of memories) {
+                const id = await this.store(mem.content, mem.metadata, false);
+                if (id) ids.push(id);
+            }
+            return ids;
         } catch (err: any) {
             console.warn(`[MemoryCortex] StoreBatch error: ${err.message || err}`);
             return [];
@@ -380,101 +506,179 @@ export class MemoryCortex {
      * Rates a stored analysis memory to enable continuous reinforcement learning.
      */
     async rateMemory(id: string, rating: number, feedback?: string): Promise<boolean> {
-        const ready = await this.initialize();
-        if (!ready || !this.qdrant) return false;
+        await this.initialize();
+        const normalizedRating = Math.max(0, Math.min(1, rating));
 
-        try {
-            const normalizedRating = Math.max(0, Math.min(1, rating));
-            await this.qdrant.setPayload(this.collectionName, {
-                wait: true,
-                points: [id],
-                payload: {
-                    qualityRating: normalizedRating,
-                    verified: normalizedRating >= 0.8,
-                    feedback: feedback || undefined,
-                    ratedAt: new Date().toISOString()
-                }
-            });
-            return true;
-        } catch (err: any) {
-            console.warn(`[MemoryCortex] RateMemory error: ${err.message || err}`);
-            return false;
+        if (this.qdrant && this.isAvailable) {
+            try {
+                await this.qdrant.setPayload(this.collectionName, {
+                    wait: true,
+                    points: [id],
+                    payload: {
+                        qualityRating: normalizedRating,
+                        verified: normalizedRating >= 0.8,
+                        feedback: feedback || undefined,
+                        ratedAt: new Date().toISOString()
+                    }
+                });
+                return true;
+            } catch (err: any) {
+                console.warn(`[MemoryCortex] RateMemory Qdrant error: ${err.message || err}`);
+            }
         }
+
+        // Ephemeral in-memory fallback
+        const point = this.fallbackStore.find(p => p.id === id);
+        if (point) {
+            point.payload.qualityRating = normalizedRating;
+            point.payload.verified = normalizedRating >= 0.8;
+            point.payload.feedback = feedback || undefined;
+            point.payload.ratedAt = new Date().toISOString();
+            return true;
+        }
+
+        return false;
+    }
+
+    private async retrieveFromFallback(query: string, options: RetrievalOptions): Promise<any[]> {
+        if (this.fallbackStore.length === 0) return [];
+
+        const candidates = this.fallbackStore.filter(pt => {
+            if (options.appId) {
+                if (options.includeShared) {
+                    if (pt.payload.appId !== options.appId && pt.payload.appId !== 'global' && pt.payload.appId !== 'shared') {
+                        return false;
+                    }
+                } else if (pt.payload.appId !== options.appId) {
+                    return false;
+                }
+            }
+            if (options.domain && pt.payload.domain !== options.domain) return false;
+            if (options.agentRole && pt.payload.agentRole !== options.agentRole) return false;
+            if (options.minRating !== undefined && (pt.payload.qualityRating ?? 0) < options.minRating) return false;
+            if (options.verifiedOnly && !pt.payload.verified) return false;
+            return true;
+        });
+
+        if (candidates.length === 0) return [];
+
+        const queryDense = await this.embeddingProvider.embed(query);
+        const querySparse = SparseTokenizer.encode(query);
+
+        // Dense ranking
+        const denseRanked = [...candidates].map(candidate => ({
+            candidate,
+            score: this.cosineSimilarity(queryDense, candidate.denseVector)
+        })).sort((a, b) => b.score - a.score);
+
+        const denseRankMap = new Map<string, number>();
+        denseRanked.forEach((item, idx) => denseRankMap.set(item.candidate.id, idx));
+
+        // Sparse ranking
+        const sparseRanked = [...candidates].map(candidate => ({
+            candidate,
+            score: this.sparseDotProduct(querySparse, candidate.sparseVector)
+        })).sort((a, b) => b.score - a.score);
+
+        const sparseRankMap = new Map<string, number>();
+        sparseRanked.forEach((item, idx) => sparseRankMap.set(item.candidate.id, idx));
+
+        // RRF scoring: 1 / (60 + denseRank + 1) + 1 / (60 + sparseRank + 1)
+        const rrfRanked = candidates.map(candidate => {
+            const dRank = denseRankMap.get(candidate.id) ?? candidates.length;
+            const sRank = sparseRankMap.get(candidate.id) ?? candidates.length;
+            const rrfScore = (1 / (60 + dRank + 1)) + (1 / (60 + sRank + 1));
+            return { candidate, rrfScore };
+        }).sort((a, b) => b.rrfScore - a.rrfScore);
+
+        const limit = options.limit || 3;
+        return rrfRanked.slice(0, limit).map(item => item.candidate.payload);
     }
 
     /**
      * Retrieves relevant past experiences using hybrid search (Dense + Sparse RRF fusion)
-     * with multi-tenant appId namespacing and quality thresholding.
+     * with multi-tenant appId namespacing, quality thresholding, and ephemeral in-memory fallback.
      */
     async retrieve(
         query: string,
         optionsOrDomain?: string | RetrievalOptions,
         limit: number = 3
     ): Promise<any[]> {
-        const ready = await this.initialize();
-        if (!ready || !this.qdrant) return [];
-
-        try {
-            let options: RetrievalOptions = {};
-            if (typeof optionsOrDomain === 'string') {
-                options = { domain: optionsOrDomain, limit };
-            } else if (typeof optionsOrDomain === 'object' && optionsOrDomain !== null) {
-                options = { ...optionsOrDomain, limit: optionsOrDomain.limit || limit };
-            } else {
-                options = { limit };
-            }
-
-            const denseVector = await this.embeddingProvider.embed(query);
-            const sparseVector = SparseTokenizer.encode(query);
-
-            const filterMust: any[] = [];
-            if (options.appId) {
-                filterMust.push({ key: "appId", match: { value: options.appId } });
-            }
-            if (options.domain) {
-                filterMust.push({ key: "domain", match: { value: options.domain } });
-            }
-            if (options.agentRole) {
-                filterMust.push({ key: "agentRole", match: { value: options.agentRole } });
-            }
-            if (options.minRating !== undefined) {
-                filterMust.push({ key: "qualityRating", range: { gte: options.minRating } });
-            }
-            if (options.verifiedOnly) {
-                filterMust.push({ key: "verified", match: { value: true } });
-            }
-
-            const filter = filterMust.length > 0 ? { must: filterMust } : undefined;
-            const searchLimit = options.limit || 3;
-
-            const results = await this.qdrant.query(this.collectionName, {
-                prefetch: [
-                    {
-                        query: denseVector,
-                        using: "dense",
-                        limit: searchLimit * 2,
-                        filter,
-                        params: { hnsw_ef: 64 }
-                    },
-                    {
-                        query: sparseVector,
-                        using: "sparse",
-                        limit: searchLimit * 2,
-                        filter
-                    }
-                ],
-                query: {
-                    rrf: { k: 60 }
-                },
-                limit: searchLimit,
-                with_payload: true
-            });
-
-            return results.points.map(r => r.payload).filter(Boolean);
-        } catch (err: any) {
-            console.warn(`[MemoryCortex] Hybrid retrieval error: ${err.message || err}`);
-            return [];
+        await this.initialize();
+        let options: RetrievalOptions = {};
+        if (typeof optionsOrDomain === 'string') {
+            options = { domain: optionsOrDomain, limit };
+        } else if (typeof optionsOrDomain === 'object' && optionsOrDomain !== null) {
+            options = { ...optionsOrDomain, limit: optionsOrDomain.limit || limit };
+        } else {
+            options = { limit };
         }
+
+        if (this.qdrant && this.isAvailable) {
+            try {
+                const denseVector = await this.embeddingProvider.embed(query);
+                const sparseVector = SparseTokenizer.encode(query);
+
+                const filterMust: any[] = [];
+                if (options.appId) {
+                    if (options.includeShared) {
+                        filterMust.push({
+                            should: [
+                                { key: "appId", match: { value: options.appId } },
+                                { key: "appId", match: { value: "global" } },
+                                { key: "appId", match: { value: "shared" } }
+                            ]
+                        });
+                    } else {
+                        filterMust.push({ key: "appId", match: { value: options.appId } });
+                    }
+                }
+                if (options.domain) {
+                    filterMust.push({ key: "domain", match: { value: options.domain } });
+                }
+                if (options.agentRole) {
+                    filterMust.push({ key: "agentRole", match: { value: options.agentRole } });
+                }
+                if (options.minRating !== undefined) {
+                    filterMust.push({ key: "qualityRating", range: { gte: options.minRating } });
+                }
+                if (options.verifiedOnly) {
+                    filterMust.push({ key: "verified", match: { value: true } });
+                }
+
+                const filter = filterMust.length > 0 ? { must: filterMust } : undefined;
+                const searchLimit = options.limit || 3;
+
+                const results = await this.qdrant.query(this.collectionName, {
+                    prefetch: [
+                        {
+                            query: denseVector,
+                            using: "dense",
+                            limit: searchLimit * 2,
+                            filter,
+                            params: { hnsw_ef: 64 }
+                        },
+                        {
+                            query: sparseVector,
+                            using: "sparse",
+                            limit: searchLimit * 2,
+                            filter
+                        }
+                    ],
+                    query: {
+                        rrf: { k: 60 }
+                    },
+                    limit: searchLimit,
+                    with_payload: true
+                });
+
+                return results.points.map(r => r.payload).filter(Boolean);
+            } catch (err: any) {
+                console.warn(`[MemoryCortex] Hybrid retrieval error: ${err.message || err}. Falling back to in-memory search.`);
+            }
+        }
+
+        return this.retrieveFromFallback(query, options);
     }
 
     /**
@@ -497,10 +701,115 @@ export class MemoryCortex {
     }
 
     /**
-     * Wipes the collection for this specific application testing ground.
+     * Consolidates and prunes memories based on minimum quality rating, expiration age, and optional appId filter.
+     */
+    async consolidateMemories(options?: ConsolidationOptions): Promise<ConsolidationResult> {
+        await this.initialize();
+        const minRating = options?.minRating ?? 0.40;
+        const pruneLowQuality = options?.pruneLowQuality ?? true;
+        const appId = options?.appId;
+        const maxAgeDays = options?.maxAgeDays;
+
+        const prunedIds: string[] = [];
+        let inspected = 0;
+
+        // Process in-memory fallback store
+        if (this.fallbackStore.length > 0) {
+            const now = Date.now();
+            const remaining: StoredMemoryPoint[] = [];
+            for (const pt of this.fallbackStore) {
+                if (appId && pt.payload.appId !== appId) {
+                    remaining.push(pt);
+                    continue;
+                }
+                inspected++;
+                let shouldPrune = false;
+                if (pruneLowQuality && (pt.payload.qualityRating ?? 0) < minRating) {
+                    shouldPrune = true;
+                }
+                if (maxAgeDays !== undefined && pt.payload.timestamp) {
+                    const ageDays = (now - new Date(pt.payload.timestamp).getTime()) / (1000 * 60 * 60 * 24);
+                    if (ageDays > maxAgeDays && !pt.payload.verified) {
+                        shouldPrune = true;
+                    }
+                }
+                if (shouldPrune) {
+                    prunedIds.push(pt.id);
+                } else {
+                    remaining.push(pt);
+                }
+            }
+            this.fallbackStore = remaining;
+        }
+
+        // Process Qdrant store if available
+        if (this.qdrant && this.isAvailable) {
+            try {
+                if (typeof (this.qdrant as any).scroll === 'function') {
+                    const scrollFilter: any[] = [];
+                    if (appId) scrollFilter.push({ key: "appId", match: { value: appId } });
+                    const scrollRes = await (this.qdrant as any).scroll(this.collectionName, {
+                        filter: scrollFilter.length > 0 ? { must: scrollFilter } : undefined,
+                        limit: 1000,
+                        with_payload: true
+                    });
+                    const now = Date.now();
+                    const qdrantPruneIds: string[] = [];
+                    for (const pt of (scrollRes.points || [])) {
+                        inspected++;
+                        const payload = (pt.payload || {}) as Record<string, any>;
+                        let shouldPrune = false;
+                        if (pruneLowQuality && (payload.qualityRating ?? 0) < minRating) {
+                            shouldPrune = true;
+                        }
+                        if (maxAgeDays !== undefined && payload.timestamp) {
+                            const ageDays = (now - new Date(payload.timestamp).getTime()) / (1000 * 60 * 60 * 24);
+                            if (ageDays > maxAgeDays && !payload.verified) {
+                                shouldPrune = true;
+                            }
+                        }
+                        if (shouldPrune) {
+                            qdrantPruneIds.push(String(pt.id));
+                            prunedIds.push(String(pt.id));
+                        }
+                    }
+                    if (qdrantPruneIds.length > 0 && typeof (this.qdrant as any).delete === 'function') {
+                        await (this.qdrant as any).delete(this.collectionName, {
+                            wait: true,
+                            points: qdrantPruneIds
+                        });
+                    }
+                } else if (typeof (this.qdrant as any).delete === 'function') {
+                    const filterMust: any[] = [];
+                    if (appId) filterMust.push({ key: "appId", match: { value: appId } });
+                    if (pruneLowQuality) filterMust.push({ key: "qualityRating", range: { lt: minRating } });
+                    await (this.qdrant as any).delete(this.collectionName, {
+                        wait: true,
+                        filter: { must: filterMust }
+                    });
+                }
+            } catch (err: any) {
+                console.warn(`[MemoryCortex] ConsolidateMemories Qdrant error: ${err.message || err}`);
+            }
+        }
+
+        return {
+            inspected,
+            pruned: prunedIds.length,
+            retained: Math.max(0, inspected - prunedIds.length),
+            prunedIds
+        };
+    }
+
+    /**
+     * Wipes the collection and in-memory store.
      */
     async wipeCollection(): Promise<boolean> {
-        if (!this.qdrant) return false;
+        this.fallbackStore = [];
+        if (!this.qdrant) {
+            this.initialized = false;
+            return true;
+        }
         try {
             await this.qdrant.deleteCollection(this.collectionName);
             this.initialized = false;
@@ -513,6 +822,14 @@ export class MemoryCortex {
     }
 
     get ready(): boolean {
+        return true;
+    }
+
+    get isQdrantAvailable(): boolean {
         return this.isAvailable;
+    }
+
+    get fallbackCount(): number {
+        return this.fallbackStore.length;
     }
 }

@@ -10,6 +10,54 @@ export const AnalystResponseSchema = z.object({
 });
 
 /**
+ * Generative UI synthesis schema for Manager Node dashboards.
+ */
+export const ManagerResponseSchema = z.object({
+  ui_title: z.string().describe("Dashboard Title"),
+  components: z.array(
+    z.discriminatedUnion("type", [
+      z.object({
+        id: z.string(),
+        type: z.literal("MetricCard"),
+        props: z.object({
+          title: z.string(),
+          value: z.string(),
+          subtitle: z.string().optional(),
+          trend: z.enum(["up", "down", "neutral"]).optional()
+        })
+      }),
+      z.object({
+        id: z.string(),
+        type: z.literal("InsightList"),
+        props: z.object({
+          title: z.string(),
+          insights: z.array(
+            z.object({
+              type: z.enum(["success", "warning", "info", "error"]),
+              message: z.string()
+            })
+          )
+        })
+      }),
+      z.object({
+        id: z.string(),
+        type: z.literal("DataTable"),
+        props: z.object({
+          title: z.string(),
+          columns: z.array(
+            z.object({
+              key: z.string(),
+              header: z.string()
+            })
+          ),
+          rows: z.array(z.record(z.string(), z.any()))
+        })
+      })
+    ])
+  ).describe("Array of UI components to render the analysis")
+});
+
+/**
  * Domain-agnostic generic analysis result schema for non-web / multi-app integration.
  */
 export const GenericAnalysisResponseSchema = z.object({
@@ -23,4 +71,5 @@ export const GenericAnalysisResponseSchema = z.object({
 });
 
 export type AnalystResponse = z.infer<typeof AnalystResponseSchema>;
+export type ManagerResponse = z.infer<typeof ManagerResponseSchema>;
 export type GenericAnalysisResponse = z.infer<typeof GenericAnalysisResponseSchema>;

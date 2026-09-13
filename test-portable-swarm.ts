@@ -10,7 +10,10 @@ import {
     PayloadCache,
     SwarmHierarchy,
     AdaptiveLoadBalancer,
-    globalLoadBalancer
+    globalLoadBalancer,
+    SwarmEngine,
+    executeSwarmWorkflow,
+    OpenRouterAdapter
 } from './swarm.ts';
 
 async function runPortableValidation() {
@@ -69,6 +72,34 @@ async function runPortableValidation() {
         throw new Error('ModelRouter complexity tier mapping failure');
     }
 
+    console.log('\n=== Step 4b: Guaranteed Free-Tier Model Routing & OpenRouter :free Resolution ===');
+    const orComplex = ModelRouter.getRecommendedModel('openrouter', 'complex');
+    const orInstant = ModelRouter.getRecommendedModel('openrouter', 'instant');
+    const geminiComplex = ModelRouter.getRecommendedModel('gemini', 'complex');
+    const mistralComplex = ModelRouter.getRecommendedModel('mistral', 'complex');
+    const resolvedFree = OpenRouterAdapter.resolveFreeModel('deepseek/deepseek-r1');
+    const alreadyFree = OpenRouterAdapter.resolveFreeModel('meta-llama/llama-3.3-70b-instruct:free');
+    const customFree = OpenRouterAdapter.resolveFreeModel('qwen/qwen-2.5-coder-32b-instruct');
+
+    console.log('OpenRouter Complex Model:', orComplex);
+    console.log('OpenRouter Instant Model:', orInstant);
+    console.log('Gemini Complex Model (free tier):', geminiComplex);
+    console.log('Mistral Complex Model (free tier):', mistralComplex);
+    console.log('Resolved free model (from deepseek/deepseek-r1):', resolvedFree);
+
+    if (!orComplex.endsWith(':free') || !orInstant.endsWith(':free')) {
+        throw new Error('OpenRouter recommended model missing guaranteed :free suffix');
+    }
+    if (geminiComplex !== 'gemini-2.5-flash') {
+        throw new Error('Gemini complex model should default to gemini-2.5-flash for high quota free tier');
+    }
+    if (mistralComplex !== 'mistral-small-latest') {
+        throw new Error('Mistral complex model should default to mistral-small-latest');
+    }
+    if (resolvedFree !== 'deepseek/deepseek-r1:free' || alreadyFree !== 'meta-llama/llama-3.3-70b-instruct:free' || customFree !== 'qwen/qwen-2.5-coder-32b-instruct:free') {
+        throw new Error('OpenRouterAdapter.resolveFreeModel resolution failure');
+    }
+
     console.log('\n=== Step 5: Agent Execution via Custom Adapter ===');
     const agent = new Agent('Mock Analyst', 'mock-v1', 'custom-mock', 'fake-key');
     const output = await agent.run('Hello swarm world', context);
@@ -84,6 +115,19 @@ async function runPortableValidation() {
         'Verify this analysis'
     );
     console.log('Lifecycle success:', lifecycleResult.success);
+    console.log('Lifecycle computed RLAIF score:', lifecycleResult.computedRating);
+    console.log('Lifecycle critic feedback:', lifecycleResult.criticFeedback);
+    if (lifecycleResult.computedRating !== 0.98) {
+        throw new Error(`Expected first attempt pass RLAIF score to be 0.98, got ${lifecycleResult.computedRating}`);
+    }
+
+    const attempt2Score = AnalysisLifecycle.computeReinforcementScore(true, 2, 3);
+    const failureScore = AnalysisLifecycle.computeReinforcementScore(false, 3, 3);
+    console.log('Computed attempt 2 RLAIF score:', attempt2Score);
+    console.log('Computed failure RLAIF score:', failureScore);
+    if (attempt2Score !== 0.88 || failureScore > 0.40) {
+        throw new Error('AnalysisLifecycle.computeReinforcementScore calibration error');
+    }
 
     console.log('\n=== Step 7: Zero-cost Deterministic Dense Embeddings ===');
     const embeddingProvider = new DeterministicLocalEmbeddingProvider();
@@ -158,21 +202,46 @@ async function runPortableValidation() {
     const mockStore: any[] = [];
     const mockPayloadUpdates: any[] = [];
     const mockQueries: any[] = [];
+    const mockCreatedIndexes: any[] = [];
 
     const mockQdrantClient: any = {
         async getCollections() {
             return { collections: [{ name: 'test_collection' }] };
         },
-        async createPayloadIndex() {
+        async createPayloadIndex(col: string, params: any) {
+            mockCreatedIndexes.push(params);
+            return { status: 'ok' };
+        },
+        async scroll(col: string, params: any) {
+            const appId = params?.filter?.must?.find((m: any) => m.key === 'appId')?.match?.value;
+            let points = mockStore;
+            if (appId) {
+                points = mockStore.filter(p => p.payload.appId === appId);
+            }
+            return { points: points.map(p => ({ id: p.id, payload: p.payload })) };
+        },
+        async delete(col: string, params: any) {
+            if (params.points) {
+                for (const pid of params.points) {
+                    const idx = mockStore.findIndex(p => p.id === pid);
+                    if (idx !== -1) mockStore.splice(idx, 1);
+                }
+            }
             return { status: 'ok' };
         },
         async query(col: string, queryParams: any) {
             mockQueries.push(queryParams);
             if (queryParams.score_threshold === 0.92) {
                 const appId = queryParams.filter?.must?.find((m: any) => m.key === 'appId')?.match?.value;
-                const existing = mockStore.find(p => p.payload.appId === appId);
-                if (existing) {
-                    return { points: [{ id: existing.id, score: 0.95, payload: existing.payload }] };
+                const queryVector = queryParams.query;
+                for (const pt of mockStore) {
+                    if (pt.payload.appId === appId && pt.vector?.dense && queryVector) {
+                        let dot = 0;
+                        for (let i = 0; i < queryVector.length; i++) dot += queryVector[i] * pt.vector.dense[i];
+                        if (dot >= 0.92) {
+                            return { points: [{ id: pt.id, score: dot, payload: pt.payload }] };
+                        }
+                    }
                 }
                 return { points: [] };
             }
@@ -262,6 +331,13 @@ async function runPortableValidation() {
     console.log('Generated few-shot learning exemplars:\n', exemplars);
     if (!exemplars.includes('[Learning Exemplar 1]') || !exemplars.includes('Quality Rating: 98%')) {
         throw new Error('retrieveExemplars failed to distill high-quality past experiences');
+    }
+
+    // 11f: Verify Verified Payload Index Creation
+    const verifiedIndex = mockCreatedIndexes.find(i => i.field_name === 'verified' && i.field_schema === 'bool');
+    console.log('Verified payload index registered:', verifiedIndex);
+    if (!verifiedIndex) {
+        throw new Error('ensurePayloadIndex failed to create verified (bool) index');
     }
 
     console.log('\n=== Step 12: Deterministic Structured Payload Caching & Drift Prevention ===');
@@ -404,7 +480,132 @@ async function runPortableValidation() {
         throw new Error('executeWithTelemetry wrapper failed');
     }
 
-    console.log('\n=== Step 15: Context Event Log Summary ===');
+    console.log('\n=== Step 15: Headless SwarmEngine Execution Verification ===');
+    const engineResult = await executeSwarmWorkflow({
+        task: 'Trivial health ping',
+        data: 'system=online',
+        settings: {
+            agents: [
+                { id: 'manager', role: 'Manager Node', provider: 'custom-mock', model: 'mock-v1', apiKey: 'k-mgr' },
+                { id: 'analyst-1', role: 'Analyst', provider: 'custom-mock', model: 'mock-v1', apiKey: 'k-an1' }
+            ]
+        }
+    });
+    console.log('Engine workflow fast-path execution title:', engineResult.finalAnalysis?.ui_title);
+    if (!engineResult.finalAnalysis || !engineResult.finalAnalysis.ui_title) {
+        throw new Error('SwarmEngine headless execution failed to produce valid final analysis');
+    }
+
+    console.log('\n=== Step 17: Qdrant Cortex Optimization, Memory Pruning & Ephemeral In-Memory Fallback ===');
+    
+    // 17a: Consolidate / Prune low-quality memories in Qdrant-backed mode
+    const lowQualityMemId = await learningCortex.store(
+        'Flaky transient timeout that failed verification',
+        { domain: 'infrastructure', agentRole: 'Analyst', appId: 'app-analytics-core', qualityRating: 0.25 }
+    );
+    console.log('Stored low-quality point for pruning test:', lowQualityMemId);
+    const prePruneCount = mockStore.length;
+    
+    const pruneResult = await learningCortex.consolidateMemories({
+        appId: 'app-analytics-core',
+        minRating: 0.40,
+        pruneLowQuality: true
+    });
+    console.log('Qdrant-backed consolidation result:', pruneResult);
+    if (pruneResult.pruned !== 1 || !pruneResult.prunedIds.includes(lowQualityMemId!)) {
+        throw new Error('consolidateMemories failed to prune low-quality point in Qdrant-backed mode');
+    }
+    if (mockStore.length !== prePruneCount - 1) {
+        throw new Error('mockStore did not decrease by pruned point count');
+    }
+
+    // 17b: Ephemeral In-Memory Vector Fallback (Zero-Qdrant Offline Operation)
+    const offlineCortex = new MemoryCortex({
+        defaultAppId: 'offline-tenant-app',
+        embeddingProvider: new DeterministicLocalEmbeddingProvider()
+    });
+    console.log('Offline cortex ready state:', offlineCortex.ready);
+    if (!offlineCortex.ready) {
+        throw new Error('Offline MemoryCortex should be immediately ready with fallbackStore');
+    }
+
+    // Store memories into in-memory fallback
+    const off1 = await offlineCortex.store(
+        'Critical cache invalidation deadlock on Redis cluster',
+        { domain: 'infrastructure', agentRole: 'Cache Specialist', qualityRating: 0.95, verified: true }
+    );
+    // Deduplication in fallbackStore
+    const off1Dup = await offlineCortex.store(
+        'Critical cache invalidation deadlock on Redis cluster',
+        { domain: 'infrastructure', agentRole: 'Cache Specialist', qualityRating: 0.98 }
+    );
+    if (off1 !== off1Dup || (offlineCortex.fallbackCount as number) !== 1) {
+        throw new Error('FallbackStore deduplication failed');
+    }
+
+    // Store low quality point
+    const offLow = await offlineCortex.store(
+        'Sporadic unverified jitter in connection handshake',
+        { domain: 'network', agentRole: 'Network Analyst', qualityRating: 0.30 }
+    );
+
+    // Store shared global point
+    const offShared = await offlineCortex.store(
+        'Enterprise auth token standard schema and lifetime',
+        { domain: 'security', agentRole: 'Security Architect', appId: 'global', qualityRating: 0.92, verified: true }
+    );
+
+    console.log(`Stored ${offlineCortex.fallbackCount} memories in ephemeral fallbackStore`);
+    if ((offlineCortex.fallbackCount as number) !== 3) {
+        throw new Error(`Expected 3 fallbackStore items, found ${offlineCortex.fallbackCount}`);
+    }
+
+    // 17c: Dense + Sparse Hybrid RRF Retrieval in Fallback Mode
+    const retrievedOffline = await offlineCortex.retrieve('cache deadlock on Redis', {
+        appId: 'offline-tenant-app',
+        limit: 2
+    });
+    console.log('Retrieved from in-memory fallback:', retrievedOffline.map(m => m.content));
+    if (retrievedOffline.length === 0 || !retrievedOffline[0].content.includes('Redis')) {
+        throw new Error('In-memory hybrid retrieval failed to return relevant experience');
+    }
+
+    // 17d: Cross-App Shared Learning Baseline Retrieval
+    const sharedRetrieved = await offlineCortex.retrieve('auth token standard', {
+        appId: 'offline-tenant-app',
+        includeShared: true,
+        limit: 2
+    });
+    console.log('Cross-app shared retrieval result:', sharedRetrieved.map(m => ({ appId: m.appId, content: m.content })));
+    if (!sharedRetrieved.some(m => m.appId === 'global')) {
+        throw new Error('includeShared retrieval failed to return global learning baseline');
+    }
+
+    // 17e: Few-Shot Exemplar Distillation in Fallback Mode
+    const offlineExemplars = await offlineCortex.retrieveExemplars('Redis cache deadlock', {
+        appId: 'offline-tenant-app',
+        minRating: 0.8
+    });
+    console.log('Generated offline exemplars:\n', offlineExemplars);
+    if (!offlineExemplars.includes('[Learning Exemplar 1]') || !offlineExemplars.includes('Quality Rating: 98%')) {
+        throw new Error('retrieveExemplars failed in ephemeral in-memory mode');
+    }
+
+    // 17f: In-Memory Consolidation / Pruning (< 0.40)
+    const offlinePrune = await offlineCortex.consolidateMemories({
+        appId: 'offline-tenant-app',
+        minRating: 0.40,
+        pruneLowQuality: true
+    });
+    console.log('Offline consolidation result:', offlinePrune);
+    if (offlinePrune.pruned !== 1 || !offlinePrune.prunedIds.includes(offLow!)) {
+        throw new Error('Offline consolidateMemories failed to prune low quality memory');
+    }
+    if ((offlineCortex.fallbackCount as number) !== 2) {
+        throw new Error(`Expected 2 remaining points in fallbackStore after pruning, found ${offlineCortex.fallbackCount}`);
+    }
+
+    console.log('\n=== Step 16: Context Event Log Summary ===');
     console.log(`Total events recorded in SwarmContext: ${recordedEvents.length}`);
     recordedEvents.forEach(e => console.log(' -', e));
 
