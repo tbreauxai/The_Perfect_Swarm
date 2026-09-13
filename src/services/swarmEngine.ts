@@ -6,6 +6,7 @@ import { profileData, createTokenChunks } from './profilerService.ts';
 
 import { ModelRouter, type TaskComplexity } from '../router.ts';
 import { AnalysisLifecycle } from '../lifecycle.ts';
+import { PayloadCache, globalPayloadCache } from '../cache.ts';
 
 import { AnalystResponseSchema, ManagerResponseSchema } from '../schemas.ts';
 import { zodToJsonSchema } from 'zod-to-json-schema';
@@ -78,6 +79,35 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     const complexity: TaskComplexity = complexityOverride || ModelRouter.inferComplexity(task, (data || '').length);
     const deepAnalysisRequested = enableDeepAnalysis ?? settings?.enableDeepAnalysis ?? (complexity === 'complex');
 
+    // 0b. Check Deterministic Payload Cache for Zero-Drift Short-Circuit
+    const targetAppId = settings?.appId || 'perfect-swarm';
+    const cacheKey = PayloadCache.computeFingerprint(task, data || "", {
+        appId: targetAppId,
+        deepAnalysis: deepAnalysisRequested,
+        complexity
+    });
+
+    const cachedAnalysis = globalPayloadCache.get(cacheKey);
+    if (cachedAnalysis) {
+        context.addEvent({
+            agentRole: 'Payload Cache',
+            action: 'Cache Hit (Zero-Drift Execution)',
+            modelName: 'Local/LRU-Cache',
+            prompt: `Deterministic cache hit for fingerprint: ${cacheKey.substring(0, 16)}...`,
+            output: {
+                fingerprint: cacheKey,
+                cached: true,
+                bypassed: '100% LLM token consumption & provider API calls'
+            },
+            durationMs: 0
+        });
+
+        return {
+            events: context.events,
+            finalAnalysis: cachedAnalysis
+        };
+    }
+
     // 1. Resolve Manager and Analysts
     const rawAgents = settings?.agents || [];
     let managerConfig = rawAgents.find((a: any) => a.id === 'manager' || a.role === 'Manager Node');
@@ -129,13 +159,16 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         throw new Error('No active Analysts found. Please configure at least one Analyst agent in settings and ensure its API key is provided.');
     }
 
+    const fastPathDecision = ModelRouter.evaluateFastPath(task, data || "", deepAnalysisRequested);
+
     context.addEvent({
         agentRole: 'Model Router',
         action: 'Routing & Complexity Classification',
         modelName: 'Local/TypeScript',
-        prompt: `Routing task with inferred complexity='${complexity}', deepAnalysis=${deepAnalysisRequested}`,
+        prompt: `Routing task with inferred complexity='${complexity}', fastPathEligible=${fastPathDecision.eligible}`,
         output: {
             complexity,
+            fastPath: fastPathDecision,
             deepAnalysis: deepAnalysisRequested,
             manager: { provider: managerConfig.provider, model: managerModel },
             analysts: analysts.map(a => ({ role: a.role, provider: a.provider, model: a.modelName }))
@@ -144,6 +177,70 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     });
 
     let finalAnalysis: any = null;
+
+    if (fastPathDecision.eligible && analysts.length > 0) {
+        const fastAnalyst = analysts[0];
+        context.addEvent({
+            agentRole: 'Model Router',
+            action: 'Fast-Path Short-Circuit Activated',
+            modelName: 'Local/TypeScript',
+            prompt: `Short-circuiting execution: ${fastPathDecision.reason}`,
+            output: {
+                bypassed: ['Data Profiler', 'Token Budgeter / Chunker', 'Qdrant Vector Cortex', 'Multi-Analyst Fanout', 'Critic Verification Loop'],
+                dispatchedTo: fastAnalyst.role,
+                estimatedTokens: fastPathDecision.estimatedTokens
+            },
+            durationMs: 0
+        });
+
+        fastAnalyst.setSystemInstruction(ANALYST_SYSTEM_INSTRUCTION);
+        const fastPrompt = `Task: ${task}\nData:\n${data || "(No additional data payload)"}`;
+
+        try {
+            const rawOutput = await fastAnalyst.run(fastPrompt, context, { responseMimeType: "application/json" });
+            const parsed = AnalystResponseSchema.safeParse(rawOutput);
+            if (parsed.success) {
+                finalAnalysis = {
+                    ui_title: `Fast Analysis: ${task.substring(0, 40)}`,
+                    components: [
+                        {
+                            id: 'fast-summary',
+                            type: 'InsightList',
+                            props: {
+                                title: 'Key Insights',
+                                insights: parsed.data.insights.map((i: string) => ({ type: 'info', message: i }))
+                            }
+                        }
+                    ]
+                };
+            } else {
+                finalAnalysis = {
+                    ui_title: `Fast Analysis: ${task.substring(0, 40)}`,
+                    components: [
+                        {
+                            id: 'fast-summary',
+                            type: 'InsightList',
+                            props: {
+                                title: 'Summary',
+                                insights: [{ type: 'info', message: typeof rawOutput === 'string' ? rawOutput : JSON.stringify(rawOutput) }]
+                            }
+                        }
+                    ]
+                };
+            }
+
+            if (finalAnalysis && !finalAnalysis.ui_title?.includes("Error")) {
+                globalPayloadCache.set(cacheKey, finalAnalysis);
+            }
+
+            return {
+                events: context.events,
+                finalAnalysis
+            };
+        } catch (err: any) {
+            console.warn(`[Fast-Path] Short-circuit failed, falling back to full swarm pipeline:`, err);
+        }
+    }
 
     try {
         // Step 1: Data Profiling
@@ -382,6 +479,10 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         }
     } catch (swarmErr) {
         console.error("Swarm execution failed:", swarmErr);
+    }
+
+    if (finalAnalysis && !finalAnalysis.ui_title?.includes("Error")) {
+        globalPayloadCache.set(cacheKey, finalAnalysis);
     }
 
     return {

@@ -6,7 +6,11 @@ import {
     MemoryCortex,
     DeterministicLocalEmbeddingProvider,
     SparseTokenizer,
-    AnalysisLifecycle
+    AnalysisLifecycle,
+    PayloadCache,
+    SwarmHierarchy,
+    AdaptiveLoadBalancer,
+    globalLoadBalancer
 } from './swarm.ts';
 
 async function runPortableValidation() {
@@ -36,13 +40,33 @@ async function runPortableValidation() {
         recordedEvents.push(`[${event.agentRole}] ${event.action}`);
     });
 
-    console.log('\n=== Step 4: ModelRouter Task Inference ===');
-    const simpleComplexity = ModelRouter.inferComplexity('Summarize this receipt in 2 bullets');
+    console.log('\n=== Step 4: ModelRouter Task Inference & Fast-Path Pre-Filtering ===');
+    const fastDecision = ModelRouter.evaluateFastPath('What is 2 + 2?');
+    const fastDecisionWithSmallData = ModelRouter.evaluateFastPath('Lookup user id', 'id=42');
+    const deepNegative = ModelRouter.evaluateFastPath('Perform root cause audit of latency spikes');
+    const largeDataNegative = ModelRouter.evaluateFastPath('Quick summary', 'x'.repeat(300));
+    const deepAnalysisFlagNegative = ModelRouter.evaluateFastPath('Quick summary', '', true);
+
+    const simpleComplexity = ModelRouter.inferComplexity('Summarize this receipt in 2 bullets', 1000);
     const complexComplexity = ModelRouter.inferComplexity('Deep audit and root cause security verification of memory leaks');
-    console.log('Inferred simple task complexity:', simpleComplexity);
-    console.log('Inferred complex task complexity:', complexComplexity);
-    if (simpleComplexity !== 'simple' || complexComplexity !== 'complex') {
-        throw new Error('ModelRouter complexity inference failure');
+    const instantComplexity = ModelRouter.inferComplexity('Hello world');
+
+    console.log('Fast-path decision for trivial query:', fastDecision);
+    console.log('Fast-path decision for small data query:', fastDecisionWithSmallData);
+    console.log('Fast-path decision for audit query:', deepNegative);
+    console.log('Inferred instant task complexity:', instantComplexity);
+
+    if (!fastDecision.eligible || fastDecision.targetTier !== 'instant') {
+        throw new Error('Fast-path failed to identify low-complexity intent');
+    }
+    if (!fastDecisionWithSmallData.eligible) {
+        throw new Error('Fast-path failed to accept small data query (<256 chars)');
+    }
+    if (deepNegative.eligible || largeDataNegative.eligible || deepAnalysisFlagNegative.eligible) {
+        throw new Error('Fast-path falsely accepted complex or deep query');
+    }
+    if (instantComplexity !== 'instant' || simpleComplexity !== 'simple' || complexComplexity !== 'complex') {
+        throw new Error('ModelRouter complexity tier mapping failure');
     }
 
     console.log('\n=== Step 5: Agent Execution via Custom Adapter ===');
@@ -240,11 +264,151 @@ async function runPortableValidation() {
         throw new Error('retrieveExemplars failed to distill high-quality past experiences');
     }
 
-    console.log('\n=== Step 12: Context Event Log Summary ===');
+    console.log('\n=== Step 12: Deterministic Structured Payload Caching & Drift Prevention ===');
+    const cache = new PayloadCache({ maxEntries: 2, defaultTtlMs: 1000 });
+
+    const fp1 = PayloadCache.computeFingerprint('Analyze server latency', 'metric=cpu_idle', { appId: 'app-1' });
+    const fp2 = PayloadCache.computeFingerprint('Analyze server latency', 'metric=cpu_idle', { appId: 'app-1' });
+    const fp3 = PayloadCache.computeFingerprint('Analyze server latency', 'metric=cpu_idle', { appId: 'app-2' });
+
+    console.log('Deterministic fingerprint 1:', fp1);
+    console.log('Deterministic fingerprint 2 (identical parameters):', fp2);
+    if (fp1 !== fp2) {
+        throw new Error('PayloadCache fingerprints must be strictly deterministic');
+    }
+    if (fp1 === fp3) {
+        throw new Error('PayloadCache fingerprints must isolate by appId');
+    }
+
+    // Set cache entry
+    cache.set(fp1, { status: 'success', diagnosis: 'CPU idle anomaly' });
+    const hit1 = cache.get(fp1);
+    console.log('Cache hit output:', hit1);
+    if (!hit1 || hit1.diagnosis !== 'CPU idle anomaly') {
+        throw new Error('PayloadCache get failed to retrieve cached payload');
+    }
+
+    // Test LRU eviction (maxEntries = 2)
+    cache.set('key-a', { id: 'a' });
+    cache.set('key-b', { id: 'b' });
+    if (cache.has(fp1)) {
+        throw new Error('PayloadCache failed to evict least recently used entry');
+    }
+    if (!cache.has('key-a') || !cache.has('key-b')) {
+        throw new Error('PayloadCache failed to preserve recent entries under LRU bound');
+    }
+
+    const stats = cache.getStats();
+    console.log('PayloadCache stats:', stats);
+    if (stats.evictions !== 1 || stats.hits < 1) {
+        throw new Error('PayloadCache stats tracking failure');
+    }
+
+    console.log('\n=== Step 13: Hierarchical Agent Communication Layers & Scoped Event Broadcasting ===');
+    const hierarchy = new SwarmHierarchy(context);
+
+    const triageAgent = new Agent('Triage Node', 'mock-v1', 'custom-mock', 'key');
+    const secAnalyst = new Agent('Security Specialist', 'mock-v1', 'custom-mock', 'key');
+    const perfAnalyst = new Agent('Performance Specialist', 'mock-v1', 'custom-mock', 'key');
+    const dbAnalyst = new Agent('Database Specialist', 'mock-v1', 'custom-mock', 'key');
+    const managerAgent = new Agent('Manager Synthesizer', 'mock-v1', 'custom-mock', 'key');
+
+    hierarchy.setTriageNode(triageAgent);
+    hierarchy.addSpecialistNode(secAnalyst, 'sec-1', 'Security Specialist', ['vulnerability', 'auth', 'security', 'cve']);
+    hierarchy.addSpecialistNode(perfAnalyst, 'perf-1', 'Performance Specialist', ['latency', 'throughput', 'memory', 'cpu']);
+    hierarchy.addSpecialistNode(dbAnalyst, 'db-1', 'Database Specialist', ['sql', 'query', 'indexing', 'database']);
+    hierarchy.setSynthesisNode(managerAgent);
+
+    // 13a: Triage Planning - targeted selection
+    const secPlan = hierarchy.planTriage('Investigate auth vulnerability in API gateway', '', 2);
+    console.log('Triage Plan for security task:', secPlan);
+    if (!secPlan.selectedSpecialistIds.includes('sec-1')) {
+        throw new Error('L1 Triage failed to select Security Specialist for vulnerability task');
+    }
+    if (secPlan.selectedSpecialistIds.includes('db-1')) {
+        throw new Error('L1 Triage should have bypassed Database Specialist for pure security task');
+    }
+
+    // 13b: Hierarchical Execution
+    const hierResult = await hierarchy.execute(
+        'Investigate auth vulnerability in API gateway',
+        'Payload: invalid JWT token format accepted',
+        { maxSpecialists: 2, scope: 'milestones' }
+    );
+    console.log('Hierarchy execution bypassed specialists:', hierResult.bypassedSpecialists);
+    if (!hierResult.bypassedSpecialists.includes('db-1')) {
+        throw new Error('Expected unneeded specialist to be bypassed during execution');
+    }
+
+    // 13c: Scoped Event Filtering
+    const allEvents = hierarchy.getContext().events;
+    const milestoneEvents = hierarchy.filterEventsByScope(allEvents, 'milestones');
+    console.log(`Total raw events: ${allEvents.length}, Scoped milestone events: ${milestoneEvents.length}`);
+    if (milestoneEvents.length > allEvents.length) {
+        throw new Error('Scoped filtering returned more events than total');
+    }
+
+    console.log('\n=== Step 14: Real-Time Adaptive Load Balancer with Latency EMA & 429 Cooldown ===');
+    const lb = new AdaptiveLoadBalancer({ emaAlpha: 0.5, rateLimitCooldownMs: 5000 });
+
+    // 14a: Telemetry recording and EMA tracking
+    lb.recordStart('provider-fast');
+    lb.recordSuccess('provider-fast', 100);
+    lb.recordStart('provider-fast');
+    lb.recordSuccess('provider-fast', 200);
+
+    lb.recordStart('provider-slow');
+    lb.recordSuccess('provider-slow', 1500);
+
+    const fastTel = lb.getTelemetry('provider-fast');
+    const slowTel = lb.getTelemetry('provider-slow');
+    console.log('Fast provider telemetry:', fastTel);
+    console.log('Slow provider telemetry:', slowTel);
+
+    if (fastTel.latencyEmaMs >= slowTel.latencyEmaMs) {
+        throw new Error('Latency EMA calculation failure: fast provider EMA should be lower');
+    }
+
+    // 14b: Provider candidate scoring and selection
+    const candidateA = { provider: 'provider-fast', apiKey: 'k1' };
+    const candidateB = { provider: 'provider-slow', apiKey: 'k2' };
+    const selected1 = lb.selectOptimalProvider([candidateA, candidateB]);
+    console.log('Optimal provider selected (expecting provider-fast):', selected1.provider);
+    if (selected1.provider !== 'provider-fast') {
+        throw new Error('AdaptiveLoadBalancer failed to select lower latency provider');
+    }
+
+    // 14c: Rate Limit 429 Cooldown & Dynamic Downweighting
+    lb.recordStart('provider-fast');
+    lb.recordFailure('provider-fast', new Error('[RATE_LIMIT_429] 429 Too Many Requests: TPM limit exceeded'));
+
+    const fastAfter429 = lb.getTelemetry('provider-fast');
+    console.log('Provider-fast telemetry after 429:', fastAfter429);
+    if (fastAfter429.status !== 'cooldown' || !fastAfter429.cooldownUntil) {
+        throw new Error('AdaptiveLoadBalancer failed to enter cooldown on 429 error');
+    }
+
+    const selected2 = lb.selectOptimalProvider([candidateA, candidateB]);
+    console.log('Optimal provider selected after 429 (expecting provider-slow):', selected2.provider);
+    if (selected2.provider !== 'provider-slow') {
+        throw new Error('AdaptiveLoadBalancer failed to route away from provider in 429 cooldown');
+    }
+
+    // 14d: Execute With Telemetry wrapper
+    let callExecuted = false;
+    const telemetryResult = await lb.executeWithTelemetry('provider-wrapped', async () => {
+        callExecuted = true;
+        return { ok: true, data: 42 };
+    });
+    if (!callExecuted || !telemetryResult.ok) {
+        throw new Error('executeWithTelemetry wrapper failed');
+    }
+
+    console.log('\n=== Step 15: Context Event Log Summary ===');
     console.log(`Total events recorded in SwarmContext: ${recordedEvents.length}`);
     recordedEvents.forEach(e => console.log(' -', e));
 
-    console.log('\n ALL PORTABILITY, RESILIENCE, LEARNING CORTEX & FAILOVER VALIDATIONS PASSED SUCCESSFULLY!');
+    console.log('\n ALL PORTABILITY, RESILIENCE, LEARNING CORTEX, CACHING, HIERARCHY & LOAD BALANCING VALIDATIONS PASSED SUCCESSFULLY!');
 }
 
 runPortableValidation().catch(err => {

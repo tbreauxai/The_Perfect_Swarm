@@ -3,6 +3,7 @@ import type { Provider, AgentRunConfig, ProviderCredential } from './types.ts';
 import { SwarmContext } from './context.ts';
 import { ProviderRegistry } from './providers/registry.ts';
 import { sanitizeModelOutput } from './providers/adapter.ts';
+import { globalLoadBalancer, type AdaptiveLoadBalancer } from './loadBalancer.ts';
 
 /**
  * Autonomous Swarm Agent decoupled from specific LLM provider implementations.
@@ -19,6 +20,7 @@ export class Agent {
     private aiClient?: GoogleGenAI;
     private systemInstruction?: string;
     private fallbacks: ProviderCredential[] = [];
+    private loadBalancer?: AdaptiveLoadBalancer;
 
     constructor(
         role: string,
@@ -26,7 +28,8 @@ export class Agent {
         provider: Provider,
         apiKey: string,
         aiClient?: GoogleGenAI,
-        fallbacks: ProviderCredential[] = []
+        fallbacks: ProviderCredential[] = [],
+        loadBalancer?: AdaptiveLoadBalancer
     ) {
         this.role = role;
         this.modelName = modelName;
@@ -34,6 +37,7 @@ export class Agent {
         this.apiKey = apiKey;
         this.aiClient = aiClient;
         this.fallbacks = [...fallbacks];
+        this.loadBalancer = loadBalancer;
     }
 
     setSystemInstruction(instruction: string): void {
@@ -60,9 +64,15 @@ export class Agent {
         const startTime = Date.now();
         const timeoutMs = config?.timeoutMs || 30000;
 
+        const lb = (config?.loadBalancer as AdaptiveLoadBalancer) || this.loadBalancer || globalLoadBalancer;
+        const candidateFallbacks = config?.fallbackProviders || this.fallbacks;
+        const sortedFallbacks = candidateFallbacks.length > 1
+            ? [...candidateFallbacks].sort((a, b) => lb.calculateScore(b.provider) - lb.calculateScore(a.provider))
+            : candidateFallbacks;
+
         const targetChain: ProviderCredential[] = [
             { provider: this.provider, modelName: this.modelName, apiKey: this.apiKey, aiClient: this.aiClient },
-            ...(config?.fallbackProviders || this.fallbacks)
+            ...sortedFallbacks
         ];
 
         context.addEvent({
@@ -82,15 +92,18 @@ export class Agent {
             for (let attempt = 1; attempt <= maxRetries; attempt++) {
                 try {
                     const adapter = ProviderRegistry.get(currentTarget.provider);
-                    const textOutput = await adapter.call({
-                        modelName: currentTarget.modelName || this.modelName,
-                        prompt,
-                        systemInstruction: this.systemInstruction,
-                        apiKey: currentTarget.apiKey,
-                        aiClient: currentTarget.aiClient || this.aiClient,
-                        config,
-                        timeoutMs
-                    });
+                    const textOutput = await lb.executeWithTelemetry(
+                        currentTarget.provider,
+                        () => adapter.call({
+                            modelName: currentTarget.modelName || this.modelName,
+                            prompt,
+                            systemInstruction: this.systemInstruction,
+                            apiKey: currentTarget.apiKey,
+                            aiClient: currentTarget.aiClient || this.aiClient,
+                            config,
+                            timeoutMs
+                        })
+                    );
 
                     const durationMs = Date.now() - startTime;
                     let parsedOutput: any = textOutput;

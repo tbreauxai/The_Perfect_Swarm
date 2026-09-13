@@ -8,7 +8,10 @@
     "./core": "./src/swarm/index.ts",
     "./memory": "./src/swarm/memory.ts",
     "./router": "./src/swarm/router.ts",
-    "./lifecycle": "./src/swarm/lifecycle.ts"
+    "./lifecycle": "./src/swarm/lifecycle.ts",
+    "./cache": "./src/swarm/cache.ts",
+    "./hierarchy": "./src/swarm/hierarchy.ts",
+    "./loadBalancer": "./src/swarm/loadBalancer.ts"
   },
   "scripts": {
     "dev": "tsx watch server.ts",

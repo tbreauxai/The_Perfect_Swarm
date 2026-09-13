@@ -1,24 +1,25 @@
-# Ultragoal Brief: Multi-App Autonomous Learning Swarm & Free-Tier Optimization
+# Ultragoal Brief: Swarm Dynamic Pre-Filtering, Hierarchical Caching & Adaptive Load Balancing
 
 ## Core Objective
-Transform the codebase into a battle-tested, zero-leak foundation for a modular AI swarm deployable across multiple independent applications, equipped with continuous learning via Qdrant and high resilience against free-tier API quotas, rate limits (429), timeouts, and model quirks.
+Maximize swarm efficiency, minimize token waste, and eliminate latency bottlenecks across free-tier AI APIs through:
+1. Low-complexity intent pre-filtering and fast-path short-circuiting to bypass heavy sub-modules for trivial tasks.
+2. Hierarchical communication layers (L1 Triage -> L2 Specialist Analysts -> L3 Manager Synthesis) with structured deterministic payload caching to prevent context window drift and broadcast overhead.
+3. Real-time adaptive load balancing leveraging latency exponential moving averages (EMA), in-flight concurrency tracking, and continuous health feedback loops.
 
 ## Constraints & Architecture Boundaries
-1. **File Structure & Clean Package Boundary**:
-   - The swarm core must live completely inside `src/swarm/` (or dedicated package) with its own memory, routing, lifecycle, state, schemas, and failover engine.
-   - Zero dependency leakage: external applications importing from `./src/swarm` or `@swarm/core` must not require React, Vite, Lucide, or Express.
-2. **Free-Tier AI Resilience**:
-   - Free APIs (Groq, OpenRouter, Mistral, GitHub, Gemini) suffer from tight RPM/TPM quotas, frequent 429s, latency spikes, and missing headers.
-   - The swarm must support provider failover cascades (if Provider A returns 429/503/timeout, automatically fail over to Provider B/C in user's configured key pool).
-   - All network requests must feature strict timeouts via `AbortController` (no hanging promises).
-   - Reasoning models (e.g. DeepSeek-R1, Llama-3.3) emitting `<think>...</think>` tags must be parsed cleanly before JSON validation.
-3. **Qdrant Continuous Learning Cortex**:
-   - Multi-app namespacing: isolate memories by `appId` without requiring separate clusters.
-   - Feedback & Reinforcement: support rating past analyses (`qualityRating`), allowing the swarm to learn which outputs were verified or approved.
-   - Semantic deduplication: avoid storing redundant vectors when repeated similar tasks run (upsert weight/reinforce if cosine similarity > 0.92).
-   - Compound payload indexing: create payload indexes for `appId`, `domain`, and `qualityRating`.
-   - Exemplary Few-Shot Learning: retrieve top-rated historical executions to inject as few-shot exemplars during planning and analysis.
-4. **Verification**:
-   - Zero TypeScript compilation errors (`tsc --noEmit`).
-   - Clean production bundle (`npm run build`).
-   - Executable simulation proving multi-app isolation, failover cascade, and reinforcement learning under native `node --experimental-strip-types`.
+1. **Zero-Leak Swarm Architecture**:
+   - All modules (`cache.ts`, `hierarchy.ts`, `loadBalancer.ts`, enhancements to `router.ts`) must reside in `src/swarm/`.
+   - Zero React/Vite/Express dependencies in `src/swarm/`.
+   - Node native type stripping compliance (`node --experimental-strip-types`): no constructor parameter properties, no TypeScript enums, explicit type imports.
+2. **Deterministic Payload Caching**:
+   - Implement memory-bounded LRU + TTL cache with SHA-256 / Murmur content hashing of task + data payload.
+   - Prevent context window drift and redundant token expenditure for identical or repetitive analyses.
+3. **Intent Pre-Filtering & Fast-Path Routing**:
+   - Short-circuit tasks under 25 tokens or matching basic metadata queries directly to a single fast node, bypassing data profiling, chunk splitting, Qdrant cortex queries, and critique lifecycle loops.
+4. **Adaptive Load Balancing & Real-Time Capacity Tracking**:
+   - Maintain rolling latency EMAs per provider.
+   - Track active in-flight requests per provider to prevent free-tier concurrency throttling.
+   - Auto-downweight providers exhibiting recent 429 rate limits or latency spikes.
+5. **Verification**:
+   - Clean `tsc --noEmit` and `vite build`.
+   - Automated benchmarking and validation test suite runnable via `npm test`.

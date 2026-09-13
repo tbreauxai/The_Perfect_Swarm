@@ -20,3 +20,6 @@ export * from './providers/github.ts';
 export * from './memory.ts';
 export * from './router.ts';
 export * from './lifecycle.ts';
+export * from './cache.ts';
+export * from './hierarchy.ts';
+export * from './loadBalancer.ts';

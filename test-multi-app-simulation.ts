@@ -6,7 +6,12 @@ import {
     MemoryCortex,
     DeterministicLocalEmbeddingProvider,
     SparseTokenizer,
-    AnalysisLifecycle
+    AnalysisLifecycle,
+    PayloadCache,
+    globalPayloadCache,
+    SwarmHierarchy,
+    AdaptiveLoadBalancer,
+    globalLoadBalancer
 } from './src/swarm/index.ts';
 
 async function runMultiAppSimulation() {
@@ -245,6 +250,224 @@ Synthesizing structured findings.
 
     if (successfulTasks.length !== 12) {
         throw new Error(`Stress test failed: only ${successfulTasks.length}/12 tasks resolved`);
+    }
+
+    // -------------------------------------------------------------
+    // PHASE 5: Fast-Path Intent Pre-Filtering & Payload Cache Benchmark
+    // -------------------------------------------------------------
+    console.log('\n>>> PHASE 5: Benchmarking Fast-Path Pre-Filtering & Deterministic Payload Caching...');
+    const fastPathBenchmarkQueries = [
+        { query: 'Status ping', data: '', expectFast: true },
+        { query: 'Health check', data: 'ok=true', expectFast: true },
+        { query: 'Get user profile count', data: 'tenant=app-fintech', expectFast: true },
+        { query: 'Echo test', data: 'ping', expectFast: true },
+        { query: 'Root cause analysis of cross-app memory leak and race condition in vector DB', data: 'stacktrace...', expectFast: false },
+        { query: 'Synthesize clinical cohort metrics across 500 patient records with confidence intervals', data: 'data...', expectFast: false }
+    ];
+
+    let fastPathEligibleCount = 0;
+    for (const item of fastPathBenchmarkQueries) {
+        const decision = ModelRouter.evaluateFastPath(item.query, item.data);
+        if (decision.eligible === item.expectFast) {
+            fastPathEligibleCount++;
+        }
+        if (item.expectFast && decision.targetTier !== 'instant') {
+            throw new Error(`Fast-path query ${item.query} was not assigned to 'instant' tier`);
+        }
+    }
+    console.log(`Fast-Path Pre-Filtering Accuracy: ${fastPathEligibleCount}/${fastPathBenchmarkQueries.length} classified correctly.`);
+    if (fastPathEligibleCount !== fastPathBenchmarkQueries.length) {
+        throw new Error('Fast-path pre-filtering classification failed on benchmark queries');
+    }
+
+    // Benchmark Deterministic Payload Cache
+    const simCache = new PayloadCache({ maxEntries: 10, defaultTtlMs: 30000 });
+    const cacheTestTask = 'Analyze recurring AML pattern for tenant';
+    const cacheTestData = JSON.stringify({ tenantId: 'app-fintech-fraud', pattern: 'burst-wire-transfers' });
+    const computedAnalysis = { riskScore: 0.98, recommendation: 'Block and notify AML officer immediately' };
+
+    // 1st Execution: Cache Miss
+    const missFingerprint = PayloadCache.computeFingerprint(cacheTestTask, cacheTestData);
+    const missResult = simCache.get(missFingerprint);
+    if (missResult !== null) {
+        throw new Error('Expected initial cache lookup to be a miss');
+    }
+    simCache.set(missFingerprint, computedAnalysis);
+
+    // 2nd Execution: Instant Cache Hit (sub-millisecond)
+    const t0 = performance.now();
+    const hitResult = simCache.get(missFingerprint);
+    const hitDurationMs = performance.now() - t0;
+    console.log(`Deterministic Cache Hit returned in ${hitDurationMs.toFixed(3)}ms (sub-millisecond zero-drift verification)`);
+
+    if (!hitResult || hitResult.riskScore !== 0.98) {
+        throw new Error('Deterministic cache hit failed to retrieve correct payload');
+    }
+
+    // Verify LRU Eviction Under Load
+    for (let k = 0; k < 12; k++) {
+        const fp = PayloadCache.computeFingerprint(`Task-${k}`, `Data-${k}`);
+        simCache.set(fp, { k });
+    }
+    const cacheStats = simCache.getStats();
+    console.log(`PayloadCache LRU Capacity: size=${cacheStats.size}, evictions=${cacheStats.evictions}, hitRatio=${(cacheStats.hitRatio * 100).toFixed(1)}%`);
+    if (cacheStats.size > 10 || cacheStats.evictions < 2) {
+        throw new Error('PayloadCache failed to enforce strict LRU bounds under load');
+    }
+
+    // -------------------------------------------------------------
+    // PHASE 6: Hierarchical Multi-Specialist Dispatch & Broadcast Reduction
+    // -------------------------------------------------------------
+    console.log('\n>>> PHASE 6: Benchmarking Hierarchical Dispatch & Scoped Event Broadcasting...');
+    const hierContext = new SwarmContext();
+    const hierEvents: string[] = [];
+    hierContext.subscribe(e => hierEvents.push(`[${e.agentRole}] ${e.action}`));
+
+    ProviderRegistry.register({
+        providerName: 'sim-specialist-exec',
+        async call(opts) {
+            return JSON.stringify({
+                status: 'completed',
+                analystEcho: (opts as any).agentRole || 'Specialist',
+                findings: `Analysis performed on: ${opts.prompt.substring(0, 35)}`
+            });
+        }
+    });
+
+    const hierarchy = new SwarmHierarchy(hierContext);
+    const l1Triage = new Agent('L1 Gatekeeper', 'llama-3.1-8b-instant', 'sim-specialist-exec', 'k');
+    const amlSpec = new Agent('AML Analyst', 'llama-3.3-70b', 'sim-specialist-exec', 'k');
+    const networkSpec = new Agent('Network Forensics', 'llama-3.3-70b', 'sim-specialist-exec', 'k');
+    const databaseSpec = new Agent('Database Specialist', 'llama-3.3-70b', 'sim-specialist-exec', 'k');
+    const frontendSpec = new Agent('UI Specialist', 'llama-3.3-70b', 'sim-specialist-exec', 'k');
+    const l3Manager = new Agent('L3 Synthesizer', 'gemini-2.5-flash', 'sim-specialist-exec', 'k');
+
+    hierarchy.setTriageNode(l1Triage);
+    hierarchy.addSpecialistNode(amlSpec, 'spec-aml', 'AML Analyst', ['wire', 'kyc', 'sanctions', 'aml', 'transfer']);
+    hierarchy.addSpecialistNode(networkSpec, 'spec-net', 'Network Forensics', ['ip', 'proxy', 'tor', 'botnet', 'geolocation']);
+    hierarchy.addSpecialistNode(databaseSpec, 'spec-db', 'Database Specialist', ['sql', 'postgres', 'index', 'migration']);
+    hierarchy.addSpecialistNode(frontendSpec, 'spec-ui', 'UI Specialist', ['react', 'css', 'dom', 'component']);
+    hierarchy.setSynthesisNode(l3Manager);
+
+    // Targeted dispatch: Task touches AML and IP forensics
+    const hierTask = 'Investigate high-velocity wire transfers originating from anomalous proxy IP addresses';
+    const hierExecution = await hierarchy.execute(hierTask, 'Sample payload data', {
+        maxSpecialists: 2,
+        scope: 'milestones'
+    });
+
+    console.log(`Hierarchy Execution Completed: Specialists Invoked: ${hierExecution.triagePlan.selectedSpecialistIds.join(', ')}`);
+    console.log(`Hierarchy Specialists Bypassed (Broadcast Reduction): ${hierExecution.bypassedSpecialists.join(', ')}`);
+
+    if (!hierExecution.triagePlan.selectedSpecialistIds.includes('spec-aml') || !hierExecution.triagePlan.selectedSpecialistIds.includes('spec-net')) {
+        throw new Error('L1 Triage failed to route to the correct domain specialists');
+    }
+    if (hierExecution.triagePlan.selectedSpecialistIds.includes('spec-db') || hierExecution.triagePlan.selectedSpecialistIds.includes('spec-ui')) {
+        throw new Error('Hierarchy failed to bypass irrelevant specialists (database, ui)');
+    }
+
+    // Verify Scoped Event Filtering
+    const allRawEvents = hierContext.events;
+    const scopedMilestones = hierarchy.filterEventsByScope(allRawEvents, 'milestones');
+    console.log(`Broadcast Event Filtering: Raw Total Events: ${allRawEvents.length} -> Scoped Milestones: ${scopedMilestones.length}`);
+    if (scopedMilestones.length >= allRawEvents.length) {
+        throw new Error('Scoped event filtering did not reduce event stream noise');
+    }
+
+    // -------------------------------------------------------------
+    // PHASE 7: Real-Time Adaptive Load Balancing & Concurrency Feedback Loop
+    // -------------------------------------------------------------
+    console.log('\n>>> PHASE 7: Benchmarking Adaptive Load Balancer & Dynamic 429 Cooldown Feedback...');
+    let burstGroqCount = 0;
+    ProviderRegistry.register({
+        providerName: 'sim-burst-groq',
+        async call(opts) {
+            burstGroqCount++;
+            // Rapidly throw 429 on 3rd call
+            if (burstGroqCount >= 3) {
+                throw new Error('[RATE_LIMIT_429] 429 Too Many Requests: Groq free-tier TPM threshold exceeded');
+            }
+            return JSON.stringify({ provider: 'sim-burst-groq', result: 'fast-groq-analysis' });
+        }
+    });
+
+    ProviderRegistry.register({
+        providerName: 'sim-burst-gemini',
+        async call(opts) {
+            return JSON.stringify({ provider: 'sim-burst-gemini', result: 'stable-gemini-analysis' });
+        }
+    });
+
+    ProviderRegistry.register({
+        providerName: 'sim-burst-mistral',
+        async call(opts) {
+            return JSON.stringify({ provider: 'sim-burst-mistral', result: 'backup-mistral-analysis' });
+        }
+    });
+
+    const adaptiveBalancer = new AdaptiveLoadBalancer({
+        emaAlpha: 0.5,
+        rateLimitCooldownMs: 8000
+    });
+
+    const candidateProviders = [
+        { provider: 'sim-burst-groq', apiKey: 'k-groq', modelName: 'llama-3.1-8b-instant' },
+        { provider: 'sim-burst-gemini', apiKey: 'k-gemini', modelName: 'gemini-2.5-flash' },
+        { provider: 'sim-burst-mistral', apiKey: 'k-mistral', modelName: 'mistral-small' }
+    ];
+
+    // Seed initial fast latency for groq
+    adaptiveBalancer.recordStart('sim-burst-groq');
+    adaptiveBalancer.recordSuccess('sim-burst-groq', 25); // 25ms
+
+    // Seed initial standard latency for gemini
+    adaptiveBalancer.recordStart('sim-burst-gemini');
+    adaptiveBalancer.recordSuccess('sim-burst-gemini', 85); // 85ms
+
+    // Initial choice: should be sim-burst-groq due to lower EMA latency
+    const initialChoice = adaptiveBalancer.selectOptimalProvider(candidateProviders);
+    console.log('Initial optimal provider selected (fastest EMA):', initialChoice.provider);
+    if (initialChoice.provider !== 'sim-burst-groq') {
+        throw new Error(`Adaptive balancer should have selected sim-burst-groq, got ${initialChoice.provider}`);
+    }
+
+    // Now execute requests and trigger 429 on groq
+    const adaptiveAgent = new Agent(
+        'Adaptive Stress Agent',
+        'llama-3.1-8b',
+        'sim-burst-groq',
+        'k-groq',
+        undefined,
+        [
+            { provider: 'sim-burst-gemini', apiKey: 'k-gemini', modelName: 'gemini-2.5-flash' },
+            { provider: 'sim-burst-mistral', apiKey: 'k-mistral', modelName: 'mistral-small' }
+        ],
+        adaptiveBalancer
+    );
+
+    const adaptiveContext = new SwarmContext();
+    const adaptiveRunResults = [];
+    for (let r = 0; r < 5; r++) {
+        const res = await adaptiveAgent.run(`Adaptive Run ${r}`, adaptiveContext, { responseMimeType: 'application/json' });
+        adaptiveRunResults.push(res);
+    }
+
+    console.log(`Adaptive Agent Runs Completed: 5 runs.`);
+    const groqTelemetry = adaptiveBalancer.getTelemetry('sim-burst-groq');
+    const geminiTelemetry = adaptiveBalancer.getTelemetry('sim-burst-gemini');
+    console.log(`Groq Telemetry Status: ${groqTelemetry.status}, Failures: ${groqTelemetry.failureCount}, Cooldown: ${groqTelemetry.cooldownUntil !== undefined}`);
+    console.log(`Gemini Telemetry Status: ${geminiTelemetry.status}, Successes: ${geminiTelemetry.successCount}, EMA Latency: ${geminiTelemetry.latencyEmaMs.toFixed(1)}ms`);
+
+    // Verify that the load balancer correctly placed groq in cooldown after the 429 error
+    if (groqTelemetry.status !== 'cooldown') {
+        throw new Error('sim-burst-groq was not placed into cooldown status following 429 rate limit');
+    }
+
+    // Subsequent selection must route to gemini, never groq
+    const postCooldownChoice = adaptiveBalancer.selectOptimalProvider(candidateProviders);
+    console.log('Optimal provider selected after 429 cooldown (expected sim-burst-gemini):', postCooldownChoice.provider);
+    if (postCooldownChoice.provider !== 'sim-burst-gemini') {
+        throw new Error('Adaptive balancer failed to route to sim-burst-gemini during Groq cooldown');
     }
 
     console.log('\n================================================================');

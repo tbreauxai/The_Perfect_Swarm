@@ -1,11 +1,11 @@
 # OmA Taskboard
 
-## Track: Multi-App Autonomous Learning Swarm & Free-Tier AI Optimization
+## Track: Swarm Dynamic Pre-Filtering, Hierarchical Caching & Adaptive Load Balancing
 
 | Goal ID | Description | Status | Verification |
 | --- | --- | --- | --- |
-| G1 | Comprehensive audit targeting multi-app portability, free-tier AI API limitations (429/503, timeouts, failover, think tags), and Qdrant continuous learning gaps | completed | `.omg/ultragoal/audit_v2.md` generated |
-| G2 | Consolidate Core Swarm into a self-contained, zero-leak package structure with clean exports for multi-app transplantation | completed | Encapsulated memory, router, lifecycle, state, orchestrator, profiler, and schemas inside `src/swarm/`; added `package.json` subpath exports; verified 23 direct exports |
-| G3 | Implement Free-Tier AI Resilience Engine: multi-provider failover cascades, request timeouts with AbortController, and reasoning model tag sanitization | completed | Failover on 429/503/timeout, 30s AbortSignal, `<think>` tag stripping, verified via automated test in `test-portable-swarm.ts` |
-| G4 | Upgrade Qdrant Memory Cortex into a Multi-App Learning Engine: multi-tenant appId namespacing, feedback scoring, semantic deduplication, and few-shot exemplary learning retrieval | completed | `appId` isolation, `qualityRating` feedback API, >0.92 cosine deduplication, exemplar prompts verified via unit tests |
-| G5 | End-to-end multi-app simulation, typecheck, build, and free-tier stress testing | completed | Full validation suite passed: `tsc --noEmit` (0 errors), `vite build` (success), `test:portable` (12 steps), and `test:simulation` (100% success across 12 concurrent tasks) |
+| G1 | Implement Low-Complexity Intent Pre-Filtering & Fast-Path Short-Circuiting in router and swarm engine | completed | `ModelRouter.evaluateFastPath` & `isFastPathEligible` short-circuit trivial tasks (<35 tokens, <256 bytes) directly to fast analyst; verified via `test-portable-swarm.ts` |
+| G2 | Implement Structured Deterministic Payload Caching & Context Drift Prevention with LRU eviction and TTL hashing in `src/swarm/cache.ts` | completed | `PayloadCache` deterministic 64-char fingerprinting, LRU bound, and TTL expiration verified via Step 12 in `test-portable-swarm.ts` |
+| G3 | Establish Hierarchical Agent Communication Layers (L1 Triage -> L2 Specialist Analysts -> L3 Manager Synthesis) with Scoped Event Broadcasting in `src/swarm/hierarchy.ts` | completed | `SwarmHierarchy` L1 triage planning, selective L2 worker routing, and scoped event filtering verified via Step 13 in `test-portable-swarm.ts` |
+| G4 | Deploy Real-Time Adaptive Load Balancer with Latency EMA, In-Flight Concurrency Tracking, and Health Feedback Loops in `src/swarm/loadBalancer.ts` | completed | Dynamic health scoring, EMA latency tracking, and automatic 429 rate limit cooldown recovery verified via Step 14 in `test-portable-swarm.ts` |
+| G5 | End-to-End Performance Benchmarking, Typecheck, Build, and Stress Testing across multi-app scenarios | completed | `tsc --noEmit` (0 errors), `vite build` (2.47s), `test:portable` (15 steps passed), `test:simulation` (7 phases passed including 0.007ms cache hits and dynamic 429 failover) |
