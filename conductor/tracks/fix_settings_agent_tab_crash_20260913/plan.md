@@ -14,10 +14,10 @@
 
 ## Phase 2: Enhanced Defensive UX & Full Regression Verification
 
-- [ ] Task: Add Loading Skeletons and Empty Key Inline Hints in AgentConfigurator
-  - [ ] Render clean inline hints when a provider's key is not configured
-  - [ ] Render loading skeleton state during async model retrieval
-- [ ] Task: Full Regression Test & Build Verification
+- [x] Task: Add Loading Skeletons and Empty Key Inline Hints in AgentConfigurator (e71f753)
+  - [x] Render clean inline hints when a provider's key is not configured
+  - [x] Render loading skeleton state during async model retrieval
+- [~] Task: Full Regression Test & Build Verification
   - [ ] Run `npx tsc --noEmit` to verify type safety with zero errors
   - [ ] Run `npm run build` to verify client and swarm distribution builds
   - [ ] Run `npm test` to verify all 5 core test suites pass 100%
