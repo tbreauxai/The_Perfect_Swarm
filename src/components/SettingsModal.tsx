@@ -28,6 +28,7 @@ interface SettingsModalProps {
         hasQdrantUrl?: boolean;
         hasQdrantKey?: boolean;
     };
+    initialTab?: 'keys' | 'swarm';
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -36,9 +37,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     settings,
     onUpdateSetting,
     onUpdateAgent,
-    envStatus
+    envStatus,
+    initialTab = 'keys'
 }) => {
-    const [activeTab, setActiveTab] = useState<'keys' | 'swarm'>('keys');
+    const [activeTab, setActiveTab] = useState<'keys' | 'swarm'>(initialTab);
 
     if (!isOpen) return null;
 
@@ -185,7 +187,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     )}
 
                     {activeTab === 'swarm' && (
-                        <AgentConfigurator agents={settings.agents} onUpdateAgent={onUpdateAgent} />
+                        <AgentConfigurator agents={settings.agents} onUpdateAgent={onUpdateAgent} settings={settings} />
                     )}
                 </div>
 
