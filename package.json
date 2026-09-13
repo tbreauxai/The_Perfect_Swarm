@@ -80,6 +80,12 @@
       "import": "./dist/swarm/server.js",
       "require": "./dist/swarm/server.cjs",
       "default": "./src/swarm/server.ts"
+    },
+    "./tools": {
+      "types": "./dist/swarm/tools/index.d.ts",
+      "import": "./dist/swarm/tools/index.js",
+      "require": "./dist/swarm/tools/index.cjs",
+      "default": "./src/swarm/tools/index.ts"
     }
   },
   "scripts": {

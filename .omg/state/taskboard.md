@@ -22,3 +22,14 @@
 | UG-3 | Add automated memory consolidation triggers and configurable dense/sparse RRF weights in `MemoryCortex` | completed | Threshold-based auto-prune (<0.40); customizable dense/sparse RRF weighting factors; verified via Step 20 in `test-portable-swarm.ts` |
 | UG-4 | End-to-End multi-session learning verification, typecheck, build, and automated test suite pass | completed | Sequential workflow executions without Qdrant accumulate positive exemplars and improve responses; `tsc --noEmit` 0 errors; all 5 suites in `npm test` pass; verified via Step 21 in `test-portable-swarm.ts` |
 
+## Track: Phase 3 - Deep Perfection Audit, Zero-Dependency Free Tools & Portable Snapshots
+
+| Goal ID | Description | Status | Verification |
+| --- | --- | --- | --- |
+| P3-G1 | Comprehensive Audit of File Structure, AI Structure, and Qdrant Utilization | completed | Detailed audit findings documented in `.omg/ultragoal/audit_v3.md` |
+| P3-G2 | Zero-Dependency Free Tool & Function Calling Framework (`src/swarm/tools/`) | completed | `ToolRegistry` and 4 built-in free analysis tools; executed in SwarmEngine; verified via Step 22 in `test-portable-swarm.ts` |
+| P3-G3 | Portable Memory Cortex Snapshotting & Cross-App Hydration (`exportMemories` / `importMemories`) | in-progress | Export/import memory points in JSON/JSONL format with deduplication |
+| P3-G4 | Resilient Zero-Drift AI JSON Repair & Schema Guard (`src/swarm/parser.ts`) | todo | Parser cleanly extracts and repairs malformed JSON and truncated output from free models |
+| P3-G5 | End-to-End Test Suite, Typecheck, Build, and Documentation Verification | todo | `test-portable-swarm.ts` verifies tools, snapshots, and JSON repair; `npm test` passes 100% |
+
+

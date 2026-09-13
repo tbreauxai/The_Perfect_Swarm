@@ -9,6 +9,7 @@ import { AnalysisLifecycle } from './lifecycle.ts';
 import { PayloadCache, globalPayloadCache } from './cache.ts';
 import { AnalystResponseSchema, ManagerResponseSchema } from './schemas.ts';
 import { zodToJsonSchema } from 'zod-to-json-schema';
+import { ToolRegistry, globalToolRegistry, type SwarmTool } from './tools/index.ts';
 
 export interface ProviderResolution {
     key: string;
@@ -140,6 +141,7 @@ export interface SwarmWorkflowParams {
     onEvent?: (event: SwarmEvent) => void;
     context?: SwarmContext;
     cortex?: MemoryCortex;
+    tools?: SwarmTool[] | ToolRegistry;
 }
 
 export interface SwarmWorkflowResult {
@@ -198,6 +200,17 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             memoryCortex = getOrCreateDefaultCortex(targetAppId, defaultAi);
         }
     }
+
+    // Resolve Tool Registry (custom passed, settings configured, or global defaults)
+    const toolRegistry: ToolRegistry = params.tools instanceof ToolRegistry
+        ? params.tools
+        : (Array.isArray(params.tools)
+            ? new ToolRegistry(params.tools)
+            : (settings?.tools instanceof ToolRegistry
+                ? settings.tools
+                : (Array.isArray(settings?.tools)
+                    ? new ToolRegistry(settings.tools)
+                    : globalToolRegistry)));
 
     // 0. Infer Task Complexity via ModelRouter
     const complexity: TaskComplexity = complexityOverride || ModelRouter.inferComplexity(task, (data || '').length);
@@ -478,29 +491,78 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         for (let i = 0; i < chunks.length; i++) {
             const chunk = chunks[i];
 
-            const analystPromises = analysts.map(analyst => {
-                analyst.setSystemInstruction(ANALYST_SYSTEM_INSTRUCTION);
+            const analystPromises = analysts.map(async analyst => {
+                const toolPrompt = toolRegistry.list().length > 0 ? `\n\n${toolRegistry.renderPromptSchema()}` : '';
+                analyst.setSystemInstruction(ANALYST_SYSTEM_INSTRUCTION + toolPrompt);
                 const analystPrompt = `Task: ${task}\nMetadata: ${JSON.stringify(profile)}\nHistorical Baselines: ${historicalContext}\nData Chunk [${i + 1}/${chunks.length}]:\n${chunk}`;
 
-                return analyst.run(analystPrompt, context, { responseMimeType: "application/json" })
-                    .then(rawOutput => {
-                        const parsed = AnalystResponseSchema.safeParse(rawOutput);
-                        if (!parsed.success) {
-                            console.warn(`[${analyst.role}] Output failed Zod schema validation:`, parsed.error);
-                            const issues = (parsed.error as any).issues || (parsed.error as any).errors || [];
-                            return {
-                                insights: [`${analyst.role} provided invalid schema. Validation errors: ${issues.map((e: any) => e.message).join(', ')}`],
-                                anomalies: [],
-                                summary: "Schema validation failed."
-                            };
+                try {
+                    const rawOutput = await analyst.run(analystPrompt, context, { responseMimeType: "application/json" });
+                    
+                    // Parse and execute any tool calls emitted in output
+                    const rawStr = typeof rawOutput === 'string' ? rawOutput : JSON.stringify(rawOutput);
+                    const toolCalls = toolRegistry.parseToolCalls(rawStr);
+                    const toolResults = toolCalls.length > 0 ? await toolRegistry.executeAllToolCalls(toolCalls) : [];
+
+                    for (const tr of toolResults) {
+                        context.addEvent({
+                            agentRole: 'Deterministic Tool Engine',
+                            action: `Executed Tool: ${tr.tool}`,
+                            modelName: 'Local/DeterministicTool',
+                            prompt: JSON.stringify(tr.parameters),
+                            output: tr.success ? tr.result : { error: tr.error },
+                            durationMs: tr.durationMs
+                        });
+                    }
+
+                    // Clean output before schema validation
+                    let cleanOutput = rawOutput;
+                    if (typeof cleanOutput === 'string') {
+                        const stripped = toolRegistry.stripToolCalls(cleanOutput);
+                        try {
+                            cleanOutput = JSON.parse(stripped);
+                        } catch {
+                            const firstObj = stripped.indexOf('{');
+                            const lastObj = stripped.lastIndexOf('}');
+                            if (firstObj !== -1 && lastObj > firstObj) {
+                                try {
+                                    cleanOutput = JSON.parse(stripped.substring(firstObj, lastObj + 1));
+                                } catch {
+                                    // ignore
+                                }
+                            }
                         }
-                        return parsed.data;
-                    })
-                    .catch(err => ({
+                    }
+
+                    const parsed = AnalystResponseSchema.safeParse(cleanOutput);
+                    if (!parsed.success) {
+                        console.warn(`[${analyst.role}] Output failed Zod schema validation:`, parsed.error);
+                        const issues = (parsed.error as any).issues || (parsed.error as any).errors || [];
+                        const baseInsights = [`${analyst.role} provided invalid schema. Validation errors: ${issues.map((e: any) => e.message).join(', ')}`];
+                        for (const tr of toolResults) {
+                            if (tr.success) baseInsights.push(`[Tool Result: ${tr.tool}]: ${JSON.stringify(tr.result)}`);
+                        }
+                        return {
+                            insights: baseInsights,
+                            anomalies: [],
+                            summary: "Schema validation failed."
+                        };
+                    }
+
+                    const resData = parsed.data;
+                    for (const tr of toolResults) {
+                        if (tr.success) {
+                            resData.insights.push(`[Tool Result: ${tr.tool}]: ${JSON.stringify(tr.result)}`);
+                        }
+                    }
+                    return resData;
+                } catch (err: any) {
+                    return {
                         insights: [`${analyst.role} was unable to process this chunk due to API constraints.`],
                         anomalies: [],
                         summary: `Failed to process: ${err.message || String(err)}`
-                    }));
+                    };
+                }
             });
 
             const chunkReports = await Promise.all(analystPromises);

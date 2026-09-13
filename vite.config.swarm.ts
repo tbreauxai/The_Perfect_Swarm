@@ -16,7 +16,8 @@ export default defineConfig({
         hierarchy: path.resolve(__dirname, 'src/swarm/hierarchy.ts'),
         loadBalancer: path.resolve(__dirname, 'src/swarm/loadBalancer.ts'),
         profiler: path.resolve(__dirname, 'src/swarm/profiler.ts'),
-        server: path.resolve(__dirname, 'src/swarm/server.ts')
+        server: path.resolve(__dirname, 'src/swarm/server.ts'),
+        tools: path.resolve(__dirname, 'src/swarm/tools/index.ts')
       },
       formats: ['es', 'cjs'],
       fileName: (format, entryName) => `${entryName}.${format === 'es' ? 'js' : 'cjs'}`

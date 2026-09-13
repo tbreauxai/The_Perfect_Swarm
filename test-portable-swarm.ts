@@ -14,7 +14,13 @@ import {
     SwarmEngine,
     executeSwarmWorkflow,
     OpenRouterAdapter,
-    getOrCreateDefaultCortex
+    getOrCreateDefaultCortex,
+    ToolRegistry,
+    globalToolRegistry,
+    calculatorTool,
+    statsSummaryTool,
+    regexMatchTool,
+    jsonExtractTool
 } from './swarm.ts';
 
 async function runPortableValidation() {
@@ -902,6 +908,109 @@ async function runPortableValidation() {
         throw new Error('Step 21: Session 2 failed to retrieve reinforced feedback exemplar from Session 1');
     }
     console.log('✓ Multi-session continuous learning loop verified end-to-end');
+
+    console.log('\n=== Step 22: Zero-Dependency Free Tool & Function Calling Framework Verification ===');
+
+    // 22a: Test built-in tools directly
+    const calcRes = await calculatorTool.execute({ expression: '((25 * 4) + 50) / 2' });
+    console.log('Calculator result:', calcRes);
+    if (calcRes.result !== 75) {
+        throw new Error(`Calculator failed: expected 75, got ${calcRes.result}`);
+    }
+
+    const statsRes = await statsSummaryTool.execute({ numbers: [10, 20, 30, 40, 50, 60] });
+    console.log('Stats summary result:', statsRes);
+    if (statsRes.count !== 6 || statsRes.sum !== 210 || statsRes.mean !== 35 || statsRes.median !== 35) {
+        throw new Error('Stats summary tool returned incorrect calculations');
+    }
+
+    const regexRes = await regexMatchTool.execute({ pattern: 'user_([a-z0-9]+)', text: 'Found user_alice42 and user_bob99 in log' });
+    console.log('Regex match result:', regexRes);
+    if (!regexRes.matched || regexRes.matchCount !== 2 || regexRes.matches[0] !== 'user_alice42') {
+        throw new Error('Regex match tool failed pattern extraction');
+    }
+
+    const jsonRes = await jsonExtractTool.execute({ data: { cluster: { nodes: [{ id: 'n1', memory: '16GB' }] } }, path: 'cluster.nodes[0].memory' });
+    console.log('JSON extract result:', jsonRes);
+    if (!jsonRes.found || jsonRes.value !== '16GB') {
+        throw new Error('JSON extract tool failed to extract path');
+    }
+
+    // 22b: ToolRegistry custom tool registration & execution
+    const customRegistry = new ToolRegistry();
+    customRegistry.register({
+        name: 'hash_sha1',
+        description: 'Computes a simple deterministic mock hash of input string.',
+        parameters: {
+            input: { type: 'string', description: 'String to hash', required: true }
+        },
+        execute({ input }) {
+            return { hash: `sha1-${input.length}-${input.charCodeAt(0)}` };
+        }
+    });
+
+    const toolExec = await customRegistry.execute('hash_sha1', { input: 'test-data' });
+    console.log('Custom tool execution result:', toolExec);
+    if (!toolExec.success || !toolExec.result?.hash?.startsWith('sha1-')) {
+        throw new Error('Custom tool execution in ToolRegistry failed');
+    }
+
+    // 22c: Parsing tool calls from raw LLM output
+    const mockModelOutput = 'Thinking...\n```tool_call\n{\n  "tool": "calculator",\n  "parameters": { "expression": "100 * 1.08" }\n}\n```\nSynthesizing output...';
+    const parsedCalls = globalToolRegistry.parseToolCalls(mockModelOutput);
+    console.log('Parsed tool calls from model output:', parsedCalls);
+    if (parsedCalls.length !== 1 || parsedCalls[0].tool !== 'calculator') {
+        throw new Error('parseToolCalls failed to extract tool_call block');
+    }
+
+    const toolCallResults = await globalToolRegistry.executeAllToolCalls(parsedCalls);
+    console.log('Executed tool calls result:', toolCallResults);
+    if (toolCallResults.length !== 1 || toolCallResults[0].result?.result !== 108) {
+        throw new Error('executeAllToolCalls returned invalid tool execution result');
+    }
+
+    // 22d: Engine Workflow with Tool Execution
+    ProviderRegistry.register({
+        providerName: 'tool-mock',
+        async call(opts) {
+            if (opts.prompt.includes('Data Chunk')) {
+                // Analyst returns a tool call block and structured response
+                return '```tool_call\n{\n  "tool": "calculator",\n  "parameters": { "expression": "5000 / 25" }\n}\n```\n' +
+                    JSON.stringify({
+                        insights: ['Initial throughput rate analyzed'],
+                        anomalies: [],
+                        summary: 'Throughput analysis with deterministic tool assistance.'
+                    });
+            }
+            return JSON.stringify({
+                ui_title: 'Deterministic Tool Assisted Analysis',
+                components: [
+                    { id: '1', type: 'InsightList', props: { title: 'Results', insights: [{ type: 'info', message: 'Tool verified' }] } }
+                ]
+            });
+        }
+    });
+
+    const toolWorkflowResult = await executeSwarmWorkflow({
+        task: 'Calculate exact throughput metrics',
+        data: 'total_requests=5000, duration_sec=25',
+        enableDeepAnalysis: true,
+        tools: globalToolRegistry,
+        settings: {
+            appId: 'tool-test-app',
+            agents: [
+                { id: 'manager', role: 'Manager Node', provider: 'tool-mock', apiKey: 'mock-key', model: 'mock-model' },
+                { id: 'a1', role: 'Telemetry Analyst', provider: 'tool-mock', apiKey: 'mock-key', model: 'mock-model' }
+            ]
+        }
+    });
+
+    const toolEngineEvent = toolWorkflowResult.events.find(e => e.action.includes('Executed Tool: calculator'));
+    console.log('Tool execution engine event:', toolEngineEvent);
+    if (!toolEngineEvent || toolEngineEvent.output?.result !== 200) {
+        throw new Error('Step 22d: SwarmEngine failed to record deterministic tool execution event');
+    }
+    console.log('✓ Zero-dependency free tool framework verified across all modes');
 
     console.log('\n=== Step 16: Context Event Log Summary ===');
     console.log(`Total events recorded in SwarmContext: ${recordedEvents.length}`);

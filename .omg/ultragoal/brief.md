@@ -1,21 +1,27 @@
-# Ultragoal Brief: Phase 2 - Continuous Learning Cortex, Cross-Provider Critic & Shared Memory Optimization
+# Ultragoal Brief: Modular AI Swarm Foundation & Continuous Learning Perfection
 
-## Core Objective
-Refine and harden `@perfect-swarm/core` into an adaptive, self-improving multi-agent intelligence runtime capable of learning across target applications using free-tier LLM APIs and hybrid Qdrant/in-memory vector memory.
+## Mission Statement
+This codebase serves as the foundation for a modular, portable AI swarm (`@perfect-swarm/core`) that can be uprooted and embedded into multiple downstream applications as a deep, accurate, and self-improving analysis engine. It strictly operates on free AI APIs (Gemini, Groq, OpenRouter `:free`, Mistral, GitHub Models) and free local deterministic tools, backed by an autonomous Qdrant learning cortex and zero-dependency in-memory vector fallback.
 
-## Architectural Audit & Focus Areas
-1. **Engine Memory Binding & Shared Knowledge**:
-   - Bind `MemoryCortex` unconditionally in `src/swarm/engine.ts` so offline/in-memory hybrid RRF vector search and exemplar distillation execute even when `QDRANT_URL` is omitted.
-   - Accept injected `cortex` in `SwarmWorkflowParams` and maintain process-level singletons per `appId` to preserve learning across workflow runs.
-   - Support `includeShared: true` in engine retrieval so consumer apps inherit foundational domain knowledge.
-2. **AI Structure & RLAIF Cross-Critique**:
-   - Prefer cross-provider Critic agents (e.g. Gemini critic for Groq analyst) to eliminate LLM self-affirmation bias.
-   - Record fast-path and low-complexity executions into the learning cortex to establish positive baselines.
-3. **Qdrant Vector Cortex & Maintenance**:
-   - Add automated memory consolidation (pruning `qualityRating < 0.40` and deduplicating clusters) on periodic intervals or item thresholds.
-   - Support customizable dense-to-sparse weights in hybrid Reciprocal Rank Fusion (RRF).
+## Core Architectural Dimensions & Audit Scope
+1. **File Structure & Decoupling**:
+   - Zero leaks: `src/swarm/` must remain completely decoupled from React, Vite, Express, and UI DOM dependencies.
+   - Dual distribution: ESM (`.js`), CommonJS (`.cjs`), and TypeScript declarations (`.d.ts`) exported in `dist/swarm/`.
+   - Subpath exports: Clean modular imports (`@perfect-swarm/core`, `./tools`, `./memory`, `./engine`, `./router`, `./server`, etc.).
 
-## Verification Criteria
-- `tsc --noEmit` passes with 0 errors.
-- `npm run build` succeeds (client + dual swarm ESM/CJS bundles).
-- `npm test` passes all suites (portable, simulation, dist, cli, server, and multi-run learning tests).
+2. **AI Structure & Free Tool Execution**:
+   - Guaranteed free-tier routing with OpenRouter `:free` auto-resolution and adaptive 429 cooldowns.
+   - Zero-dependency tool and function calling framework (`src/swarm/tools/`) allowing agents to run deterministic free analysis tools (stats, regex, JSON queries, calculators).
+   - Resilient AI JSON repair (`src/swarm/parser.ts`) ensuring zero runtime crashes from malformed, markdown-fenced, or truncated free LLM outputs.
+   - Cross-provider Critic selection preventing self-affirmation bias.
+
+3. **Qdrant Utilization & Continuous Learning**:
+   - Hybrid dense (768d Cosine) + sparse (BM25 token frequency) vectors fused via configurable RRF weights.
+   - Ephemeral in-memory vector fallback with shared collection stores for offline or zero-infrastructure operation.
+   - Automated consolidation triggers (`qualityRating < 0.40` threshold pruning).
+   - Portable Memory Snapshots (`exportMemories` / `importMemories`) allowing learned baselines and exemplars to be serialized, versioned, and transplanted across applications.
+
+## Constraints
+- Zero commercial API keys required; 100% functional on free tier and offline local fallback.
+- Strictly pure TypeScript / Node.js standard library in `src/swarm/`.
+- Strict typecheck (`tsc --noEmit`) with zero errors.
