@@ -3,8 +3,8 @@ import { GoogleGenAI } from '@google/genai';
 
 export interface MemoryMetadata {
     appId?: string;
-    domain: string;
-    agentRole: string;
+    domain?: string;
+    agentRole?: string;
     sessionId?: string;
     qualityRating?: number; // 0.0 to 1.0
     verified?: boolean;
@@ -16,6 +16,16 @@ export interface MemoryMetadata {
     [key: string]: any;
 }
 
+export type RrfProfile = 'semantic' | 'lexical' | 'balanced' | 'hybrid';
+export type RrfWeights = { denseWeight: number; sparseWeight: number };
+
+export const RRF_PRESETS: Record<RrfProfile, RrfWeights> = {
+    semantic: { denseWeight: 4.0, sparseWeight: 0.5 },
+    lexical: { denseWeight: 0.5, sparseWeight: 4.0 },
+    balanced: { denseWeight: 1.0, sparseWeight: 1.0 },
+    hybrid: { denseWeight: 2.0, sparseWeight: 1.5 }
+};
+
 export interface RetrievalOptions {
     appId?: string;
     domain?: string;
@@ -26,6 +36,8 @@ export interface RetrievalOptions {
     includeShared?: boolean;
     denseWeight?: number;
     sparseWeight?: number;
+    profile?: RrfProfile | RrfWeights;
+    rrfProfile?: RrfProfile | RrfWeights;
 }
 
 export interface ConsolidationOptions {
@@ -47,6 +59,7 @@ export interface ExportMemoriesOptions {
     minRating?: number;
     verifiedOnly?: boolean;
     includeVectors?: boolean;
+    format?: 'snapshot' | 'json' | 'jsonl';
 }
 
 export interface MemorySnapshotPoint {
@@ -674,8 +687,10 @@ export class MemoryCortex {
         const sparseRankMap = new Map<string, number>();
         sparseRanked.forEach((item, idx) => sparseRankMap.set(item.candidate.id, idx));
 
-        const denseWeight = options.denseWeight ?? 1.0;
-        const sparseWeight = options.sparseWeight ?? 1.0;
+        const selectedProfile = options.profile || options.rrfProfile;
+        const preset = typeof selectedProfile === 'string' ? RRF_PRESETS[selectedProfile] : selectedProfile;
+        const denseWeight = options.denseWeight ?? preset?.denseWeight ?? 1.0;
+        const sparseWeight = options.sparseWeight ?? preset?.sparseWeight ?? 1.0;
 
         // RRF scoring: (denseWeight / (60 + denseRank + 1)) + (sparseWeight / (60 + sparseRank + 1))
         const rrfRanked = candidates.map(candidate => {
@@ -1062,96 +1077,88 @@ export class MemoryCortex {
             };
 
             const hasVectors = Array.isArray(item.denseVector) && item.denseVector.length > 0;
+            const denseVector = (hasVectors && !recomputeVectors)
+                ? item.denseVector
+                : await this.embeddingProvider.embed(content);
+            const sparseVector = item.sparseVector || SparseTokenizer.encode(content);
+            const pointId = item.id || crypto.randomUUID();
+            const now = new Date().toISOString();
 
-            if (hasVectors && !recomputeVectors) {
-                const pointId = item.id || crypto.randomUUID();
-                const now = new Date().toISOString();
-                const sparseVector = item.sparseVector || SparseTokenizer.encode(content);
-
-                if (this.qdrant && this.isAvailable) {
-                    try {
-                        let isDup = false;
-                        if (deduplicate) {
-                            const existing = await this.qdrant.query(this.collectionName, {
-                                query: item.denseVector,
-                                using: "dense",
-                                limit: 1,
-                                score_threshold: 0.92,
-                                filter: {
-                                    must: [{ key: "appId", match: { value: metadata.appId } }]
-                                },
-                                with_payload: true
-                            });
-                            if (existing.points.length > 0 && (existing.points[0].score ?? 0) >= 0.92) {
-                                isDup = true;
-                                deduplicated++;
-                                importedIds.push(String(existing.points[0].id));
-                            }
-                        }
-
-                        if (!isDup) {
-                            await this.qdrant.upsert(this.collectionName, {
-                                wait: false,
-                                points: [{
-                                    id: pointId,
-                                    vector: { dense: item.denseVector, sparse: sparseVector },
-                                    payload: { content, ...metadata, frequency: 1, timestamp: now, lastSeen: now }
-                                }]
-                            });
-                            imported++;
-                            importedIds.push(pointId);
-                        }
-                        continue;
-                    } catch (err: any) {
-                        console.warn(`[MemoryCortex] Import Qdrant error: ${err.message || err}. Falling back to in-memory store.`);
-                    }
-                }
-
-                // Ephemeral fallback
-                let isDup = false;
-                if (deduplicate) {
-                    for (const existing of this.fallbackStore) {
-                        if (existing.payload.appId === metadata.appId) {
-                            const sim = this.cosineSimilarity(item.denseVector, existing.denseVector);
-                            if (sim >= 0.92) {
-                                isDup = true;
-                                existing.payload.frequency = (existing.payload.frequency || 1) + 1;
-                                existing.payload.qualityRating = Math.max(metadata.qualityRating ?? 0, existing.payload.qualityRating || 0);
-                                deduplicated++;
-                                importedIds.push(existing.id);
-                                break;
-                            }
+            if (this.qdrant && this.isAvailable) {
+                try {
+                    let isDup = false;
+                    if (deduplicate) {
+                        const existing = await this.qdrant.query(this.collectionName, {
+                            query: denseVector,
+                            using: "dense",
+                            limit: 1,
+                            score_threshold: 0.92,
+                            filter: {
+                                must: [{ key: "appId", match: { value: metadata.appId } }]
+                            },
+                            with_payload: true
+                        });
+                        if (existing.points.length > 0 && (existing.points[0].score ?? 0) >= 0.92) {
+                            isDup = true;
+                            deduplicated++;
+                            importedIds.push(String(existing.points[0].id));
                         }
                     }
-                }
 
-                if (!isDup) {
-                    this.fallbackStore.push({
-                        id: pointId,
-                        denseVector: item.denseVector,
-                        sparseVector,
-                        payload: {
-                            content,
-                            appId: metadata.appId!,
-                            frequency: 1,
-                            qualityRating,
-                            verified: metadata.verified ?? false,
-                            timestamp: now,
-                            lastSeen: now,
-                            ...metadata
+                    if (!isDup) {
+                        await this.qdrant.upsert(this.collectionName, {
+                            wait: false,
+                            points: [{
+                                id: pointId,
+                                vector: { dense: denseVector, sparse: sparseVector },
+                                payload: { content, ...metadata, frequency: 1, timestamp: now, lastSeen: now }
+                            }]
+                        });
+                        imported++;
+                        importedIds.push(pointId);
+                    }
+                    continue;
+                } catch (err: any) {
+                    console.warn(`[MemoryCortex] Import Qdrant error: ${err.message || err}. Falling back to in-memory store.`);
+                }
+            }
+
+            // Ephemeral fallback
+            let isDup = false;
+            if (deduplicate) {
+                for (const existing of this.fallbackStore) {
+                    if (existing.payload.appId === metadata.appId) {
+                        const sim = this.cosineSimilarity(denseVector, existing.denseVector);
+                        if (sim >= 0.92) {
+                            isDup = true;
+                            existing.payload.frequency = (existing.payload.frequency || 1) + 1;
+                            existing.payload.qualityRating = Math.max(metadata.qualityRating ?? 0, existing.payload.qualityRating || 0);
+                            deduplicated++;
+                            importedIds.push(existing.id);
+                            break;
                         }
-                    });
-                    imported++;
-                    importedIds.push(pointId);
+                    }
                 }
-            } else {
-                const storedId = await this.store(content, metadata, deduplicate);
-                if (storedId) {
-                    imported++;
-                    importedIds.push(storedId);
-                } else {
-                    skipped++;
-                }
+            }
+
+            if (!isDup) {
+                this.fallbackStore.push({
+                    id: pointId,
+                    denseVector,
+                    sparseVector,
+                    payload: {
+                        content,
+                        appId: metadata.appId!,
+                        frequency: 1,
+                        qualityRating,
+                        verified: metadata.verified ?? false,
+                        timestamp: now,
+                        lastSeen: now,
+                        ...metadata
+                    }
+                });
+                imported++;
+                importedIds.push(pointId);
             }
         }
 

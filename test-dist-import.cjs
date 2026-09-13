@@ -28,14 +28,19 @@ async function testCjsImport() {
 
     const toolsCjs = require('./dist/swarm/tools.cjs');
     const parserCjs = require('./dist/swarm/parser.cjs');
-    if (!toolsCjs.ToolRegistry || !parserCjs.repairJson || !parserCjs.parseJsonSafe) {
-        throw new Error('CommonJS tools or parser exports missing');
+    const clientCjs = require('./dist/swarm/client.cjs');
+    if (!toolsCjs.ToolRegistry || !parserCjs.repairJson || !parserCjs.parseJsonSafe || !clientCjs.createSwarmClient) {
+        throw new Error('CommonJS tools, parser, or client exports missing');
+    }
+    const client = clientCjs.createSwarmClient({ mode: 'embedded', appId: 'cjs-app' });
+    if (!client || client.mode !== 'embedded') {
+        throw new Error('CommonJS createSwarmClient failed to initialize');
     }
     const repairedCjs = parserCjs.parseJsonSafe('{ status: True, val: 99, }');
     if (!repairedCjs || repairedCjs.status !== true || repairedCjs.val !== 99) {
         throw new Error('CommonJS parser failed safe repair');
     }
-    console.log('✓ CJS tools and parser subpaths verified');
+    console.log('✓ CJS tools, parser, and client subpaths verified');
 
     console.log('✓ ALL COMMONJS SWARM DISTRIBUTION TESTS PASSED!\n');
 }

@@ -8,9 +8,11 @@ import {
     AdaptiveLoadBalancer,
     ProviderRegistry,
     createSwarmServer,
-    handleSwarmSse
+    handleSwarmSse,
+    createSwarmClient
 } from './dist/swarm/index.js';
 import { createSwarmServer as serverFromSubpath } from './dist/swarm/server.js';
+import { createSwarmClient as clientFromSubpath } from './dist/swarm/client.js';
 import { ToolRegistry, calculatorTool } from './dist/swarm/tools.js';
 import { repairJson, parseJsonSafe } from './dist/swarm/parser.js';
 
@@ -19,10 +21,14 @@ async function runDistVerification() {
 
     // 1. Verify exports presence
     console.log('Verifying compiled library exports:');
-    if (!executeSwarmWorkflow || !SwarmEngine || !MemoryCortex || !ModelRouter || !PayloadCache || !SwarmHierarchy || !AdaptiveLoadBalancer || !ProviderRegistry || !createSwarmServer || !handleSwarmSse || !serverFromSubpath) {
+    if (!executeSwarmWorkflow || !SwarmEngine || !MemoryCortex || !ModelRouter || !PayloadCache || !SwarmHierarchy || !AdaptiveLoadBalancer || !ProviderRegistry || !createSwarmServer || !handleSwarmSse || !serverFromSubpath || !createSwarmClient || !clientFromSubpath) {
         throw new Error('Missing core exports in compiled dist bundle');
     }
-    console.log('✓ All core exports verified.');
+    const distClient = clientFromSubpath({ mode: 'embedded', appId: 'dist-client-app' });
+    if (!distClient || distClient.mode !== 'embedded') {
+        throw new Error('Compiled clientFromSubpath failed to initialize');
+    }
+    console.log('✓ All core exports and client SDK subpath verified.');
 
     // 2. Test compiled ModelRouter fast-path inference
     const fastDecision = ModelRouter.evaluateFastPath('ping server', '');

@@ -57,6 +57,12 @@ npx perfect-swarm init ./my-analysis-app
 
 # Execute a headless swarm task directly from your terminal
 npx perfect-swarm run "Analyze transaction volume anomalies" --mock
+
+# Export memory snapshots from MemoryCortex to JSON or JSONL
+npx perfect-swarm export-memory --app my-app --out snapshot.jsonl --min-rating 0.85
+
+# Import and hydrate memory snapshots into another target application
+npx perfect-swarm import-memory snapshot.jsonl --target-app downstream-app
 ```
 
 ---
@@ -195,6 +201,63 @@ console.log(parsed.active); // true
 console.log(parsed.payload); // null
 ```
 
+### 7. Unified Multi-App Swarm Client SDK
+
+```typescript
+import { createSwarmClient } from '@perfect-swarm/core/client';
+
+// Embedded execution mode:
+const embeddedClient = createSwarmClient({
+  mode: 'embedded',
+  appId: 'analytics-worker'
+});
+
+// Direct analysis execution:
+const result = await embeddedClient.analyze({
+  task: 'Audit system resource allocation',
+  data: 'metrics=load:0.4'
+});
+console.log(result.finalAnalysis);
+
+// Live async iterator streaming:
+for await (const chunk of embeddedClient.stream({ task: 'Continuous monitor' })) {
+  if (chunk.type === 'event') console.log(`[${chunk.event?.agentRole}] ${chunk.event?.action}`);
+  if (chunk.type === 'complete') console.log('Finished:', chunk.finalAnalysis);
+}
+
+// Remote HTTP/SSE server mode:
+const remoteClient = createSwarmClient({
+  mode: 'remote',
+  endpoint: 'http://localhost:3000'
+});
+```
+
+### 8. Pre-Calibrated RRF Presets & Continuous Learning Hooks
+
+```typescript
+import { MemoryCortex, RRF_PRESETS } from '@perfect-swarm/core/memory';
+import { SwarmEngine } from '@perfect-swarm/core/engine';
+
+const cortex = new MemoryCortex({ defaultAppId: 'trading-app' });
+
+// Query with pre-calibrated RRF profiles:
+// RRF_PRESETS.semantic (dense: 0.85, sparse: 0.15)
+// RRF_PRESETS.lexical  (dense: 0.15, sparse: 0.85)
+// RRF_PRESETS.balanced (dense: 0.50, sparse: 0.50)
+// RRF_PRESETS.hybrid   (dense: 0.70, sparse: 0.30)
+const results = await cortex.retrieve('order execution latency', {
+  rrfProfile: RRF_PRESETS.semantic
+});
+
+// Hook into real-time continuous learning captures:
+const engine = new SwarmEngine({
+  cortex,
+  onMemoryLearned: (event) => {
+    console.log(`[Learned Memory] App: ${event.appId}, Verified: ${event.metadata.verified}, Task: ${event.metadata.task}`);
+  }
+});
+```
+
 ---
 
 ## 🐳 Docker Deployment
@@ -220,7 +283,7 @@ The repository contains a full battery of automated tests:
 npm test
 
 # Run specific suites
-npm run test:portable     # 24 portability, tool execution, snapshot, & JSON repair tests
+npm run test:portable     # 25 portability, tool execution, snapshot, & JSON repair tests
 npm run test:simulation   # 7-phase multi-app stress test
 npm run test:dist         # ESM and CommonJS bundle checks
 npm run test:cli          # CLI utility tests
@@ -234,6 +297,7 @@ npm run test:server       # HTTP & SSE streaming tests
 | Export Path | Description |
 | --- | --- |
 | `@perfect-swarm/core` | Complete swarm library exports |
+| `@perfect-swarm/core/client` | Unified multi-app Swarm Client SDK for embedded execution & remote SSE streaming |
 | `@perfect-swarm/core/engine` | Core orchestration engine and workflow executor |
 | `@perfect-swarm/core/server` | Zero-dependency HTTP & SSE streaming server |
 | `@perfect-swarm/core/tools` | Zero-dependency free tool registry & deterministic analysis tools |

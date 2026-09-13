@@ -56,3 +56,19 @@ export interface VerificationResult {
     pass: boolean;
     feedback?: string;
 }
+
+export interface LearnedMemoryEvent {
+    appId: string;
+    content: string;
+    id?: string;
+    metadata: {
+        domain?: string;
+        agentRole?: string;
+        qualityRating?: number;
+        verified?: boolean;
+        feedback?: string;
+        task?: string;
+        fastPath?: boolean;
+        [key: string]: any;
+    };
+}

@@ -27,3 +27,4 @@ export * from './engine.ts';
 export * from './server.ts';
 export * from './tools/index.ts';
 export * from './parser.ts';
+export * from './client.ts';

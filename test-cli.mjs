@@ -61,6 +61,61 @@ async function testCli() {
     }
     console.log('✓ CLI run command verified.');
 
+    // 5. Test CLI Memory Export & Import
+    console.log('\n[CLI Test 5] Testing memory export and import...');
+    const snapshotFile = path.resolve(process.cwd(), '.test-cli-snapshot.jsonl');
+    const exportedFile = path.resolve(process.cwd(), '.test-cli-export.json');
+
+    try {
+        const dummyMemories = [
+            {
+                id: 'cli-mem-1',
+                content: 'System cache eviction interval configured to 300s.',
+                metadata: { domain: 'caching', qualityRating: 0.92, verified: true, appId: 'cli-seed-app' }
+            },
+            {
+                id: 'cli-mem-2',
+                content: 'Database connection pool max clients set to 50.',
+                metadata: { domain: 'database', qualityRating: 0.88, verified: true, appId: 'cli-seed-app' }
+            }
+        ];
+        fs.writeFileSync(snapshotFile, dummyMemories.map(m => JSON.stringify(m)).join('\n'), 'utf8');
+
+        // Import snapshot into hydrated-cli-app
+        const importOutput = execSync(`node bin/cli.js import-memory "${snapshotFile}" --target-app "hydrated-cli-app"`, { encoding: 'utf8' });
+        console.log(importOutput);
+        if (!importOutput.includes('Import completed') || !importOutput.includes('Imported:        2')) {
+            throw new Error('CLI import-memory failed or did not import 2 items');
+        }
+        console.log('✓ CLI import-memory verified.');
+
+        // Test deduplication on re-import
+        const dedupOutput = execSync(`node bin/cli.js import-memory "${snapshotFile}" --target-app "hydrated-cli-app"`, { encoding: 'utf8' });
+        console.log(dedupOutput);
+        if (!dedupOutput.includes('Skipped (dedup): 2')) {
+            throw new Error('CLI import-memory deduplication check failed');
+        }
+        console.log('✓ CLI deduplication verified.');
+
+        // Export memories from hydrated-cli-app to JSON format
+        const exportOutput = execSync(`node bin/cli.js export-memory --app "hydrated-cli-app" --out "${exportedFile}" --format json`, { encoding: 'utf8' });
+        console.log(exportOutput);
+        if (!fs.existsSync(exportedFile)) {
+            throw new Error('CLI export-memory failed to write output file');
+        }
+        const exportedJson = JSON.parse(fs.readFileSync(exportedFile, 'utf8'));
+        if (!exportedJson.memories || exportedJson.memories.length !== 2) {
+            throw new Error('CLI exported memories count mismatch');
+        }
+        console.log('✓ CLI export-memory verified.');
+    } finally {
+        if (fs.existsSync(snapshotFile)) fs.rmSync(snapshotFile, { force: true });
+        if (fs.existsSync(exportedFile)) fs.rmSync(exportedFile, { force: true });
+        const localSwarmDir = path.resolve(process.cwd(), '.swarm');
+        if (fs.existsSync(localSwarmDir)) fs.rmSync(localSwarmDir, { recursive: true, force: true });
+        console.log('✓ Cleaned up CLI snapshot test files');
+    }
+
     console.log('\n✓ ALL CLI TESTS PASSED SUCCESSFULLY!\n');
 }
 

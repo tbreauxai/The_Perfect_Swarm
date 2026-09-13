@@ -2,7 +2,7 @@ import { GoogleGenAI } from '@google/genai';
 import { MemoryCortex } from './memory.ts';
 import { Agent } from './agent.ts';
 import { SwarmContext } from './context.ts';
-import type { SwarmEvent, ProviderCredential, Provider } from './types.ts';
+import type { SwarmEvent, ProviderCredential, Provider, LearnedMemoryEvent } from './types.ts';
 import { profileData, createTokenChunks } from './profiler.ts';
 import { ModelRouter, type TaskComplexity } from './router.ts';
 import { AnalysisLifecycle } from './lifecycle.ts';
@@ -140,6 +140,7 @@ export interface SwarmWorkflowParams {
     enableDeepAnalysis?: boolean;
     complexityOverride?: TaskComplexity;
     onEvent?: (event: SwarmEvent) => void;
+    onMemoryLearned?: (event: LearnedMemoryEvent) => void;
     context?: SwarmContext;
     cortex?: MemoryCortex;
     tools?: SwarmTool[] | ToolRegistry;
@@ -383,19 +384,31 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             if (finalAnalysis && !finalAnalysis.ui_title?.includes("Error")) {
                 globalPayloadCache.set(cacheKey, finalAnalysis);
                 if (memoryCortex) {
-                    memoryCortex.store(
-                        `Task: ${task}\nResult: ${finalAnalysis.ui_title || 'Fast analysis complete'}`,
-                        {
-                            domain: 'analysis',
-                            agentRole: fastAnalyst.role,
-                            complexity: 'instant',
-                            verified: true,
-                            appId: targetAppId,
-                            qualityRating: 0.90,
-                            feedback: 'Fast-path short-circuit: validated instant-tier heuristic',
-                            attempts: 1
-                        }
-                    ).catch(() => {});
+                    const content = `Task: ${task}\nResult: ${finalAnalysis.ui_title || 'Fast analysis complete'}`;
+                    const meta = {
+                        domain: 'analysis',
+                        agentRole: fastAnalyst.role,
+                        complexity: 'instant' as const,
+                        verified: true,
+                        appId: targetAppId,
+                        qualityRating: 0.90,
+                        feedback: 'Fast-path short-circuit: validated instant-tier heuristic',
+                        attempts: 1,
+                        task,
+                        fastPath: true
+                    };
+                    memoryCortex.store(content, meta)
+                        .then(storedId => {
+                            if (params.onMemoryLearned) {
+                                params.onMemoryLearned({
+                                    appId: targetAppId,
+                                    content,
+                                    id: storedId,
+                                    metadata: meta
+                                });
+                            }
+                        })
+                        .catch(() => {});
                 }
             }
 
@@ -602,20 +615,32 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 : (complexity === 'instant' ? 0.90 : 0.85);
             const verified = lifecycleResult ? lifecycleResult.success : false;
             const feedback = lifecycleResult?.criticFeedback;
+            const content = `Task: ${task}\nResult: ${finalAnalysis.ui_title || 'Analysis complete'}`;
+            const meta = {
+                domain: 'analysis',
+                agentRole: 'Manager Node',
+                complexity,
+                verified,
+                appId: targetAppId,
+                qualityRating,
+                feedback,
+                attempts: lifecycleResult?.attempts || 1,
+                task,
+                fastPath: false
+            };
 
-            memoryCortex.store(
-                `Task: ${task}\nResult: ${finalAnalysis.ui_title || 'Analysis complete'}`,
-                {
-                    domain: 'analysis',
-                    agentRole: 'Manager Node',
-                    complexity,
-                    verified,
-                    appId: targetAppId,
-                    qualityRating,
-                    feedback,
-                    attempts: lifecycleResult?.attempts || 1
-                }
-            ).catch(() => {});
+            memoryCortex.store(content, meta)
+                .then(storedId => {
+                    if (params.onMemoryLearned) {
+                        params.onMemoryLearned({
+                            appId: targetAppId,
+                            content,
+                            id: storedId,
+                            metadata: meta
+                        });
+                    }
+                })
+                .catch(() => {});
         }
     } catch (swarmErr) {
         console.error("Swarm execution failed:", swarmErr);
@@ -638,20 +663,37 @@ export class SwarmEngine {
     private defaultSettings: any;
     private defaultAi?: GoogleGenAI;
     private defaultCortex?: MemoryCortex;
+    private defaultOnMemoryLearned?: (event: LearnedMemoryEvent) => void;
 
-    constructor(defaultSettings: any = {}, defaultAi?: GoogleGenAI, defaultCortex?: MemoryCortex) {
-        this.defaultSettings = defaultSettings;
-        this.defaultAi = defaultAi;
-        this.defaultCortex = defaultCortex;
+    constructor(
+        configOrSettings: any = {},
+        defaultAi?: GoogleGenAI,
+        defaultCortex?: MemoryCortex
+    ) {
+        if (configOrSettings && typeof configOrSettings === 'object' && ('cortex' in configOrSettings || 'onMemoryLearned' in configOrSettings || 'defaultCortex' in configOrSettings)) {
+            this.defaultSettings = configOrSettings.settings || {};
+            this.defaultAi = configOrSettings.defaultAi || defaultAi;
+            this.defaultCortex = configOrSettings.cortex || configOrSettings.defaultCortex || defaultCortex;
+            this.defaultOnMemoryLearned = configOrSettings.onMemoryLearned;
+        } else {
+            this.defaultSettings = configOrSettings;
+            this.defaultAi = defaultAi;
+            this.defaultCortex = defaultCortex;
+        }
     }
 
-    async execute(params: Omit<SwarmWorkflowParams, 'settings' | 'defaultAi'> & { settings?: any; defaultAi?: GoogleGenAI; cortex?: MemoryCortex }): Promise<SwarmWorkflowResult> {
+    async execute(params: Omit<SwarmWorkflowParams, 'settings' | 'defaultAi'> & { settings?: any; defaultAi?: GoogleGenAI; cortex?: MemoryCortex; onMemoryLearned?: (event: LearnedMemoryEvent) => void }): Promise<SwarmWorkflowResult> {
         return executeSwarmWorkflow({
             ...params,
             settings: { ...this.defaultSettings, ...params.settings },
             defaultAi: params.defaultAi || this.defaultAi,
-            cortex: params.cortex || this.defaultCortex
+            cortex: params.cortex || this.defaultCortex,
+            onMemoryLearned: params.onMemoryLearned || this.defaultOnMemoryLearned
         });
+    }
+
+    async executeWorkflow(params: Omit<SwarmWorkflowParams, 'settings' | 'defaultAi'> & { settings?: any; defaultAi?: GoogleGenAI; cortex?: MemoryCortex; onMemoryLearned?: (event: LearnedMemoryEvent) => void }): Promise<SwarmWorkflowResult> {
+        return this.execute(params);
     }
 
     static execute(params: SwarmWorkflowParams): Promise<SwarmWorkflowResult> {

@@ -32,4 +32,14 @@
 | P3-G4 | Resilient Zero-Drift AI JSON Repair & Schema Guard (`src/swarm/parser.ts`) | completed | Cleanly repairs malformed JSON, markdown fences, unquoted keys, trailing commas, comments, and truncated outputs; verified via Step 24 in `test-portable-swarm.ts` |
 | P3-G5 | End-to-End Test Suite, Typecheck, Build, and Documentation Verification | completed | All 24 steps in `test-portable-swarm.ts`, 7 simulation phases, dist ESM/CJS subpath tests, CLI tests, SSE streaming tests pass 100%; `tsc` and dual build clean |
 
+## Track: Phase 4 - Unified Client SDK, RRF Presets & CLI Snapshot Management
+
+| Goal ID | Description | Status | Verification |
+| --- | --- | --- | --- |
+| P4-G1 | Pre-Calibrated RRF Retrieval Profiles (`RRF_PRESETS`) & Learning Hooks (`onMemoryLearned`) | completed | Profile-based RRF retrieval ('semantic', 'lexical', 'balanced', 'hybrid') and SwarmEngine onMemoryLearned callback; verified via Step 25a and 25b in `test-portable-swarm.ts` |
+| P4-G2 | Unified Multi-App Swarm Client SDK (`src/swarm/client.ts` & `./client` subpath) | completed | `createSwarmClient` providing identical embedded/remote streaming and analysis API; verified via Step 25c in `test-portable-swarm.ts`, `test-dist-import.mjs`, and `test-dist-import.cjs` |
+| P4-G3 | CLI Memory Snapshot Management (`export-memory` and `import-memory` commands) | completed | `bin/cli.js` export/import commands for terminal memory backup and cross-app transfer with offline fallback; verified via CLI Test 5 in `test-cli.mjs` |
+| P4-G4 | End-to-End Test Suite Validation (Step 25 in `test-portable-swarm.ts` & `test-cli.mjs`) | completed | Step 25 in `test-portable-swarm.ts` verifies client/presets; `test-cli.mjs` verifies snapshot commands; all 5 suites in `npm test` pass 100% |
+| P4-G5 | Full Dual Build, Typecheck, Distribution Verification, and Git Release | completed | Clean `tsc --noEmit` (0 errors), Vite dual build generates all ESM/CJS bundles + declarations, all 5 test suites pass |
+
 

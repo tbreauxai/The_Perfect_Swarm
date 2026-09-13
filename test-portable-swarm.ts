@@ -26,7 +26,10 @@ import {
     guardAnalystResponse,
     guardManagerResponse,
     guardVerificationResult,
-    repairAndValidate
+    repairAndValidate,
+    createSwarmClient,
+    SwarmClient,
+    RRF_PRESETS
 } from './swarm.ts';
 
 async function runPortableValidation() {
@@ -1224,6 +1227,162 @@ Anomalies:
         throw new Error('Step 24f: SwarmEngine failed to handle malformed LLM outputs gracefully');
     }
     console.log('✓ Resilient Zero-Drift AI JSON Repair & Schema Guard verified');
+
+    console.log('\n=== Step 25: RRF Retrieval Presets, onMemoryLearned Lifecycle Hook & Unified SwarmClient SDK ===');
+
+    // 25a: RRF Retrieval Presets (semantic, lexical, balanced, hybrid)
+    const rrfTestCortex = new MemoryCortex({ defaultAppId: 'rrf-preset-app', isolatedStore: true });
+    await rrfTestCortex.store('Critical database deadlock timeout detected on payment processing transactions.', {
+        domain: 'database',
+        qualityRating: 0.95,
+        verified: true,
+        appId: 'rrf-preset-app'
+    });
+    await rrfTestCortex.store('Sluggish UI performance and elevated latency observed on checkout page.', {
+        domain: 'frontend',
+        qualityRating: 0.90,
+        verified: true,
+        appId: 'rrf-preset-app'
+    });
+
+    const semanticQuery = await rrfTestCortex.retrieve('system sluggishness and high delay', {
+        rrfProfile: RRF_PRESETS.semantic
+    });
+    console.log('Semantic preset retrieval top match:', semanticQuery[0]?.content);
+    if (!semanticQuery.length || !semanticQuery[0].content.includes('Sluggish UI')) {
+        throw new Error('Step 25a: RRF_PRESETS.semantic failed to prioritize semantic match');
+    }
+
+    const lexicalQuery = await rrfTestCortex.retrieve('deadlock timeout database transactions', {
+        rrfProfile: RRF_PRESETS.lexical
+    });
+    console.log('Lexical preset retrieval top match:', lexicalQuery[0]?.content);
+    if (!lexicalQuery.length || !lexicalQuery[0].content.includes('deadlock timeout')) {
+        throw new Error('Step 25a: RRF_PRESETS.lexical failed to prioritize lexical match');
+    }
+
+    const balancedQuery = await rrfTestCortex.retrieve('database latency', {
+        rrfProfile: RRF_PRESETS.balanced
+    });
+    const hybridQuery = await rrfTestCortex.retrieve('database latency', {
+        rrfProfile: RRF_PRESETS.hybrid
+    });
+    if (balancedQuery.length === 0 || hybridQuery.length === 0) {
+        throw new Error('Step 25a: Balanced or hybrid RRF retrieval failed to return results');
+    }
+    console.log('✓ Pre-Calibrated RRF Retrieval Presets verified');
+
+    // 25b: onMemoryLearned Lifecycle Hook
+    const learnedEvents: any[] = [];
+    const learningEngine = new SwarmEngine({
+        cortex: rrfTestCortex,
+        onMemoryLearned: (event) => {
+            learnedEvents.push(event);
+        }
+    });
+
+    // Fast-path execution trigger
+    await learningEngine.executeWorkflow({
+        task: 'Health check node ping',
+        data: 'node=green',
+        settings: {
+            appId: 'rrf-preset-app',
+            agents: [
+                { id: 'm1', role: 'Manager Node', provider: 'custom-mock', apiKey: 'k-mock', model: 'm-mock' },
+                { id: 'a1', role: 'Analyst', provider: 'custom-mock', apiKey: 'k-mock', model: 'm-mock' }
+            ]
+        }
+    });
+
+    console.log('Fast-path learned event:', learnedEvents[0]);
+    if (learnedEvents.length === 0 || !learnedEvents[0].metadata?.fastPath) {
+        throw new Error('Step 25b: onMemoryLearned did not fire on fast-path workflow');
+    }
+
+    // Deep analysis execution trigger
+    await learningEngine.executeWorkflow({
+        task: 'Investigate deadlock logs and propose indexing strategy',
+        enableDeepAnalysis: true,
+        settings: {
+            appId: 'rrf-preset-app',
+            agents: [
+                { id: 'm1', role: 'Manager Node', provider: 'custom-mock', apiKey: 'k-mock', model: 'm-mock' },
+                { id: 'a1', role: 'Analyst', provider: 'custom-mock', apiKey: 'k-mock', model: 'm-mock' }
+            ]
+        }
+    });
+
+    console.log('Total onMemoryLearned events received:', learnedEvents.length);
+    const deepLearned = learnedEvents.find(e => e.metadata?.task?.includes('deadlock logs'));
+    if (!deepLearned || deepLearned.metadata?.fastPath) {
+        throw new Error('Step 25b: onMemoryLearned did not fire on deep-analysis workflow');
+    }
+    console.log('✓ onMemoryLearned lifecycle hooks verified for both fast-path and deep-analysis');
+
+    // 25c: Unified SwarmClient SDK
+    const client = createSwarmClient({
+        mode: 'embedded',
+        appId: 'sdk-client-app',
+        settings: {
+            agents: [
+                { id: 'sdk-mgr', role: 'Manager Node', provider: 'custom-mock', apiKey: 'k-mock', model: 'm-mock' },
+                { id: 'sdk-analyst', role: 'Analyst', provider: 'custom-mock', apiKey: 'k-mock', model: 'm-mock' }
+            ]
+        }
+    });
+
+    const sdkResult = await client.analyze({
+        task: 'Analyze system telemetry stream',
+        data: 'telemetry=nominal'
+    });
+    console.log('SDK analyze() output title:', sdkResult.finalAnalysis?.ui_title);
+    if (!sdkResult.finalAnalysis?.ui_title) {
+        throw new Error('Step 25c: SwarmClient.analyze() failed');
+    }
+
+    const streamedChunks: any[] = [];
+    for await (const chunk of client.stream({
+        task: 'Stream diagnostic health check',
+        data: 'mode=live'
+    })) {
+        streamedChunks.push(chunk);
+    }
+    console.log(`SDK stream() received ${streamedChunks.length} chunks`);
+    if (streamedChunks.length === 0 || !streamedChunks.some(c => c.type === 'complete')) {
+        throw new Error('Step 25c: SwarmClient.stream() failed to stream events');
+    }
+
+    // Test client memory interface
+    const storedMemId = await client.memory.store('SDK knowledge: Redis caching reduces p95 by 40ms.', {
+        domain: 'caching',
+        qualityRating: 0.98
+    });
+    console.log('SDK memory store result ID:', storedMemId);
+    if (!storedMemId) {
+        throw new Error('Step 25c: SwarmClient.memory.store() failed');
+    }
+
+    const retrievedMemories = await client.memory.retrieve('Redis caching p95');
+    if (retrievedMemories.length === 0 || !retrievedMemories[0].content.includes('Redis caching')) {
+        throw new Error('Step 25c: SwarmClient.memory.retrieve() failed');
+    }
+
+    const exportedSnapshot = await client.memory.exportSnapshot({ format: 'json' });
+    const importedResult = await client.memory.importSnapshot(exportedSnapshot, { deduplicate: true });
+    console.log('SDK memory export/import stats:', importedResult);
+    if (importedResult.deduplicated < 1) {
+        throw new Error('Step 25c: SwarmClient.memory export/import roundtrip failed');
+    }
+
+    // Remote mode client validation
+    const remoteClient = createSwarmClient({
+        mode: 'remote',
+        endpoint: 'http://localhost:3000'
+    });
+    if (remoteClient.mode !== 'remote') {
+        throw new Error('Step 25c: SwarmClient remote configuration failed');
+    }
+    console.log('✓ Unified SwarmClient SDK verified (embedded analyze, streaming, memory, and remote config)');
 
     console.log('\n=== Step 16: Context Event Log Summary ===');
     console.log(`Total events recorded in SwarmContext: ${recordedEvents.length}`);

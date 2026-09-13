@@ -2,39 +2,39 @@
   "activeGoalId": null,
   "goals": [
     {
-      "id": "P3-G1",
-      "description": "Comprehensive Audit of File Structure, AI Structure, and Qdrant Utilization",
+      "id": "P4-G1",
+      "description": "Pre-Calibrated RRF Retrieval Profiles (RRF_PRESETS) & Learning Hooks (onMemoryLearned)",
       "status": "completed",
-      "verificationCriteria": "Audit document .omg/ultragoal/audit_v3.md exists detailing decoupling status, tool execution gaps, AI JSON resilience, and Qdrant snapshotting opportunities",
-      "evidence": "Completed comprehensive audit documented in .omg/ultragoal/audit_v3.md verifying zero UI/server leaks, free-tier routing, RLAIF learning, and identifying zero-dependency tool calling, portable memory snapshots, and JSON repair as perfection targets."
+      "verificationCriteria": "MemoryCortex supports profile-based RRF retrieval ('semantic', 'lexical', 'balanced', 'hybrid') and SwarmEngine emits onMemoryLearned lifecycle callback",
+      "evidence": "RRF_PRESETS and onMemoryLearned verified in Step 25a and 25b in test-portable-swarm.ts"
     },
     {
-      "id": "P3-G2",
-      "description": "Zero-Dependency Free Tool & Function Calling Framework (src/swarm/tools/)",
+      "id": "P4-G2",
+      "description": "Unified Multi-App Swarm Client SDK (src/swarm/client.ts & ./client subpath)",
       "status": "completed",
-      "verificationCriteria": "ToolRegistry and SwarmTool interfaces implemented with built-in free analysis tools; agents can register and execute deterministic tools during analysis without external dependencies",
-      "evidence": "Created SwarmTool, ToolRegistry, and 4 standard free analysis tools (calculator, stats_summary, regex_match, json_extract) in src/swarm/tools/; integrated tool parsing, stripToolCalls, and execution into SwarmEngine; exported via ./tools subpath; verified via Step 22 in test-portable-swarm.ts."
+      "verificationCriteria": "createSwarmClient provides unified API for both embedded engine execution and remote HTTP/SSE streaming server with identical async iterator stream() and analyze() methods",
+      "evidence": "createSwarmClient verified across embedded analyze, live streaming, memory methods, and remote config in Step 25c of test-portable-swarm.ts, test-dist-import.mjs, and test-dist-import.cjs"
     },
     {
-      "id": "P3-G3",
-      "description": "Portable Memory Cortex Snapshotting & Cross-App Hydration (exportMemories / importMemories)",
+      "id": "P4-G3",
+      "description": "CLI Memory Snapshot Management (export-memory and import-memory commands)",
       "status": "completed",
-      "verificationCriteria": "MemoryCortex supports exportMemories and importMemories in JSON/JSONL format with deduplication and quality preservation across in-memory and Qdrant stores",
-      "evidence": "Implemented exportMemories, exportJson, exportJsonl, and importMemories in MemoryCortex; supports JSON/JSONL serialization, cross-app targetAppId remapping, deduplication against existing memory points, vector preservation, and Qdrant/in-memory fallback store synchronization; verified via Step 23 in test-portable-swarm.ts."
+      "verificationCriteria": "bin/cli.js supports export-memory and import-memory commands for backing up, exporting, and hydrating memory snapshots between apps from terminal",
+      "evidence": "bin/cli.js export-memory and import-memory verified in CLI Test 5 in test-cli.mjs with roundtrip JSONL and JSON export/import and offline persistence fallback"
     },
     {
-      "id": "P3-G4",
-      "description": "Resilient Zero-Drift AI JSON Repair & Schema Guard (src/swarm/parser.ts)",
+      "id": "P4-G4",
+      "description": "End-to-End Test Suite Validation (Step 25 in test-portable-swarm.ts & test-cli.mjs)",
       "status": "completed",
-      "verificationCriteria": "Parser cleanly extracts and repairs malformed JSON, markdown fences, and truncated output from free-tier models without crashing",
-      "evidence": "Created zero-dependency repairJson, parseJsonSafe, guardAnalystResponse, guardManagerResponse, guardVerificationResult, and repairAndValidate in src/swarm/parser.ts; handles markdown fences, unclosed thinking tags, unquoted keys, Python literals, trailing commas, comments, and truncated JSON; integrated into Agent.run, AnalysisLifecycle, and SwarmEngine; exported via ./parser; verified via Step 24 in test-portable-swarm.ts."
+      "verificationCriteria": "Step 25 in test-portable-swarm.ts verifies RRF presets and unified client; test-cli.mjs verifies memory snapshot export/import CLI commands",
+      "evidence": "All 25 steps in test-portable-swarm.ts and all 5 CLI test suites passing with 100% assertions"
     },
     {
-      "id": "P3-G5",
-      "description": "End-to-End Test Suite, Typecheck, Build, and Documentation Verification",
+      "id": "P4-G5",
+      "description": "Full Dual Build, Typecheck, Distribution Verification, and Git Release",
       "status": "completed",
-      "verificationCriteria": "Automated tests in test-portable-swarm.ts verify tools, snapshots, and JSON repair; tsc --noEmit and npm test pass 100%",
-      "evidence": "Executed full test suite (npm test): test:portable passed all 24 validation steps; test:simulation passed all 7 multi-app phases; test:dist verified compiled ESM/CJS bundles and tools/parser subpaths; test:cli verified doctor/init/run commands; test:server verified HTTP and SSE streaming. Typecheck tsc --noEmit passed cleanly (0 errors); dual build npm run build succeeded."
+      "verificationCriteria": "tsc --noEmit clean, npm run build generates ESM/CJS bundles and .d.ts files for all subpaths, npm test passes 100%, changes committed and pushed",
+      "evidence": "tsc --noEmit clean, npm run build:swarm generates all bundles and declarations, npm test runs all 5 suites with 0 failures"
     }
   ]
 }
