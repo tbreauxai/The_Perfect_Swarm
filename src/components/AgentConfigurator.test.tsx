@@ -66,7 +66,7 @@ describe('AgentConfigurator & SettingsModal Swarm Agents Tab', () => {
         }).not.toThrow();
     });
 
-    it('displays inline hints when provider API key is not configured', () => {
+    it('displays inline hints and descriptive placeholders when provider API key is not configured', () => {
         const settingsMissingGroq: AppSettings = {
             ...mockSettings,
             groqApiKey: ''
@@ -80,5 +80,6 @@ describe('AgentConfigurator & SettingsModal Swarm Agents Tab', () => {
         );
         // Expect an inline indicator or hint that groq key is missing
         expect(html).toContain('API Key required');
+        expect(html).toContain('Model ID (API Key required to load list)');
     });
 });
