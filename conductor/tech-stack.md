@@ -14,3 +14,7 @@
 - **AI Orchestration**: Google GenAI SDK, Native Fetch for REST APIs (OpenRouter, Groq, Mistral, GitHub)
 - **Data Validation**: Zod, Zod-to-JSON-Schema
 - **Vector Database / Semantic Caching**: Qdrant (`@qdrant/js-client-rest`)
+
+## Testing
+- **Unit & Component Testing**: Vitest, React DOM Server testing
+- **Integration & Simulation Testing**: Zero-dependency portable CLI & multi-app stress suites
