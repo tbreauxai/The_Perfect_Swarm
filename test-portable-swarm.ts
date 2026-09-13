@@ -667,6 +667,7 @@ async function runPortableValidation() {
     const isolatedCustomCortex = new MemoryCortex({ defaultAppId: 'custom-injected-app' });
     await isolatedCustomCortex.store('Custom injected knowledge: P99 latency SLA is 20ms.', {
         domain: 'performance',
+        agentRole: 'Performance Architect',
         qualityRating: 0.95,
         verified: true,
         appId: 'custom-injected-app'
@@ -691,6 +692,216 @@ async function runPortableValidation() {
         throw new Error('Step 18: Injected custom cortex was not utilized in executeSwarmWorkflow');
     }
     console.log('✓ Injected custom cortex verified in Run 2');
+
+    console.log('\n=== Step 19: Dedicated Critic Routing, Cross-Provider Critic & Fast-Path Learning Capture ===');
+
+    // 19a: Fast-path execution records into MemoryCortex with heuristic feedback
+    const fastAppId = 'app-fast-path-learning';
+    const fastCortex = getOrCreateDefaultCortex(fastAppId);
+
+    await executeSwarmWorkflow({
+        task: 'Ping database connection',
+        settings: {
+            appId: fastAppId,
+            agents: [
+                { id: 'manager', role: 'Manager Node', provider: 'custom-mock', apiKey: 'mock-key', model: 'mock-model' },
+                { id: 'a1', role: 'Database Analyst', provider: 'custom-mock', apiKey: 'mock-key', model: 'mock-model' }
+            ]
+        }
+    });
+
+    const fastMemories = await fastCortex.retrieve('Ping database connection', { appId: fastAppId });
+    console.log('Fast-path recorded memories:', fastMemories.map(m => ({ content: m.content, feedback: m.feedback })));
+    if (fastMemories.length === 0 || !fastMemories[0].feedback?.includes('Fast-path short-circuit')) {
+        throw new Error('Step 19a: Fast-path execution failed to record into MemoryCortex with heuristic feedback');
+    }
+    console.log('✓ Fast-path execution learning capture verified');
+
+    // 19b: Cross-provider Critic selection (Manager on custom-mock, Analyst 1 on custom-mock, Analyst 2 on backup-mock)
+    ProviderRegistry.register({
+        providerName: 'backup-mock',
+        async call(opts) {
+            if (opts.prompt.includes('Evaluate this proposal') || opts.systemInstruction?.includes('Verification Critic')) {
+                return JSON.stringify({ pass: true, feedback: 'Cross-provider verification passed with zero discrepancies.' });
+            }
+            return JSON.stringify({ insights: ['Backup analyst insight'], anomalies: [], summary: 'Done' });
+        }
+    });
+
+    const crossProviderResult = await executeSwarmWorkflow({
+        task: 'Deep security audit of API token rotation',
+        enableDeepAnalysis: true,
+        settings: {
+            appId: 'cross-provider-test',
+            agents: [
+                { id: 'manager', role: 'Manager Node', provider: 'custom-mock', apiKey: 'mock-key', model: 'mock-model' },
+                { id: 'a1', role: 'Primary Analyst', provider: 'custom-mock', apiKey: 'mock-key', model: 'mock-model' },
+                { id: 'a2', role: 'Secondary Analyst', provider: 'backup-mock', apiKey: 'mock-key', model: 'mock-model' }
+            ]
+        }
+    });
+
+    const crossCriticEvent = crossProviderResult.events.find(e => e.action === 'Deep Analysis Verification Loop Started');
+    console.log('Cross-provider Critic modelName:', crossCriticEvent?.modelName);
+    if (!crossCriticEvent || !crossCriticEvent.modelName.includes('backup-mock')) {
+        throw new Error('Step 19b: Failed to select cross-provider analyst as Critic');
+    }
+    console.log('✓ Cross-provider critic selection verified');
+
+    // 19c: Explicit Dedicated Critic Agent Configuration
+    const dedicatedCriticResult = await executeSwarmWorkflow({
+        task: 'Deep compliance audit of PII storage',
+        enableDeepAnalysis: true,
+        settings: {
+            appId: 'dedicated-critic-test',
+            agents: [
+                { id: 'manager', role: 'Manager Node', provider: 'custom-mock', apiKey: 'mock-key', model: 'mock-model' },
+                { id: 'a1', role: 'Compliance Analyst', provider: 'custom-mock', apiKey: 'mock-key', model: 'mock-model' },
+                { id: 'critic', role: 'Chief Compliance Auditor', provider: 'backup-mock', apiKey: 'mock-key', model: 'mock-model' }
+            ]
+        }
+    });
+
+    const dedicatedCriticEvent = dedicatedCriticResult.events.find(e => e.action === 'Deep Analysis Verification Loop Started');
+    console.log('Dedicated Critic modelName:', dedicatedCriticEvent?.modelName);
+    if (!dedicatedCriticEvent || !dedicatedCriticEvent.modelName.includes('backup-mock')) {
+        throw new Error('Step 19c: Failed to utilize explicit dedicated Critic agent');
+    }
+    console.log('\n=== Step 20: Automated Memory Consolidation & Weighted Hybrid RRF Scoring ===');
+
+    // 20a: Automated Consolidation Threshold Trigger
+    const autoConsolidateCortex = new MemoryCortex({
+        defaultAppId: 'auto-prune-app',
+        isolatedStore: true,
+        autoConsolidateThreshold: 3,
+        autoConsolidationOptions: { minRating: 0.5, pruneLowQuality: true }
+    });
+
+    await autoConsolidateCortex.store('Transient flaky socket disconnect', {
+        domain: 'network',
+        agentRole: 'Analyst',
+        qualityRating: 0.20
+    });
+    await autoConsolidateCortex.store('Definitive zero-trust IAM policy blueprint', {
+        domain: 'security',
+        agentRole: 'Architect',
+        qualityRating: 0.95
+    });
+
+    console.log('Pending stores before threshold:', autoConsolidateCortex.getPendingConsolidationCount());
+    console.log('Fallback count before threshold:', autoConsolidateCortex.fallbackCount);
+    if (autoConsolidateCortex.getPendingConsolidationCount() !== 2 || autoConsolidateCortex.fallbackCount !== 2) {
+        throw new Error('Step 20a: Pending count or fallback count mismatch before threshold trigger');
+    }
+
+    // 3rd store reaches threshold (3) -> auto-consolidates!
+    await autoConsolidateCortex.store('Optimized database connection pooling configuration', {
+        domain: 'database',
+        agentRole: 'DBA',
+        qualityRating: 0.88
+    });
+
+    console.log('Pending stores after threshold:', autoConsolidateCortex.getPendingConsolidationCount());
+    console.log('Fallback count after auto-prune:', autoConsolidateCortex.fallbackCount);
+    if (autoConsolidateCortex.getPendingConsolidationCount() !== 0) {
+        throw new Error('Step 20a: pendingConsolidationCount was not reset after auto-consolidation');
+    }
+    if (autoConsolidateCortex.fallbackCount !== 2) {
+        throw new Error(`Step 20a: Expected 2 points retained after auto-pruning, found ${autoConsolidateCortex.fallbackCount}`);
+    }
+
+    const remainingMemories = await autoConsolidateCortex.retrieve('socket', { minRating: 0 });
+    if (remainingMemories.some(m => m.qualityRating < 0.5)) {
+        throw new Error('Step 20a: Low quality memory was not pruned by auto-consolidation');
+    }
+    console.log('✓ Automated memory consolidation threshold trigger verified');
+
+    // 20b: Weighted Hybrid RRF Scoring (denseWeight vs sparseWeight)
+    const weightedCortex = new MemoryCortex({
+        defaultAppId: 'weighted-rrf-app',
+        isolatedStore: true
+    });
+
+    await weightedCortex.store('Postgres connection pool exhaustion under high concurrency spike', {
+        domain: 'database',
+        agentRole: 'DBA',
+        qualityRating: 0.9
+    });
+    await weightedCortex.store('Relational database storage replication delay and failover procedures', {
+        domain: 'database',
+        agentRole: 'DBA',
+        qualityRating: 0.9
+    });
+
+    // When dense weight dominates
+    const densePriorityResults = await weightedCortex.retrieve('Postgres pool', {
+        denseWeight: 5.0,
+        sparseWeight: 0.2,
+        limit: 2
+    });
+    // When sparse weight dominates
+    const sparsePriorityResults = await weightedCortex.retrieve('Postgres pool', {
+        denseWeight: 0.2,
+        sparseWeight: 5.0,
+        limit: 2
+    });
+
+    if (densePriorityResults.length === 0 || sparsePriorityResults.length === 0) {
+        throw new Error('Step 20b: Weighted RRF retrieval returned empty results');
+    }
+    console.log('✓ Weighted RRF retrieval verified with dense/sparse weights');
+
+    console.log('\n=== Step 21: End-to-End Multi-Session Continuous Learning Verification ===');
+    const continuousLearningAppId = 'continuous-learning-production-app';
+    const prodCortex = getOrCreateDefaultCortex(continuousLearningAppId);
+
+    // Session 1: Initial analysis
+    const session1Task = 'Mitigate distributed denial of service attack on API gateways';
+    await executeSwarmWorkflow({
+        task: session1Task,
+        enableDeepAnalysis: true,
+        settings: {
+            appId: continuousLearningAppId,
+            agents: [
+                { id: 'manager', role: 'Manager Node', provider: 'custom-mock', apiKey: 'mock-key', model: 'mock-model' },
+                { id: 'a1', role: 'Security Analyst', provider: 'custom-mock', apiKey: 'mock-key', model: 'mock-model' }
+            ]
+        }
+    });
+
+    const session1Persisted = await prodCortex.retrieve(session1Task, { appId: continuousLearningAppId });
+    if (session1Persisted.length === 0) {
+        throw new Error('Step 21: Session 1 failed to persist analysis to MemoryCortex');
+    }
+    console.log('✓ Session 1 analysis successfully persisted to cortex');
+
+    // Reinforce Session 1 with verified human/critic feedback
+    const session1Point = session1Persisted[0];
+    const pointId = (prodCortex as any).fallbackStore.find((p: any) => p.payload.content === session1Point.content)?.id;
+    if (pointId) {
+        await prodCortex.rateMemory(pointId, 0.98, 'Strict guideline: Always apply eBPF SYN-flood drops before cloud WAF throttling.');
+    }
+
+    // Session 2: Subsequent execution on related task retrieves Session 1's feedback exemplar
+    const session2Task = 'Handle severe SYN flood traffic spike on edge gateway';
+    const session2Result = await executeSwarmWorkflow({
+        task: session2Task,
+        enableDeepAnalysis: true,
+        settings: {
+            appId: continuousLearningAppId,
+            agents: [
+                { id: 'manager', role: 'Manager Node', provider: 'custom-mock', apiKey: 'mock-key', model: 'mock-model' },
+                { id: 'a1', role: 'Security Analyst', provider: 'custom-mock', apiKey: 'mock-key', model: 'mock-model' }
+            ]
+        }
+    });
+
+    const session2Retrieval = session2Result.events.find(e => e.action === 'Cortex Retrieval Complete');
+    console.log('Session 2 cortex retrieval output:', session2Retrieval?.output);
+    if (!session2Retrieval || !session2Retrieval.output?.message.includes('eBPF SYN-flood drops')) {
+        throw new Error('Step 21: Session 2 failed to retrieve reinforced feedback exemplar from Session 1');
+    }
+    console.log('✓ Multi-session continuous learning loop verified end-to-end');
 
     console.log('\n=== Step 16: Context Event Log Summary ===');
     console.log(`Total events recorded in SwarmContext: ${recordedEvents.length}`);

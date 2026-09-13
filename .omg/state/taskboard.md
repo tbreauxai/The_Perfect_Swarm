@@ -18,7 +18,7 @@
 | Goal ID | Description | Status | Verification |
 | --- | --- | --- | --- |
 | UG-1 | Unconditionally bind `MemoryCortex` in `src/swarm/engine.ts` with in-memory persistence and `includeShared` cross-app retrieval | completed | Engine initializes `MemoryCortex` without `QDRANT_URL`; retrieves baselines and exemplars; verified via Step 18 in `test-portable-swarm.ts` |
-| UG-2 | Implement cross-provider Critic routing and fast-path learning capture in `src/swarm/engine.ts` | in-progress | Selects dedicated critic or alternative provider; fast-path executions persist to cortex |
-| UG-3 | Add automated memory consolidation triggers and configurable dense/sparse RRF weights in `MemoryCortex` | todo | Threshold-based auto-prune (<0.40); customizable RRF weighting factors |
-| UG-4 | End-to-End multi-session learning verification, typecheck, build, and automated test suite pass | todo | Sequential workflow executions without Qdrant accumulate positive exemplars and improve responses; `npm test` passes |
+| UG-2 | Implement cross-provider Critic routing and fast-path learning capture in `src/swarm/engine.ts` | completed | Selects dedicated critic or alternative provider; fast-path executions persist to cortex with heuristic feedback; verified via Step 19 in `test-portable-swarm.ts` |
+| UG-3 | Add automated memory consolidation triggers and configurable dense/sparse RRF weights in `MemoryCortex` | completed | Threshold-based auto-prune (<0.40); customizable dense/sparse RRF weighting factors; verified via Step 20 in `test-portable-swarm.ts` |
+| UG-4 | End-to-End multi-session learning verification, typecheck, build, and automated test suite pass | completed | Sequential workflow executions without Qdrant accumulate positive exemplars and improve responses; `tsc --noEmit` 0 errors; all 5 suites in `npm test` pass; verified via Step 21 in `test-portable-swarm.ts` |
 

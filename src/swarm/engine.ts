@@ -231,9 +231,10 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         };
     }
 
-    // 1. Resolve Manager and Analysts
+    // 1. Resolve Manager, Analysts, and Critic
     const rawAgents = settings?.agents || [];
     let managerConfig = rawAgents.find((a: any) => a.id === 'manager' || a.role === 'Manager Node');
+    const dedicatedCriticConfig = rawAgents.find((a: any) => a.id === 'critic' || a.role?.toLowerCase().includes('critic') || a.role?.toLowerCase().includes('verifier')) || settings?.critic;
     const analystConfigs = rawAgents.filter((a: any) => a.id !== 'manager' && a.provider !== 'none');
 
     const hasUserGemini = !!settings?.geminiApiKey;
@@ -277,6 +278,17 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             analysts.push(new Agent(ac.role || 'Analyst', aModel, ac.provider, finalAKey, aClient, aFallbacks));
         } else {
             console.warn(`Skipping ${ac.role}: missing API key for ${ac.provider}`);
+        }
+    }
+
+    let dedicatedCriticAgent: Agent | null = null;
+    if (dedicatedCriticConfig) {
+        const { key: cKey, client: cClient } = resolveProvider(dedicatedCriticConfig.provider, settings, defaultAi);
+        const finalCKey = dedicatedCriticConfig.apiKey ? sanitizeApiKey(dedicatedCriticConfig.apiKey) : cKey;
+        if (finalCKey) {
+            const cModel = dedicatedCriticConfig.model || ModelRouter.getRecommendedModel(dedicatedCriticConfig.provider, complexity);
+            const cFallbacks = availableFallbacks.filter(f => f.provider !== dedicatedCriticConfig.provider);
+            dedicatedCriticAgent = new Agent(dedicatedCriticConfig.role || 'Verification Critic', cModel, dedicatedCriticConfig.provider, finalCKey, cClient, cFallbacks);
         }
     }
 
@@ -366,6 +378,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                             verified: true,
                             appId: targetAppId,
                             qualityRating: 0.90,
+                            feedback: 'Fast-path short-circuit: validated instant-tier heuristic',
                             attempts: 1
                         }
                     ).catch(() => {});
@@ -520,16 +533,19 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         let parsedManagerOutput: any = null;
         let lifecycleResult: any = null;
 
-        if (deepAnalysisRequested && analysts.length > 0) {
-            const criticAgent = analysts[0];
+        if (deepAnalysisRequested && (analysts.length > 0 || dedicatedCriticAgent)) {
+            // Select critic: Prefer dedicated critic, then cross-provider analyst (different from manager), then first analyst
+            const crossProviderAnalyst = analysts.find(a => a.provider !== managerAgent.provider);
+            const criticAgent = dedicatedCriticAgent || crossProviderAnalyst || analysts[0];
+
             criticAgent.setSystemInstruction("You are the Swarm Verification Critic. Audit proposed analyses strictly against the raw data, historical baselines, and analyst reports. Flag discrepancies, missed anomalies, or schema violations.");
 
             const lifecycle = new AnalysisLifecycle(managerAgent, criticAgent, 2);
             context.addEvent({
                 agentRole: 'Analysis Lifecycle',
                 action: 'Deep Analysis Verification Loop Started',
-                modelName: `${managerAgent.modelName} (Proposer) vs ${criticAgent.modelName} (Critic)`,
-                prompt: `Auditing synthesized proposal against raw findings (max 2 attempts)`
+                modelName: `${managerAgent.modelName} (${managerAgent.provider}) vs ${criticAgent.modelName} (${criticAgent.provider})`,
+                prompt: `Auditing synthesized proposal against raw findings with cross-provider verification (max 2 attempts)`
             });
 
             lifecycleResult = await lifecycle.executeAndVerify(

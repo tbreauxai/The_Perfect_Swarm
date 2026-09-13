@@ -24,6 +24,8 @@ export interface RetrievalOptions {
     verifiedOnly?: boolean;
     agentRole?: string;
     includeShared?: boolean;
+    denseWeight?: number;
+    sparseWeight?: number;
 }
 
 export interface ConsolidationOptions {
@@ -157,6 +159,8 @@ export interface MemoryCortexConfig {
     embeddingProvider?: EmbeddingProvider;
     aiClient?: GoogleGenAI;
     isolatedStore?: boolean;
+    autoConsolidateThreshold?: number;
+    autoConsolidationOptions?: ConsolidationOptions;
 }
 
 /**
@@ -178,6 +182,9 @@ export class MemoryCortex {
     private initialized: boolean = false;
     private isAvailable: boolean = false;
     private fallbackStore: StoredMemoryPoint[];
+    private storesSinceConsolidation: number = 0;
+    private autoConsolidateThreshold: number = 50;
+    private autoConsolidationOptions?: ConsolidationOptions;
 
     static clearFallbackStore(collectionName: string = "pwa_swarm_dev_cortex_v2"): void {
         const store = MemoryCortex.globalFallbackStores.get(collectionName);
@@ -189,6 +196,8 @@ export class MemoryCortex {
         const apiKey = config.apiKey || process.env.QDRANT_API_KEY;
         this.collectionName = config.collectionName || "pwa_swarm_dev_cortex_v2";
         this.defaultAppId = config.defaultAppId || "default";
+        this.autoConsolidateThreshold = config.autoConsolidateThreshold !== undefined ? config.autoConsolidateThreshold : 50;
+        this.autoConsolidationOptions = config.autoConsolidationOptions;
 
         if (config.isolatedStore) {
             this.fallbackStore = [];
@@ -338,6 +347,7 @@ export class MemoryCortex {
         await this.initialize();
         const appId = metadata.appId || this.defaultAppId;
         const now = new Date().toISOString();
+        let storedId: string | null = null;
 
         if (this.qdrant && this.isAvailable) {
             try {
@@ -375,86 +385,101 @@ export class MemoryCortex {
                             }
                         });
 
-                        return String(matched.id);
+                        storedId = String(matched.id);
                     }
                 }
 
-                const id = crypto.randomUUID();
-                await this.qdrant.upsert(this.collectionName, {
-                    wait: false,
-                    points: [
-                        {
-                            id,
-                            vector: {
-                                dense: denseVector,
-                                sparse: sparseVector
-                            },
-                            payload: {
-                                content,
-                                appId,
-                                frequency: 1,
-                                qualityRating: metadata.qualityRating ?? 0.5,
-                                verified: metadata.verified ?? false,
-                                timestamp: now,
-                                lastSeen: now,
-                                ...metadata
+                if (!storedId) {
+                    const id = crypto.randomUUID();
+                    await this.qdrant.upsert(this.collectionName, {
+                        wait: false,
+                        points: [
+                            {
+                                id,
+                                vector: {
+                                    dense: denseVector,
+                                    sparse: sparseVector
+                                },
+                                payload: {
+                                    content,
+                                    appId,
+                                    frequency: 1,
+                                    qualityRating: metadata.qualityRating ?? 0.5,
+                                    verified: metadata.verified ?? false,
+                                    timestamp: now,
+                                    lastSeen: now,
+                                    ...metadata
+                                }
                             }
-                        }
-                    ]
-                });
+                        ]
+                    });
 
-                return id;
+                    storedId = id;
+                }
             } catch (err: any) {
                 console.warn(`[MemoryCortex] Qdrant store error: ${err.message || err}. Falling back to in-memory store.`);
             }
         }
 
-        // Ephemeral in-memory fallback
-        try {
-            const denseVector = await this.embeddingProvider.embed(content);
-            const sparseVector = SparseTokenizer.encode(content);
+        if (!storedId) {
+            // Ephemeral in-memory fallback
+            try {
+                const denseVector = await this.embeddingProvider.embed(content);
+                const sparseVector = SparseTokenizer.encode(content);
 
-            if (deduplicate) {
-                for (const existing of this.fallbackStore) {
-                    if (existing.payload.appId === appId) {
-                        const sim = this.cosineSimilarity(denseVector, existing.denseVector);
-                        if (sim >= 0.92) {
-                            existing.payload.frequency = (existing.payload.frequency || 1) + 1;
-                            existing.payload.lastSeen = now;
-                            if (metadata.qualityRating !== undefined) {
-                                existing.payload.qualityRating = Math.max(metadata.qualityRating, existing.payload.qualityRating || 0);
+                if (deduplicate) {
+                    for (const existing of this.fallbackStore) {
+                        if (existing.payload.appId === appId) {
+                            const sim = this.cosineSimilarity(denseVector, existing.denseVector);
+                            if (sim >= 0.92) {
+                                existing.payload.frequency = (existing.payload.frequency || 1) + 1;
+                                existing.payload.lastSeen = now;
+                                if (metadata.qualityRating !== undefined) {
+                                    existing.payload.qualityRating = Math.max(metadata.qualityRating, existing.payload.qualityRating || 0);
+                                }
+                                if (metadata.verified !== undefined) {
+                                    existing.payload.verified = metadata.verified;
+                                }
+                                storedId = existing.id;
+                                break;
                             }
-                            if (metadata.verified !== undefined) {
-                                existing.payload.verified = metadata.verified;
-                            }
-                            return existing.id;
                         }
                     }
                 }
-            }
 
-            const id = crypto.randomUUID();
-            this.fallbackStore.push({
-                id,
-                denseVector,
-                sparseVector,
-                payload: {
-                    content,
-                    appId,
-                    frequency: 1,
-                    qualityRating: metadata.qualityRating ?? 0.5,
-                    verified: metadata.verified ?? false,
-                    timestamp: now,
-                    lastSeen: now,
-                    ...metadata
+                if (!storedId) {
+                    const id = crypto.randomUUID();
+                    this.fallbackStore.push({
+                        id,
+                        denseVector,
+                        sparseVector,
+                        payload: {
+                            content,
+                            appId,
+                            frequency: 1,
+                            qualityRating: metadata.qualityRating ?? 0.5,
+                            verified: metadata.verified ?? false,
+                            timestamp: now,
+                            lastSeen: now,
+                            ...metadata
+                        }
+                    });
+                    storedId = id;
                 }
-            });
-
-            return id;
-        } catch (err: any) {
-            console.warn(`[MemoryCortex] In-memory store error: ${err.message || err}`);
-            return null;
+            } catch (err: any) {
+                console.warn(`[MemoryCortex] In-memory store error: ${err.message || err}`);
+            }
         }
+
+        if (storedId) {
+            this.storesSinceConsolidation++;
+            if (this.autoConsolidateThreshold > 0 && this.storesSinceConsolidation >= this.autoConsolidateThreshold) {
+                this.storesSinceConsolidation = 0;
+                await this.consolidateMemories(this.autoConsolidationOptions);
+            }
+        }
+
+        return storedId;
     }
 
     /**
@@ -497,6 +522,12 @@ export class MemoryCortex {
                     wait: false,
                     points
                 });
+
+                this.storesSinceConsolidation += points.length;
+                if (this.autoConsolidateThreshold > 0 && this.storesSinceConsolidation >= this.autoConsolidateThreshold) {
+                    this.storesSinceConsolidation = 0;
+                    await this.consolidateMemories(this.autoConsolidationOptions);
+                }
 
                 return points.map(p => p.id as string);
             } catch (err: any) {
@@ -599,11 +630,14 @@ export class MemoryCortex {
         const sparseRankMap = new Map<string, number>();
         sparseRanked.forEach((item, idx) => sparseRankMap.set(item.candidate.id, idx));
 
-        // RRF scoring: 1 / (60 + denseRank + 1) + 1 / (60 + sparseRank + 1)
+        const denseWeight = options.denseWeight ?? 1.0;
+        const sparseWeight = options.sparseWeight ?? 1.0;
+
+        // RRF scoring: (denseWeight / (60 + denseRank + 1)) + (sparseWeight / (60 + sparseRank + 1))
         const rrfRanked = candidates.map(candidate => {
             const dRank = denseRankMap.get(candidate.id) ?? candidates.length;
             const sRank = sparseRankMap.get(candidate.id) ?? candidates.length;
-            const rrfScore = (1 / (60 + dRank + 1)) + (1 / (60 + sRank + 1));
+            const rrfScore = (denseWeight / (60 + dRank + 1)) + (sparseWeight / (60 + sRank + 1));
             return { candidate, rrfScore };
         }).sort((a, b) => b.rrfScore - a.rrfScore);
 
@@ -755,7 +789,8 @@ export class MemoryCortex {
                     remaining.push(pt);
                 }
             }
-            this.fallbackStore = remaining;
+            this.fallbackStore.length = 0;
+            this.fallbackStore.push(...remaining);
         }
 
         // Process Qdrant store if available
@@ -821,7 +856,8 @@ export class MemoryCortex {
      * Wipes the collection and in-memory store.
      */
     async wipeCollection(): Promise<boolean> {
-        this.fallbackStore = [];
+        this.fallbackStore.length = 0;
+        this.storesSinceConsolidation = 0;
         if (!this.qdrant) {
             this.initialized = false;
             return true;
@@ -847,5 +883,13 @@ export class MemoryCortex {
 
     get fallbackCount(): number {
         return this.fallbackStore.length;
+    }
+
+    get pendingConsolidationCount(): number {
+        return this.storesSinceConsolidation;
+    }
+
+    getPendingConsolidationCount(): number {
+        return this.storesSinceConsolidation;
     }
 }
