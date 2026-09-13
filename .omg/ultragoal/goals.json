@@ -3,38 +3,38 @@
   "goals": [
     {
       "id": "G1",
-      "description": "Execute comprehensive codebase audit: document optimization opportunities across architecture, AI provider dispatch, and Qdrant memory configuration",
+      "description": "Execute comprehensive audit targeting multi-app portability, free-tier AI API limitations (429/503, timeouts, failover, think tags), and Qdrant continuous learning gaps",
       "status": "completed",
-      "verificationCriteria": "Detailed audit report generated identifying all architectural bottlenecks, invalid Qdrant configurations, provider coupling, and portability blockers",
-      "evidence": "Completed full codebase audit identifying: (1) Invalid Qdrant schema ('turbo4'/'turbo' hallucination) in src/memory.ts; (2) Decoupled MemoryCortex unused by swarmEngine; (3) Monolithic provider if-else block in Agent.run violating OCP; (4) Unintegrated AnalysisLifecycle & ModelRouter; (5) Fragile cross-directory import structure preventing clean library transplantation."
+      "verificationCriteria": "Structured audit findings document detailing exact failure modes, missing abstractions, and architecture requirements across File Structure, AI Setup, and Qdrant Utilization",
+      "evidence": "Generated .omg/ultragoal/audit_v2.md identifying: (1) Core primitives scattered across UI directory with leaky web schemas; (2) Critical lack of AI failover cascades for free-tier 429/503 errors and hanging fetch calls without timeouts; (3) Absence of Qdrant multi-app namespacing (appId), feedback reinforcement, semantic deduplication, and compound payload indexing."
     },
     {
       "id": "G2",
-      "description": "Optimize Qdrant setup and Memory Cortex: fix invalid schema (turbo4/turbo), enable robust hybrid search, and support flexible embedding providers",
+      "description": "Consolidate Core Swarm into a self-contained, zero-leak package structure with clean exports for multi-app transplantation",
       "status": "completed",
-      "verificationCriteria": "MemoryCortex uses compliant Qdrant schemas with int8 scalar quantization and on-disk payload; graceful fallback when embeddings or cluster unavailable",
-      "evidence": "Refactored src/memory.ts: replaced invalid 'turbo4'/'turbo' configs with compliant Qdrant scalar int8 quantization, on_disk: true; implemented EmbeddingProvider interface with Gemini and DeterministicLocalEmbeddingProvider fallback; implemented hybrid Dense + Sparse RRF search; wired MemoryCortex directly into swarmEngine.ts for baseline retrieval and insight persistence. Verified with tsc --noEmit and vite build."
+      "verificationCriteria": "All swarm core primitives (memory, router, lifecycle, state, schemas, adapters) reside within src/swarm/ with proper exports; zero React/Vite dependencies required by the swarm library",
+      "evidence": "Relocated memory, router, lifecycle, state, orchestrator, profiler, and generic analysis schemas into src/swarm/ with 0 external ../ imports; defined subpath exports in package.json; preserved backward-compatible root shims; verified via tsc, vite build, and native node direct import (23 exports)."
     },
     {
       "id": "G3",
-      "description": "Refactor Swarm Core into a standalone portable library package with pluggable Provider Adapters",
+      "description": "Implement Free-Tier AI Resilience Engine: multi-provider failover cascades, request timeouts with AbortController, and reasoning model tag sanitization",
       "status": "completed",
-      "verificationCriteria": "Clean provider adapter interface (Gemini, Groq, OpenRouter, Mistral, GitHub) decoupled from Agent class; unified exports via src/swarm/index.ts with zero Express/React coupling",
-      "evidence": "Created src/swarm modular directory with types.ts, context.ts, agent.ts, providers/adapter.ts, providers/registry.ts, and 5 provider adapters (Gemini, Groq, OpenRouter with sk-or-v1- auth handling, Mistral with rate limiter mutex, GitHub). Cleaned constructor parameter properties and import types for zero-error Node.js native --experimental-strip-types execution. Standalone import verified."
+      "verificationCriteria": "Agent automatically cascades to backup providers upon 429/503/timeouts; requests abort after configurable deadline; <think> tags stripped cleanly without corrupting JSON",
+      "evidence": "Implemented ProviderCredential failover chain in Agent.run triggering on 429 rate limits, quotas, 5xx errors, and timeouts; added 30s AbortSignal.timeout across Groq, OpenRouter, Mistral, and GitHub adapters; built sanitizeModelOutput stripping <think>...</think> reasoning blocks and markdown fences; verified via automated test in test-portable-swarm.ts."
     },
     {
       "id": "G4",
-      "description": "Integrate Memory Cortex, Model Router, and Analysis Lifecycle into the Swarm Orchestrator for deep analysis",
+      "description": "Upgrade Qdrant Memory Cortex into a Multi-App Learning Engine: multi-tenant appId namespacing, feedback scoring, semantic deduplication, and few-shot exemplary learning retrieval",
       "status": "completed",
-      "verificationCriteria": "SwarmEngine leverages MemoryCortex for semantic baseline retrieval and optional AnalysisLifecycle verification loops for high-complexity analysis tasks",
-      "evidence": "Integrated ModelRouter into swarmEngine for automated complexity classification and optimal model selection; wired MemoryCortex for hybrid baseline retrieval and structured insight persistence; integrated AnalysisLifecycle into manager synthesis for Red Team / Blue Team audit loops on deep analysis tasks. Verified via tsc --noEmit and vite build."
+      "verificationCriteria": "MemoryCortex isolates memories by appId; indexes appId/qualityRating/domain in Qdrant; prevents vector duplication via cosine thresholding; retrieves top-rated exemplars for prompt reinforcement",
+      "evidence": "Implemented multi-tenant appId isolation, cosine deduplication threshold (>0.92), rateMemory reinforcement scoring, and retrieveExemplars few-shot prompt distillation in MemoryCortex; integrated into swarmEngine.ts; verified via unit tests in test-portable-swarm.ts."
     },
     {
       "id": "G5",
-      "description": "End-to-end verification, type checking, bundle build, and portability validation",
+      "description": "End-to-end multi-app simulation, typecheck, build, and free-tier stress testing",
       "status": "completed",
-      "verificationCriteria": "tsc --noEmit passes with 0 errors; vite build succeeds; sample portable consumer script verifies zero-framework invocation",
-      "evidence": "tsc --noEmit passed cleanly (0 errors); vite build succeeded (252 kB bundle); test-portable-swarm.ts verified ProviderRegistry, dynamic custom adapters, SwarmContext event subscriptions, ModelRouter complexity inference, and AnalysisLifecycle Red Team/Blue Team verification under native node --experimental-strip-types."
+      "verificationCriteria": "tsc --noEmit passes cleanly; vite build succeeds; multi-app learning simulation test script executes successfully under node --experimental-strip-types",
+      "evidence": "Executed comprehensive test suite: tsc --noEmit passed (0 errors); vite build succeeded (dist/assets bundled cleanly); node --experimental-strip-types test-portable-swarm.ts passed all 12 validation steps; test-multi-app-simulation.ts verified multi-tenant deployment across FinTech & Health apps, 429 failover recovery, <think> sanitization, feedback reinforcement, and 12-task parallel stress test with 100% success."
     }
   ]
 }

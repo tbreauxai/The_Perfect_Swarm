@@ -1,5 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
-import { cleanToken, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
+import { cleanToken, sanitizeModelOutput, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
 
 export class GeminiAdapter implements ProviderAdapter {
     readonly providerName = 'gemini';
@@ -24,12 +24,14 @@ export class GeminiAdapter implements ProviderAdapter {
             reqConfig.systemInstruction = options.systemInstruction;
         }
 
+        const isJson = options.config?.responseMimeType === 'application/json';
         const response = await client.models.generateContent({
             model: options.modelName,
             contents: options.prompt,
             config: reqConfig
         });
 
-        return response.text || '';
+        const rawText = response.text || '';
+        return sanitizeModelOutput(rawText, isJson);
     }
 }

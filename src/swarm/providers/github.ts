@@ -1,4 +1,4 @@
-import { cleanToken, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
+import { cleanToken, sanitizeModelOutput, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
 
 export class GitHubAdapter implements ProviderAdapter {
     readonly providerName = 'github';
@@ -16,6 +16,7 @@ export class GitHubAdapter implements ProviderAdapter {
         messages.push({ role: 'user', content: options.prompt });
 
         const isJson = options.config?.responseMimeType === 'application/json';
+        const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 30000;
 
         const bodyParams: any = {
             model: options.modelName,
@@ -26,22 +27,38 @@ export class GitHubAdapter implements ProviderAdapter {
             bodyParams.response_format = { type: 'json_object' };
         }
 
-        const response = await fetch('https://models.github.ai/inference/chat/completions', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${key}`,
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
-            },
-            body: JSON.stringify(bodyParams)
-        });
+        let response: Response;
+        try {
+            response = await fetch('https://models.github.ai/inference/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${key}`,
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
+                body: JSON.stringify(bodyParams),
+                signal: AbortSignal.timeout(timeoutMs)
+            });
+        } catch (err: any) {
+            if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+                throw new Error(`[TIMEOUT] GitHub Models request timed out after ${timeoutMs}ms.`);
+            }
+            throw err;
+        }
 
         if (!response.ok) {
             const err = await response.text();
+            if (response.status === 429) {
+                throw new Error(`[RATE_LIMIT_429] GitHub Models rate limit exceeded: ${err}`);
+            }
+            if (response.status >= 500) {
+                throw new Error(`[SERVER_ERROR_${response.status}] GitHub Models service error: ${err}`);
+            }
             throw new Error(`GitHub API Error: ${response.status} - ${err}`);
         }
 
         const data = await response.json();
-        return data?.choices?.[0]?.message?.content || '';
+        const rawContent = data?.choices?.[0]?.message?.content || '';
+        return sanitizeModelOutput(rawContent, isJson);
     }
 }

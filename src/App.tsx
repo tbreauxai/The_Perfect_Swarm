@@ -42,6 +42,7 @@ export default function App() {
     qdrantUrl: '',
     qdrantApiKey: '',
     githubToken: '',
+    appId: 'perfect-swarm',
     agents: [
       { id: 'manager', role: 'Manager Node', provider: 'gemini', model: 'gemini-2.5-flash' },
       { id: 'a1', role: 'Analyst 1', provider: 'gemini', model: 'gemini-2.5-pro' },

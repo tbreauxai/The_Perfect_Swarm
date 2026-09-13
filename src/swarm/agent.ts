@@ -1,11 +1,15 @@
 import type { GoogleGenAI } from '@google/genai';
-import type { Provider, AgentRunConfig } from './types.ts';
+import type { Provider, AgentRunConfig, ProviderCredential } from './types.ts';
 import { SwarmContext } from './context.ts';
 import { ProviderRegistry } from './providers/registry.ts';
+import { sanitizeModelOutput } from './providers/adapter.ts';
 
 /**
  * Autonomous Swarm Agent decoupled from specific LLM provider implementations.
- * Delegates execution to registered ProviderAdapters.
+ * Features:
+ * - Dynamic execution via ProviderRegistry adapters
+ * - Multi-provider failover cascades on free-tier rate limits (429), timeouts, and 5xx errors
+ * - Robust reasoning model sanitization (<think> tag stripping)
  */
 export class Agent {
     public role: string;
@@ -14,19 +18,22 @@ export class Agent {
     private apiKey: string;
     private aiClient?: GoogleGenAI;
     private systemInstruction?: string;
+    private fallbacks: ProviderCredential[] = [];
 
     constructor(
         role: string,
         modelName: string,
         provider: Provider,
         apiKey: string,
-        aiClient?: GoogleGenAI
+        aiClient?: GoogleGenAI,
+        fallbacks: ProviderCredential[] = []
     ) {
         this.role = role;
         this.modelName = modelName;
         this.provider = provider;
         this.apiKey = apiKey;
         this.aiClient = aiClient;
+        this.fallbacks = [...fallbacks];
     }
 
     setSystemInstruction(instruction: string): void {
@@ -37,8 +44,27 @@ export class Agent {
         return this.systemInstruction;
     }
 
+    setFallbacks(fallbacks: ProviderCredential[]): void {
+        this.fallbacks = [...fallbacks];
+    }
+
+    addFallback(fallback: ProviderCredential): void {
+        this.fallbacks.push(fallback);
+    }
+
+    getFallbacks(): ProviderCredential[] {
+        return [...this.fallbacks];
+    }
+
     async run(prompt: string, context: SwarmContext, config?: AgentRunConfig): Promise<any> {
         const startTime = Date.now();
+        const timeoutMs = config?.timeoutMs || 30000;
+
+        const targetChain: ProviderCredential[] = [
+            { provider: this.provider, modelName: this.modelName, apiKey: this.apiKey, aiClient: this.aiClient },
+            ...(config?.fallbackProviders || this.fallbacks)
+        ];
+
         context.addEvent({
             agentRole: this.role,
             action: 'Started execution',
@@ -46,54 +72,91 @@ export class Agent {
             prompt
         });
 
-        const maxRetries = 2;
         let lastError: any = null;
 
-        for (let attempt = 1; attempt <= maxRetries; attempt++) {
-            try {
-                const adapter = ProviderRegistry.get(this.provider);
-                const textOutput = await adapter.call({
-                    modelName: this.modelName,
-                    prompt,
-                    systemInstruction: this.systemInstruction,
-                    apiKey: this.apiKey,
-                    aiClient: this.aiClient,
-                    config
-                });
+        for (let targetIdx = 0; targetIdx < targetChain.length; targetIdx++) {
+            const currentTarget = targetChain[targetIdx];
+            const isFallback = targetIdx > 0;
+            const maxRetries = 2;
 
-                const durationMs = Date.now() - startTime;
-                let parsedOutput: any = textOutput;
+            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
+                    const adapter = ProviderRegistry.get(currentTarget.provider);
+                    const textOutput = await adapter.call({
+                        modelName: currentTarget.modelName || this.modelName,
+                        prompt,
+                        systemInstruction: this.systemInstruction,
+                        apiKey: currentTarget.apiKey,
+                        aiClient: currentTarget.aiClient || this.aiClient,
+                        config,
+                        timeoutMs
+                    });
 
-                if (config?.responseMimeType === 'application/json') {
-                    try {
-                        let cleanText = (textOutput || '').replace(/```(?:json)?/gi, '').trim();
-                        const startIdx = cleanText.indexOf('{');
-                        const endIdx = cleanText.lastIndexOf('}');
-                        if (startIdx !== -1 && endIdx !== -1) {
-                            cleanText = cleanText.substring(startIdx, endIdx + 1);
+                    const durationMs = Date.now() - startTime;
+                    let parsedOutput: any = textOutput;
+
+                    if (config?.responseMimeType === 'application/json') {
+                        try {
+                            const cleanText = sanitizeModelOutput(textOutput, true);
+                            parsedOutput = JSON.parse(cleanText || '{}');
+                        } catch {
+                            parsedOutput = textOutput;
                         }
-                        parsedOutput = JSON.parse(cleanText || '{}');
-                    } catch {
-                        parsedOutput = textOutput;
                     }
-                }
 
-                context.addEvent({
-                    agentRole: this.role,
-                    action: 'Completed execution',
-                    modelName: `${this.provider} / ${this.modelName}`,
-                    prompt,
-                    output: parsedOutput,
-                    durationMs
-                });
+                    context.addEvent({
+                        agentRole: this.role,
+                        action: isFallback ? `Completed execution via failover (${currentTarget.provider})` : 'Completed execution',
+                        modelName: `${currentTarget.provider} / ${currentTarget.modelName || this.modelName}`,
+                        prompt,
+                        output: parsedOutput,
+                        durationMs
+                    });
 
-                return parsedOutput;
-            } catch (err: any) {
-                lastError = err;
-                console.warn(`[${this.role}] Attempt ${attempt}/${maxRetries} failed:`, err.message);
+                    return parsedOutput;
+                } catch (err: any) {
+                    lastError = err;
+                    const errMsg = err?.message || String(err);
+                    console.warn(`[${this.role}][${currentTarget.provider}] Attempt ${attempt}/${maxRetries} failed:`, errMsg);
 
-                if (attempt < maxRetries) {
-                    await new Promise(resolve => setTimeout(resolve, 1500 * attempt));
+                    const isFailoverEligible = 
+                        errMsg.includes('429') ||
+                        errMsg.includes('RATE_LIMIT') ||
+                        errMsg.includes('quota') ||
+                        errMsg.includes('TIMEOUT') ||
+                        errMsg.includes('503') ||
+                        errMsg.includes('502') ||
+                        errMsg.includes('SERVER_ERROR') ||
+                        errMsg.includes('401') ||
+                        errMsg.includes('403');
+
+                    const hasNextProvider = targetIdx < targetChain.length - 1;
+
+                    // If eligible for failover and we have another provider ready, failover immediately without waiting
+                    if (isFailoverEligible && hasNextProvider) {
+                        const nextTarget = targetChain[targetIdx + 1];
+                        context.addEvent({
+                            agentRole: this.role,
+                            action: 'Provider Failover Triggered',
+                            modelName: `${currentTarget.provider} -> ${nextTarget.provider}`,
+                            prompt: `Cascading to backup provider due to error: ${errMsg}`,
+                            output: {
+                                failedProvider: currentTarget.provider,
+                                fallbackProvider: nextTarget.provider,
+                                reason: errMsg
+                            },
+                            failover: {
+                                fromProvider: String(currentTarget.provider),
+                                toProvider: String(nextTarget.provider),
+                                reason: errMsg
+                            }
+                        });
+                        break; // Exit retry loop to advance to next target in chain
+                    }
+
+                    if (attempt < maxRetries) {
+                        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+                    }
                 }
             }
         }

@@ -1,6 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
 import { MemoryCortex } from '../memory.ts';
-import { Agent, SwarmContext, type SwarmEvent } from '../../swarm.ts';
+import { Agent, SwarmContext, type SwarmEvent, type ProviderCredential, type Provider } from '../../swarm.ts';
 import { resolveProvider, validateProviderKey } from './providerService.ts';
 import { profileData, createTokenChunks } from './profilerService.ts';
 
@@ -93,17 +93,33 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         };
     }
 
+    const availableFallbacks: ProviderCredential[] = [];
+    const allProviders: Provider[] = ['gemini', 'openrouter', 'groq', 'github', 'mistral'];
+    for (const p of allProviders) {
+        const { key, client } = resolveProvider(p, settings, defaultAi);
+        if (key) {
+            availableFallbacks.push({
+                provider: p,
+                apiKey: key,
+                modelName: ModelRouter.getRecommendedModel(p, complexity),
+                aiClient: client
+            });
+        }
+    }
+
     const { key: mKey, client: mClient } = resolveProvider(managerConfig.provider, settings, defaultAi);
     validateProviderKey(managerConfig.provider, mKey, managerConfig.role || 'Manager Node');
     const managerModel = managerConfig.model || ModelRouter.getRecommendedModel(managerConfig.provider, complexity);
-    const managerAgent = new Agent('Manager Node', managerModel, managerConfig.provider, mKey, mClient);
+    const managerFallbacks = availableFallbacks.filter(f => f.provider !== managerConfig.provider);
+    const managerAgent = new Agent('Manager Node', managerModel, managerConfig.provider, mKey, mClient, managerFallbacks);
 
     const analysts: Agent[] = [];
     for (const ac of analystConfigs) {
         const { key: aKey, client: aClient } = resolveProvider(ac.provider, settings, defaultAi);
         if (aKey) {
             const aModel = ac.model || ModelRouter.getRecommendedModel(ac.provider, complexity);
-            analysts.push(new Agent(ac.role || 'Analyst', aModel, ac.provider, aKey, aClient));
+            const aFallbacks = availableFallbacks.filter(f => f.provider !== ac.provider);
+            analysts.push(new Agent(ac.role || 'Analyst', aModel, ac.provider, aKey, aClient, aFallbacks));
         } else {
             console.warn(`Skipping ${ac.role}: missing API key for ${ac.provider}`);
         }
@@ -162,20 +178,28 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         if (qdrantUrl) {
             try {
                 const parsedUrl = new URL(qdrantUrl);
+                const targetAppId = settings?.appId || 'perfect-swarm';
                 memoryCortex = new MemoryCortex({
                     url: qdrantUrl,
                     apiKey: qdrantApiKey,
-                    aiClient: defaultAi
+                    aiClient: defaultAi,
+                    defaultAppId: targetAppId
                 });
 
                 context.addEvent({
                     agentRole: 'System Orchestrator',
                     action: 'Targeted Cortex Retrieval',
                     modelName: 'Qdrant/HybridCortex',
-                    prompt: `Connecting to ${parsedUrl.host} for historical baseline constraints...`
+                    prompt: `Connecting to ${parsedUrl.host} for historical baseline constraints (appId='${targetAppId}')...`
                 });
 
-                const retrieved = await memoryCortex.retrieve(task, undefined, 3);
+                const retrieved = await memoryCortex.retrieve(task, { appId: targetAppId }, 3);
+                const exemplars = await memoryCortex.retrieveExemplars(task, {
+                    appId: targetAppId,
+                    limit: 2,
+                    minRating: 0.7
+                }).catch(() => "");
+
                 if (retrieved.length > 0) {
                     historicalContext = `Retrieved ${retrieved.length} relevant historical baselines from memory:\n` +
                         retrieved.map((m: any, idx: number) => `[Baseline ${idx + 1}]: ${m.content || JSON.stringify(m)}`).join('\n');
@@ -183,12 +207,16 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     historicalContext = "Vector Cortex connected. No prior matching historical baselines found for this domain.";
                 }
 
+                if (exemplars) {
+                    historicalContext += `\n\nHigh-Quality Exemplars from Past Runs:\n${exemplars}`;
+                }
+
                 context.addEvent({
                     agentRole: 'System Orchestrator',
                     action: 'Cortex Retrieval Complete',
                     prompt: 'Retrieval completed',
                     modelName: 'Qdrant/HybridCortex',
-                    output: { recordsFound: retrieved.length, status: 'Success', message: historicalContext },
+                    output: { recordsFound: retrieved.length, exemplarsIncluded: Boolean(exemplars), status: 'Success', message: historicalContext },
                     durationMs: 120
                 });
             } catch (err: any) {
@@ -339,9 +367,17 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         }
 
         if (memoryCortex && finalAnalysis && !finalAnalysis.ui_title?.includes("Error")) {
+            const targetAppId = settings?.appId || 'perfect-swarm';
             memoryCortex.store(
                 `Task: ${task}\nResult: ${finalAnalysis.ui_title || 'Analysis complete'}`,
-                { domain: 'analysis', agentRole: 'Manager Node', complexity, verified: deepAnalysisRequested }
+                {
+                    domain: 'analysis',
+                    agentRole: 'Manager Node',
+                    complexity,
+                    verified: deepAnalysisRequested,
+                    appId: targetAppId,
+                    qualityRating: deepAnalysisRequested ? 0.95 : 0.85
+                }
             ).catch(() => {});
         }
     } catch (swarmErr) {

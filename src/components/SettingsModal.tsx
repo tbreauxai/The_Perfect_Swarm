@@ -10,6 +10,7 @@ export interface AppSettings {
     qdrantUrl: string;
     qdrantApiKey: string;
     githubToken: string;
+    appId?: string;
     agents: AgentConfig[];
 }
 
@@ -163,6 +164,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                         value={settings.qdrantApiKey || ''}
                                         onChange={(e) => onUpdateSetting('qdrantApiKey', e.target.value)}
                                         placeholder="API Key"
+                                        className="w-full px-3 py-2 rounded-lg border border-neutral-300 focus:border-indigo-500 outline-none text-sm"
+                                    />
+                                </div>
+                                <div>
+                                    <div className="flex items-center justify-between mb-1">
+                                        <label className="block text-sm font-medium text-neutral-700">App Namespace (appId)</label>
+                                        <span className="text-xs text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-200">Learning Cortex</span>
+                                    </div>
+                                    <input
+                                        type="text"
+                                        value={settings.appId || ''}
+                                        onChange={(e) => onUpdateSetting('appId', e.target.value)}
+                                        placeholder="perfect-swarm (or external app ID)"
                                         className="w-full px-3 py-2 rounded-lg border border-neutral-300 focus:border-indigo-500 outline-none text-sm"
                                     />
                                 </div>

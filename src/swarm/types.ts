@@ -4,6 +4,13 @@ export const KNOWN_PROVIDERS = ['gemini', 'groq', 'openrouter', 'github', 'mistr
 
 export type Provider = typeof KNOWN_PROVIDERS[number] | string;
 
+export interface ProviderCredential {
+    provider: Provider;
+    apiKey: string;
+    modelName?: string;
+    aiClient?: GoogleGenAI;
+}
+
 export interface SwarmEvent {
     id: string;
     timestamp: string;
@@ -14,12 +21,19 @@ export interface SwarmEvent {
     output?: any;
     error?: string;
     durationMs?: number;
+    failover?: {
+        fromProvider: string;
+        toProvider: string;
+        reason: string;
+    };
 }
 
 export interface AgentRunConfig {
     responseMimeType?: string;
     temperature?: number;
     maxTokens?: number;
+    timeoutMs?: number;
+    fallbackProviders?: ProviderCredential[];
     [key: string]: any;
 }
 
@@ -30,6 +44,7 @@ export interface ProviderCallOptions {
     apiKey: string;
     aiClient?: GoogleGenAI;
     config?: AgentRunConfig;
+    timeoutMs?: number;
 }
 
 export interface ProviderAdapter {

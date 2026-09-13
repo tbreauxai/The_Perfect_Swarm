@@ -1,4 +1,4 @@
-import { cleanToken, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
+import { cleanToken, sanitizeModelOutput, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
 
 export class GroqAdapter implements ProviderAdapter {
     readonly providerName = 'groq';
@@ -16,28 +16,45 @@ export class GroqAdapter implements ProviderAdapter {
         messages.push({ role: 'user', content: options.prompt });
 
         const isJson = options.config?.responseMimeType === 'application/json';
+        const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 30000;
 
-        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${key}`,
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
-            },
-            body: JSON.stringify({
-                model: options.modelName,
-                messages,
-                max_tokens: options.config?.maxTokens || 1500,
-                response_format: isJson ? { type: 'json_object' } : undefined
-            })
-        });
+        let response: Response;
+        try {
+            response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${key}`,
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
+                body: JSON.stringify({
+                    model: options.modelName,
+                    messages,
+                    max_tokens: options.config?.maxTokens || 1500,
+                    response_format: isJson ? { type: 'json_object' } : undefined
+                }),
+                signal: AbortSignal.timeout(timeoutMs)
+            });
+        } catch (err: any) {
+            if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+                throw new Error(`[TIMEOUT] Groq request timed out after ${timeoutMs}ms.`);
+            }
+            throw err;
+        }
 
         if (!response.ok) {
             const errorText = await response.text();
-            throw new Error(`Groq API Error: ${errorText}`);
+            if (response.status === 429) {
+                throw new Error(`[RATE_LIMIT_429] Groq rate limit / quota exceeded: ${errorText}`);
+            }
+            if (response.status >= 500) {
+                throw new Error(`[SERVER_ERROR_${response.status}] Groq service unavailable: ${errorText}`);
+            }
+            throw new Error(`Groq API Error (${response.status}): ${errorText}`);
         }
 
         const data = await response.json();
-        return data?.choices?.[0]?.message?.content || '';
+        const rawContent = data?.choices?.[0]?.message?.content || '';
+        return sanitizeModelOutput(rawContent, isJson);
     }
 }

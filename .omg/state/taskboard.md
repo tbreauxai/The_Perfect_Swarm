@@ -1,11 +1,11 @@
 # OmA Taskboard
 
-## Track: Modular AI Swarm & Qdrant Optimization (Status: Completed)
+## Track: Multi-App Autonomous Learning Swarm & Free-Tier AI Optimization
 
 | Goal ID | Description | Status | Verification |
 | --- | --- | --- | --- |
-| G1 | Comprehensive codebase audit across architecture, provider dispatch, Qdrant setup | completed | Full audit log generated identifying 5 architectural bottlenecks |
-| G2 | Optimize Qdrant setup and Memory Cortex (int8 scalar quantization, hybrid RRF search, pluggable embedding providers) | completed | Replaced invalid schemas, implemented dense+sparse hybrid search, tested Gemini + local fallback |
-| G3 | Refactor Swarm Core into standalone portable package with pluggable Provider Adapters | completed | Created `src/swarm/` modular package with 5 provider adapters, ProviderRegistry, and sanitized types |
-| G4 | Integrate Memory Cortex, Model Router, and Analysis Lifecycle into Swarm Orchestrator | completed | Inferred complexity, dynamic model recommendation, Red Team / Blue Team verification loop, persistent cortex storage |
-| G5 | End-to-end verification, type checking, bundle build, and portability validation | completed | `tsc --noEmit` passed (0 errors), `vite build` passed, `test:portable` script verified via `node --experimental-strip-types` |
+| G1 | Comprehensive audit targeting multi-app portability, free-tier AI API limitations (429/503, timeouts, failover, think tags), and Qdrant continuous learning gaps | completed | `.omg/ultragoal/audit_v2.md` generated |
+| G2 | Consolidate Core Swarm into a self-contained, zero-leak package structure with clean exports for multi-app transplantation | completed | Encapsulated memory, router, lifecycle, state, orchestrator, profiler, and schemas inside `src/swarm/`; added `package.json` subpath exports; verified 23 direct exports |
+| G3 | Implement Free-Tier AI Resilience Engine: multi-provider failover cascades, request timeouts with AbortController, and reasoning model tag sanitization | completed | Failover on 429/503/timeout, 30s AbortSignal, `<think>` tag stripping, verified via automated test in `test-portable-swarm.ts` |
+| G4 | Upgrade Qdrant Memory Cortex into a Multi-App Learning Engine: multi-tenant appId namespacing, feedback scoring, semantic deduplication, and few-shot exemplary learning retrieval | completed | `appId` isolation, `qualityRating` feedback API, >0.92 cosine deduplication, exemplar prompts verified via unit tests |
+| G5 | End-to-end multi-app simulation, typecheck, build, and free-tier stress testing | completed | Full validation suite passed: `tsc --noEmit` (0 errors), `vite build` (success), `test:portable` (12 steps), and `test:simulation` (100% success across 12 concurrent tasks) |

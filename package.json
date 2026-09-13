@@ -3,6 +3,13 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "exports": {
+    ".": "./src/swarm/index.ts",
+    "./core": "./src/swarm/index.ts",
+    "./memory": "./src/swarm/memory.ts",
+    "./router": "./src/swarm/router.ts",
+    "./lifecycle": "./src/swarm/lifecycle.ts"
+  },
   "scripts": {
     "dev": "tsx watch server.ts",
     "build": "vite build",
@@ -10,6 +17,8 @@
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "test:portable": "node --experimental-strip-types test-portable-swarm.ts",
+    "test:simulation": "node --experimental-strip-types test-multi-app-simulation.ts",
+    "test": "npm run test:portable && npm run test:simulation",
     "start": "node --experimental-strip-types server.ts"
   },
   "dependencies": {
