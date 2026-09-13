@@ -15,10 +15,10 @@
 ### Key Features
 
 - 🆓 **100% Free-Tier Calibrated**: Engineered for zero-cost operation across free LLM endpoints (Gemini 2.5 Flash, Groq LLaMA 3.3 70B, OpenRouter free models with automatic `:free` suffix resolution, Mistral Small, and GitHub Models).
-- 🧠 **Continuous Qdrant Learning Cortex**: Semantic vector memory with dense (1536d) + sparse (BM25 token frequency) hybrid Reciprocal Rank Fusion (RRF), verified payload indexing (`verified: bool`), and automated memory consolidation (`qualityRating < 0.40` pruning).
-- ⚡ **Ephemeral In-Memory Fallback**: Full dense+sparse vector search, semantic deduplication, and few-shot exemplar distillation work out-of-the-box even without a live Qdrant cluster.
-- 🔄 **Reinforcement Learning from AI Feedback (RLAIF)**: Automated verification loop scores agent outputs, applies dynamic quality ratings, and distills critique feedback into few-shot learning exemplars.
-- 🏎️ **Fast-Path & Zero-Drift LRU Caching**: Instant sub-millisecond classification and caching for trivial or recurring payloads, saving 100% of LLM tokens.
+- 🧠 **Continuous Qdrant & In-Memory Learning Cortex**: Semantic vector memory with dense (768d) + sparse (BM25 token frequency) hybrid Reciprocal Rank Fusion (RRF), configurable `denseWeight` and `sparseWeight`, verified payload indexing (`verified: bool`), automated memory consolidation triggers (`qualityRating < 0.40`), and cross-app shared learning baselines (`includeShared`).
+- ⚡ **Zero-Qdrant In-Memory Persistence**: Unconditional MemoryCortex binding with fallback store sharing per collection, semantic deduplication, and few-shot exemplar distillation working 100% offline without external infrastructure.
+- 🔄 **Cross-Provider Critic & RLAIF Feedback Loop**: Automated verification loops dynamically select alternative provider analysts as critics to eliminate LLM self-affirmation bias, scores agent outputs, and captures verified feedback across multi-session executions.
+- 🏎️ **Fast-Path & Zero-Drift LRU Caching**: Instant sub-millisecond classification and caching for trivial or recurring payloads, saving 100% of LLM tokens and auto-persisting validated heuristics.
 - 📦 **Dual ESM & CommonJS Bundles**: Seamless imports across modern ESM (`import`) and legacy CommonJS (`require`), complete with TypeScript declaration (`.d.ts`) files.
 - 💻 **CLI Utility**: `npx perfect-swarm doctor`, `init <appName>`, and `run "<task>"` for instant scaffolding and headless execution.
 - 📡 **Zero-Dependency Streaming Server**: Built-in HTTP and Server-Sent Events (SSE) server for streaming live swarm reasoning events directly to frontends.
@@ -156,7 +156,7 @@ The repository contains a full battery of automated tests:
 npm test
 
 # Run specific suites
-npm run test:portable     # 17 portability & learning tests
+npm run test:portable     # 21 portability, resilience & continuous learning tests
 npm run test:simulation   # 7-phase multi-app stress test
 npm run test:dist         # ESM and CommonJS bundle checks
 npm run test:cli          # CLI utility tests
