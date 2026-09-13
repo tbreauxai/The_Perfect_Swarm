@@ -1,5 +1,5 @@
 {
-  "activeGoalId": "P3-G3",
+  "activeGoalId": null,
   "goals": [
     {
       "id": "P3-G1",
@@ -18,23 +18,23 @@
     {
       "id": "P3-G3",
       "description": "Portable Memory Cortex Snapshotting & Cross-App Hydration (exportMemories / importMemories)",
-      "status": "in-progress",
+      "status": "completed",
       "verificationCriteria": "MemoryCortex supports exportMemories and importMemories in JSON/JSONL format with deduplication and quality preservation across in-memory and Qdrant stores",
-      "evidence": null
+      "evidence": "Implemented exportMemories, exportJson, exportJsonl, and importMemories in MemoryCortex; supports JSON/JSONL serialization, cross-app targetAppId remapping, deduplication against existing memory points, vector preservation, and Qdrant/in-memory fallback store synchronization; verified via Step 23 in test-portable-swarm.ts."
     },
     {
       "id": "P3-G4",
       "description": "Resilient Zero-Drift AI JSON Repair & Schema Guard (src/swarm/parser.ts)",
-      "status": "todo",
+      "status": "completed",
       "verificationCriteria": "Parser cleanly extracts and repairs malformed JSON, markdown fences, and truncated output from free-tier models without crashing",
-      "evidence": null
+      "evidence": "Created zero-dependency repairJson, parseJsonSafe, guardAnalystResponse, guardManagerResponse, guardVerificationResult, and repairAndValidate in src/swarm/parser.ts; handles markdown fences, unclosed thinking tags, unquoted keys, Python literals, trailing commas, comments, and truncated JSON; integrated into Agent.run, AnalysisLifecycle, and SwarmEngine; exported via ./parser; verified via Step 24 in test-portable-swarm.ts."
     },
     {
       "id": "P3-G5",
       "description": "End-to-End Test Suite, Typecheck, Build, and Documentation Verification",
-      "status": "todo",
+      "status": "completed",
       "verificationCriteria": "Automated tests in test-portable-swarm.ts verify tools, snapshots, and JSON repair; tsc --noEmit and npm test pass 100%",
-      "evidence": null
+      "evidence": "Executed full test suite (npm test): test:portable passed all 24 validation steps; test:simulation passed all 7 multi-app phases; test:dist verified compiled ESM/CJS bundles and tools/parser subpaths; test:cli verified doctor/init/run commands; test:server verified HTTP and SSE streaming. Typecheck tsc --noEmit passed cleanly (0 errors); dual build npm run build succeeded."
     }
   ]
 }

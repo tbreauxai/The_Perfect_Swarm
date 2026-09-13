@@ -1,10 +1,9 @@
 import { Agent } from './agent.ts';
 import { SwarmContext } from './context.ts';
+import { parseJsonSafe, guardVerificationResult } from './parser.ts';
 
-export interface VerificationResult {
-    pass: boolean;
-    feedback?: string;
-}
+import type { VerificationResult } from './types.ts';
+export type { VerificationResult };
 
 export interface LifecycleExecutionResult {
     success: boolean;
@@ -78,21 +77,7 @@ export class AnalysisLifecycle {
             
             const proposalRaw = await this.proposer.run(executePrompt, context, { responseMimeType: 'application/json' });
             
-            if (typeof proposalRaw === 'object' && proposalRaw !== null) {
-                currentProposal = proposalRaw;
-            } else {
-                try {
-                    let clean = String(proposalRaw || '').replace(/```(?:json)?/gi, '').trim();
-                    const startIdx = clean.indexOf('{');
-                    const endIdx = clean.lastIndexOf('}');
-                    if (startIdx !== -1 && endIdx !== -1) {
-                        clean = clean.substring(startIdx, endIdx + 1);
-                    }
-                    currentProposal = JSON.parse(clean);
-                } catch (e) {
-                    currentProposal = { rawText: proposalRaw, error: "Failed to parse JSON" };
-                }
-            }
+            currentProposal = parseJsonSafe(proposalRaw, { rawText: proposalRaw, error: "Failed to parse JSON" });
 
             // 2. Critic verifies
             context.addEvent({
@@ -106,22 +91,7 @@ export class AnalysisLifecycle {
             
             const verificationRaw = await this.critic.run(verifyPrompt, context, { responseMimeType: 'application/json' });
             
-            let verification: VerificationResult;
-            if (typeof verificationRaw === 'object' && verificationRaw !== null) {
-                verification = verificationRaw as VerificationResult;
-            } else {
-                try {
-                    let clean = String(verificationRaw || '').replace(/```(?:json)?/gi, '').trim();
-                    const startIdx = clean.indexOf('{');
-                    const endIdx = clean.lastIndexOf('}');
-                    if (startIdx !== -1 && endIdx !== -1) {
-                        clean = clean.substring(startIdx, endIdx + 1);
-                    }
-                    verification = JSON.parse(clean);
-                } catch (e) {
-                    verification = { pass: false, feedback: "Critic failed to output valid JSON evaluation. Treat as verification failure." };
-                }
-            }
+            const verification: VerificationResult = guardVerificationResult(verificationRaw);
 
             // 3. Pass/Fail evaluation
             if (verification.pass) {

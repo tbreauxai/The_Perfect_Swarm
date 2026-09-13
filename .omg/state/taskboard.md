@@ -28,8 +28,8 @@
 | --- | --- | --- | --- |
 | P3-G1 | Comprehensive Audit of File Structure, AI Structure, and Qdrant Utilization | completed | Detailed audit findings documented in `.omg/ultragoal/audit_v3.md` |
 | P3-G2 | Zero-Dependency Free Tool & Function Calling Framework (`src/swarm/tools/`) | completed | `ToolRegistry` and 4 built-in free analysis tools; executed in SwarmEngine; verified via Step 22 in `test-portable-swarm.ts` |
-| P3-G3 | Portable Memory Cortex Snapshotting & Cross-App Hydration (`exportMemories` / `importMemories`) | in-progress | Export/import memory points in JSON/JSONL format with deduplication |
-| P3-G4 | Resilient Zero-Drift AI JSON Repair & Schema Guard (`src/swarm/parser.ts`) | todo | Parser cleanly extracts and repairs malformed JSON and truncated output from free models |
-| P3-G5 | End-to-End Test Suite, Typecheck, Build, and Documentation Verification | todo | `test-portable-swarm.ts` verifies tools, snapshots, and JSON repair; `npm test` passes 100% |
+| P3-G3 | Portable Memory Cortex Snapshotting & Cross-App Hydration (`exportMemories` / `importMemories`) | completed | Export/import memory points in JSON/JSONL format with deduplication; verified via Step 23 in `test-portable-swarm.ts` |
+| P3-G4 | Resilient Zero-Drift AI JSON Repair & Schema Guard (`src/swarm/parser.ts`) | completed | Cleanly repairs malformed JSON, markdown fences, unquoted keys, trailing commas, comments, and truncated outputs; verified via Step 24 in `test-portable-swarm.ts` |
+| P3-G5 | End-to-End Test Suite, Typecheck, Build, and Documentation Verification | completed | All 24 steps in `test-portable-swarm.ts`, 7 simulation phases, dist ESM/CJS subpath tests, CLI tests, SSE streaming tests pass 100%; `tsc` and dual build clean |
 
 

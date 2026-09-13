@@ -20,7 +20,13 @@ import {
     calculatorTool,
     statsSummaryTool,
     regexMatchTool,
-    jsonExtractTool
+    jsonExtractTool,
+    repairJson,
+    parseJsonSafe,
+    guardAnalystResponse,
+    guardManagerResponse,
+    guardVerificationResult,
+    repairAndValidate
 } from './swarm.ts';
 
 async function runPortableValidation() {
@@ -1011,6 +1017,213 @@ async function runPortableValidation() {
         throw new Error('Step 22d: SwarmEngine failed to record deterministic tool execution event');
     }
     console.log('✓ Zero-dependency free tool framework verified across all modes');
+
+    console.log('\n=== Step 23: Portable Memory Cortex Snapshotting & Cross-App Hydration ===');
+
+    // 23a: Seed source cortex with high-quality and low-quality memories
+    const sourceAppId = 'app-origin-analytics';
+    const sourceCortex = new MemoryCortex({
+        defaultAppId: sourceAppId,
+        isolatedStore: true
+    });
+
+    await sourceCortex.store('Architectural Baseline: Use distributed read-replicas for read-heavy OLAP pipelines.', {
+        domain: 'architecture',
+        agentRole: 'Lead Architect',
+        qualityRating: 0.98,
+        verified: true,
+        appId: sourceAppId
+    });
+
+    await sourceCortex.store('Security Baseline: JWT signatures must use RS256 with asymmetric private key rotation.', {
+        domain: 'security',
+        agentRole: 'Security Officer',
+        qualityRating: 0.95,
+        verified: true,
+        appId: sourceAppId
+    });
+
+    await sourceCortex.store('Ephemeral unverified log message from temporary probe', {
+        domain: 'debug',
+        agentRole: 'Probe',
+        qualityRating: 0.20,
+        verified: false,
+        appId: sourceAppId
+    });
+
+    // 23b: Export snapshot with quality filter (minRating: 0.8)
+    const snapshot = await sourceCortex.exportMemories({ minRating: 0.8 });
+    console.log(`Exported snapshot points count: ${snapshot.pointCount}`);
+    if (snapshot.pointCount !== 2 || snapshot.memories.some(m => m.metadata.qualityRating < 0.8)) {
+        throw new Error('Step 23b: exportMemories failed to filter out low-quality memories');
+    }
+    if (!snapshot.memories[0].denseVector || !snapshot.memories[0].sparseVector) {
+        throw new Error('Step 23b: exportMemories omitted vector representations');
+    }
+
+    // 23c: Export JSON and JSONL
+    const jsonStr = await sourceCortex.exportJson({ minRating: 0.8 });
+    const jsonlStr = await sourceCortex.exportJsonl({ minRating: 0.8 });
+    console.log(`JSON snapshot byte length: ${jsonStr.length}, JSONL line count: ${jsonlStr.split('\n').length}`);
+    if (!jsonStr.includes('distributed read-replicas') || jsonlStr.split('\n').length !== 2) {
+        throw new Error('Step 23c: exportJson/exportJsonl produced invalid serialized data');
+    }
+
+    // 23d: Hydrate snapshot into a fresh downstream app cortex
+    const targetAppId = 'app-transplanted-downstream';
+    const targetCortex = new MemoryCortex({
+        defaultAppId: targetAppId,
+        isolatedStore: true
+    });
+
+    const importResult = await targetCortex.importMemories(snapshot, { targetAppId });
+    console.log('Hydration import result:', importResult);
+    if (importResult.imported !== 2 || importResult.skipped !== 0) {
+        throw new Error('Step 23d: importMemories failed to hydrate snapshot points into target cortex');
+    }
+
+    // Verify search and few-shot exemplar retrieval in the hydrated cortex
+    const retrievedFromTarget = await targetCortex.retrieve('read-replicas for OLAP', { appId: targetAppId });
+    console.log('Retrieved from transplanted cortex:', retrievedFromTarget.map(m => ({ appId: m.appId, content: m.content })));
+    if (retrievedFromTarget.length === 0 || retrievedFromTarget[0].appId !== targetAppId) {
+        throw new Error('Step 23d: Transplanted cortex failed to retrieve hydrated memory with remapped appId');
+    }
+
+    const targetExemplars = await targetCortex.retrieveExemplars('JWT signatures and asymmetric keys', { appId: targetAppId });
+    console.log('Distilled exemplars from transplanted cortex:\n', targetExemplars);
+    if (!targetExemplars.includes('RS256 with asymmetric private key rotation')) {
+        throw new Error('Step 23d: Transplanted cortex failed to distill few-shot learning exemplars');
+    }
+
+    // 23e: Hydrate from JSONL string format with deduplication
+    const jsonlImport = await targetCortex.importMemories(jsonlStr, { targetAppId, deduplicate: true });
+    console.log('JSONL re-import result (expecting deduplication):', jsonlImport);
+    if (jsonlImport.deduplicated !== 2) {
+        throw new Error('Step 23e: Re-importing identical snapshot failed semantic deduplication');
+    }
+    console.log('✓ Portable memory snapshotting and cross-app hydration verified');
+
+    console.log('\n=== Step 24: Resilient Zero-Drift AI JSON Repair & Schema Guard ===');
+
+    // 24a: Malformed JSON with thinking tags, markdown fences, unquoted keys, trailing commas, comments, and Python literals
+    const malformedOutput = `
+<think>The user wants an analysis of the Redis cluster. Let me prepare the response.</think>
+\`\`\`json
+{
+    // Primary observation
+    summary: 'Redis cluster status is optimal',
+    /* anomalies section */
+    anomalies: [
+        'Intermittent socket timeout on node-3',
+    ],
+    insights: [
+        "Memory fragmentation ratio is 1.12",
+        "Replication lag under 2ms",
+    ],
+    verified: True,
+    active_connections: None,
+}
+\`\`\`
+Hope this helps! Feel free to ask if you need further adjustments.
+`;
+    const repairedJsonStr = repairJson(malformedOutput);
+    console.log('Repaired JSON string:\n', repairedJsonStr);
+    const parsedObj = parseJsonSafe(malformedOutput);
+    console.log('Parsed object from malformed output:', parsedObj);
+    if (!parsedObj || parsedObj.summary !== 'Redis cluster status is optimal' || parsedObj.verified !== true || parsedObj.active_connections !== null) {
+        throw new Error('Step 24a: parseJsonSafe failed to repair and parse malformed JSON');
+    }
+
+    // 24b: Truncated JSON repair (mid-string and mid-array inside an object)
+    const truncatedOutput = `{"summary": "Cluster migration in progress", "insights": ["Phase 1 complete", "Phase 2 synchronizing keys`;
+    const repairedTruncated = parseJsonSafe(truncatedOutput);
+    console.log('Repaired truncated object:', repairedTruncated);
+    if (!repairedTruncated || repairedTruncated.summary !== 'Cluster migration in progress' || !Array.isArray(repairedTruncated.insights) || repairedTruncated.insights.length !== 2) {
+        throw new Error('Step 24b: parseJsonSafe failed to auto-close and salvage truncated JSON');
+    }
+
+    // 24c: Unclosed <think> tag preceding JSON output
+    const unclosedThink = `<think>Analyzing high throughput stream...
+{"summary": "Throughput steady at 45k ops/sec", "insights": ["No backpressure detected"], "anomalies": []}`;
+    const parsedUnclosed = parseJsonSafe(unclosedThink);
+    console.log('Parsed unclosed think tag output:', parsedUnclosed);
+    if (!parsedUnclosed || parsedUnclosed.summary !== 'Throughput steady at 45k ops/sec') {
+        throw new Error('Step 24c: parseJsonSafe failed to strip unclosed thinking tag');
+    }
+
+    // 24d: Fuzzy field extraction from unstructured conversational prose
+    const rawProse = `
+Here is the analytical breakdown:
+Summary: Production ingress proxy reported elevated 5xx rates.
+Insights:
+- Upstream Envoy timeout triggered after 15 seconds
+- TCP connection pool exhausted on worker-pod-07
+Anomalies:
+- Spurious RST packets detected on eth0
+`;
+    const parsedProse = parseJsonSafe(rawProse);
+    console.log('Fuzzy parsed prose object:', parsedProse);
+    if (!parsedProse || !parsedProse.summary || !Array.isArray(parsedProse.insights) || parsedProse.insights.length !== 2) {
+        throw new Error('Step 24d: parseJsonSafe failed fuzzy field extraction on unstructured text');
+    }
+
+    // 24e: Domain schema guards
+    const guardedAnalyst = guardAnalystResponse(rawProse, 'Network Specialist');
+    console.log('Guarded Analyst Response:', guardedAnalyst);
+    if (!guardedAnalyst.summary || guardedAnalyst.insights.length !== 2 || guardedAnalyst.anomalies.length !== 1) {
+        throw new Error('Step 24e: guardAnalystResponse failed to synthesize valid AnalystResponse');
+    }
+
+    const guardedManager = guardManagerResponse({ title: 'Custom Title', insights: ['System healthy'] });
+    console.log('Guarded Manager Response:', guardedManager);
+    if (!guardedManager.ui_title || !Array.isArray(guardedManager.components) || guardedManager.components.length === 0) {
+        throw new Error('Step 24e: guardManagerResponse failed to synthesize valid ManagerResponse');
+    }
+
+    const criticPass = guardVerificationResult("The proposal looks solid. VERIFICATION PASSED with high confidence.");
+    const criticFail = guardVerificationResult("CRITIQUE FAILED: Missing database indexing specification.");
+    console.log('Guarded Critic Results:', { pass: criticPass, fail: criticFail });
+    if (criticPass.pass !== true || criticFail.pass !== false) {
+        throw new Error('Step 24e: guardVerificationResult failed sentiment pass/fail evaluation');
+    }
+
+    // 24f: SwarmEngine resilient workflow execution with malformed analyst and manager outputs
+    const malformedProvider = 'malformed-test-provider';
+    ProviderRegistry.register({
+        providerName: malformedProvider,
+        async call(opts) {
+            if (opts.prompt.includes('Evaluate this proposal')) {
+                return 'After careful review, VERIFICATION PASSED. All invariants met.';
+            }
+            if (opts.systemInstruction?.includes('Swarm Orchestrator') || opts.prompt.includes('Analyst Reports:')) {
+                // Return malformed markdown-fenced manager output with trailing commas
+                return '```json\n{ ui_title: "Resilient Manager Dashboard", components: [ { id: "m1", type: "InsightList", props: { title: "Status", insights: [ { type: "success", message: "Zero drift parsing verified", }, ], }, }, ], }\n```\nDone!';
+            }
+            // Return malformed analyst output with unquoted keys and unclosed think
+            return '<think>Thinking...\n{ summary: "Zero-drift parser test", insights: ["Handled malformed input smoothly",], anomalies: [], }';
+        }
+    });
+
+    const malformedResult = await executeSwarmWorkflow({
+        task: 'Test payload for parser resilience',
+        enableDeepAnalysis: true,
+        settings: {
+            appId: 'resilient-test-app',
+            agents: [
+                { id: 'manager', role: 'Manager Node', provider: malformedProvider, apiKey: 'mock-key', model: 'malformed-mock' },
+                { id: 'a1', role: 'Malformed Analyst', provider: malformedProvider, apiKey: 'mock-key', model: 'malformed-mock' }
+            ]
+        }
+    });
+
+    console.log('Resilient swarm workflow execution result:', {
+        title: malformedResult.finalAnalysis.ui_title,
+        componentsCount: malformedResult.finalAnalysis.components?.length
+    });
+    if (!malformedResult.finalAnalysis.ui_title || malformedResult.finalAnalysis.ui_title.includes('Error')) {
+        throw new Error('Step 24f: SwarmEngine failed to handle malformed LLM outputs gracefully');
+    }
+    console.log('✓ Resilient Zero-Drift AI JSON Repair & Schema Guard verified');
 
     console.log('\n=== Step 16: Context Event Log Summary ===');
     console.log(`Total events recorded in SwarmContext: ${recordedEvents.length}`);

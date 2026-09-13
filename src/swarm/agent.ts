@@ -4,6 +4,7 @@ import { SwarmContext } from './context.ts';
 import { ProviderRegistry } from './providers/registry.ts';
 import { sanitizeModelOutput } from './providers/adapter.ts';
 import { globalLoadBalancer, type AdaptiveLoadBalancer } from './loadBalancer.ts';
+import { parseJsonSafe } from './parser.ts';
 
 /**
  * Autonomous Swarm Agent decoupled from specific LLM provider implementations.
@@ -109,11 +110,10 @@ export class Agent {
                     let parsedOutput: any = textOutput;
 
                     if (config?.responseMimeType === 'application/json') {
-                        try {
-                            const cleanText = sanitizeModelOutput(textOutput, true);
-                            parsedOutput = JSON.parse(cleanText || '{}');
-                        } catch {
+                        if (textOutput.includes('```tool_call') || textOutput.includes('[TOOL_CALL]')) {
                             parsedOutput = textOutput;
+                        } else {
+                            parsedOutput = parseJsonSafe(textOutput);
                         }
                     }
 

@@ -42,6 +42,50 @@ export interface ConsolidationResult {
     prunedIds: string[];
 }
 
+export interface ExportMemoriesOptions {
+    appId?: string;
+    minRating?: number;
+    verifiedOnly?: boolean;
+    includeVectors?: boolean;
+}
+
+export interface MemorySnapshotPoint {
+    id: string;
+    content: string;
+    metadata: MemoryMetadata & {
+        appId: string;
+        qualityRating: number;
+        verified: boolean;
+        frequency: number;
+        timestamp: string;
+        lastSeen: string;
+    };
+    denseVector?: number[];
+    sparseVector?: SparseVector;
+}
+
+export interface MemorySnapshot {
+    version: string;
+    exportedAt: string;
+    collectionName: string;
+    pointCount: number;
+    memories: MemorySnapshotPoint[];
+}
+
+export interface ImportMemoriesOptions {
+    targetAppId?: string;
+    deduplicate?: boolean;
+    recomputeVectors?: boolean;
+    minRating?: number;
+}
+
+export interface ImportMemoriesResult {
+    imported: number;
+    skipped: number;
+    deduplicated: number;
+    importedIds: string[];
+}
+
 export interface StoredMemoryPoint {
     id: string;
     denseVector: number[];
@@ -849,6 +893,273 @@ export class MemoryCortex {
             pruned: prunedIds.length,
             retained: Math.max(0, inspected - prunedIds.length),
             prunedIds
+        };
+    }
+
+    /**
+     * Exports a portable snapshot of stored memories filtered by options.
+     */
+    async exportMemories(options?: ExportMemoriesOptions): Promise<MemorySnapshot> {
+        await this.initialize();
+        const minRating = options?.minRating;
+        const verifiedOnly = options?.verifiedOnly;
+        const appId = options?.appId;
+        const includeVectors = options?.includeVectors !== false;
+
+        const snapshotPoints: MemorySnapshotPoint[] = [];
+
+        // 1. In-memory fallback points
+        if (this.fallbackStore.length > 0) {
+            for (const pt of this.fallbackStore) {
+                if (appId && pt.payload.appId !== appId) continue;
+                if (minRating !== undefined && (pt.payload.qualityRating ?? 0) < minRating) continue;
+                if (verifiedOnly && !pt.payload.verified) continue;
+
+                snapshotPoints.push({
+                    id: pt.id,
+                    content: pt.payload.content,
+                    metadata: { ...pt.payload },
+                    denseVector: includeVectors ? pt.denseVector : undefined,
+                    sparseVector: includeVectors ? pt.sparseVector : undefined
+                });
+            }
+        }
+
+        // 2. Qdrant points if available
+        if (this.qdrant && this.isAvailable) {
+            try {
+                if (typeof (this.qdrant as any).scroll === 'function') {
+                    const scrollFilter: any[] = [];
+                    if (appId) scrollFilter.push({ key: "appId", match: { value: appId } });
+                    if (minRating !== undefined) scrollFilter.push({ key: "qualityRating", range: { gte: minRating } });
+                    if (verifiedOnly) scrollFilter.push({ key: "verified", match: { value: true } });
+
+                    const scrollRes = await (this.qdrant as any).scroll(this.collectionName, {
+                        filter: scrollFilter.length > 0 ? { must: scrollFilter } : undefined,
+                        limit: 1000,
+                        with_payload: true,
+                        with_vector: includeVectors
+                    });
+
+                    for (const pt of (scrollRes.points || [])) {
+                        if (snapshotPoints.some(sp => sp.id === String(pt.id))) continue;
+
+                        const payload = (pt.payload || {}) as Record<string, any>;
+                        let denseVec: number[] | undefined;
+                        let sparseVec: SparseVector | undefined;
+
+                        if (includeVectors && pt.vector) {
+                            if (Array.isArray(pt.vector)) {
+                                denseVec = pt.vector;
+                            } else if (typeof pt.vector === 'object') {
+                                denseVec = pt.vector.dense;
+                                sparseVec = pt.vector.sparse;
+                            }
+                        }
+
+                        snapshotPoints.push({
+                            id: String(pt.id),
+                            content: payload.content || '',
+                            metadata: payload as any,
+                            denseVector: denseVec,
+                            sparseVector: sparseVec
+                        });
+                    }
+                }
+            } catch (err: any) {
+                console.warn(`[MemoryCortex] ExportMemories Qdrant scroll error: ${err.message || err}`);
+            }
+        }
+
+        return {
+            version: "1.0.0",
+            exportedAt: new Date().toISOString(),
+            collectionName: this.collectionName,
+            pointCount: snapshotPoints.length,
+            memories: snapshotPoints
+        };
+    }
+
+    /**
+     * Exports memories as formatted JSON string.
+     */
+    async exportJson(options?: ExportMemoriesOptions): Promise<string> {
+        const snapshot = await this.exportMemories(options);
+        return JSON.stringify(snapshot, null, 2);
+    }
+
+    /**
+     * Exports memories as line-delimited JSON (JSONL) string.
+     */
+    async exportJsonl(options?: ExportMemoriesOptions): Promise<string> {
+        const snapshot = await this.exportMemories(options);
+        return snapshot.memories.map(m => JSON.stringify(m)).join('\n');
+    }
+
+    /**
+     * Imports a portable snapshot or array of memories into the Cortex.
+     */
+    async importMemories(
+        input: MemorySnapshot | string | any[],
+        options?: ImportMemoriesOptions
+    ): Promise<ImportMemoriesResult> {
+        await this.initialize();
+        const deduplicate = options?.deduplicate !== false;
+        const recomputeVectors = options?.recomputeVectors ?? false;
+        const targetAppId = options?.targetAppId;
+        const minRating = options?.minRating;
+
+        let rawItems: any[] = [];
+
+        if (typeof input === 'string') {
+            const trimmed = input.trim();
+            if (trimmed.startsWith('{') && !trimmed.includes('\n{"')) {
+                try {
+                    const parsed = JSON.parse(trimmed);
+                    rawItems = parsed.memories && Array.isArray(parsed.memories) ? parsed.memories : [parsed];
+                } catch {
+                    rawItems = trimmed.split('\n').filter(l => l.trim().length > 0).map(l => JSON.parse(l));
+                }
+            } else {
+                rawItems = trimmed.split('\n')
+                    .map(l => l.trim())
+                    .filter(l => l.length > 0)
+                    .map(l => JSON.parse(l));
+            }
+        } else if (Array.isArray(input)) {
+            rawItems = input;
+        } else if (input && typeof input === 'object' && Array.isArray((input as any).memories)) {
+            rawItems = (input as any).memories;
+        }
+
+        let imported = 0;
+        let skipped = 0;
+        let deduplicated = 0;
+        const importedIds: string[] = [];
+
+        for (const item of rawItems) {
+            const content = item.content || item.payload?.content;
+            if (!content) {
+                skipped++;
+                continue;
+            }
+
+            const rawMeta = item.metadata || item.payload || {};
+            const qualityRating = rawMeta.qualityRating ?? item.qualityRating ?? 0.5;
+
+            if (minRating !== undefined && qualityRating < minRating) {
+                skipped++;
+                continue;
+            }
+
+            const metadata: MemoryMetadata = {
+                domain: rawMeta.domain || 'general',
+                agentRole: rawMeta.agentRole || 'Analyst',
+                ...rawMeta,
+                appId: targetAppId || rawMeta.appId || this.defaultAppId,
+                qualityRating,
+                verified: rawMeta.verified ?? (qualityRating >= 0.8)
+            };
+
+            const hasVectors = Array.isArray(item.denseVector) && item.denseVector.length > 0;
+
+            if (hasVectors && !recomputeVectors) {
+                const pointId = item.id || crypto.randomUUID();
+                const now = new Date().toISOString();
+                const sparseVector = item.sparseVector || SparseTokenizer.encode(content);
+
+                if (this.qdrant && this.isAvailable) {
+                    try {
+                        let isDup = false;
+                        if (deduplicate) {
+                            const existing = await this.qdrant.query(this.collectionName, {
+                                query: item.denseVector,
+                                using: "dense",
+                                limit: 1,
+                                score_threshold: 0.92,
+                                filter: {
+                                    must: [{ key: "appId", match: { value: metadata.appId } }]
+                                },
+                                with_payload: true
+                            });
+                            if (existing.points.length > 0 && (existing.points[0].score ?? 0) >= 0.92) {
+                                isDup = true;
+                                deduplicated++;
+                                importedIds.push(String(existing.points[0].id));
+                            }
+                        }
+
+                        if (!isDup) {
+                            await this.qdrant.upsert(this.collectionName, {
+                                wait: false,
+                                points: [{
+                                    id: pointId,
+                                    vector: { dense: item.denseVector, sparse: sparseVector },
+                                    payload: { content, ...metadata, frequency: 1, timestamp: now, lastSeen: now }
+                                }]
+                            });
+                            imported++;
+                            importedIds.push(pointId);
+                        }
+                        continue;
+                    } catch (err: any) {
+                        console.warn(`[MemoryCortex] Import Qdrant error: ${err.message || err}. Falling back to in-memory store.`);
+                    }
+                }
+
+                // Ephemeral fallback
+                let isDup = false;
+                if (deduplicate) {
+                    for (const existing of this.fallbackStore) {
+                        if (existing.payload.appId === metadata.appId) {
+                            const sim = this.cosineSimilarity(item.denseVector, existing.denseVector);
+                            if (sim >= 0.92) {
+                                isDup = true;
+                                existing.payload.frequency = (existing.payload.frequency || 1) + 1;
+                                existing.payload.qualityRating = Math.max(metadata.qualityRating ?? 0, existing.payload.qualityRating || 0);
+                                deduplicated++;
+                                importedIds.push(existing.id);
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (!isDup) {
+                    this.fallbackStore.push({
+                        id: pointId,
+                        denseVector: item.denseVector,
+                        sparseVector,
+                        payload: {
+                            content,
+                            appId: metadata.appId!,
+                            frequency: 1,
+                            qualityRating,
+                            verified: metadata.verified ?? false,
+                            timestamp: now,
+                            lastSeen: now,
+                            ...metadata
+                        }
+                    });
+                    imported++;
+                    importedIds.push(pointId);
+                }
+            } else {
+                const storedId = await this.store(content, metadata, deduplicate);
+                if (storedId) {
+                    imported++;
+                    importedIds.push(storedId);
+                } else {
+                    skipped++;
+                }
+            }
+        }
+
+        return {
+            imported,
+            skipped,
+            deduplicated,
+            importedIds
         };
     }
 

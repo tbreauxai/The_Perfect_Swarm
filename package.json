@@ -83,9 +83,15 @@
     },
     "./tools": {
       "types": "./dist/swarm/tools/index.d.ts",
-      "import": "./dist/swarm/tools/index.js",
-      "require": "./dist/swarm/tools/index.cjs",
+      "import": "./dist/swarm/tools.js",
+      "require": "./dist/swarm/tools.cjs",
       "default": "./src/swarm/tools/index.ts"
+    },
+    "./parser": {
+      "types": "./dist/swarm/parser.d.ts",
+      "import": "./dist/swarm/parser.js",
+      "require": "./dist/swarm/parser.cjs",
+      "default": "./src/swarm/parser.ts"
     }
   },
   "scripts": {

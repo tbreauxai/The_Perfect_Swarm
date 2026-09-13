@@ -51,3 +51,8 @@ export interface ProviderAdapter {
     readonly providerName: string;
     call(options: ProviderCallOptions): Promise<string>;
 }
+
+export interface VerificationResult {
+    pass: boolean;
+    feedback?: string;
+}

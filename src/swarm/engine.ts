@@ -10,6 +10,7 @@ import { PayloadCache, globalPayloadCache } from './cache.ts';
 import { AnalystResponseSchema, ManagerResponseSchema } from './schemas.ts';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { ToolRegistry, globalToolRegistry, type SwarmTool } from './tools/index.ts';
+import { guardAnalystResponse, guardManagerResponse, parseJsonSafe } from './parser.ts';
 
 export interface ProviderResolution {
     key: string;
@@ -515,41 +516,9 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                         });
                     }
 
-                    // Clean output before schema validation
-                    let cleanOutput = rawOutput;
-                    if (typeof cleanOutput === 'string') {
-                        const stripped = toolRegistry.stripToolCalls(cleanOutput);
-                        try {
-                            cleanOutput = JSON.parse(stripped);
-                        } catch {
-                            const firstObj = stripped.indexOf('{');
-                            const lastObj = stripped.lastIndexOf('}');
-                            if (firstObj !== -1 && lastObj > firstObj) {
-                                try {
-                                    cleanOutput = JSON.parse(stripped.substring(firstObj, lastObj + 1));
-                                } catch {
-                                    // ignore
-                                }
-                            }
-                        }
-                    }
-
-                    const parsed = AnalystResponseSchema.safeParse(cleanOutput);
-                    if (!parsed.success) {
-                        console.warn(`[${analyst.role}] Output failed Zod schema validation:`, parsed.error);
-                        const issues = (parsed.error as any).issues || (parsed.error as any).errors || [];
-                        const baseInsights = [`${analyst.role} provided invalid schema. Validation errors: ${issues.map((e: any) => e.message).join(', ')}`];
-                        for (const tr of toolResults) {
-                            if (tr.success) baseInsights.push(`[Tool Result: ${tr.tool}]: ${JSON.stringify(tr.result)}`);
-                        }
-                        return {
-                            insights: baseInsights,
-                            anomalies: [],
-                            summary: "Schema validation failed."
-                        };
-                    }
-
-                    const resData = parsed.data;
+                    // Resilient schema guard for Analyst output
+                    const strippedOutput = typeof rawOutput === 'string' ? toolRegistry.stripToolCalls(rawOutput) : rawOutput;
+                    const resData = guardAnalystResponse(strippedOutput, analyst.role);
                     for (const tr of toolResults) {
                         if (tr.success) {
                             resData.insights.push(`[Tool Result: ${tr.tool}]: ${JSON.stringify(tr.result)}`);
@@ -619,53 +588,12 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
 
             parsedManagerOutput = lifecycleResult.finalProposal;
         } else {
-            const orchestratorPlan = await managerAgent.run(dynamicPrompt, context, {
+            parsedManagerOutput = await managerAgent.run(dynamicPrompt, context, {
                 responseMimeType: "application/json"
             });
-
-            if (typeof orchestratorPlan === "string") {
-                let cleanText = (orchestratorPlan || "").replace(/```(?:json)?/gi, '').trim();
-                const startIdx = cleanText.indexOf('{');
-                const endIdx = cleanText.lastIndexOf('}');
-                if (startIdx !== -1 && endIdx !== -1) {
-                    cleanText = cleanText.substring(startIdx, endIdx + 1);
-                }
-                parsedManagerOutput = JSON.parse(cleanText || "{}");
-            } else {
-                parsedManagerOutput = orchestratorPlan;
-            }
         }
 
-        try {
-            const parsed = ManagerResponseSchema.safeParse(parsedManagerOutput);
-            if (!parsed.success) {
-                console.warn("[Manager] Output failed Zod schema validation:", parsed.error);
-                const issues = (parsed.error as any).issues || (parsed.error as any).errors || [];
-                finalAnalysis = { 
-                    ui_title: "Validation Error",
-                    components: [
-                        {
-                            id: "error1",
-                            type: "InsightList",
-                            props: {
-                                title: "Schema Validation Failed",
-                                insights: issues.map((e: any) => ({ type: "error", message: e.message }))
-                            }
-                        }
-                    ]
-                };
-            } else {
-                finalAnalysis = parsed.data;
-            }
-        } catch (e) {
-            console.error("JSON Parse error:", e);
-            finalAnalysis = { 
-                ui_title: "JSON Parse Error", 
-                components: [
-                    { id: "e1", type: "InsightList", props: { title: "Error", insights: [{ type: "error", message: "Failed to parse orchestrator output as JSON. Check console for raw output." }] } }
-                ] 
-            };
-        }
+        finalAnalysis = guardManagerResponse(parsedManagerOutput, "Executive Swarm Synthesis");
 
         if (memoryCortex && finalAnalysis && !finalAnalysis.ui_title?.includes("Error")) {
             const targetAppId = settings?.appId || 'perfect-swarm';
