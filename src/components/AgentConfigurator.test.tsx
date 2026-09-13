@@ -39,7 +39,6 @@ describe('AgentConfigurator & SettingsModal Swarm Agents Tab', () => {
                 React.createElement(AgentConfigurator, {
                     agents: mockAgents,
                     onUpdateAgent: () => {},
-                    // @ts-expect-error Testing missing settings prop resilience
                     settings: undefined
                 })
             );
