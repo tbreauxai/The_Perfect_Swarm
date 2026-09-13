@@ -10,56 +10,158 @@ export interface MemoryMetadata {
     [key: string]: any;
 }
 
+export interface SparseVector {
+    indices: number[];
+    values: number[];
+}
 
-class SparseTokenizer {
-    static encode(text, vocabSize = 10000) {
+/**
+ * Tokenizes text into sparse term frequency vector for BM25-style lexical search.
+ */
+export class SparseTokenizer {
+    static encode(text: string, vocabSize: number = 10000): SparseVector {
         const tokens = text.toLowerCase().match(/\b\w+\b/g) || [];
-        const termFreqs = {};
+        const termFreqs: Record<number, number> = {};
+
         for (const token of tokens) {
-            let hash = 0;
+            let hash = 5381;
             for (let i = 0; i < token.length; i++) {
-                hash = ((hash << 5) - hash) + token.charCodeAt(i);
+                hash = ((hash << 5) + hash) + token.charCodeAt(i);
                 hash |= 0;
             }
             const index = Math.abs(hash) % vocabSize;
             termFreqs[index] = (termFreqs[index] || 0) + 1;
         }
-        
+
         const indices = Object.keys(termFreqs).map(Number).sort((a, b) => a - b);
         const values = indices.map(i => termFreqs[i]);
-        
+
         return { indices, values };
     }
 }
 
-export class MemoryCortex {
-    private qdrant: QdrantClient;
+/**
+ * Pluggable embedding provider interface.
+ */
+export interface EmbeddingProvider {
+    readonly dimension: number;
+    embed(text: string): Promise<number[]>;
+}
+
+/**
+ * Google AI Gemini dense embedding provider using text-embedding-004.
+ */
+export class GeminiEmbeddingProvider implements EmbeddingProvider {
+    readonly dimension = 768;
     private aiClient: GoogleGenAI;
-    private collectionName: string;
-    private initialized: boolean = false;
-    private embeddingModel: string;
+    private modelName: string;
 
     constructor(
-        qdrantUrl: string,
-        qdrantApiKey: string,
         aiClient: GoogleGenAI,
-        collectionName: string = "pwa_swarm_dev_cortex_v2", // Changed to a specific dev collection to prevent cross-contamination
-        embeddingModel: string = "text-embedding-004"
+        modelName: string = 'text-embedding-004'
     ) {
-        this.qdrant = new QdrantClient({ url: qdrantUrl, apiKey: qdrantApiKey });
         this.aiClient = aiClient;
-        this.collectionName = collectionName;
-        this.embeddingModel = embeddingModel;
+        this.modelName = modelName;
+    }
+
+    async embed(text: string): Promise<number[]> {
+        const response = await this.aiClient.models.embedContent({
+            model: this.modelName,
+            contents: text,
+        });
+        return response.embeddings?.[0]?.values || [];
+    }
+}
+
+/**
+ * Deterministic local dense embedding generator (768 dimensions).
+ * Enables offline execution, zero-cost operation, and local testing without external API keys.
+ */
+export class DeterministicLocalEmbeddingProvider implements EmbeddingProvider {
+    readonly dimension = 768;
+
+    async embed(text: string): Promise<number[]> {
+        const vector = new Array(this.dimension).fill(0);
+        const tokens = text.toLowerCase().match(/\b\w+\b/g) || [];
+        if (tokens.length === 0) return vector;
+
+        for (const token of tokens) {
+            let hash = 5381;
+            for (let i = 0; i < token.length; i++) {
+                hash = ((hash << 5) + hash) + token.charCodeAt(i);
+                hash |= 0;
+            }
+            const index = Math.abs(hash) % this.dimension;
+            vector[index] += 1;
+        }
+
+        let sumSq = 0;
+        for (let i = 0; i < this.dimension; i++) sumSq += vector[i] * vector[i];
+        const norm = Math.sqrt(sumSq) || 1;
+        for (let i = 0; i < this.dimension; i++) vector[i] /= norm;
+
+        return vector;
+    }
+}
+
+export interface MemoryCortexConfig {
+    url?: string;
+    apiKey?: string;
+    collectionName?: string;
+    embeddingProvider?: EmbeddingProvider;
+    aiClient?: GoogleGenAI;
+}
+
+/**
+ * High-performance, hybrid vector memory engine powered by Qdrant.
+ * Features:
+ * - Hybrid dense + sparse vectors merged via Reciprocal Rank Fusion (RRF)
+ * - Compliant Qdrant int8 scalar quantization and on-disk payload storage
+ * - Flexible embedding providers (Gemini or Deterministic Local fallback)
+ * - Resilient failure handling with zero uncaught crashes
+ */
+export class MemoryCortex {
+    private qdrant: QdrantClient | null = null;
+    private embeddingProvider: EmbeddingProvider;
+    private collectionName: string;
+    private initialized: boolean = false;
+    private isAvailable: boolean = false;
+
+    constructor(config: MemoryCortexConfig) {
+        const url = config.url || process.env.QDRANT_URL;
+        const apiKey = config.apiKey || process.env.QDRANT_API_KEY;
+        this.collectionName = config.collectionName || "pwa_swarm_dev_cortex_v2";
+
+        if (url) {
+            try {
+                new URL(url);
+                this.qdrant = new QdrantClient({ url, apiKey, checkCompatibility: false });
+                this.isAvailable = true;
+            } catch (err) {
+                console.warn(`[MemoryCortex] Invalid Qdrant URL '${url}', vector memory will run in disabled mode.`);
+                this.isAvailable = false;
+            }
+        }
+
+        if (config.embeddingProvider) {
+            this.embeddingProvider = config.embeddingProvider;
+        } else if (config.aiClient) {
+            this.embeddingProvider = new GeminiEmbeddingProvider(config.aiClient);
+        } else {
+            this.embeddingProvider = new DeterministicLocalEmbeddingProvider();
+        }
     }
 
     /**
-     * Ensures the collection exists in Qdrant with highly optimized settings:
-     * - Scalar Quantization (reduces RAM usage by 4x)
-     * - On-Disk Payload (saves RAM for your live cluster)
-     * - Payload Indexing (speeds up domain-specific filtering)
+     * Initializes the collection in Qdrant using compliant schemas:
+     * - Cosine dense vector (768-dim) + sparse BM25 vector
+     * - Int8 scalar quantization for 4x memory compression
+     * - On-disk payload storage to protect RAM
+     * - Keyword index on domain for fast filtered retrieval
      */
-    async initialize() {
-        if (this.initialized) return;
+    async initialize(): Promise<boolean> {
+        if (this.initialized) return this.isAvailable;
+        if (!this.qdrant || !this.isAvailable) return false;
 
         try {
             const collections = await this.qdrant.getCollections();
@@ -68,201 +170,204 @@ export class MemoryCortex {
             if (!exists) {
                 await this.qdrant.createCollection(this.collectionName, {
                     vectors: {
-                        "dense": {
-                            size: 768, // Gemini text-embedding-004 dimension size
+                        dense: {
+                            size: this.embeddingProvider.dimension,
                             distance: 'Cosine',
-                            memory: 'cold',
-                            datatype: 'turbo4'
+                            on_disk: true
                         }
                     },
                     sparse_vectors: {
-                        "sparse": { }
+                        sparse: {
+                            index: {
+                                on_disk: true
+                            }
+                        }
                     },
-                    // 8x compression with high recall across models, pinned in RAM for low-latency
-                    // Note: When using named vectors, you typically specify quantization and hnsw inside the vector params or globally if generic. 
-                    // To be safe we put it at the root which serves as default.
                     quantization_config: {
-                        turbo: {
-                            bits: "bits4",
-                            memory: "pinned"
+                        scalar: {
+                            type: 'int8',
+                            quantile: 0.99,
+                            always_ram: true
                         }
                     },
                     hnsw_config: {
-                        m: 32,
-                        ef_construct: 256,
-                        memory: 'cold',
-                        inline_storage: true,
-                        max_indexing_threads: 4
+                        m: 16,
+                        ef_construct: 128,
+                        on_disk: true
                     },
                     optimizers_config: {
-                        default_segment_number: 8, // Match to vCPU core count for low per-query latency
-                        max_optimization_threads: 1, // Serializes background merges per shard to eliminate CPU spikes
-                        deleted_threshold: 0.3, // Prevent vacuum optimizer from interrupting search threads prematurely
-                        prevent_unoptimized: true // Prevents brute-force backlog scans during write bursts
+                        default_segment_number: 2,
+                        deleted_threshold: 0.2
                     },
-                    strict_mode_config: {
-                        unindexed_filtering_retrieve: false, // Hard-rejects any filters on unindexed fields to prevent catastrophic latency spikes
-                        unindexed_filtering_update: false
-                    },
-                    on_disk_payload: true // Keeps JSON payloads on disk rather than RAM
+                    on_disk_payload: true
                 });
 
-                // Create a keyword index on the 'domain' field so filtering is instantaneous (O(1) lookup)
                 await this.qdrant.createPayloadIndex(this.collectionName, {
                     field_name: "domain",
                     field_schema: "keyword"
                 });
 
-                console.log(`[MemoryCortex] Created optimized collection: ${this.collectionName}`);
+                console.log(`[MemoryCortex] Initialized compliant Qdrant collection: ${this.collectionName}`);
             }
+
             this.initialized = true;
-        } catch (error) {
-            console.error("[MemoryCortex] Initialization failed:", error);
-            throw error;
+            return true;
+        } catch (error: any) {
+            console.warn(`[MemoryCortex] Initialization failed: ${error.message || error}`);
+            this.isAvailable = false;
+            return false;
         }
     }
 
     /**
-     * Generates an embedding for a text string using Gemini.
+     * Stores an analysis memory point into Qdrant.
      */
-    private async getEmbedding(text: string): Promise<number[]> {
-        const response = await this.aiClient.models.embedContent({
-            model: this.embeddingModel,
-            contents: text,
-        });
-        return response.embeddings?.[0]?.values || [];
-    }
+    async store(content: string, metadata: MemoryMetadata): Promise<string | null> {
+        const ready = await this.initialize();
+        if (!ready || !this.qdrant) return null;
 
-    /**
-     * Stores an experience, insight, or past interaction into long-term memory.
-     */
-    async store(content: string, metadata: MemoryMetadata): Promise<string> {
-        await this.initialize();
-        
-        const vector = await this.getEmbedding(content);
-        const id = crypto.randomUUID();
-
-        await this.qdrant.upsert(this.collectionName, {
-            wait: false, // Non-blocking write to avoid locking thread pools when prevent_unoptimized is true
-            points: [
-                {
-                    id: id,
-                    vector: {
-                        "dense": vector,
-                        "sparse": SparseTokenizer.encode(content)
-                    },
-                    payload: {
-                        content,
-                        ...metadata,
-                        timestamp: new Date().toISOString()
-                    }
-                }
-            ]
-        });
-
-        return id;
-    }
-
-    /**
-     * Batches multiple experiences into long-term memory. 
-     * Recommended chunk sizes: 100 - 500 vectors per write to reduce transaction overhead.
-     */
-    async storeBatch(memories: {content: string, metadata: MemoryMetadata}[]): Promise<string[]> {
-        await this.initialize();
-        
-        // Generate embeddings in parallel (assuming external API handles concurrency well)
-        // In highly productionized systems, you may want to chunk the API embedding calls as well.
-        const points = await Promise.all(memories.map(async (memory) => {
-            const vector = await this.getEmbedding(memory.content);
+        try {
+            const denseVector = await this.embeddingProvider.embed(content);
+            const sparseVector = SparseTokenizer.encode(content);
             const id = crypto.randomUUID();
-            return {
-                id: id,
-                vector: {
-                    "dense": vector,
-                    "sparse": SparseTokenizer.encode(memory.content)
-                },
-                payload: {
-                    content: memory.content,
-                    ...memory.metadata,
-                    timestamp: new Date().toISOString()
-                }
-            };
-        }));
 
-        await this.qdrant.upsert(this.collectionName, {
-            wait: false, // Mandatory non-blocking write
-            points: points
-        });
-
-        return points.map(p => p.id as string);
-    }
-
-    /**
-     * Retrieves the most relevant past experiences based on a semantic query.
-     */
-    async retrieve(query: string, domainFilter?: string, limit: number = 3): Promise<any[]> {
-        await this.initialize();
-
-        const queryVector = await this.getEmbedding(query);
-
-        // Optional: Pre-filter by domain (e.g., only search "finance" or "sports" memories)
-        const filter = domainFilter ? {
-            must: [
-                {
-                    key: "domain",
-                    match: { value: domainFilter }
-                }
-            ]
-        } : undefined;
-
-        const sparseQueryVector = SparseTokenizer.encode(query);
-        const results = await this.qdrant.query(this.collectionName, {
-            prefetch: [
-                {
-                    query: queryVector,
-                    using: "dense",
-                    limit: limit * 2,
-                    filter: filter,
-                    params: {
-                        hnsw_ef: 128,
-                        quantization: {
-                            rescore: true,
-                            oversampling: 2.0
+            await this.qdrant.upsert(this.collectionName, {
+                wait: false,
+                points: [
+                    {
+                        id,
+                        vector: {
+                            dense: denseVector,
+                            sparse: sparseVector
+                        },
+                        payload: {
+                            content,
+                            ...metadata,
+                            timestamp: new Date().toISOString()
                         }
                     }
-                },
-                {
-                    query: sparseQueryVector,
-                    using: "sparse",
-                    limit: limit * 2,
-                    filter: filter,
-                }
-            ],
-            query: {
-                rrf: {
-                    k: 60
-                }
-            },
-            limit: limit,
-            with_payload: true
-        });
+                ]
+            });
 
-        return results.points.map(result => result.payload);
+            return id;
+        } catch (err: any) {
+            console.warn(`[MemoryCortex] Store error: ${err.message || err}`);
+            return null;
+        }
     }
 
     /**
-     * DANGER: Wipes the entire testing ground collection.
-     * This ONLY deletes the collection specified by this.collectionName (e.g. "pwa_swarm_dev_cortex")
-     * and will NOT touch any other collections or data in your Qdrant cluster.
+     * Stores a batch of analysis experiences into Qdrant.
      */
-    async wipeCollection(): Promise<void> {
+    async storeBatch(memories: { content: string; metadata: MemoryMetadata }[]): Promise<string[]> {
+        const ready = await this.initialize();
+        if (!ready || !this.qdrant || memories.length === 0) return [];
+
+        try {
+            const points = await Promise.all(
+                memories.map(async (memory) => {
+                    const denseVector = await this.embeddingProvider.embed(memory.content);
+                    const sparseVector = SparseTokenizer.encode(memory.content);
+                    const id = crypto.randomUUID();
+
+                    return {
+                        id,
+                        vector: {
+                            dense: denseVector,
+                            sparse: sparseVector
+                        },
+                        payload: {
+                            content: memory.content,
+                            ...memory.metadata,
+                            timestamp: new Date().toISOString()
+                        }
+                    };
+                })
+            );
+
+            await this.qdrant.upsert(this.collectionName, {
+                wait: false,
+                points
+            });
+
+            return points.map(p => p.id as string);
+        } catch (err: any) {
+            console.warn(`[MemoryCortex] StoreBatch error: ${err.message || err}`);
+            return [];
+        }
+    }
+
+    /**
+     * Retrieves the most relevant past experiences using hybrid search (Dense + Sparse RRF fusion).
+     */
+    async retrieve(query: string, domainFilter?: string, limit: number = 3): Promise<any[]> {
+        const ready = await this.initialize();
+        if (!ready || !this.qdrant) return [];
+
+        try {
+            const denseVector = await this.embeddingProvider.embed(query);
+            const sparseVector = SparseTokenizer.encode(query);
+
+            const filter = domainFilter ? {
+                must: [
+                    {
+                        key: "domain",
+                        match: { value: domainFilter }
+                    }
+                ]
+            } : undefined;
+
+            const results = await this.qdrant.query(this.collectionName, {
+                prefetch: [
+                    {
+                        query: denseVector,
+                        using: "dense",
+                        limit: limit * 2,
+                        filter,
+                        params: {
+                            hnsw_ef: 64
+                        }
+                    },
+                    {
+                        query: sparseVector,
+                        using: "sparse",
+                        limit: limit * 2,
+                        filter
+                    }
+                ],
+                query: {
+                    rrf: {
+                        k: 60
+                    }
+                },
+                limit,
+                with_payload: true
+            });
+
+            return results.points.map(r => r.payload).filter(Boolean);
+        } catch (err: any) {
+            console.warn(`[MemoryCortex] Hybrid retrieval error: ${err.message || err}`);
+            return [];
+        }
+    }
+
+    /**
+     * Wipes the collection for this specific application testing ground.
+     */
+    async wipeCollection(): Promise<boolean> {
+        if (!this.qdrant) return false;
         try {
             await this.qdrant.deleteCollection(this.collectionName);
             this.initialized = false;
-            console.log(`[MemoryCortex] Successfully wiped collection: ${this.collectionName}`);
-        } catch (error) {
-            console.error(`[MemoryCortex] Failed to wipe collection ${this.collectionName}:`, error);
-            throw error;
+            console.log(`[MemoryCortex] Successfully deleted collection: ${this.collectionName}`);
+            return true;
+        } catch (error: any) {
+            console.warn(`[MemoryCortex] WipeCollection failed: ${error.message || error}`);
+            return false;
         }
+    }
+
+    get ready(): boolean {
+        return this.isAvailable;
     }
 }

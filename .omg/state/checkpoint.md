@@ -1,7 +1,6 @@
-# OmA Checkpoint Snapshot
+# OmA Checkpoint
 
-- **Timestamp**: 2026-09-12T13:48:00Z
-- **Active Goal**: G1
-- **Stage**: team-verify
-- **Result**: PASSED
-- **Notes**: Purged 97 obsolete files; verified clean workspace; tsc and vite build pass.
+- **Timestamp**: 2026-09-12T19:04:00Z
+- **Active Goal**: G2 completed
+- **Next Goal**: G3 (Refactor Swarm Core into a standalone portable library package with pluggable Provider Adapters)
+- **Status**: verified

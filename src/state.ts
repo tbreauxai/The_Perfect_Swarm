@@ -65,9 +65,12 @@ export class CentralState {
 }
 
 export class DraftFolder {
+    public readonly agentId: string;
     private drafts: Record<string, any> = {};
 
-    constructor(public readonly agentId: string) {}
+    constructor(agentId: string) {
+        this.agentId = agentId;
+    }
 
     writeDraft(key: string, data: any) {
         // Agents can only write to their own isolated draft

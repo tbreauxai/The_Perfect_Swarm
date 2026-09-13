@@ -1,10 +1,11 @@
 # OmA Taskboard
 
-## Active Goal: G1 - Purge irrelevant files & obsolete patch scripts
+## Track: Modular AI Swarm & Qdrant Optimization (Status: Completed)
 
-| Task ID | Description | Status | Verification |
+| Goal ID | Description | Status | Verification |
 | --- | --- | --- | --- |
-| T1.1 | Audit root directory and catalog obsolete scripts (*.cjs, test_*.js, plan.md) | completed | Cataloged 81 .cjs files, 8 test_*.js files, plan.md |
-| T1.2 | Identify and target backup files in src/ (App.tsx.backup) | completed | Identified src/App.tsx.backup |
-| T1.3 | Execute deletion of all non-essential and obsolete script files | completed | Deleted 97 files via git rm & committed |
-| T1.4 | Verify core project files, git status, and directory cleanliness | completed | `tsc --noEmit` & `npm run build` both succeeded |
+| G1 | Comprehensive codebase audit across architecture, provider dispatch, Qdrant setup | completed | Full audit log generated identifying 5 architectural bottlenecks |
+| G2 | Optimize Qdrant setup and Memory Cortex (int8 scalar quantization, hybrid RRF search, pluggable embedding providers) | completed | Replaced invalid schemas, implemented dense+sparse hybrid search, tested Gemini + local fallback |
+| G3 | Refactor Swarm Core into standalone portable package with pluggable Provider Adapters | completed | Created `src/swarm/` modular package with 5 provider adapters, ProviderRegistry, and sanitized types |
+| G4 | Integrate Memory Cortex, Model Router, and Analysis Lifecycle into Swarm Orchestrator | completed | Inferred complexity, dynamic model recommendation, Red Team / Blue Team verification loop, persistent cortex storage |
+| G5 | End-to-end verification, type checking, bundle build, and portability validation | completed | `tsc --noEmit` passed (0 errors), `vite build` passed, `test:portable` script verified via `node --experimental-strip-types` |

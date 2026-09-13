@@ -6,11 +6,19 @@ export interface VerificationResult {
 }
 
 export class AnalysisLifecycle {
+    private proposer: Agent;
+    private critic: Agent;
+    private maxRetries: number;
+
     constructor(
-        private proposer: Agent,
-        private critic: Agent,
-        private maxRetries: number = 3
-    ) {}
+        proposer: Agent,
+        critic: Agent,
+        maxRetries: number = 3
+    ) {
+        this.proposer = proposer;
+        this.critic = critic;
+        this.maxRetries = maxRetries;
+    }
 
     /**
      * Executes the Red Team / Blue Team analysis loop.
@@ -40,11 +48,20 @@ export class AnalysisLifecycle {
             
             const proposalRaw = await this.proposer.run(executePrompt, context, { responseMimeType: 'application/json' });
             
-            try {
-                currentProposal = JSON.parse(proposalRaw);
-            } catch (e) {
-                // If it fails to parse as JSON, wrap it in a fallback object
-                currentProposal = { rawText: proposalRaw, error: "Failed to parse JSON" };
+            if (typeof proposalRaw === 'object' && proposalRaw !== null) {
+                currentProposal = proposalRaw;
+            } else {
+                try {
+                    let clean = String(proposalRaw || '').replace(/```(?:json)?/gi, '').trim();
+                    const startIdx = clean.indexOf('{');
+                    const endIdx = clean.lastIndexOf('}');
+                    if (startIdx !== -1 && endIdx !== -1) {
+                        clean = clean.substring(startIdx, endIdx + 1);
+                    }
+                    currentProposal = JSON.parse(clean);
+                } catch (e) {
+                    currentProposal = { rawText: proposalRaw, error: "Failed to parse JSON" };
+                }
             }
 
             // 2. Critic verifies
@@ -55,11 +72,20 @@ export class AnalysisLifecycle {
             const verificationRaw = await this.critic.run(verifyPrompt, context, { responseMimeType: 'application/json' });
             
             let verification: VerificationResult;
-            try {
-                verification = JSON.parse(verificationRaw);
-            } catch (e) {
-                // Force a fail if critic outputs invalid JSON
-                verification = { pass: false, feedback: "Critic failed to output valid JSON evaluation. Treat as verification failure." };
+            if (typeof verificationRaw === 'object' && verificationRaw !== null) {
+                verification = verificationRaw as VerificationResult;
+            } else {
+                try {
+                    let clean = String(verificationRaw || '').replace(/```(?:json)?/gi, '').trim();
+                    const startIdx = clean.indexOf('{');
+                    const endIdx = clean.lastIndexOf('}');
+                    if (startIdx !== -1 && endIdx !== -1) {
+                        clean = clean.substring(startIdx, endIdx + 1);
+                    }
+                    verification = JSON.parse(clean);
+                } catch (e) {
+                    verification = { pass: false, feedback: "Critic failed to output valid JSON evaluation. Treat as verification failure." };
+                }
             }
 
             // 3. Pass/Fail evaluation

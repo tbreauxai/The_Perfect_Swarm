@@ -1,5 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
-import { Provider } from '../../swarm.ts';
+import type { Provider } from '../../swarm.ts';
 
 export interface ProviderResolution {
     key: string;

@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
+    "test:portable": "node --experimental-strip-types test-portable-swarm.ts",
     "start": "node --experimental-strip-types server.ts"
   },
   "dependencies": {

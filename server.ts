@@ -40,7 +40,7 @@ async function startServer() {
 
   app.post('/api/swarm/analyze', async (req, res) => {
     try {
-      const { task, data, settings } = req.body;
+      const { task, data, settings, enableDeepAnalysis, complexityOverride } = req.body;
       
       const hasUserKeys = settings?.geminiApiKey || settings?.groqApiKey || settings?.openRouterApiKey || settings?.githubToken || settings?.mistralApiKey;
       const hasEnvKeys = !!process.env.GEMINI_API_KEY || !!process.env.OPENROUTER_API_KEY || !!process.env.GROQ_API_KEY || !!process.env.MISTRAL_API_KEY || !!process.env.GITHUB_TOKEN;
@@ -57,7 +57,9 @@ async function startServer() {
         task,
         data,
         settings,
-        defaultAi
+        defaultAi,
+        enableDeepAnalysis: enableDeepAnalysis ?? settings?.enableDeepAnalysis,
+        complexityOverride
       });
 
       res.json(result);

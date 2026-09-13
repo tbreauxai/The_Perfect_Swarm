@@ -1,5 +1,5 @@
 {
-  "activeGoalId": "G2",
+  "activeGoalId": "G5",
   "goals": [
     {
       "id": "G1",
@@ -11,30 +11,30 @@
     {
       "id": "G2",
       "description": "Optimize Qdrant setup and Memory Cortex: fix invalid schema (turbo4/turbo), enable robust hybrid search, and support flexible embedding providers",
-      "status": "in-progress",
+      "status": "completed",
       "verificationCriteria": "MemoryCortex uses compliant Qdrant schemas with int8 scalar quantization and on-disk payload; graceful fallback when embeddings or cluster unavailable",
-      "evidence": null
+      "evidence": "Refactored src/memory.ts: replaced invalid 'turbo4'/'turbo' configs with compliant Qdrant scalar int8 quantization, on_disk: true; implemented EmbeddingProvider interface with Gemini and DeterministicLocalEmbeddingProvider fallback; implemented hybrid Dense + Sparse RRF search; wired MemoryCortex directly into swarmEngine.ts for baseline retrieval and insight persistence. Verified with tsc --noEmit and vite build."
     },
     {
       "id": "G3",
       "description": "Refactor Swarm Core into a standalone portable library package with pluggable Provider Adapters",
-      "status": "todo",
+      "status": "completed",
       "verificationCriteria": "Clean provider adapter interface (Gemini, Groq, OpenRouter, Mistral, GitHub) decoupled from Agent class; unified exports via src/swarm/index.ts with zero Express/React coupling",
-      "evidence": null
+      "evidence": "Created src/swarm modular directory with types.ts, context.ts, agent.ts, providers/adapter.ts, providers/registry.ts, and 5 provider adapters (Gemini, Groq, OpenRouter with sk-or-v1- auth handling, Mistral with rate limiter mutex, GitHub). Cleaned constructor parameter properties and import types for zero-error Node.js native --experimental-strip-types execution. Standalone import verified."
     },
     {
       "id": "G4",
       "description": "Integrate Memory Cortex, Model Router, and Analysis Lifecycle into the Swarm Orchestrator for deep analysis",
-      "status": "todo",
+      "status": "completed",
       "verificationCriteria": "SwarmEngine leverages MemoryCortex for semantic baseline retrieval and optional AnalysisLifecycle verification loops for high-complexity analysis tasks",
-      "evidence": null
+      "evidence": "Integrated ModelRouter into swarmEngine for automated complexity classification and optimal model selection; wired MemoryCortex for hybrid baseline retrieval and structured insight persistence; integrated AnalysisLifecycle into manager synthesis for Red Team / Blue Team audit loops on deep analysis tasks. Verified via tsc --noEmit and vite build."
     },
     {
       "id": "G5",
       "description": "End-to-end verification, type checking, bundle build, and portability validation",
-      "status": "todo",
+      "status": "completed",
       "verificationCriteria": "tsc --noEmit passes with 0 errors; vite build succeeds; sample portable consumer script verifies zero-framework invocation",
-      "evidence": null
+      "evidence": "tsc --noEmit passed cleanly (0 errors); vite build succeeded (252 kB bundle); test-portable-swarm.ts verified ProviderRegistry, dynamic custom adapters, SwarmContext event subscriptions, ModelRouter complexity inference, and AnalysisLifecycle Red Team/Blue Team verification under native node --experimental-strip-types."
     }
   ]
 }

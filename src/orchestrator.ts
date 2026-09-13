@@ -1,4 +1,4 @@
-import { Agent, SwarmContext, Provider } from '../swarm.ts';
+import { Agent, SwarmContext, type Provider } from '../swarm.ts';
 import { CentralState, DraftFolder } from './state.ts';
 import { GoogleGenAI } from '@google/genai';
 
