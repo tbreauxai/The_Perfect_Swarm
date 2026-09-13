@@ -12,7 +12,7 @@
   - [x] Run `vitest` to confirm all tests pass (Green Phase)
 - [x] Task: Phase Verification & Checkpoint (Refer to workflow.md) (f011225)
 
-## Phase 2: Enhanced Defensive UX & Full Regression Verification
+## Phase 2: Enhanced Defensive UX & Full Regression Verification [checkpoint: c2f08f4]
 
 - [x] Task: Add Loading Skeletons and Empty Key Inline Hints in AgentConfigurator (e71f753)
   - [x] Render clean inline hints when a provider's key is not configured
@@ -21,4 +21,4 @@
   - [x] Run `npx tsc --noEmit` to verify type safety with zero errors
   - [x] Run `npm run build` to verify client and swarm distribution builds
   - [x] Run `npm test` to verify all 5 core test suites pass 100%
-- [~] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+- [x] Task: Phase Verification & Checkpoint (Refer to workflow.md) (c2f08f4)
