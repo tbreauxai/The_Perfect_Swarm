@@ -3,12 +3,14 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { executeSwarmWorkflow, type SwarmWorkflowParams, type SwarmWorkflowResult } from './engine.ts';
 import type { SwarmEvent } from './types.ts';
 import type { GoogleGenAI } from '@google/genai';
+import type { MemoryCortex } from './memory.ts';
 
 export interface SwarmServerOptions {
     port?: number;
     host?: string;
     defaultSettings?: any;
     defaultAi?: GoogleGenAI;
+    defaultCortex?: MemoryCortex;
     cors?: boolean;
 }
 
@@ -87,6 +89,7 @@ export function parseJsonBody<T = any>(req: IncomingMessage): Promise<T> {
 export function createSwarmServer(options: SwarmServerOptions = {}): http.Server {
     const defaultSettings = options.defaultSettings || {};
     const defaultAi = options.defaultAi;
+    const defaultCortex = options.defaultCortex;
 
     const server = http.createServer(async (req, res) => {
         // CORS headers
@@ -123,6 +126,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): http.Server
                         data: body.data,
                         settings: { ...defaultSettings, ...body.settings },
                         defaultAi: body.defaultAi || defaultAi,
+                        cortex: body.cortex || defaultCortex,
                         enableDeepAnalysis: body.enableDeepAnalysis,
                         complexityOverride: body.complexityOverride
                     };
@@ -134,7 +138,8 @@ export function createSwarmServer(options: SwarmServerOptions = {}): http.Server
                         task,
                         data,
                         settings: { ...defaultSettings, appId },
-                        defaultAi
+                        defaultAi,
+                        cortex: defaultCortex
                     };
                 } else {
                     res.writeHead(405, { 'Content-Type': 'application/json' });
@@ -166,6 +171,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): http.Server
                     data: body.data,
                     settings: { ...defaultSettings, ...body.settings },
                     defaultAi: body.defaultAi || defaultAi,
+                    cortex: body.cortex || defaultCortex,
                     enableDeepAnalysis: body.enableDeepAnalysis,
                     complexityOverride: body.complexityOverride
                 });

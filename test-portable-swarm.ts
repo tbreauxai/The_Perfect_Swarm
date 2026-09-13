@@ -13,7 +13,8 @@ import {
     globalLoadBalancer,
     SwarmEngine,
     executeSwarmWorkflow,
-    OpenRouterAdapter
+    OpenRouterAdapter,
+    getOrCreateDefaultCortex
 } from './swarm.ts';
 
 async function runPortableValidation() {
@@ -30,6 +31,21 @@ async function runPortableValidation() {
         async call(opts) {
             if (opts.prompt.includes('Evaluate this proposal')) {
                 return JSON.stringify({ pass: true, feedback: 'Verified successfully against all criteria.' });
+            }
+            if (opts.systemInstruction?.includes('Swarm Orchestrator') || opts.prompt.includes('Analyst Reports:')) {
+                return JSON.stringify({
+                    ui_title: 'Cluster Security Dashboard',
+                    components: [
+                        { id: 'c1', type: 'InsightList', props: { title: 'Insights', insights: [{ type: 'info', message: 'Policy enforced' }] } }
+                    ]
+                });
+            }
+            if (opts.systemInstruction?.includes('Specialized Analyst') || opts.prompt.includes('Data Chunk')) {
+                return JSON.stringify({
+                    insights: ['Endpoint authenticated', 'Policy verified'],
+                    anomalies: [],
+                    summary: 'Policy enforcement check completed.'
+                });
             }
             return JSON.stringify({ title: 'Synthesized proposal', metric: 42, summary: `Processed: ${opts.prompt.substring(0, 30)}...` });
         }
@@ -522,6 +538,7 @@ async function runPortableValidation() {
     // 17b: Ephemeral In-Memory Vector Fallback (Zero-Qdrant Offline Operation)
     const offlineCortex = new MemoryCortex({
         defaultAppId: 'offline-tenant-app',
+        isolatedStore: true,
         embeddingProvider: new DeterministicLocalEmbeddingProvider()
     });
     console.log('Offline cortex ready state:', offlineCortex.ready);
@@ -604,6 +621,76 @@ async function runPortableValidation() {
     if ((offlineCortex.fallbackCount as number) !== 2) {
         throw new Error(`Expected 2 remaining points in fallbackStore after pruning, found ${offlineCortex.fallbackCount}`);
     }
+
+    console.log('\n=== Step 18: Unconditional Engine Cortex Binding & Multi-Run In-Memory Learning ===');
+    const multiRunAppId = 'test-unconditional-learning-app';
+
+    // Seed a global shared learning baseline into the default cortex for this session
+    const globalCortex = getOrCreateDefaultCortex('shared');
+    await globalCortex.store('Shared Security Baseline: All API endpoints must enforce Bearer token validation and rate limiting.', {
+        domain: 'security',
+        agentRole: 'Global Policy Analyst',
+        qualityRating: 0.99,
+        verified: true,
+        appId: 'shared'
+    });
+
+    // Run 1: Run headless workflow without QDRANT_URL. It should retrieve the shared baseline!
+    const run1Result = await executeSwarmWorkflow({
+        task: 'Enforce security policy on customer portal API',
+        data: 'endpoint=/api/customers, auth=none',
+        settings: {
+            appId: multiRunAppId,
+            includeShared: true,
+            agents: [
+                { id: 'manager', role: 'Manager Node', provider: 'custom-mock', apiKey: 'mock-key', model: 'mock-model' },
+                { id: 'a1', role: 'Security Analyst', provider: 'custom-mock', apiKey: 'mock-key', model: 'mock-model' }
+            ]
+        }
+    });
+
+    const retrievalEvent = run1Result.events.find(e => e.action === 'Cortex Retrieval Complete');
+    if (!retrievalEvent) {
+        throw new Error('Step 18: executeSwarmWorkflow failed to perform Cortex Retrieval in offline mode');
+    }
+    console.log('✓ Cortex Retrieval succeeded in offline mode:', retrievalEvent.output);
+
+    // Verify Run 1 persisted its result to the in-memory cortex
+    const appCortex = getOrCreateDefaultCortex(multiRunAppId);
+    const learnedMemories = await appCortex.retrieve('customer portal API', { appId: multiRunAppId });
+    console.log('✓ Learned memory persisted to appCortex:', learnedMemories.map(m => m.content));
+    if (learnedMemories.length === 0) {
+        throw new Error('Step 18: executeSwarmWorkflow failed to persist execution into in-memory cortex');
+    }
+
+    // Run 2: Injected custom cortex verification
+    const isolatedCustomCortex = new MemoryCortex({ defaultAppId: 'custom-injected-app' });
+    await isolatedCustomCortex.store('Custom injected knowledge: P99 latency SLA is 20ms.', {
+        domain: 'performance',
+        qualityRating: 0.95,
+        verified: true,
+        appId: 'custom-injected-app'
+    });
+
+    const run2Result = await executeSwarmWorkflow({
+        task: 'Audit latency SLAs across all microservices and database tiers',
+        enableDeepAnalysis: true,
+        cortex: isolatedCustomCortex,
+        settings: {
+            appId: 'custom-injected-app',
+            agents: [
+                { id: 'manager', role: 'Manager Node', provider: 'custom-mock', apiKey: 'mock-key', model: 'mock-model' },
+                { id: 'a1', role: 'Performance Analyst', provider: 'custom-mock', apiKey: 'mock-key', model: 'mock-model' }
+            ]
+        }
+    });
+    const run2Retrieval = run2Result.events.find(e => e.action === 'Cortex Retrieval Complete');
+    console.log('Run 2 retrieval event output:', run2Retrieval?.output);
+    console.log('Run 2 all event actions:', run2Result.events.map(e => e.action));
+    if (!run2Retrieval || !run2Retrieval.output?.message.includes('Custom injected knowledge')) {
+        throw new Error('Step 18: Injected custom cortex was not utilized in executeSwarmWorkflow');
+    }
+    console.log('✓ Injected custom cortex verified in Run 2');
 
     console.log('\n=== Step 16: Context Event Log Summary ===');
     console.log(`Total events recorded in SwarmContext: ${recordedEvents.length}`);

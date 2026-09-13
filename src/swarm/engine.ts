@@ -139,11 +139,28 @@ export interface SwarmWorkflowParams {
     complexityOverride?: TaskComplexity;
     onEvent?: (event: SwarmEvent) => void;
     context?: SwarmContext;
+    cortex?: MemoryCortex;
 }
 
 export interface SwarmWorkflowResult {
     events: SwarmEvent[];
     finalAnalysis: any;
+}
+
+/**
+ * Process-level singleton registry for in-memory cortex instances per appId.
+ * Preserves continuous vector learning across sequential workflow runs in the same runtime.
+ */
+export const defaultCortexRegistry = new Map<string, MemoryCortex>();
+
+export function getOrCreateDefaultCortex(appId: string, aiClient?: GoogleGenAI): MemoryCortex {
+    if (!defaultCortexRegistry.has(appId)) {
+        defaultCortexRegistry.set(appId, new MemoryCortex({
+            defaultAppId: appId,
+            aiClient
+        }));
+    }
+    return defaultCortexRegistry.get(appId)!;
 }
 
 /**
@@ -158,12 +175,35 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         context.subscribe(onEvent);
     }
 
+    const targetAppId = settings?.appId || 'perfect-swarm';
+    const qdrantUrl = settings?.qdrantUrl || process.env.QDRANT_URL;
+    const qdrantApiKey = settings?.qdrantApiKey || process.env.QDRANT_API_KEY;
+    const includeShared = settings?.includeShared ?? true;
+
+    // Unconditionally bind MemoryCortex with fallback to process-level in-memory learning
+    let memoryCortex: MemoryCortex = params.cortex || settings?.cortex;
+    if (!memoryCortex) {
+        if (qdrantUrl) {
+            try {
+                memoryCortex = new MemoryCortex({
+                    url: qdrantUrl,
+                    apiKey: qdrantApiKey,
+                    aiClient: defaultAi,
+                    defaultAppId: targetAppId
+                });
+            } catch {
+                memoryCortex = getOrCreateDefaultCortex(targetAppId, defaultAi);
+            }
+        } else {
+            memoryCortex = getOrCreateDefaultCortex(targetAppId, defaultAi);
+        }
+    }
+
     // 0. Infer Task Complexity via ModelRouter
     const complexity: TaskComplexity = complexityOverride || ModelRouter.inferComplexity(task, (data || '').length);
     const deepAnalysisRequested = enableDeepAnalysis ?? settings?.enableDeepAnalysis ?? (complexity === 'complex');
 
     // 0b. Check Deterministic Payload Cache for Zero-Drift Short-Circuit
-    const targetAppId = settings?.appId || 'perfect-swarm';
     const cacheKey = PayloadCache.computeFingerprint(task, data || "", {
         appId: targetAppId,
         deepAnalysis: deepAnalysisRequested,
@@ -316,6 +356,20 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
 
             if (finalAnalysis && !finalAnalysis.ui_title?.includes("Error")) {
                 globalPayloadCache.set(cacheKey, finalAnalysis);
+                if (memoryCortex) {
+                    memoryCortex.store(
+                        `Task: ${task}\nResult: ${finalAnalysis.ui_title || 'Fast analysis complete'}`,
+                        {
+                            domain: 'analysis',
+                            agentRole: fastAnalyst.role,
+                            complexity: 'instant',
+                            verified: true,
+                            appId: targetAppId,
+                            qualityRating: 0.90,
+                            attempts: 1
+                        }
+                    ).catch(() => {});
+                }
             }
 
             return {
@@ -350,73 +404,59 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             durationMs: 0
         });
 
-        // Step 3: Targeted Memory Grounding (Qdrant Cortex)
+        // Step 3: Targeted Memory Grounding (Hybrid Qdrant / In-Memory Cortex)
         let historicalContext = "";
-        const qdrantUrl = settings?.qdrantUrl || process.env.QDRANT_URL;
-        const qdrantApiKey = settings?.qdrantApiKey || process.env.QDRANT_API_KEY;
+        try {
+            const cortexName = qdrantUrl ? 'Qdrant/HybridCortex' : 'Local/InMemoryCortex';
+            context.addEvent({
+                agentRole: 'System Orchestrator',
+                action: 'Targeted Cortex Retrieval',
+                modelName: cortexName,
+                prompt: `Retrieving historical baseline constraints (appId='${targetAppId}', includeShared=${includeShared})...`
+            });
 
-        let memoryCortex: MemoryCortex | null = null;
+            const retrieved = await memoryCortex.retrieve(task, { appId: targetAppId, includeShared }, 3);
+            const exemplars = await memoryCortex.retrieveExemplars(task, {
+                appId: targetAppId,
+                includeShared,
+                limit: 2,
+                minRating: 0.7
+            }).catch(() => "");
 
-        if (qdrantUrl) {
-            try {
-                const parsedUrl = new URL(qdrantUrl);
-                const targetAppId = settings?.appId || 'perfect-swarm';
-                memoryCortex = new MemoryCortex({
-                    url: qdrantUrl,
-                    apiKey: qdrantApiKey,
-                    aiClient: defaultAi,
-                    defaultAppId: targetAppId
-                });
-
-                context.addEvent({
-                    agentRole: 'System Orchestrator',
-                    action: 'Targeted Cortex Retrieval',
-                    modelName: 'Qdrant/HybridCortex',
-                    prompt: `Connecting to ${parsedUrl.host} for historical baseline constraints (appId='${targetAppId}')...`
-                });
-
-                const retrieved = await memoryCortex.retrieve(task, { appId: targetAppId }, 3);
-                const exemplars = await memoryCortex.retrieveExemplars(task, {
-                    appId: targetAppId,
-                    limit: 2,
-                    minRating: 0.7
-                }).catch(() => "");
-
-                if (retrieved.length > 0) {
-                    historicalContext = `Retrieved ${retrieved.length} relevant historical baselines from memory:\n` +
-                        retrieved.map((m: any, idx: number) => `[Baseline ${idx + 1}]: ${m.content || JSON.stringify(m)}`).join('\n');
-                } else {
-                    historicalContext = "Vector Cortex connected. No prior matching historical baselines found for this domain.";
-                }
-
-                if (exemplars) {
-                    historicalContext += `\n\nHigh-Quality Exemplars from Past Runs:\n${exemplars}`;
-                }
-
-                context.addEvent({
-                    agentRole: 'System Orchestrator',
-                    action: 'Cortex Retrieval Complete',
-                    prompt: 'Retrieval completed',
-                    modelName: 'Qdrant/HybridCortex',
-                    output: { recordsFound: retrieved.length, exemplarsIncluded: Boolean(exemplars), status: 'Success', message: historicalContext },
-                    durationMs: 120
-                });
-            } catch (err: any) {
-                let errorMessage = err.message || String(err);
-                if (errorMessage.includes("Unexpected token '<'") || errorMessage.includes("is not valid JSON")) {
-                    errorMessage = "The Qdrant URL provided returned an HTML web page instead of JSON. Ensure you use the Cluster REST Endpoint URL (e.g. https://xyz.cloud.qdrant.tech:6333) and not the dashboard URL.";
-                }
-
-                context.addEvent({
-                    agentRole: 'System Orchestrator',
-                    action: 'Cortex Retrieval Failed',
-                    prompt: 'Retrieval failed',
-                    modelName: 'Qdrant/VectorDB',
-                    error: `Qdrant connection error: ${errorMessage}`,
-                    durationMs: 0
-                });
-                historicalContext = "Failed to retrieve baselines from Qdrant. Proceeding without historical context.";
+            if (retrieved.length > 0) {
+                historicalContext = `Retrieved ${retrieved.length} relevant historical baselines from memory:\n` +
+                    retrieved.map((m: any, idx: number) => `[Baseline ${idx + 1}]: ${m.content || JSON.stringify(m)}`).join('\n');
+            } else {
+                historicalContext = "Vector Cortex connected. No prior matching historical baselines found for this domain.";
             }
+
+            if (exemplars) {
+                historicalContext += `\n\nHigh-Quality Exemplars from Past Runs:\n${exemplars}`;
+            }
+
+            context.addEvent({
+                agentRole: 'System Orchestrator',
+                action: 'Cortex Retrieval Complete',
+                prompt: 'Retrieval completed',
+                modelName: cortexName,
+                output: { recordsFound: retrieved.length, exemplarsIncluded: Boolean(exemplars), status: 'Success', message: historicalContext },
+                durationMs: 12
+            });
+        } catch (err: any) {
+            let errorMessage = err.message || String(err);
+            if (errorMessage.includes("Unexpected token '<'") || errorMessage.includes("is not valid JSON")) {
+                errorMessage = "The Qdrant URL provided returned an HTML web page instead of JSON. Ensure you use the Cluster REST Endpoint URL (e.g. https://xyz.cloud.qdrant.tech:6333) and not the dashboard URL.";
+            }
+
+            context.addEvent({
+                agentRole: 'System Orchestrator',
+                action: 'Cortex Retrieval Failed',
+                prompt: 'Retrieval failed',
+                modelName: 'Cortex/Fallback',
+                error: `Memory retrieval error: ${errorMessage}`,
+                durationMs: 0
+            });
+            historicalContext = "Failed to retrieve baselines from memory. Proceeding without historical context.";
         }
 
         // Step 4: Run Analysts across Chunks
@@ -591,17 +631,20 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
 export class SwarmEngine {
     private defaultSettings: any;
     private defaultAi?: GoogleGenAI;
+    private defaultCortex?: MemoryCortex;
 
-    constructor(defaultSettings: any = {}, defaultAi?: GoogleGenAI) {
+    constructor(defaultSettings: any = {}, defaultAi?: GoogleGenAI, defaultCortex?: MemoryCortex) {
         this.defaultSettings = defaultSettings;
         this.defaultAi = defaultAi;
+        this.defaultCortex = defaultCortex;
     }
 
-    async execute(params: Omit<SwarmWorkflowParams, 'settings' | 'defaultAi'> & { settings?: any; defaultAi?: GoogleGenAI }): Promise<SwarmWorkflowResult> {
+    async execute(params: Omit<SwarmWorkflowParams, 'settings' | 'defaultAi'> & { settings?: any; defaultAi?: GoogleGenAI; cortex?: MemoryCortex }): Promise<SwarmWorkflowResult> {
         return executeSwarmWorkflow({
             ...params,
             settings: { ...this.defaultSettings, ...params.settings },
-            defaultAi: params.defaultAi || this.defaultAi
+            defaultAi: params.defaultAi || this.defaultAi,
+            cortex: params.cortex || this.defaultCortex
         });
     }
 

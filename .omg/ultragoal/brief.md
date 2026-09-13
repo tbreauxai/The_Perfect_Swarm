@@ -1,24 +1,21 @@
-# Ultragoal Brief: Modular AI Swarm Foundation, Free-Tier AI & Qdrant Learning Cortex Optimization
+# Ultragoal Brief: Phase 2 - Continuous Learning Cortex, Cross-Provider Critic & Shared Memory Optimization
 
 ## Core Objective
-Optimize and harden the modular AI swarm codebase into a refined, zero-leak, portable foundation capable of continuous learning across multiple target applications. The swarm operates strictly on free-tier AI APIs (Gemini, Groq, OpenRouter, Mistral, GitHub) and Qdrant vector memory.
+Refine and harden `@perfect-swarm/core` into an adaptive, self-improving multi-agent intelligence runtime capable of learning across target applications using free-tier LLM APIs and hybrid Qdrant/in-memory vector memory.
 
-## Architectural Focus Areas
-1. **File Structure & Portability**:
-   - Relocate the core orchestration workflow into a headless, self-contained `src/swarm/engine.ts`.
-   - Ensure `src/swarm/` has zero dependencies on client/UI/server code, allowing turnkey transplantation to any Node/Next.js/Bun/Express app.
-   - Provide clean package.json subpath exports (`./engine`, `./profiler`, `./cache`, `./hierarchy`, etc.).
-2. **AI Structure & Free-Tier Resilience**:
-   - Align default model router mappings with guaranteed free-tier endpoints (e.g., auto `:free` suffix on OpenRouter, free-tier Mistral/Gemini quotas).
-   - Implement autonomous reinforcement learning (RLAIF) connecting `AnalysisLifecycle` critic verification directly into `MemoryCortex` quality scores.
-   - Robust structured JSON output recovery with fallback schema parsing.
-3. **Qdrant Utilization & Continuous Learning Cortex**:
-   - Complete Qdrant payload indexes (add `verified` bool index).
-   - Implement ephemeral in-memory vector fallback when Qdrant is unavailable, enabling offline learning.
-   - Implement automated memory pruning and consolidation for stale/low-rated memories.
-   - Support cross-app shared learning baselines (`includeShared` option).
+## Architectural Audit & Focus Areas
+1. **Engine Memory Binding & Shared Knowledge**:
+   - Bind `MemoryCortex` unconditionally in `src/swarm/engine.ts` so offline/in-memory hybrid RRF vector search and exemplar distillation execute even when `QDRANT_URL` is omitted.
+   - Accept injected `cortex` in `SwarmWorkflowParams` and maintain process-level singletons per `appId` to preserve learning across workflow runs.
+   - Support `includeShared: true` in engine retrieval so consumer apps inherit foundational domain knowledge.
+2. **AI Structure & RLAIF Cross-Critique**:
+   - Prefer cross-provider Critic agents (e.g. Gemini critic for Groq analyst) to eliminate LLM self-affirmation bias.
+   - Record fast-path and low-complexity executions into the learning cortex to establish positive baselines.
+3. **Qdrant Vector Cortex & Maintenance**:
+   - Add automated memory consolidation (pruning `qualityRating < 0.40` and deduplicating clusters) on periodic intervals or item thresholds.
+   - Support customizable dense-to-sparse weights in hybrid Reciprocal Rank Fusion (RRF).
 
 ## Verification Criteria
 - `tsc --noEmit` passes with 0 errors.
-- `vite build` succeeds.
-- Comprehensive portable and multi-app simulation tests verify headless engine execution, continuous learning score propagation, Qdrant fallback, and free-tier resilience under `node --experimental-strip-types`.
+- `npm run build` succeeds (client + dual swarm ESM/CJS bundles).
+- `npm test` passes all suites (portable, simulation, dist, cli, server, and multi-run learning tests).

@@ -12,3 +12,13 @@
 | T1 | Dual ESM/CJS Distribution Packaging & Declaration Generation (`@perfect-swarm/core`) | completed | `scripts/build-swarm.ts` & `vite.config.swarm.ts` emit ESM (`.js`), CJS (`.cjs`), and `.d.ts` into `dist/swarm/`; verified via `test-dist-import.mjs` and `test-dist-import.cjs` |
 | T2 | Portable Swarm CLI Executable (`bin/cli.js`) | completed | CLI binary `perfect-swarm` registered in `package.json`; commands `doctor`, `init`, and `run` verified via `test-cli.mjs` |
 | T3 | Zero-Dependency HTTP & Server-Sent Events (SSE) Streaming Server (`src/swarm/server.ts`) | completed | Standalone `createSwarmServer` & `handleSwarmSse` with CORS, health, and live event streaming; verified via `test-sse-server.mjs` |
+
+## Track: Phase 2 - Continuous Learning Cortex, Cross-Provider Critic & Shared Memory Optimization
+
+| Goal ID | Description | Status | Verification |
+| --- | --- | --- | --- |
+| UG-1 | Unconditionally bind `MemoryCortex` in `src/swarm/engine.ts` with in-memory persistence and `includeShared` cross-app retrieval | completed | Engine initializes `MemoryCortex` without `QDRANT_URL`; retrieves baselines and exemplars; verified via Step 18 in `test-portable-swarm.ts` |
+| UG-2 | Implement cross-provider Critic routing and fast-path learning capture in `src/swarm/engine.ts` | in-progress | Selects dedicated critic or alternative provider; fast-path executions persist to cortex |
+| UG-3 | Add automated memory consolidation triggers and configurable dense/sparse RRF weights in `MemoryCortex` | todo | Threshold-based auto-prune (<0.40); customizable RRF weighting factors |
+| UG-4 | End-to-End multi-session learning verification, typecheck, build, and automated test suite pass | todo | Sequential workflow executions without Qdrant accumulate positive exemplars and improve responses; `npm test` passes |
+

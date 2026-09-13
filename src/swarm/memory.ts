@@ -156,6 +156,7 @@ export interface MemoryCortexConfig {
     defaultAppId?: string;
     embeddingProvider?: EmbeddingProvider;
     aiClient?: GoogleGenAI;
+    isolatedStore?: boolean;
 }
 
 /**
@@ -169,19 +170,34 @@ export interface MemoryCortexConfig {
  * - Compliant Qdrant int8 scalar quantization and on-disk payload storage
  */
 export class MemoryCortex {
+    private static globalFallbackStores = new Map<string, StoredMemoryPoint[]>();
     private qdrant: QdrantClient | null = null;
     private embeddingProvider: EmbeddingProvider;
     private collectionName: string;
     private defaultAppId: string;
     private initialized: boolean = false;
     private isAvailable: boolean = false;
-    private fallbackStore: StoredMemoryPoint[] = [];
+    private fallbackStore: StoredMemoryPoint[];
+
+    static clearFallbackStore(collectionName: string = "pwa_swarm_dev_cortex_v2"): void {
+        const store = MemoryCortex.globalFallbackStores.get(collectionName);
+        if (store) store.length = 0;
+    }
 
     constructor(config: MemoryCortexConfig) {
         const url = config.url || process.env.QDRANT_URL;
         const apiKey = config.apiKey || process.env.QDRANT_API_KEY;
         this.collectionName = config.collectionName || "pwa_swarm_dev_cortex_v2";
         this.defaultAppId = config.defaultAppId || "default";
+
+        if (config.isolatedStore) {
+            this.fallbackStore = [];
+        } else {
+            if (!MemoryCortex.globalFallbackStores.has(this.collectionName)) {
+                MemoryCortex.globalFallbackStores.set(this.collectionName, []);
+            }
+            this.fallbackStore = MemoryCortex.globalFallbackStores.get(this.collectionName)!;
+        }
 
         if (url) {
             try {
