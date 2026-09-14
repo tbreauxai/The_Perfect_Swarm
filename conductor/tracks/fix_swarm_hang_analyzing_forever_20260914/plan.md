@@ -2,8 +2,8 @@
 
 ## Phase 1: Failover & Timeout Hardening (Engine, Adapters, Cortex)
 - [x] Task: Write failing unit tests for immediate 429 failover, Gemini timeout guards, and stream error handling (Red) (9c6edce)
-- [ ] Task: Implement immediate failover in `Agent.run` when fallbacks exist and fix `test-multi-app-simulation.ts` (Green)
-- [ ] Task: Add timeout protection to `GeminiAdapter` and `GeminiEmbeddingProvider` with graceful fallback (Green)
+- [x] Task: Implement immediate failover in `Agent.run` when fallbacks exist and fix `test-multi-app-simulation.ts` (Green) (66e3b32)
+- [~] Task: Add timeout protection to `GeminiAdapter` and `GeminiEmbeddingProvider` with graceful fallback (Green)
 - [ ] Task: Update `SwarmClient.streamRemote` to handle `swarm_error` events properly (Green)
 - [ ] Task: Guard `profiler.ts` against unbounded single-line payloads (Green)
 - [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
