@@ -127,7 +127,7 @@ export class ModelRouter {
                 // gemini-2.5-flash offers 15 RPM / 1M token window on free tier
                 return 'gemini-2.5-flash';
             case 'groq':
-                return complexity === 'instant' ? 'llama-3.1-8b-instant' : 'llama-3.3-70b-versatile';
+                return complexity === 'instant' ? 'llama-3.1-8b-instant' : 'llama3-70b-8192';
             case 'openrouter':
                 return complexity === 'complex'
                     ? 'deepseek/deepseek-r1:free'

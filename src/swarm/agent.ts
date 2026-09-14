@@ -84,6 +84,8 @@ export class Agent {
         });
 
         let lastError: any = null;
+        let lastFailedProvider = this.provider;
+        let lastFailedModel = this.modelName;
 
         for (let targetIdx = 0; targetIdx < targetChain.length; targetIdx++) {
             const currentTarget = targetChain[targetIdx];
@@ -129,6 +131,8 @@ export class Agent {
                     return parsedOutput;
                 } catch (err: any) {
                     lastError = err;
+                    lastFailedProvider = currentTarget.provider;
+                    lastFailedModel = currentTarget.modelName || this.modelName;
                     const errMsg = err?.message || String(err);
                     console.warn(`[${this.role}][${currentTarget.provider}] Attempt ${attempt}/${maxRetries} failed:`, errMsg);
 
@@ -178,7 +182,7 @@ export class Agent {
         context.addEvent({
             agentRole: this.role,
             action: 'Failed execution',
-            modelName: `${this.provider} / ${this.modelName}`,
+            modelName: `${lastFailedProvider} / ${lastFailedModel}`,
             prompt,
             error: lastError?.message || String(lastError),
             durationMs

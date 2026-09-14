@@ -275,12 +275,15 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     for (const p of allProviders) {
         const { key, client } = resolveProvider(p, settings, defaultAi);
         if (key) {
-            availableFallbacks.push({
-                provider: p,
-                apiKey: key,
-                modelName: ModelRouter.getRecommendedModel(p, complexity),
-                aiClient: client
-            });
+            const userConfiguredAgent = rawAgents.find((a: any) => a.provider === p && a.model);
+            if (userConfiguredAgent) {
+                availableFallbacks.push({
+                    provider: p,
+                    apiKey: key,
+                    modelName: userConfiguredAgent.model,
+                    aiClient: client
+                });
+            }
         }
     }
 
