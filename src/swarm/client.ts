@@ -31,9 +31,10 @@ export interface AnalyzeResponse {
 }
 
 export interface StreamEventPayload {
-    type: 'event' | 'complete';
+    type: 'event' | 'complete' | 'error';
     event?: SwarmEvent;
     finalAnalysis?: any;
+    error?: string;
 }
 
 /**
@@ -185,13 +186,19 @@ export class SwarmClient {
             }
         }).then(result => {
             pushItem({ type: 'complete', finalAnalysis: result.finalAnalysis });
-            isDone = true;
         }).catch(err => {
+            const errorMsg = err?.message || String(err);
             pushItem({
-                type: 'complete',
-                finalAnalysis: { ui_title: 'Execution Error', error: String(err) }
+                type: 'error',
+                error: errorMsg,
+                finalAnalysis: { ui_title: 'Execution Error', error: errorMsg }
             });
+        }).finally(() => {
             isDone = true;
+            if (resolveNext) {
+                resolveNext();
+                resolveNext = null;
+            }
         });
 
         while (!isDone || eventQueue.length > 0) {
@@ -266,6 +273,13 @@ export class SwarmClient {
                         yield { type: 'event', event: parsedData };
                     } else if (eventType === 'swarm_complete') {
                         yield { type: 'complete', finalAnalysis: parsedData.finalAnalysis };
+                    } else if (eventType === 'swarm_error') {
+                        const errMsg = parsedData.error || 'Swarm remote error';
+                        yield {
+                            type: 'error',
+                            error: errMsg,
+                            finalAnalysis: { ui_title: 'Execution Error', error: errMsg }
+                        };
                     }
                 } catch {
                     // ignore unparseable chunk
