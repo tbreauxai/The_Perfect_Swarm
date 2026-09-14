@@ -14,6 +14,11 @@ export interface SwarmServerOptions {
     cors?: boolean;
 }
 
+export interface SwarmSseOptions {
+    heartbeatIntervalMs?: number;
+    signal?: AbortSignal;
+}
+
 /**
  * Handles Server-Sent Events (SSE) streaming for swarm execution.
  * Compatible with Node.js http, Express, Fastify, and Next.js route handlers.
@@ -21,7 +26,8 @@ export interface SwarmServerOptions {
 export async function handleSwarmSse(
     req: IncomingMessage,
     res: ServerResponse,
-    params: SwarmWorkflowParams
+    params: SwarmWorkflowParams,
+    options?: SwarmSseOptions
 ): Promise<SwarmWorkflowResult> {
     // Set headers for Server-Sent Events
     res.writeHead(200, {
@@ -32,11 +38,36 @@ export async function handleSwarmSse(
         'Access-Control-Allow-Origin': '*'
     });
 
+    if (typeof (res as any).flushHeaders === 'function') {
+        (res as any).flushHeaders();
+    }
+
     // Send initial handshake
     res.write(`:connected\n\n`);
 
+    let isFinished = false;
+    const heartbeatIntervalMs = options?.heartbeatIntervalMs ?? 15000;
+    const heartbeatTimer = setInterval(() => {
+        if (!isFinished && !res.writableEnded) {
+            try {
+                res.write(`:keepalive\n\n`);
+            } catch {
+                cleanup();
+            }
+        }
+    }, heartbeatIntervalMs);
+
+    const cleanup = () => {
+        isFinished = true;
+        clearInterval(heartbeatTimer);
+    };
+
+    req.on('close', cleanup);
+
     const sendEvent = (eventType: string, data: any) => {
-        res.write(`event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`);
+        if (!isFinished && !res.writableEnded) {
+            res.write(`event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`);
+        }
     };
 
     try {
@@ -57,6 +88,11 @@ export async function handleSwarmSse(
         sendEvent('swarm_error', { error: err.message || String(err) });
         res.end();
         throw err;
+    } finally {
+        cleanup();
+        if (typeof (req as any).removeListener === 'function') {
+            (req as any).removeListener('close', cleanup);
+        }
     }
 }
 
