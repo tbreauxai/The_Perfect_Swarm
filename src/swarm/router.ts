@@ -146,11 +146,33 @@ export class ModelRouter {
     }
 
     /**
+     * Validates if a user-supplied model name is a known deprecated or hallucinated ID.
+     */
+    static isValidModel(model: string): boolean {
+        if (!model) return false;
+        const lower = model.toLowerCase();
+        // Reject known hallucinated or deprecated models
+        if (lower === 'gemini-3.5-flash' || 
+            lower === 'openai/gpt-oss-120b' || 
+            lower === 'nvidia/nemotron-3-ultra-550b-a55b:free' || 
+            lower === 'open-mistral-nemo' ||
+            lower.includes('3.5-flash') ||
+            lower.includes('gpt-oss')) {
+            return false;
+        }
+        return true;
+    }
+
+    /**
      * Dynamically routes the task to the most efficient model based on complexity.
      */
     static createRoutedAgent(config: RouteConfig): Agent {
         const provider = config.provider || 'gemini';
-        const modelName = config.modelName || this.getRecommendedModel(provider, config.complexity);
+        let modelName = config.modelName;
+
+        if (!modelName || !this.isValidModel(modelName)) {
+            modelName = this.getRecommendedModel(provider, config.complexity);
+        }
 
         const agent = new Agent(
             config.role,

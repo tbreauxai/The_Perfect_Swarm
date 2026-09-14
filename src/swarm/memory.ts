@@ -272,6 +272,20 @@ export class MemoryCortex {
         if (store) store.length = 0;
     }
 
+    private async withTimeout<T>(promise: Promise<T>, ms: number = 3000): Promise<T> {
+        let timeoutId: any;
+        const timeoutPromise = new Promise<T>((_, reject) => {
+            timeoutId = setTimeout(() => {
+                reject(new Error(`Qdrant operation timed out after ${ms}ms`));
+            }, ms);
+        });
+        try {
+            return await Promise.race([promise, timeoutPromise]);
+        } finally {
+            clearTimeout(timeoutId);
+        }
+    }
+
     constructor(config: MemoryCortexConfig) {
         const url = config.url || process.env.QDRANT_URL;
         const apiKey = config.apiKey || process.env.QDRANT_API_KEY;
@@ -469,7 +483,7 @@ export class MemoryCortex {
                 const sparseVector = SparseTokenizer.encode(content);
 
                 if (deduplicate) {
-                    const existing = await this.qdrant.query(this.collectionName, {
+                    const existing = await this.withTimeout(this.qdrant.query(this.collectionName, {
                         query: denseVector,
                         using: "dense",
                         limit: 1,
@@ -478,7 +492,7 @@ export class MemoryCortex {
                             must: [{ key: "appId", match: { value: appId } }]
                         },
                         with_payload: true
-                    });
+                    }));
 
                     if (existing.points.length > 0 && (existing.points[0].score ?? 0) >= 0.92) {
                         const matched = existing.points[0];
@@ -488,7 +502,7 @@ export class MemoryCortex {
                             ? Math.max(metadata.qualityRating, (existingPayload.qualityRating as number) || 0)
                             : existingPayload.qualityRating;
 
-                        await this.qdrant.setPayload(this.collectionName, {
+                        await this.withTimeout(this.qdrant.setPayload(this.collectionName, {
                             wait: false,
                             points: [matched.id],
                             payload: {
@@ -497,7 +511,7 @@ export class MemoryCortex {
                                 qualityRating: mergedRating,
                                 verified: metadata.verified ?? existingPayload.verified
                             }
-                        });
+                        }));
 
                         storedId = String(matched.id);
                     }
@@ -505,7 +519,7 @@ export class MemoryCortex {
 
                 if (!storedId) {
                     const id = crypto.randomUUID();
-                    await this.qdrant.upsert(this.collectionName, {
+                    await this.withTimeout(this.qdrant.upsert(this.collectionName, {
                         wait: false,
                         points: [
                             {
@@ -526,7 +540,7 @@ export class MemoryCortex {
                                 }
                             }
                         ]
-                    });
+                    }));
 
                     storedId = id;
                 }
@@ -633,10 +647,10 @@ export class MemoryCortex {
                     })
                 );
 
-                await this.qdrant.upsert(this.collectionName, {
+                await this.withTimeout(this.qdrant.upsert(this.collectionName, {
                     wait: false,
                     points
-                });
+                }));
 
                 this.storesSinceConsolidation += points.length;
                 if (this.autoConsolidateThreshold > 0 && this.storesSinceConsolidation >= this.autoConsolidateThreshold) {
@@ -674,7 +688,7 @@ export class MemoryCortex {
 
         if (this.qdrant && this.isAvailable) {
             try {
-                await this.qdrant.setPayload(this.collectionName, {
+                await this.withTimeout(this.qdrant.setPayload(this.collectionName, {
                     wait: true,
                     points: [id],
                     payload: {
@@ -683,7 +697,7 @@ export class MemoryCortex {
                         feedback: feedback || undefined,
                         ratedAt: new Date().toISOString()
                     }
-                });
+                }));
                 await this.savePersistFileIfConfigured();
                 return true;
             } catch (err: any) {
@@ -824,7 +838,7 @@ export class MemoryCortex {
                 const filter = filterMust.length > 0 ? { must: filterMust } : undefined;
                 const searchLimit = options.limit || 3;
 
-                const results = await this.qdrant.query(this.collectionName, {
+                const results = await this.withTimeout(this.qdrant.query(this.collectionName, {
                     prefetch: [
                         {
                             query: denseVector,
@@ -845,7 +859,7 @@ export class MemoryCortex {
                     },
                     limit: searchLimit,
                     with_payload: true
-                });
+                }));
 
                 return results.points.map(r => r.payload).filter(Boolean);
             } catch (err: any) {
@@ -1191,7 +1205,7 @@ export class MemoryCortex {
                 try {
                     let isDup = false;
                     if (deduplicate) {
-                        const existing = await this.qdrant.query(this.collectionName, {
+                        const existing = await this.withTimeout(this.qdrant.query(this.collectionName, {
                             query: denseVector,
                             using: "dense",
                             limit: 1,
@@ -1200,7 +1214,7 @@ export class MemoryCortex {
                                 must: [{ key: "appId", match: { value: metadata.appId } }]
                             },
                             with_payload: true
-                        });
+                        }));
                         if (existing.points.length > 0 && (existing.points[0].score ?? 0) >= 0.92) {
                             isDup = true;
                             deduplicated++;
@@ -1209,14 +1223,20 @@ export class MemoryCortex {
                     }
 
                     if (!isDup) {
-                        await this.qdrant.upsert(this.collectionName, {
+                        await this.withTimeout(this.qdrant.upsert(this.collectionName, {
                             wait: false,
                             points: [{
                                 id: pointId,
                                 vector: { dense: denseVector, sparse: sparseVector },
-                                payload: { content, ...metadata, frequency: 1, timestamp: now, lastSeen: now }
+                                payload: {
+                                    content,
+                                    frequency: 1,
+                                    timestamp: now,
+                                    lastSeen: now,
+                                    ...metadata
+                                }
                             }]
-                        });
+                        }));
                         imported++;
                         importedIds.push(pointId);
                     }
