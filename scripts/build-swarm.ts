@@ -34,6 +34,9 @@ function copyAndRewrite(source: string, target: string) {
         if (entry.isDirectory()) {
             copyAndRewrite(srcPath, tgtPath);
         } else if (entry.isFile() && entry.name.endsWith('.ts')) {
+            if (entry.name.includes('.test.')) {
+                continue;
+            }
             let content = fs.readFileSync(srcPath, 'utf8');
             // Rewrite local relative imports from './foo.ts' or '../foo.ts' to './foo.js' for NodeNext resolution
             content = content.replace(/(from\s+['"])(\.[^'"]*)\.ts(['"])/g, '$1$2.js$3');
@@ -61,7 +64,8 @@ fs.writeFileSync(stagingTsConfig, JSON.stringify({
         skipLibCheck: true,
         strict: false
     },
-    include: ['.swarm-dts-staging/**/*']
+    include: ['.swarm-dts-staging/**/*'],
+    exclude: ['**/*.test.ts', '**/*.test.tsx']
 }, null, 2), 'utf8');
 
 try {
