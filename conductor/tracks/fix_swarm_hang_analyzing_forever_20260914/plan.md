@@ -1,7 +1,7 @@
 # Implementation Plan: Resolve Swarm Hang in Analyzing State & Codebase Audit Hardening
 
 ## Phase 1: Failover & Timeout Hardening (Engine, Adapters, Cortex)
-- [ ] Task: Write failing unit tests for immediate 429 failover, Gemini timeout guards, and stream error handling (Red)
+- [x] Task: Write failing unit tests for immediate 429 failover, Gemini timeout guards, and stream error handling (Red) (9c6edce)
 - [ ] Task: Implement immediate failover in `Agent.run` when fallbacks exist and fix `test-multi-app-simulation.ts` (Green)
 - [ ] Task: Add timeout protection to `GeminiAdapter` and `GeminiEmbeddingProvider` with graceful fallback (Green)
 - [ ] Task: Update `SwarmClient.streamRemote` to handle `swarm_error` events properly (Green)
