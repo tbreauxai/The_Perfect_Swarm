@@ -145,22 +145,8 @@ export class ModelRouter {
         }
     }
 
-    /**
-     * Validates if a user-supplied model name is a known deprecated or hallucinated ID.
-     */
     static isValidModel(model: string): boolean {
-        if (!model) return false;
-        const lower = model.toLowerCase();
-        // Reject known hallucinated or deprecated models
-        if (lower === 'gemini-3.5-flash' || 
-            lower === 'openai/gpt-oss-120b' || 
-            lower === 'nvidia/nemotron-3-ultra-550b-a55b:free' || 
-            lower === 'open-mistral-nemo' ||
-            lower.includes('3.5-flash') ||
-            lower.includes('gpt-oss')) {
-            return false;
-        }
-        return true;
+        return !!model;
     }
 
     /**

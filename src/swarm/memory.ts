@@ -166,7 +166,7 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
     constructor(
         aiClient: GoogleGenAI,
         modelName: string = 'text-embedding-004',
-        timeoutMs: number = 30000
+        timeoutMs: number = 5000
     ) {
         this.aiClient = aiClient;
         this.modelName = modelName;

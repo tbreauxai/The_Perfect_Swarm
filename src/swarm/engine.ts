@@ -269,6 +269,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             provider: defaultProvider,
             model: ModelRouter.getRecommendedModel(defaultProvider, complexity)
         };
+    } else if (!ModelRouter.isValidModel(managerConfig.model as string)) {
+        managerConfig.model = ModelRouter.getRecommendedModel(managerConfig.provider, complexity);
     }
 
     const availableFallbacks: ProviderCredential[] = [];
@@ -278,7 +280,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             const { key, client } = resolveProvider(p, settings, defaultAi);
             if (key) {
                 const userConfiguredAgent = rawAgents.find((a: AgentConfig) => a.provider === p && a.model);
-                if (userConfiguredAgent) {
+                if (userConfiguredAgent && ModelRouter.isValidModel(userConfiguredAgent.model)) {
                     availableFallbacks.push({
                         provider: p,
                         apiKey: key,
@@ -302,7 +304,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         const { key: aKey, client: aClient } = resolveProvider(ac.provider, settings, defaultAi);
         const finalAKey = ac.apiKey ? sanitizeApiKey(ac.apiKey) : aKey;
         if (finalAKey) {
-            const aModel = ac.model || ModelRouter.getRecommendedModel(ac.provider, complexity);
+            const aModel = ModelRouter.isValidModel(ac.model) ? ac.model : ModelRouter.getRecommendedModel(ac.provider, complexity);
             const aFallbacks = (ac as any).disableFallback || (ac as any).strictProvider
                 ? []
                 : availableFallbacks.filter(f => f.provider !== ac.provider);
@@ -317,7 +319,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         const { key: cKey, client: cClient } = resolveProvider(dedicatedCriticConfig.provider, settings, defaultAi);
         const finalCKey = dedicatedCriticConfig.apiKey ? sanitizeApiKey(dedicatedCriticConfig.apiKey) : cKey;
         if (finalCKey) {
-            const cModel = dedicatedCriticConfig.model || ModelRouter.getRecommendedModel(dedicatedCriticConfig.provider, complexity);
+            const cModel = ModelRouter.isValidModel(dedicatedCriticConfig.model) ? dedicatedCriticConfig.model : ModelRouter.getRecommendedModel(dedicatedCriticConfig.provider, complexity);
             const cFallbacks = availableFallbacks.filter(f => f.provider !== dedicatedCriticConfig.provider);
             dedicatedCriticAgent = new Agent(dedicatedCriticConfig.role || 'Verification Critic', cModel, dedicatedCriticConfig.provider, finalCKey, cClient, cFallbacks);
         }
