@@ -349,11 +349,11 @@ export class MemoryCortex {
         }
 
         try {
-            const collections = await this.qdrant.getCollections();
+            const collections = await this.withTimeout(this.qdrant.getCollections(), 5000);
             const exists = collections.collections.some(c => c.name === this.collectionName);
 
             if (!exists) {
-                await this.qdrant.createCollection(this.collectionName, {
+                await this.withTimeout(this.qdrant.createCollection(this.collectionName, {
                     vectors: {
                         dense: {
                             size: this.embeddingProvider.dimension,
@@ -385,7 +385,7 @@ export class MemoryCortex {
                         deleted_threshold: 0.2
                     },
                     on_disk_payload: true
-                });
+                }), 10000);
 
                 console.log(`[MemoryCortex] Initialized compliant Qdrant collection: ${this.collectionName}`);
             }
