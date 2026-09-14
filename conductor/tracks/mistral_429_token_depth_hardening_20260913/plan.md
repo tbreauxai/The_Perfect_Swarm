@@ -6,11 +6,11 @@
   - [x] Write unit test verifying structured Mistral 429 (Code 1300) transparent error reporting
   - [x] Write unit test verifying mutex release on error (no 31s freeze)
   - [x] Confirm tests fail as expected
-- [~] Task: Implement Transparent Error Reporting & Non-Blocking Mutex in MistralAdapter (TDD Green Phase)
-  - [ ] Release mutex immediately on 429 errors to eliminate 31s freeze
-  - [ ] Return clean diagnostic message without silent provider substitution
-  - [ ] Confirm all tests pass (Green Phase)
-- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+- [x] Task: Implement Transparent Error Reporting & Non-Blocking Mutex in MistralAdapter (TDD Green Phase) (6a40fa7)
+  - [x] Release mutex immediately on 429 errors to eliminate 31s freeze
+  - [x] Return clean diagnostic message without silent provider substitution
+  - [x] Confirm all tests pass (Green Phase)
+- [~] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
 ## Phase 2: Token Budget Expansion & Deep Metadata Chunking (TDD)
 
