@@ -11,7 +11,7 @@
 ## Phase 2: Server-Side Streaming & Heartbeat Resilience
 - [x] Task: Write integration tests for SSE keep-alive heartbeat and connection abort cleanup (Red) (5d4890e)
 - [x] Task: Implement periodic keep-alive comments and abort signal handling in `src/swarm/server.ts` (Green) (2e17d62)
-- [~] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+- [x] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
 ## Phase 3: Client UI Real-Time Streaming & Cancel Control
 - [ ] Task: Implement real-time SSE stream consumption in `src/App.tsx` via `/api/swarm/stream` with live timeline rendering
