@@ -14,9 +14,9 @@
 - [x] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
 ## Phase 3: Client UI Real-Time Streaming & Cancel Control
-- [ ] Task: Implement real-time SSE stream consumption in `src/App.tsx` via `/api/swarm/stream` with live timeline rendering
-- [ ] Task: Add "Cancel Analysis" button with `AbortController` in `src/App.tsx` and error recovery
-- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+- [x] Task: Implement real-time SSE stream consumption in `src/App.tsx` via `/api/swarm/stream` with live timeline rendering (49e8106)
+- [x] Task: Add "Cancel Analysis" button with `AbortController` in `src/App.tsx` and error recovery (49e8106)
+- [x] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
 ## Phase 4: Full Regression & Multi-App Audit Verification
 - [ ] Task: Run full test suite (`npm test`, vitest, simulation, portable swarm, CLI) and verify zero hangs
