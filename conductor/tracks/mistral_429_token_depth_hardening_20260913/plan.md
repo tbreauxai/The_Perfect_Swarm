@@ -16,11 +16,11 @@
 
 - [x] Task: Write Failing Tests for Token Budget Expansion and Deep Chunking (TDD Red Phase) (3296757)
   - [x] Write unit tests verifying expanded token budgets and chunk boundary continuity
-- [~] Task: Expand Token Allocations and Improve Metadata Chunking (TDD Green Phase)
-  - [ ] Adjust default maxTokens allocations in adapters and profiler
-  - [ ] Enhance chunking algorithm in `profiler.ts` to preserve metadata depth
-  - [ ] Confirm all tests pass (Green Phase)
-- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+- [x] Task: Expand Token Allocations and Improve Metadata Chunking (TDD Green Phase) (8255d0a)
+  - [x] Adjust default maxTokens allocations in adapters and profiler
+  - [x] Enhance chunking algorithm in `profiler.ts` to preserve metadata depth
+  - [x] Confirm all tests pass (Green Phase)
+- [~] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
 ## Phase 3: Full Regression Test & Build Verification
 
