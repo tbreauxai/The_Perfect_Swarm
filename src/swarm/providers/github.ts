@@ -21,7 +21,8 @@ export class GitHubAdapter implements ProviderAdapter {
         const bodyParams: any = {
             model: options.modelName,
             messages,
-            temperature: options.config?.temperature || 0.7
+            temperature: options.config?.temperature || 0.7,
+            max_tokens: options.config?.maxTokens || 3500
         };
         if (isJson) {
             bodyParams.response_format = { type: 'json_object' };

@@ -13,9 +13,9 @@ export interface ChunkingResult {
     warning?: string;
 }
 
-const DEFAULT_MAX_CHARS = 500000;
-const DEFAULT_MAX_TOKENS_PER_CHUNK = 8000; // Calibrated for free-tier quotas
-const DEFAULT_MAX_CHUNKS = 4;
+export const DEFAULT_MAX_CHARS = 500000;
+export const DEFAULT_MAX_TOKENS_PER_CHUNK = 8000; // Calibrated for free-tier quotas
+export const DEFAULT_MAX_CHUNKS = 8; // Expanded from 4 to 8 to support deep metadata payloads
 
 /**
  * Extracts metadata and profiles the input data payload.
@@ -81,8 +81,20 @@ export function createTokenChunks(
     let warning: string | undefined = undefined;
 
     if (chunks.length > maxChunks) {
-        warning = `Payload exceeded ${maxChunks} batches (${originalChunkCount} chunks detected). Analysis capped to the first ${maxChunks} representative chunks to prevent free-tier quota exhaustion.`;
-        chunks.splice(maxChunks);
+        warning = `Payload exceeded ${maxChunks} batches (${originalChunkCount} chunks detected). Analysis balanced to preserve opening structure, representative sampling, and closing metadata trailer.`;
+        if (maxChunks <= 1) {
+            chunks.length = 1;
+        } else if (maxChunks === 2) {
+            const first = chunks[0];
+            const last = chunks[chunks.length - 1];
+            chunks.length = 0;
+            chunks.push(first, last);
+        } else {
+            const first = chunks.slice(0, maxChunks - 1);
+            const last = chunks[chunks.length - 1];
+            chunks.length = 0;
+            chunks.push(...first, last);
+        }
     }
 
     const totalTokens = chunks.reduce((acc, c) => acc + Math.ceil(c.length / 4), 0);
