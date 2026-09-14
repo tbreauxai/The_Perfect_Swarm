@@ -16,7 +16,7 @@ export class GroqAdapter implements ProviderAdapter {
         messages.push({ role: 'user', content: options.prompt });
 
         const isJson = options.config?.responseMimeType === 'application/json';
-        const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 30000;
+        const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 120000;
 
         let response: Response;
         try {

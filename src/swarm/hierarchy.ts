@@ -183,7 +183,7 @@ export class SwarmHierarchy {
             try {
                 const output = await node.agent.run(prompt, this.scopedContext, {
                     responseMimeType: 'application/json',
-                    timeoutMs: options?.taskTimeoutMs ?? 30000
+                    timeoutMs: options?.taskTimeoutMs ?? 120000
                 });
                 specialistReports[id] = {
                     role: node.role,
@@ -210,7 +210,7 @@ export class SwarmHierarchy {
             try {
                 synthesisOutput = await this.synthesisNode.agent.run(synthesisPrompt, this.scopedContext, {
                     responseMimeType: 'application/json',
-                    timeoutMs: options?.taskTimeoutMs ?? 30000
+                    timeoutMs: options?.taskTimeoutMs ?? 120000
                 });
             } catch (err: any) {
                 synthesisOutput = { error: `Synthesis failed: ${err.message || String(err)}` };

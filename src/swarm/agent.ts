@@ -63,7 +63,7 @@ export class Agent {
 
     async run(prompt: string, context: SwarmContext, config?: AgentRunConfig): Promise<any> {
         const startTime = Date.now();
-        const timeoutMs = config?.timeoutMs || 30000;
+        const timeoutMs = config?.timeoutMs || 120000;
 
         const lb = (config?.loadBalancer as AdaptiveLoadBalancer) || this.loadBalancer || globalLoadBalancer;
         const candidateFallbacks = config?.fallbackProviders || this.fallbacks;
@@ -90,7 +90,7 @@ export class Agent {
         for (let targetIdx = 0; targetIdx < targetChain.length; targetIdx++) {
             const currentTarget = targetChain[targetIdx];
             const isFallback = targetIdx > 0;
-            const maxRetries = 2;
+            const maxRetries = 4;
 
             for (let attempt = 1; attempt <= maxRetries; attempt++) {
                 try {
@@ -172,7 +172,7 @@ export class Agent {
                     }
 
                     if (attempt < maxRetries) {
-                        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+                        await new Promise(resolve => setTimeout(resolve, 2000 * Math.pow(2, attempt - 1)));
                     }
                 }
             }
