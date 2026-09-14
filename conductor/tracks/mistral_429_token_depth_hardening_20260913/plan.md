@@ -24,8 +24,8 @@
 
 ## Phase 3: Full Regression Test & Build Verification
 
-- [ ] Task: Full Regression Test & Build Verification
-  - [ ] Run `npx tsc --noEmit` to verify type safety
-  - [ ] Run `npm run build` to verify client and swarm distribution builds
-  - [ ] Run `npm test` to verify all 5 core test suites pass 100%
-- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+- [x] Task: Full Regression Test & Build Verification (d27bf99)
+  - [x] Run `npx tsc --noEmit` to verify type safety
+  - [x] Run `npm run build` to verify client and swarm distribution builds
+  - [x] Run `npm test` to verify all 5 core test suites pass 100%
+- [~] Task: Phase Verification & Checkpoint (Refer to workflow.md)
