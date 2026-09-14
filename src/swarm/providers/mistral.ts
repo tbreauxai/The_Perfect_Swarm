@@ -2,6 +2,13 @@ import { cleanToken, sanitizeModelOutput, type ProviderAdapter, type ProviderCal
 
 let mistralMutex: Promise<void> = Promise.resolve();
 
+/**
+ * Resets the internal Mistral mutex. Primarily used in unit tests and manual rate-limit recovery.
+ */
+export function resetMistralMutex(): void {
+    mistralMutex = Promise.resolve();
+}
+
 export class MistralAdapter implements ProviderAdapter {
     readonly providerName = 'mistral';
 
@@ -17,6 +24,8 @@ export class MistralAdapter implements ProviderAdapter {
         await mistralMutex;
         let releaseMutex: () => void;
         mistralMutex = new Promise(resolve => { releaseMutex = resolve as () => void; });
+
+        let isSuccess = false;
 
         try {
             const messages: any[] = [];
@@ -39,7 +48,7 @@ export class MistralAdapter implements ProviderAdapter {
                     body: JSON.stringify({
                         model: options.modelName,
                         messages,
-                        max_tokens: options.config?.maxTokens || 1500,
+                        max_tokens: options.config?.maxTokens || 3000,
                         response_format: isJson ? { type: 'json_object' } : undefined
                     }),
                     signal: AbortSignal.timeout(timeoutMs)
@@ -54,7 +63,20 @@ export class MistralAdapter implements ProviderAdapter {
             if (!response.ok) {
                 const errorText = await response.text();
                 if (response.status === 429) {
-                    throw new Error(`[RATE_LIMIT_429] Mistral rate limit exceeded: ${errorText}`);
+                    let detail = errorText;
+                    try {
+                        const parsed = JSON.parse(errorText);
+                        if (parsed.code === 1300 || parsed.code) {
+                            throw new Error(`[RATE_LIMIT_429] Mistral API rate limit exceeded (Code 1300): ${parsed.message || errorText}`);
+                        } else if (parsed.message) {
+                            detail = parsed.message;
+                        }
+                    } catch (e: any) {
+                        if (e.message?.startsWith('[RATE_LIMIT_429]')) {
+                            throw e;
+                        }
+                    }
+                    throw new Error(`[RATE_LIMIT_429] Mistral API rate limit exceeded: ${detail}`);
                 }
                 if (response.status >= 500) {
                     throw new Error(`[SERVER_ERROR_${response.status}] Mistral server error: ${errorText}`);
@@ -64,9 +86,15 @@ export class MistralAdapter implements ProviderAdapter {
 
             const data = await response.json();
             const rawContent = data?.choices?.[0]?.message?.content || '';
+            isSuccess = true;
             return sanitizeModelOutput(rawContent, isJson);
         } finally {
-            setTimeout(releaseMutex!, 31000);
+            if (isSuccess) {
+                setTimeout(releaseMutex!, 31000);
+            } else {
+                // Release mutex immediately on errors to avoid freezing subsequent requests
+                releaseMutex!();
+            }
         }
     }
 }

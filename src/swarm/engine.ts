@@ -297,7 +297,9 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         const finalAKey = ac.apiKey ? sanitizeApiKey(ac.apiKey) : aKey;
         if (finalAKey) {
             const aModel = ac.model || ModelRouter.getRecommendedModel(ac.provider, complexity);
-            const aFallbacks = availableFallbacks.filter(f => f.provider !== ac.provider);
+            const aFallbacks = (ac as any).disableFallback || (ac as any).strictProvider
+                ? []
+                : availableFallbacks.filter(f => f.provider !== ac.provider);
             analysts.push(new Agent(ac.role || 'Analyst', aModel, ac.provider, finalAKey, aClient, aFallbacks));
         } else {
             console.warn(`Skipping ${ac.role}: missing API key for ${ac.provider}`);
@@ -548,10 +550,11 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     }
                     return resData;
                 } catch (err: any) {
+                    const errDetail = err?.message || String(err);
                     return {
-                        insights: [`${analyst.role} was unable to process this chunk due to API constraints.`],
-                        anomalies: [],
-                        summary: `Failed to process: ${err.message || String(err)}`
+                        insights: [`${analyst.role} was unable to process this chunk: ${errDetail}`],
+                        anomalies: [`[${analyst.role} Error]: ${errDetail}`],
+                        summary: `Failed to process: ${errDetail}`
                     };
                 }
             });

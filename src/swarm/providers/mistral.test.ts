@@ -1,11 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { MistralAdapter } from './mistral';
+import { MistralAdapter, resetMistralMutex } from './mistral';
 
 describe('MistralAdapter 429 and Mutex Behavior', () => {
     const originalFetch = globalThis.fetch;
 
     beforeEach(() => {
         vi.restoreAllMocks();
+        resetMistralMutex();
     });
 
     afterEach(() => {
@@ -68,5 +69,20 @@ describe('MistralAdapter 429 and Mutex Behavior', () => {
         const elapsed = Date.now() - start;
         expect(result).toBe('Success after error');
         expect(elapsed).toBeLessThan(1000); // Must not freeze for 31 seconds
+    });
+
+    it('handles plain text 429 responses cleanly', async () => {
+        const adapter = new MistralAdapter();
+        globalThis.fetch = vi.fn().mockResolvedValue({
+            ok: false,
+            status: 429,
+            text: async () => 'Too Many Requests'
+        } as any);
+
+        await expect(adapter.call({
+            apiKey: 'test-key',
+            modelName: 'mistral-small-latest',
+            prompt: 'Hello Mistral'
+        })).rejects.toThrow(/\[RATE_LIMIT_429\] Mistral API rate limit exceeded: Too Many Requests/);
     });
 });
