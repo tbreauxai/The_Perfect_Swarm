@@ -25,11 +25,28 @@ export class GeminiAdapter implements ProviderAdapter {
         }
 
         const isJson = options.config?.responseMimeType === 'application/json';
-        const response = await client.models.generateContent({
-            model: options.modelName,
-            contents: options.prompt,
-            config: reqConfig
+        const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 45000;
+
+        let timeoutId: any;
+        const timeoutPromise = new Promise<never>((_, reject) => {
+            timeoutId = setTimeout(() => {
+                reject(new Error(`[TIMEOUT] Gemini request timed out after ${timeoutMs}ms.`));
+            }, timeoutMs);
         });
+
+        let response: any;
+        try {
+            response = await Promise.race([
+                client.models.generateContent({
+                    model: options.modelName,
+                    contents: options.prompt,
+                    config: reqConfig
+                }),
+                timeoutPromise
+            ]);
+        } finally {
+            clearTimeout(timeoutId);
+        }
 
         const rawText = response.text || '';
         return sanitizeModelOutput(rawText, isJson);

@@ -161,21 +161,38 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
     readonly dimension = 768;
     private aiClient: GoogleGenAI;
     private modelName: string;
+    private timeoutMs: number;
 
     constructor(
         aiClient: GoogleGenAI,
-        modelName: string = 'text-embedding-004'
+        modelName: string = 'text-embedding-004',
+        timeoutMs: number = 30000
     ) {
         this.aiClient = aiClient;
         this.modelName = modelName;
+        this.timeoutMs = timeoutMs;
     }
 
     async embed(text: string): Promise<number[]> {
-        const response = await this.aiClient.models.embedContent({
-            model: this.modelName,
-            contents: text,
+        let timeoutId: any;
+        const timeoutPromise = new Promise<never>((_, reject) => {
+            timeoutId = setTimeout(() => {
+                reject(new Error(`[TIMEOUT] Gemini embedding request timed out after ${this.timeoutMs}ms.`));
+            }, this.timeoutMs);
         });
-        return response.embeddings?.[0]?.values || [];
+
+        try {
+            const response: any = await Promise.race([
+                this.aiClient.models.embedContent({
+                    model: this.modelName,
+                    contents: text,
+                }),
+                timeoutPromise
+            ]);
+            return response.embeddings?.[0]?.values || [];
+        } finally {
+            clearTimeout(timeoutId);
+        }
     }
 }
 
@@ -710,7 +727,12 @@ export class MemoryCortex {
 
         if (candidates.length === 0) return [];
 
-        const queryDense = await this.embeddingProvider.embed(query);
+        let queryDense: number[];
+        try {
+            queryDense = await this.embeddingProvider.embed(query);
+        } catch {
+            queryDense = await new DeterministicLocalEmbeddingProvider().embed(query);
+        }
         const querySparse = SparseTokenizer.encode(query);
 
         // Dense ranking
