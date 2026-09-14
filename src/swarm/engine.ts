@@ -2,7 +2,7 @@ import { GoogleGenAI } from '@google/genai';
 import { MemoryCortex } from './memory.ts';
 import { Agent } from './agent.ts';
 import { SwarmContext } from './context.ts';
-import type { SwarmEvent, ProviderCredential, Provider, LearnedMemoryEvent } from './types.ts';
+import type { SwarmEvent, ProviderCredential, Provider, LearnedMemoryEvent, AgentRunConfig, SwarmEngineSettings, AgentConfig } from './types.ts';
 import { profileData, createTokenChunks } from './profiler.ts';
 import { ModelRouter, type TaskComplexity } from './router.ts';
 import { AnalysisLifecycle } from './lifecycle.ts';
@@ -46,7 +46,7 @@ export function validateProviderKey(provider: Provider, key: string, role: strin
  */
 export function resolveProvider(
     provider: string,
-    settings: any,
+    settings: SwarmEngineSettings,
     defaultAi?: GoogleGenAI
 ): ProviderResolution {
     let key = '';
@@ -135,7 +135,7 @@ Example of expected output structure:
 export interface SwarmWorkflowParams {
     task: string;
     data?: string;
-    settings?: any;
+    settings?: SwarmEngineSettings;
     defaultAi?: GoogleGenAI;
     enableDeepAnalysis?: boolean;
     complexityOverride?: TaskComplexity;
@@ -256,14 +256,15 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
 
     // 1. Resolve Manager, Analysts, and Critic
     const rawAgents = settings?.agents || [];
-    let managerConfig = rawAgents.find((a: any) => a.id === 'manager' || a.role === 'Manager Node');
-    const dedicatedCriticConfig = rawAgents.find((a: any) => a.id === 'critic' || a.role?.toLowerCase().includes('critic') || a.role?.toLowerCase().includes('verifier')) || settings?.critic;
-    const analystConfigs = rawAgents.filter((a: any) => a.id !== 'manager' && a.provider !== 'none');
+    let managerConfig = rawAgents.find((a: AgentConfig) => a.id === 'manager' || a.role === 'Manager Node');
+    const dedicatedCriticConfig = rawAgents.find((a: AgentConfig) => a.id === 'critic' || a.role?.toLowerCase().includes('critic') || a.role?.toLowerCase().includes('verifier')) || settings?.critic;
+    const analystConfigs = rawAgents.filter((a: AgentConfig) => a.id !== 'manager' && a.provider !== 'none');
 
     const hasUserGemini = !!settings?.geminiApiKey;
     if (!managerConfig) {
         const defaultProvider = hasUserGemini || process.env.GEMINI_API_KEY ? 'gemini' : 'openrouter';
         managerConfig = {
+            id: 'manager',
             role: 'Manager Node',
             provider: defaultProvider,
             model: ModelRouter.getRecommendedModel(defaultProvider, complexity)
@@ -276,7 +277,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         for (const p of allProviders) {
             const { key, client } = resolveProvider(p, settings, defaultAi);
             if (key) {
-                const userConfiguredAgent = rawAgents.find((a: any) => a.provider === p && a.model);
+                const userConfiguredAgent = rawAgents.find((a: AgentConfig) => a.provider === p && a.model);
                 if (userConfiguredAgent) {
                     availableFallbacks.push({
                         provider: p,
@@ -683,13 +684,13 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
  * Headless Swarm Engine object encapsulating configuration and execution.
  */
 export class SwarmEngine {
-    private defaultSettings: any;
+    private defaultSettings: SwarmEngineSettings;
     private defaultAi?: GoogleGenAI;
     private defaultCortex?: MemoryCortex;
     private defaultOnMemoryLearned?: (event: LearnedMemoryEvent) => void;
 
     constructor(
-        configOrSettings: any = {},
+        configOrSettings: SwarmEngineSettings = {},
         defaultAi?: GoogleGenAI,
         defaultCortex?: MemoryCortex
     ) {
@@ -705,7 +706,7 @@ export class SwarmEngine {
         }
     }
 
-    async execute(params: Omit<SwarmWorkflowParams, 'settings' | 'defaultAi'> & { settings?: any; defaultAi?: GoogleGenAI; cortex?: MemoryCortex; onMemoryLearned?: (event: LearnedMemoryEvent) => void }): Promise<SwarmWorkflowResult> {
+    async execute(params: Omit<SwarmWorkflowParams, 'settings' | 'defaultAi'> & { settings?: SwarmEngineSettings; defaultAi?: GoogleGenAI; cortex?: MemoryCortex; onMemoryLearned?: (event: LearnedMemoryEvent) => void }): Promise<SwarmWorkflowResult> {
         return executeSwarmWorkflow({
             ...params,
             settings: { ...this.defaultSettings, ...params.settings },
@@ -715,7 +716,7 @@ export class SwarmEngine {
         });
     }
 
-    async executeWorkflow(params: Omit<SwarmWorkflowParams, 'settings' | 'defaultAi'> & { settings?: any; defaultAi?: GoogleGenAI; cortex?: MemoryCortex; onMemoryLearned?: (event: LearnedMemoryEvent) => void }): Promise<SwarmWorkflowResult> {
+    async executeWorkflow(params: Omit<SwarmWorkflowParams, 'settings' | 'defaultAi'> & { settings?: SwarmEngineSettings; defaultAi?: GoogleGenAI; cortex?: MemoryCortex; onMemoryLearned?: (event: LearnedMemoryEvent) => void }): Promise<SwarmWorkflowResult> {
         return this.execute(params);
     }
 

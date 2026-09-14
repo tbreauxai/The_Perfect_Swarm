@@ -4,6 +4,26 @@ export const KNOWN_PROVIDERS = ['gemini', 'groq', 'openrouter', 'github', 'mistr
 
 export type Provider = typeof KNOWN_PROVIDERS[number] | string;
 
+export interface AgentConfig {
+    id?: string;
+    role: string;
+    provider: string;
+    model: string;
+    apiKey?: string;
+}
+
+export interface SwarmEngineSettings {
+    geminiApiKey?: string;
+    openRouterApiKey?: string;
+    groqApiKey?: string;
+    mistralApiKey?: string;
+    githubToken?: string;
+    disableFallback?: boolean;
+    critic?: AgentConfig;
+    agents?: AgentConfig[];
+    [key: string]: any;
+}
+
 export interface ProviderCredential {
     provider: Provider;
     apiKey: string;

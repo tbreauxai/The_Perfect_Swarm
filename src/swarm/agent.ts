@@ -147,10 +147,11 @@ export class Agent {
                         errMsg.includes('401') ||
                         errMsg.includes('403');
 
+                    const isFatal = errMsg.includes('401') || errMsg.includes('403') || errMsg.includes('quota');
                     const hasNextProvider = targetIdx < targetChain.length - 1;
 
-                    // If eligible for failover and we have another provider ready, failover immediately without waiting
-                    if (isFailoverEligible && hasNextProvider) {
+                    // If eligible for failover and we have another provider ready, failover immediately if fatal or exhausted retries
+                    if (isFailoverEligible && hasNextProvider && (isFatal || attempt === maxRetries)) {
                         const nextTarget = targetChain[targetIdx + 1];
                         context.addEvent({
                             agentRole: this.role,
