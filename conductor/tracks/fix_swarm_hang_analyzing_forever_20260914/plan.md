@@ -19,5 +19,5 @@
 - [x] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
 ## Phase 4: Full Regression & Multi-App Audit Verification
-- [ ] Task: Run full test suite (`npm test`, vitest, simulation, portable swarm, CLI) and verify zero hangs
-- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+- [x] Task: Run full test suite (`npm test`, vitest, simulation, portable swarm, CLI) and verify zero hangs (df0ea9c)
+- [x] Task: Phase Verification & Checkpoint (Refer to workflow.md)
