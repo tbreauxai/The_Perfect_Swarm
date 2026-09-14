@@ -1,6 +1,6 @@
 # Implementation Plan: Swarm Execution Hardening (Mistral 429 Transparency & Token Depth Allocation)
 
-## Phase 1: Mistral 429 Transparency & Fast-Fail Optimization (TDD)
+## Phase 1: Mistral 429 Transparency & Fast-Fail Optimization (TDD) [checkpoint: 6a40fa7]
 
 - [x] Task: Write Failing Tests for Mistral 429 Handling and Non-Blocking Mutex (TDD Red Phase) (c4e8391)
   - [x] Write unit test verifying structured Mistral 429 (Code 1300) transparent error reporting
@@ -10,7 +10,7 @@
   - [x] Release mutex immediately on 429 errors to eliminate 31s freeze
   - [x] Return clean diagnostic message without silent provider substitution
   - [x] Confirm all tests pass (Green Phase)
-- [~] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+- [x] Task: Phase Verification & Checkpoint (Refer to workflow.md) (6a40fa7)
 
 ## Phase 2: Token Budget Expansion & Deep Metadata Chunking (TDD)
 
