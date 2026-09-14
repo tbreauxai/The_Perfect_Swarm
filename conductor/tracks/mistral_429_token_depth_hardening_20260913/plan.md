@@ -2,11 +2,11 @@
 
 ## Phase 1: Mistral 429 Transparency & Fast-Fail Optimization (TDD)
 
-- [ ] Task: Write Failing Tests for Mistral 429 Handling and Non-Blocking Mutex (TDD Red Phase)
-  - [ ] Write unit test verifying structured Mistral 429 (Code 1300) transparent error reporting
-  - [ ] Write unit test verifying mutex release on error (no 31s freeze)
-  - [ ] Confirm tests fail as expected
-- [ ] Task: Implement Transparent Error Reporting & Non-Blocking Mutex in MistralAdapter (TDD Green Phase)
+- [x] Task: Write Failing Tests for Mistral 429 Handling and Non-Blocking Mutex (TDD Red Phase) (c4e8391)
+  - [x] Write unit test verifying structured Mistral 429 (Code 1300) transparent error reporting
+  - [x] Write unit test verifying mutex release on error (no 31s freeze)
+  - [x] Confirm tests fail as expected
+- [~] Task: Implement Transparent Error Reporting & Non-Blocking Mutex in MistralAdapter (TDD Green Phase)
   - [ ] Release mutex immediately on 429 errors to eliminate 31s freeze
   - [ ] Return clean diagnostic message without silent provider substitution
   - [ ] Confirm all tests pass (Green Phase)
