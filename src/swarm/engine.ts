@@ -271,18 +271,20 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     }
 
     const availableFallbacks: ProviderCredential[] = [];
-    const allProviders: Provider[] = ['gemini', 'openrouter', 'groq', 'github', 'mistral'];
-    for (const p of allProviders) {
-        const { key, client } = resolveProvider(p, settings, defaultAi);
-        if (key) {
-            const userConfiguredAgent = rawAgents.find((a: any) => a.provider === p && a.model);
-            if (userConfiguredAgent) {
-                availableFallbacks.push({
-                    provider: p,
-                    apiKey: key,
-                    modelName: userConfiguredAgent.model,
-                    aiClient: client
-                });
+    if (!settings?.disableFallback) {
+        const allProviders: Provider[] = ['gemini', 'openrouter', 'groq', 'github', 'mistral'];
+        for (const p of allProviders) {
+            const { key, client } = resolveProvider(p, settings, defaultAi);
+            if (key) {
+                const userConfiguredAgent = rawAgents.find((a: any) => a.provider === p && a.model);
+                if (userConfiguredAgent) {
+                    availableFallbacks.push({
+                        provider: p,
+                        apiKey: key,
+                        modelName: userConfiguredAgent.model,
+                        aiClient: client
+                    });
+                }
             }
         }
     }

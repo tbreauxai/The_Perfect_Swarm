@@ -11,6 +11,7 @@ export interface AppSettings {
     qdrantApiKey: string;
     githubToken: string;
     appId?: string;
+    disableFallback?: boolean;
     agents: AgentConfig[];
 }
 
@@ -187,7 +188,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     )}
 
                     {activeTab === 'swarm' && (
-                        <AgentConfigurator agents={settings.agents} onUpdateAgent={onUpdateAgent} settings={settings} />
+                        <div className="space-y-6">
+                            <div className="flex items-center justify-between bg-white border border-neutral-200 p-4 rounded-xl shadow-sm">
+                                <div>
+                                    <h4 className="text-sm font-semibold text-neutral-900">Disable Provider Fallback</h4>
+                                    <p className="text-xs text-neutral-500 mt-1">If enabled, agents will strictly use their configured provider and will not failover to others on errors.</p>
+                                </div>
+                                <label className="relative inline-flex items-center cursor-pointer">
+                                    <input 
+                                        type="checkbox" 
+                                        className="sr-only peer"
+                                        checked={settings.disableFallback ?? true}
+                                        onChange={(e) => onUpdateSetting('disableFallback', e.target.checked as any)}
+                                    />
+                                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                                </label>
+                            </div>
+                            <AgentConfigurator agents={settings.agents} onUpdateAgent={onUpdateAgent} settings={settings} />
+                        </div>
                     )}
                 </div>
 
