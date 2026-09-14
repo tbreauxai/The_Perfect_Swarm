@@ -52,11 +52,25 @@ export function createTokenChunks(
     maxChunks: number = DEFAULT_MAX_CHUNKS
 ): ChunkingResult {
     const rawLines = rawInput.split('\n');
+    const maxCharsPerChunk = maxTokensPerChunk * 4;
+    const normalizedLines: string[] = [];
+
+    for (const line of rawLines) {
+        if (line.length <= maxCharsPerChunk) {
+            normalizedLines.push(line);
+        } else {
+            // Segment ultra-long line (e.g. minified JSON or unformatted logs)
+            for (let offset = 0; offset < line.length; offset += maxCharsPerChunk) {
+                normalizedLines.push(line.substring(offset, offset + maxCharsPerChunk));
+            }
+        }
+    }
+
     const chunks: string[] = [];
     let currentChunk = "";
     let currentTokens = 0;
 
-    for (const line of rawLines) {
+    for (const line of normalizedLines) {
         const lineTokens = Math.ceil(line.length / 4);
 
         if (currentTokens + lineTokens > maxTokensPerChunk && currentChunk.length > 0) {
