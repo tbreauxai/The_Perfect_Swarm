@@ -5,8 +5,8 @@
 - [x] Task: Implement immediate failover in `Agent.run` when fallbacks exist and fix `test-multi-app-simulation.ts` (Green) (66e3b32)
 - [x] Task: Add timeout protection to `GeminiAdapter` and `GeminiEmbeddingProvider` with graceful fallback (Green) (40945fc)
 - [x] Task: Update `SwarmClient.streamRemote` to handle `swarm_error` events properly (Green) (3d79981)
-- [~] Task: Guard `profiler.ts` against unbounded single-line payloads (Green)
-- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+- [x] Task: Guard `profiler.ts` against unbounded single-line payloads (Green) (b5897d4)
+- [x] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
 ## Phase 2: Server-Side Streaming & Heartbeat Resilience
 - [ ] Task: Write integration tests for SSE keep-alive heartbeat and connection abort cleanup (Red)
