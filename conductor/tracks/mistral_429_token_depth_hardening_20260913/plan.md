@@ -14,9 +14,9 @@
 
 ## Phase 2: Token Budget Expansion & Deep Metadata Chunking (TDD)
 
-- [ ] Task: Write Failing Tests for Token Budget Expansion and Deep Chunking (TDD Red Phase)
-  - [ ] Write unit tests verifying expanded token budgets and chunk boundary continuity
-- [ ] Task: Expand Token Allocations and Improve Metadata Chunking (TDD Green Phase)
+- [x] Task: Write Failing Tests for Token Budget Expansion and Deep Chunking (TDD Red Phase) (3296757)
+  - [x] Write unit tests verifying expanded token budgets and chunk boundary continuity
+- [~] Task: Expand Token Allocations and Improve Metadata Chunking (TDD Green Phase)
   - [ ] Adjust default maxTokens allocations in adapters and profiler
   - [ ] Enhance chunking algorithm in `profiler.ts` to preserve metadata depth
   - [ ] Confirm all tests pass (Green Phase)
