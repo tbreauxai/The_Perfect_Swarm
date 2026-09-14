@@ -1,7 +1,6 @@
 /**
- * Backward compatibility re-export. Core implementation moved to self-contained src/swarm/engine.ts.
+ * Client-side provider service for querying available models.
  */
-export * from '../swarm/engine.ts';
 
 export interface ModelOption {
     id: string;

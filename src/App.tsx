@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect } from 'react';
-import { Loader2, BrainCircuit, FileText, Activity, AlertCircle, Settings } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Loader2, BrainCircuit, FileText, Activity, AlertCircle, Settings, Square } from 'lucide-react';
 import { SettingsModal, AppSettings } from './components/SettingsModal';
 import { SwarmEventTimeline, SwarmTimelineEvent } from './components/SwarmEventTimeline';
 import { AnalysisViewer } from './components/AnalysisViewer';
@@ -16,6 +16,14 @@ export default function App() {
   const [events, setEvents] = useState<SwarmTimelineEvent[]>([]);
   const [finalAnalysis, setFinalAnalysis] = useState<any>(null);
   const [error, setError] = useState('');
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  const cancelSwarm = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+  };
 
   // Settings & Env State
   const [showSettings, setShowSettings] = useState(false);
@@ -96,6 +104,9 @@ export default function App() {
       return;
     }
 
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     setLoading(true);
     setError('');
     setEvents([]);
@@ -107,10 +118,11 @@ export default function App() {
     }
 
     try {
-      const response = await fetch('/api/swarm/analyze', {
+      const response = await fetch('/api/swarm/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ task, data: safeData, settings })
+        body: JSON.stringify({ task, data: safeData, settings }),
+        signal: controller.signal
       });
 
       if (!response.ok) {
@@ -125,20 +137,66 @@ export default function App() {
         throw new Error(errorMsg);
       }
 
-      const rawText = await response.text();
-      let resData;
-      try {
-        resData = JSON.parse(rawText);
-      } catch (parseError) {
-        console.error("RAW SERVER RESPONSE:", rawText);
-        throw new Error("The server returned HTML instead of JSON. Check the browser console for details.");
+      if (!response.body) {
+        throw new Error('No response stream returned by server.');
       }
-      setEvents(resData.events || []);
-      setFinalAnalysis(resData.finalAnalysis || null);
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n\n');
+        buffer = lines.pop() || '';
+
+        for (const block of lines) {
+          if (!block.trim() || block.startsWith(':')) continue;
+
+          let eventType = 'message';
+          let dataStr = '';
+
+          for (const line of block.split('\n')) {
+            if (line.startsWith('event:')) {
+              eventType = line.replace('event:', '').trim();
+            } else if (line.startsWith('data:')) {
+              dataStr = line.replace('data:', '').trim();
+            }
+          }
+
+          if (!dataStr) continue;
+
+          try {
+            const parsedData = JSON.parse(dataStr);
+            if (eventType === 'swarm_event') {
+              setEvents(prev => [...prev, parsedData]);
+            } else if (eventType === 'swarm_complete') {
+              if (parsedData.finalAnalysis) {
+                setFinalAnalysis(parsedData.finalAnalysis);
+              }
+              if (parsedData.events && Array.isArray(parsedData.events)) {
+                setEvents(parsedData.events);
+              }
+            } else if (eventType === 'swarm_error') {
+              setError(parsedData.error || 'Swarm execution error');
+            }
+          } catch (err) {
+            console.warn('Error parsing SSE block:', err, block);
+          }
+        }
+      }
     } catch (err: any) {
-      setError(err.message);
+      if (err.name === 'AbortError') {
+        setError('Analysis cancelled by user.');
+      } else {
+        setError(err.message || 'An unexpected error occurred during execution.');
+      }
     } finally {
       setLoading(false);
+      abortControllerRef.current = null;
     }
   };
 
@@ -201,22 +259,33 @@ export default function App() {
                   />
                 </div>
 
-                <button
-                  onClick={runSwarm}
-                  disabled={loading}
-                  className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 rounded-xl transition-colors disabled:opacity-70 flex items-center justify-center gap-2"
-                >
-                  {loading ? (
-                    <>
+                {loading ? (
+                  <div className="flex gap-2">
+                    <button
+                      disabled
+                      className="flex-1 bg-indigo-600/85 text-white font-medium py-3 rounded-xl flex items-center justify-center gap-2 cursor-wait"
+                    >
                       <Loader2 className="w-5 h-5 animate-spin" />
-                      Executing...
-                    </>
-                  ) : (
-                    <>
-                      Run Swarm
-                    </>
-                  )}
-                </button>
+                      Analyzing ({events.length} {events.length === 1 ? 'event' : 'events'})...
+                    </button>
+                    <button
+                      onClick={cancelSwarm}
+                      type="button"
+                      className="px-4 bg-red-50 hover:bg-red-100 text-red-700 font-medium py-3 rounded-xl transition-colors border border-red-200 flex items-center justify-center gap-1.5"
+                      title="Cancel analysis"
+                    >
+                      <Square className="w-4 h-4 fill-current" />
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={runSwarm}
+                    className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 rounded-xl transition-colors flex items-center justify-center gap-2"
+                  >
+                    Run Swarm
+                  </button>
+                )}
 
                 {error && (
                   <div className="p-4 bg-red-50 text-red-700 rounded-xl border border-red-100 text-sm flex gap-2">
@@ -232,9 +301,17 @@ export default function App() {
           <div className="lg:col-span-8 space-y-6">
             {(events.length > 0 || finalAnalysis) ? (
               <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200">
-                <h2 className="text-xl font-medium flex items-center gap-2 border-b border-neutral-100 pb-4 mb-6">
-                  <Activity className="w-5 h-5 text-indigo-600" />
-                  Execution Trace
+                <h2 className="text-xl font-medium flex items-center justify-between border-b border-neutral-100 pb-4 mb-6">
+                  <span className="flex items-center gap-2">
+                    <Activity className="w-5 h-5 text-indigo-600" />
+                    Execution Trace
+                  </span>
+                  {loading && (
+                    <span className="text-xs font-normal text-indigo-600 bg-indigo-50 border border-indigo-100 px-2.5 py-1 rounded-full flex items-center gap-1.5 animate-pulse">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      Live Swarm Streaming
+                    </span>
+                  )}
                 </h2>
 
                 <SwarmEventTimeline
@@ -244,6 +321,18 @@ export default function App() {
                 />
 
                 <AnalysisViewer finalAnalysis={finalAnalysis} />
+              </div>
+            ) : loading ? (
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200 h-full flex flex-col items-center justify-center text-center space-y-3 min-h-[400px]">
+                <div className="w-16 h-16 bg-indigo-50 rounded-full flex items-center justify-center mb-2 border border-indigo-100 animate-pulse">
+                  <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
+                </div>
+                <h3 className="text-lg font-medium text-neutral-800">
+                  Initializing Swarm Execution...
+                </h3>
+                <p className="text-sm text-neutral-500 max-w-sm">
+                  Connecting to streaming endpoint, profiling payload, and dispatching analysts in real time.
+                </p>
               </div>
             ) : (
               <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200 h-full flex flex-col items-center justify-center text-center space-y-3 min-h-[400px]">
