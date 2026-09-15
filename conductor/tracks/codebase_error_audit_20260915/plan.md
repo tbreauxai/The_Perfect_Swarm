@@ -1,10 +1,10 @@
 # Implementation Plan: Full Codebase Error Audit & Remediation
 
-- [ ] Task: Phase 1 - Test Suite Audit & Failure Remediation
-    - [ ] Write failing test or isolate assertion failure in `test-portable-swarm.ts` for Gemini complex model routing
-    - [ ] Implement fix in `src/swarm/router.ts` / defaults to align model tier routing with expectations
-    - [ ] Run and verify all 5 test suites (`test:portable`, `test:simulation`, `test:dist`, `test:cli`, `test:server`) pass cleanly
-    - [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+- [x] Task: Phase 1 - Test Suite Audit & Failure Remediation [805dfbc]
+    - [x] Write failing test or isolate assertion failure in `test-portable-swarm.ts` for Gemini complex model routing [805dfbc]
+    - [x] Implement fix in `src/swarm/router.ts` / defaults to align model tier routing with expectations [805dfbc]
+    - [x] Run and verify all 5 test suites (`test:portable`, `test:simulation`, `test:dist`, `test:cli`, `test:server`) pass cleanly [805dfbc]
+    - [x] Task: Phase Verification & Checkpoint (Refer to workflow.md) [805dfbc]
 
 - [ ] Task: Phase 2 - Type Checking, Build & Packaging Audit
     - [ ] Execute `tsc --noEmit` across whole repo and fix any uncovered type inconsistencies
