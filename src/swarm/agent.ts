@@ -151,10 +151,18 @@ export class Agent {
                         errMsg.includes('401') ||
                         errMsg.includes('403');
 
+                    const isFatal = 
+                        errMsg.includes('404') || 
+                        errMsg.includes('NOT_FOUND');
+
                     const hasNextProvider = targetIdx < targetChain.length - 1;
 
+                    if (isFatal && !hasNextProvider) {
+                        break; // Fatal error (like model not found), don't waste time retrying
+                    }
+
                     // If eligible for failover and a backup provider is ready, failover immediately without waiting
-                    if (isFailoverEligible && hasNextProvider) {
+                    if ((isFailoverEligible || isFatal) && hasNextProvider) {
                         const nextTarget = targetChain[targetIdx + 1];
                         context.addEvent({
                             agentRole: this.role,
@@ -193,7 +201,7 @@ export class Agent {
             action: 'Failed execution',
             modelName: `${lastFailedProvider} / ${lastFailedModel}`,
             prompt,
-            error: lastError?.message || String(lastError),
+            error: lastError?.stack || lastError?.message || String(lastError),
             durationMs
         });
 

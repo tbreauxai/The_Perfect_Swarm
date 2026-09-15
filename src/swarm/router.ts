@@ -124,7 +124,8 @@ export class ModelRouter {
         const p = (provider || 'gemini').toLowerCase();
         switch (p) {
             case 'gemini':
-                return 'gemini-3.1-pro';
+                // gemini-2.5-flash offers 15 RPM / 1M token window on free tier
+                return 'gemini-2.5-flash';
             case 'groq':
                 return complexity === 'instant' ? 'llama-3.1-8b-instant' : 'llama3-70b-8192';
             case 'openrouter':
@@ -164,7 +165,7 @@ export class ModelRouter {
         const provider = config.provider || 'gemini';
         let modelName = config.modelName;
 
-        if (!modelName) {
+        if (!modelName || !this.isValidModel(modelName)) {
             modelName = this.getRecommendedModel(provider, config.complexity);
         }
 

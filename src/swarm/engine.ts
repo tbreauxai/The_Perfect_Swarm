@@ -564,7 +564,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     }
                     return resData;
                 } catch (err: any) {
-                    const errDetail = err?.message || String(err);
+                    const errDetail = err?.stack || err?.message || String(err);
                     return {
                         insights: [`${analyst.role} was unable to process this chunk: ${errDetail}`],
                         anomalies: [`[${analyst.role} Error]: ${errDetail}`],

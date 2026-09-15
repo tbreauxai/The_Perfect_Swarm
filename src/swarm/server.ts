@@ -85,7 +85,7 @@ export async function handleSwarmSse(
         res.end();
         return result;
     } catch (err: any) {
-        sendEvent('swarm_error', { error: err.message || String(err) });
+        sendEvent('swarm_error', { error: err.stack || err.message || String(err) });
         res.end();
     } finally {
         cleanup();
