@@ -136,6 +136,10 @@ export class Agent {
                     const errMsg = err?.message || String(err);
                     console.warn(`[${this.role}][${currentTarget.provider}] Attempt ${attempt}/${maxRetries} failed:`, errMsg);
 
+                    const isQuotaExhausted =
+                        errMsg.includes('RESOURCE_EXHAUSTED') ||
+                        (errMsg.includes('429') && errMsg.includes('quota'));
+
                     const isFailoverEligible = 
                         errMsg.includes('429') ||
                         errMsg.includes('RATE_LIMIT') ||
@@ -169,6 +173,11 @@ export class Agent {
                             }
                         });
                         break; // Exit retry loop to advance to next target in chain
+                    }
+
+                    // Quota exhaustion won't recover in seconds — surface immediately if no fallback
+                    if (isQuotaExhausted && !hasNextProvider) {
+                        break;
                     }
 
                     if (attempt < maxRetries) {

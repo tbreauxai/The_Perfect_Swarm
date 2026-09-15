@@ -87,7 +87,6 @@ export async function handleSwarmSse(
     } catch (err: any) {
         sendEvent('swarm_error', { error: err.message || String(err) });
         res.end();
-        throw err;
     } finally {
         cleanup();
         if (typeof (req as any).removeListener === 'function') {

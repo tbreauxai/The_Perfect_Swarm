@@ -272,6 +272,17 @@ export class MemoryCortex {
         if (store) store.length = 0;
     }
 
+    // Safe embedding wrapper that permanently downgrades to local embeddings if the API fails
+    private async safeEmbed(text: string): Promise<number[]> {
+        try {
+            return await this.embeddingProvider.embed(text);
+        } catch (err: any) {
+            console.warn(`[MemoryCortex] Primary embedding provider failed (${err.message || String(err)}). Permanently downgrading to DeterministicLocalEmbeddingProvider.`);
+            this.embeddingProvider = new DeterministicLocalEmbeddingProvider();
+            return await this.embeddingProvider.embed(text);
+        }
+    }
+
     private async withTimeout<T>(promise: Promise<T>, ms: number = 3000): Promise<T> {
         let timeoutId: any;
         const timeoutPromise = new Promise<T>((_, reject) => {
@@ -479,7 +490,7 @@ export class MemoryCortex {
 
         if (this.qdrant && this.isAvailable) {
             try {
-                const denseVector = await this.embeddingProvider.embed(content);
+                const denseVector = await this.safeEmbed(content);
                 const sparseVector = SparseTokenizer.encode(content);
 
                 if (deduplicate) {
@@ -552,7 +563,7 @@ export class MemoryCortex {
         if (!storedId) {
             // Ephemeral in-memory fallback
             try {
-                const denseVector = await this.embeddingProvider.embed(content);
+                const denseVector = await this.safeEmbed(content);
                 const sparseVector = SparseTokenizer.encode(content);
 
                 if (deduplicate) {
@@ -623,7 +634,7 @@ export class MemoryCortex {
             try {
                 const points = await Promise.all(
                     memories.map(async (memory) => {
-                        const denseVector = await this.embeddingProvider.embed(memory.content);
+                        const denseVector = await this.safeEmbed(memory.content);
                         const sparseVector = SparseTokenizer.encode(memory.content);
                         const id = crypto.randomUUID();
 
@@ -741,12 +752,7 @@ export class MemoryCortex {
 
         if (candidates.length === 0) return [];
 
-        let queryDense: number[];
-        try {
-            queryDense = await this.embeddingProvider.embed(query);
-        } catch {
-            queryDense = await new DeterministicLocalEmbeddingProvider().embed(query);
-        }
+        const queryDense = await this.safeEmbed(query);
         const querySparse = SparseTokenizer.encode(query);
 
         // Dense ranking
@@ -805,7 +811,7 @@ export class MemoryCortex {
 
         if (this.qdrant && this.isAvailable) {
             try {
-                const denseVector = await this.embeddingProvider.embed(query);
+                const denseVector = await this.safeEmbed(query);
                 const sparseVector = SparseTokenizer.encode(query);
 
                 const filterMust: any[] = [];
@@ -1196,7 +1202,7 @@ export class MemoryCortex {
             const hasVectors = Array.isArray(item.denseVector) && item.denseVector.length > 0;
             const denseVector = (hasVectors && !recomputeVectors)
                 ? item.denseVector
-                : await this.embeddingProvider.embed(content);
+                : await this.safeEmbed(content);
             const sparseVector = item.sparseVector || SparseTokenizer.encode(content);
             const pointId = item.id || crypto.randomUUID();
             const now = new Date().toISOString();

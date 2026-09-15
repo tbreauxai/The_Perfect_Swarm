@@ -189,25 +189,34 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     if (!memoryCortex) {
         const persistPath = settings?.persistPath;
         const autoSave = settings?.autoSave;
+
+        // Prefer user's settings key for embeddings; fall back to env key only if valid,
+        // otherwise omit aiClient so MemoryCortex uses DeterministicLocalEmbeddingProvider.
+        const cortexGeminiKey = settings?.geminiApiKey ||
+            (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MISSING_KEY' ? process.env.GEMINI_API_KEY : undefined);
+        const cortexAiClient = cortexGeminiKey
+            ? new GoogleGenAI({ apiKey: cortexGeminiKey, apiVersion: 'v1alpha', httpOptions: { headers: { 'User-Agent': 'aistudio-build' } } })
+            : undefined;
+
         if (qdrantUrl) {
             try {
                 memoryCortex = new MemoryCortex({
                     url: qdrantUrl,
                     apiKey: qdrantApiKey,
-                    aiClient: defaultAi,
+                    aiClient: cortexAiClient,
                     defaultAppId: targetAppId,
                     persistPath,
                     autoSave
                 });
             } catch {
                 memoryCortex = persistPath
-                    ? new MemoryCortex({ defaultAppId: targetAppId, aiClient: defaultAi, persistPath, autoSave })
-                    : getOrCreateDefaultCortex(targetAppId, defaultAi);
+                    ? new MemoryCortex({ defaultAppId: targetAppId, aiClient: cortexAiClient, persistPath, autoSave })
+                    : getOrCreateDefaultCortex(targetAppId, cortexAiClient);
             }
         } else {
             memoryCortex = persistPath
-                ? new MemoryCortex({ defaultAppId: targetAppId, aiClient: defaultAi, persistPath, autoSave })
-                : getOrCreateDefaultCortex(targetAppId, defaultAi);
+                ? new MemoryCortex({ defaultAppId: targetAppId, aiClient: cortexAiClient, persistPath, autoSave })
+                : getOrCreateDefaultCortex(targetAppId, cortexAiClient);
         }
     }
 
@@ -269,10 +278,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             provider: defaultProvider,
             model: ModelRouter.getRecommendedModel(defaultProvider, complexity)
         };
-    } else if (!ModelRouter.isValidModel(managerConfig.model as string)) {
-        managerConfig.model = ModelRouter.getRecommendedModel(managerConfig.provider, complexity);
     }
-
     const availableFallbacks: ProviderCredential[] = [];
     if (!settings?.disableFallback) {
         const allProviders: Provider[] = ['gemini', 'openrouter', 'groq', 'github', 'mistral'];
@@ -280,7 +286,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             const { key, client } = resolveProvider(p, settings, defaultAi);
             if (key) {
                 const userConfiguredAgent = rawAgents.find((a: AgentConfig) => a.provider === p && a.model);
-                if (userConfiguredAgent && ModelRouter.isValidModel(userConfiguredAgent.model)) {
+                if (userConfiguredAgent) {
                     availableFallbacks.push({
                         provider: p,
                         apiKey: key,
@@ -304,7 +310,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         const { key: aKey, client: aClient } = resolveProvider(ac.provider, settings, defaultAi);
         const finalAKey = ac.apiKey ? sanitizeApiKey(ac.apiKey) : aKey;
         if (finalAKey) {
-            const aModel = ModelRouter.isValidModel(ac.model) ? ac.model : ModelRouter.getRecommendedModel(ac.provider, complexity);
+            const aModel = ac.model || ModelRouter.getRecommendedModel(ac.provider, complexity);
             const aFallbacks = (ac as any).disableFallback || (ac as any).strictProvider
                 ? []
                 : availableFallbacks.filter(f => f.provider !== ac.provider);
@@ -319,7 +325,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         const { key: cKey, client: cClient } = resolveProvider(dedicatedCriticConfig.provider, settings, defaultAi);
         const finalCKey = dedicatedCriticConfig.apiKey ? sanitizeApiKey(dedicatedCriticConfig.apiKey) : cKey;
         if (finalCKey) {
-            const cModel = ModelRouter.isValidModel(dedicatedCriticConfig.model) ? dedicatedCriticConfig.model : ModelRouter.getRecommendedModel(dedicatedCriticConfig.provider, complexity);
+            const cModel = dedicatedCriticConfig.model || ModelRouter.getRecommendedModel(dedicatedCriticConfig.provider, complexity);
             const cFallbacks = availableFallbacks.filter(f => f.provider !== dedicatedCriticConfig.provider);
             dedicatedCriticAgent = new Agent(dedicatedCriticConfig.role || 'Verification Critic', cModel, dedicatedCriticConfig.provider, finalCKey, cClient, cFallbacks);
         }
@@ -670,6 +676,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         }
     } catch (swarmErr) {
         console.error("Swarm execution failed:", swarmErr);
+        throw swarmErr;
     }
 
     if (finalAnalysis && !finalAnalysis.ui_title?.includes("Error")) {

@@ -124,8 +124,7 @@ export class ModelRouter {
         const p = (provider || 'gemini').toLowerCase();
         switch (p) {
             case 'gemini':
-                // gemini-2.5-flash offers 15 RPM / 1M token window on free tier
-                return 'gemini-2.5-flash';
+                return 'gemini-3.1-pro';
             case 'groq':
                 return complexity === 'instant' ? 'llama-3.1-8b-instant' : 'llama3-70b-8192';
             case 'openrouter':
@@ -146,7 +145,16 @@ export class ModelRouter {
     }
 
     static isValidModel(model: string): boolean {
-        return !!model;
+        if (!model) return false;
+        const lower = model.toLowerCase();
+        // Remove restrictive model blacklisting to support modern 3.x series
+        if (lower === 'openai/gpt-oss-120b' ||
+            lower === 'nvidia/nemotron-3-ultra-550b-a55b:free' ||
+            lower === 'open-mistral-nemo' ||
+            lower.includes('gpt-oss')) {
+            return false;
+        }
+        return true;
     }
 
     /**
@@ -156,7 +164,7 @@ export class ModelRouter {
         const provider = config.provider || 'gemini';
         let modelName = config.modelName;
 
-        if (!modelName || !this.isValidModel(modelName)) {
+        if (!modelName) {
             modelName = this.getRecommendedModel(provider, config.complexity);
         }
 

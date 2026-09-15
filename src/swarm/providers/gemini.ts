@@ -11,6 +11,7 @@ export class GeminiAdapter implements ProviderAdapter {
         if (!client && key) {
             client = new GoogleGenAI({
                 apiKey: key,
+                apiVersion: 'v1alpha',
                 httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
             });
         }

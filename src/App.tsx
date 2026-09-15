@@ -53,9 +53,9 @@ export default function App() {
     appId: 'perfect-swarm',
     disableFallback: true,
     agents: [
-      { id: 'manager', role: 'Manager Node', provider: 'gemini', model: 'gemini-2.5-flash' },
-      { id: 'a1', role: 'Analyst 1', provider: 'gemini', model: 'gemini-2.5-pro' },
-      { id: 'a2', role: 'Analyst 2', provider: 'groq', model: 'openai/gpt-oss-120b' },
+      { id: 'manager', role: 'Manager Node', provider: 'gemini', model: 'gemini-3.1-pro' },
+      { id: 'a1', role: 'Analyst 1', provider: 'gemini', model: 'gemini-3.1-pro' },
+      { id: 'a2', role: 'Analyst 2', provider: 'groq', model: 'llama3-70b-8192' },
       { id: 'a3', role: 'Analyst 3', provider: 'openrouter', model: 'google/gemma-2-9b-it:free' },
       { id: 'a4', role: 'Analyst 4', provider: 'mistral', model: 'mistral-small-latest' }
     ]
