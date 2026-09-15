@@ -480,13 +480,15 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 prompt: `Retrieving historical baseline constraints (appId='${targetAppId}', includeShared=${includeShared})...`
             });
 
-            const retrieved = await memoryCortex.retrieve(task, { appId: targetAppId, includeShared }, 3);
-            const exemplars = await memoryCortex.retrieveExemplars(task, {
-                appId: targetAppId,
-                includeShared,
-                limit: 2,
-                minRating: 0.7
-            }).catch(() => "");
+            const [retrieved, exemplars] = await Promise.all([
+                memoryCortex.retrieve(task, { appId: targetAppId, includeShared }, 3).catch(() => []),
+                memoryCortex.retrieveExemplars(task, {
+                    appId: targetAppId,
+                    includeShared,
+                    limit: 2,
+                    minRating: 0.7
+                }).catch(() => "")
+            ]);
 
             if (retrieved.length > 0) {
                 historicalContext = `Retrieved ${retrieved.length} relevant historical baselines from memory:\n` +
