@@ -13,11 +13,11 @@
     - [x] Verify `package.json` entry points and CLI execution (`node bin/cli.js --help`) [verified]
     - [x] Task: Phase Verification & Checkpoint (Refer to workflow.md) [verified]
 
-- [ ] Task: Phase 3 - Core Swarm Engine & Runtime Resilience Audit
-    - [ ] Audit `src/swarm/engine.ts`, `lifecycle.ts`, and `hierarchy.ts` for unhandled rejections and hang states
-    - [ ] Audit `src/swarm/router.ts` and `loadBalancer.ts` for provider rate limit (429) failover logic
-    - [ ] Audit `src/swarm/memory.ts` and `cache.ts` for graceful Qdrant disconnection fallback
-    - [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+- [x] Task: Phase 3 - Core Swarm Engine & Runtime Resilience Audit [6fedfde]
+    - [x] Audit `src/swarm/engine.ts`, `lifecycle.ts`, and `hierarchy.ts` for unhandled rejections and hang states [6fedfde]
+    - [x] Audit `src/swarm/router.ts` and `loadBalancer.ts` for provider rate limit (429) failover logic [6fedfde]
+    - [x] Audit `src/swarm/memory.ts` and `cache.ts` for graceful Qdrant disconnection fallback [6fedfde]
+    - [x] Task: Phase Verification & Checkpoint (Refer to workflow.md) [6fedfde]
 
 - [ ] Task: Phase 4 - Frontend & Server API Resilience Audit
     - [ ] Audit `server.ts` endpoints and SSE stream handling under unexpected client disconnects
