@@ -7,3 +7,5 @@
 - ~~[x] **Track: Audit Core Swarm Engine**~~ *Link: [./archive/audit_swarm_engine_20260914/index.md](./archive/audit_swarm_engine_20260914/index.md)*
 
 - [ ] **Track: Bug - Qdrant Cortex Hang** *Link: [bug_qdrant_hang/index.md](./tracks/bug_qdrant_hang/index.md)*
+
+- [ ] **Track: Full Codebase Error Audit & Remediation** *Link: [codebase_error_audit_20260915/index.md](./tracks/codebase_error_audit_20260915/index.md)*
