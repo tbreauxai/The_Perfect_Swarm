@@ -1,20 +1,32 @@
 [
   {
-    "id": "goal-api-logic",
-    "description": "Implement the API fetching logic in providerService.ts for all 5 providers (OpenRouter, Groq, Gemini, Mistral, GitHub Models) to retrieve available models.",
+    "id": "goal-1-audit-test-suites",
+    "description": "Execute and audit all test suites (portable, simulation, dist imports, cli, sse-server) to identify active failures and broken assertions.",
     "status": "completed",
-    "verification": "Functions are implemented and exported, correctly hitting the respective endpoints and returning an array of model names."
+    "verification": "All test runners executed with failure logs categorized and isolated to root causes."
   },
   {
-    "id": "goal-ui-state",
-    "description": "Add React state to SettingsModal.tsx to manage the dynamic model lists, loading states, and error messages for each provider.",
+    "id": "goal-2-audit-types-and-build",
+    "description": "Audit TypeScript type checking, build pipeline (Vite client build, build-swarm dual ESM/CJS, types generation), and package exports.",
     "status": "completed",
-    "verification": "React state hooks are present and wired up to the API functions."
+    "verification": "Type check and build scripts run clean or discrepancies clearly cataloged."
   },
   {
-    "id": "goal-ui-dropdown",
-    "description": "Replace the free-text model input with a <select> dropdown in SettingsModal.tsx that populates with the fetched models.",
+    "id": "goal-3-audit-swarm-engine-runtime",
+    "description": "Inspect core swarm modules (engine, lifecycle, router, memory, cache, load balancer, tools) for error handling gaps, unhandled rejections, and hang conditions.",
     "status": "completed",
-    "verification": "The UI successfully displays a dropdown menu containing the dynamically fetched models for the selected provider."
+    "verification": "Static and runtime analysis report highlighting concurrency, memory leaks, and timeout failure modes."
+  },
+  {
+    "id": "goal-4-audit-frontend-and-server-api",
+    "description": "Audit Express server endpoints, SSE streaming resilience, and React frontend components for state desync, unhandled errors, and API mismatches.",
+    "status": "completed",
+    "verification": "Frontend/backend interface contract audit completed with issues documented."
+  },
+  {
+    "id": "goal-5-synthesis-and-conductor-track",
+    "description": "Consolidate audit findings into a structured report and align with Conductor spec/plan for remediation.",
+    "status": "completed",
+    "verification": "Comprehensive audit report produced and Conductor track spec/plan finalized."
   }
 ]

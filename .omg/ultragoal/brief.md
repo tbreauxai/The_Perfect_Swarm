@@ -1,11 +1,13 @@
 # Objective
-Implement dynamic model selection dropdowns in the UI that pull available (and free) models directly from the active provider APIs (OpenRouter, Groq, Mistral, GitHub Models, Gemini) instead of relying on a free-text input or hardcoded lists.
+Perform a full audit of the codebase for errors, regressions, broken assertions, build/packaging issues, and runtime hazards across both backend/swarm core and frontend UI.
 
-## Context and Constraints
-- **OpenRouter**: Has a public unauthenticated `/api/v1/models` endpoint. We can filter for `pricing.prompt === "0"` and `pricing.completion === "0"`.
-- **Groq**: Uses `/openai/v1/models` (requires auth). All beta models are technically free.
-- **Mistral / GitHub**: Provide standard `/v1/models` (or equivalent) requiring auth.
-- **Gemini**: Provides `models.list` requiring auth.
-- The UI (specifically `SettingsModal.tsx`) needs to display a dropdown instead of a text input for the `model` property.
-- API keys stored in state/localStorage should be used to fetch these lists dynamically upon provider selection or modal open.
-- Handle loading and error states cleanly so the user isn't blocked if a fetch fails.
+## Context and Scope
+- **Core Engine & Architecture**: Swarm orchestration, model routing (Gemini, Groq, OpenRouter, Mistral, GitHub), Qdrant memory/caching, hierarchical agents, and load balancing.
+- **Packaging & Exports**: Multi-target dual ESM/CJS distribution (`@perfect-swarm/core`), CLI binary, and tsx/vite configs.
+- **Test Suites**: Portable swarm test suite, multi-app simulation, dist import test, CLI test, and SSE server test.
+- **Frontend & Server**: React 19 UI, Vite 6, Tailwind CSS v4, Express server, SSE streaming, and provider model fetching.
+
+## Boundaries & Constraints
+- Systematic verification-first approach: inspect tests, builds, static typing, and core module logic.
+- Document all identified bugs, edge cases, and architectural discrepancies before or alongside remediation.
+- Maintain Conductor track alignment and SDD principles.
