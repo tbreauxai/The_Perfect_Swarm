@@ -17,7 +17,7 @@ export async function fetchAvailableModels(provider: string, apiKey?: string): P
                 const res = await fetch('https://openrouter.ai/api/v1/models');
                 if (!res.ok) throw new Error('Failed to fetch OpenRouter models');
                 const data = await res.json();
-                return data.data.map((m: any) => ({
+                return (data.data || []).map((m: any) => ({
                     id: m.id,
                     name: m.name || m.id,
                     context_length: m.context_length,
@@ -31,7 +31,7 @@ export async function fetchAvailableModels(provider: string, apiKey?: string): P
                 });
                 if (!res.ok) throw new Error('Failed to fetch Groq models');
                 const data = await res.json();
-                return data.data.map((m: any) => ({
+                return (data.data || []).map((m: any) => ({
                     id: m.id,
                     name: m.id,
                     free: true // All Groq beta models are currently free
@@ -43,10 +43,10 @@ export async function fetchAvailableModels(provider: string, apiKey?: string): P
                 if (!res.ok) throw new Error('Failed to fetch Gemini models');
                 const data = await res.json();
                 // Filter for generateContent supported models
-                return data.models
-                    .filter((m: any) => m.supportedGenerationMethods.includes('generateContent'))
+                return (data.models || [])
+                    .filter((m: any) => Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes('generateContent'))
                     .map((m: any) => ({
-                        id: m.name.replace('models/', ''),
+                        id: (m.name || '').replace('models/', ''),
                         name: m.displayName || m.name,
                         free: true // Assumed free tier if key works
                     }));
@@ -58,10 +58,10 @@ export async function fetchAvailableModels(provider: string, apiKey?: string): P
                 });
                 if (!res.ok) throw new Error('Failed to fetch Mistral models');
                 const data = await res.json();
-                return data.data.map((m: any) => ({
+                return (data.data || []).map((m: any) => ({
                     id: m.id,
                     name: m.id,
-                    free: m.id.includes('free') || m.id.includes('open')
+                    free: typeof m.id === 'string' && (m.id.includes('free') || m.id.includes('open'))
                 }));
             }
             case 'github': {
@@ -71,7 +71,8 @@ export async function fetchAvailableModels(provider: string, apiKey?: string): P
                 });
                 if (!res.ok) throw new Error('Failed to fetch GitHub models');
                 const data = await res.json();
-                return data.map((m: any) => ({
+                const list = Array.isArray(data) ? data : (data.data || []);
+                return list.map((m: any) => ({
                     id: m.name,
                     name: m.friendly_name || m.name,
                     free: true // GitHub models in beta are free
