@@ -6,12 +6,12 @@
     - [x] Run and verify all 5 test suites (`test:portable`, `test:simulation`, `test:dist`, `test:cli`, `test:server`) pass cleanly [805dfbc]
     - [x] Task: Phase Verification & Checkpoint (Refer to workflow.md) [805dfbc]
 
-- [ ] Task: Phase 2 - Type Checking, Build & Packaging Audit
-    - [ ] Execute `tsc --noEmit` across whole repo and fix any uncovered type inconsistencies
-    - [ ] Audit and run `npm run build:client` (Vite, React 19, Tailwind v4)
-    - [ ] Audit and run `npm run build:swarm` (dual ESM/CJS, `.d.ts` declaration generation)
-    - [ ] Verify `package.json` entry points and CLI execution (`node bin/cli.js --help`)
-    - [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+- [x] Task: Phase 2 - Type Checking, Build & Packaging Audit [verified]
+    - [x] Execute `tsc --noEmit` across whole repo and fix any uncovered type inconsistencies [verified]
+    - [x] Audit and run `npm run build:client` (Vite, React 19, Tailwind v4) [verified]
+    - [x] Audit and run `npm run build:swarm` (dual ESM/CJS, `.d.ts` declaration generation) [verified]
+    - [x] Verify `package.json` entry points and CLI execution (`node bin/cli.js --help`) [verified]
+    - [x] Task: Phase Verification & Checkpoint (Refer to workflow.md) [verified]
 
 - [ ] Task: Phase 3 - Core Swarm Engine & Runtime Resilience Audit
     - [ ] Audit `src/swarm/engine.ts`, `lifecycle.ts`, and `hierarchy.ts` for unhandled rejections and hang states
