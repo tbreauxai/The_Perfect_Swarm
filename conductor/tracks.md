@@ -8,4 +8,4 @@
 
 - [ ] **Track: Bug - Qdrant Cortex Hang** *Link: [bug_qdrant_hang/index.md](./tracks/bug_qdrant_hang/index.md)*
 
-- [x] **Track: Full Codebase Error Audit & Remediation** *Link: [codebase_error_audit_20260915/index.md](./tracks/codebase_error_audit_20260915/index.md)*
+- ~~[x] **Track: Full Codebase Error Audit & Remediation**~~ *Link: [./archive/codebase_error_audit_20260915/index.md](./archive/codebase_error_audit_20260915/index.md)*
