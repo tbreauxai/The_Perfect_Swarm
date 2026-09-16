@@ -17,8 +17,7 @@ export class OpenRouterAdapter implements ProviderAdapter {
             'meta-llama/llama-3.3-70b-instruct': 'meta-llama/llama-3.3-70b-instruct:free',
             'meta-llama/llama-3.1-8b-instruct': 'meta-llama/llama-3.1-8b-instruct:free',
             'meta-llama/llama-3-8b-instruct': 'meta-llama/llama-3-8b-instruct:free',
-            'google/gemini-2.0-flash-exp': 'google/gemini-2.0-flash-exp:free',
-            'google/gemini-2.5-flash': 'google/gemini-2.0-flash-exp:free',
+            'google/gemini-3.5-flash': 'google/gemini-2.0-flash-exp:free',
             'mistralai/mistral-7b-instruct': 'mistralai/mistral-7b-instruct:free',
             'qwen/qwen-2.5-coder-32b-instruct': 'qwen/qwen-2.5-coder-32b-instruct:free'
         };

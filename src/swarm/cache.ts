@@ -214,4 +214,4 @@ export class PayloadCache {
 /**
  * Global shared payload cache singleton for cross-invocation persistence.
  */
-export const globalPayloadCache = new PayloadCache({ maxEntries: 300, defaultTtlMs: 15 * 60 * 1000 });
+export const globalPayloadCache = new PayloadCache({ maxEntries: 300, defaultTtlMs: 60 * 60 * 1000 });

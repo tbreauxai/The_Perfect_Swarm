@@ -1,9 +1,9 @@
 import { GoogleGenAI } from '@google/genai';
-import { MemoryCortex } from './memory.ts';
 import { Agent } from './agent.ts';
+import { MemoryCortex } from './memory.ts';
 import { SwarmContext } from './context.ts';
 import type { SwarmEvent, ProviderCredential, Provider, LearnedMemoryEvent, AgentRunConfig, SwarmEngineSettings, AgentConfig } from './types.ts';
-import { profileData, createTokenChunks } from './profiler.ts';
+import { profileData, createTokenChunks, SwarmTracer } from './profiler.ts';
 import { ModelRouter, type TaskComplexity } from './router.ts';
 import { AnalysisLifecycle } from './lifecycle.ts';
 import { PayloadCache, globalPayloadCache } from './cache.ts';
@@ -56,7 +56,7 @@ export function resolveProvider(
         case 'gemini': {
             key = sanitizeApiKey(settings?.geminiApiKey || process.env.GEMINI_API_KEY);
             client = key
-                ? new GoogleGenAI({ apiKey: key, httpOptions: { headers: { 'User-Agent': 'aistudio-build' } } })
+                ? new GoogleGenAI({ apiKey: key })
                 : defaultAi;
             break;
         }
@@ -195,7 +195,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         const cortexGeminiKey = settings?.geminiApiKey ||
             (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MISSING_KEY' ? process.env.GEMINI_API_KEY : undefined);
         const cortexAiClient = cortexGeminiKey
-            ? new GoogleGenAI({ apiKey: cortexGeminiKey, apiVersion: 'v1alpha', httpOptions: { headers: { 'User-Agent': 'aistudio-build' } } })
+            ? new GoogleGenAI({ apiKey: cortexGeminiKey })
             : undefined;
 
         if (qdrantUrl) {
@@ -230,6 +230,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 : (Array.isArray(settings?.tools)
                     ? new ToolRegistry(settings.tools)
                     : globalToolRegistry)));
+
+
 
     // 0. Infer Task Complexity via ModelRouter
     const complexity: TaskComplexity = complexityOverride || ModelRouter.inferComplexity(task, (data || '').length);
@@ -276,7 +278,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             id: 'manager',
             role: 'Manager Node',
             provider: defaultProvider,
-            model: ModelRouter.getRecommendedModel(defaultProvider, complexity)
+            model: ''
         };
     }
     const availableFallbacks: ProviderCredential[] = [];
@@ -286,14 +288,13 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             const { key, client } = resolveProvider(p, settings, defaultAi);
             if (key) {
                 const userConfiguredAgent = rawAgents.find((a: AgentConfig) => a.provider === p && a.model);
-                if (userConfiguredAgent) {
-                    availableFallbacks.push({
-                        provider: p,
-                        apiKey: key,
-                        modelName: userConfiguredAgent.model,
-                        aiClient: client
-                    });
-                }
+                const fallbackModel = userConfiguredAgent?.model || '';
+                availableFallbacks.push({
+                    provider: p,
+                    apiKey: key,
+                    modelName: fallbackModel,
+                    aiClient: client
+                });
             }
         }
     }
@@ -301,7 +302,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     const { key: mKey, client: mClient } = resolveProvider(managerConfig.provider, settings, defaultAi);
     const finalMKey = managerConfig.apiKey ? sanitizeApiKey(managerConfig.apiKey) : mKey;
     validateProviderKey(managerConfig.provider, finalMKey, managerConfig.role || 'Manager Node');
-    const managerModel = managerConfig.model || ModelRouter.getRecommendedModel(managerConfig.provider, complexity);
+    const managerModel = managerConfig.model || '';
     const managerFallbacks = availableFallbacks.filter(f => f.provider !== managerConfig.provider);
     const managerAgent = new Agent('Manager Node', managerModel, managerConfig.provider, finalMKey, mClient, managerFallbacks);
 
@@ -310,7 +311,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         const { key: aKey, client: aClient } = resolveProvider(ac.provider, settings, defaultAi);
         const finalAKey = ac.apiKey ? sanitizeApiKey(ac.apiKey) : aKey;
         if (finalAKey) {
-            const aModel = ac.model || ModelRouter.getRecommendedModel(ac.provider, complexity);
+            const aModel = ac.model || '';
             const aFallbacks = (ac as any).disableFallback || (ac as any).strictProvider
                 ? []
                 : availableFallbacks.filter(f => f.provider !== ac.provider);
@@ -325,7 +326,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         const { key: cKey, client: cClient } = resolveProvider(dedicatedCriticConfig.provider, settings, defaultAi);
         const finalCKey = dedicatedCriticConfig.apiKey ? sanitizeApiKey(dedicatedCriticConfig.apiKey) : cKey;
         if (finalCKey) {
-            const cModel = dedicatedCriticConfig.model || ModelRouter.getRecommendedModel(dedicatedCriticConfig.provider, complexity);
+            const cModel = dedicatedCriticConfig.model || '';
             const cFallbacks = availableFallbacks.filter(f => f.provider !== dedicatedCriticConfig.provider);
             dedicatedCriticAgent = new Agent(dedicatedCriticConfig.role || 'Verification Critic', cModel, dedicatedCriticConfig.provider, finalCKey, cClient, cFallbacks);
         }
@@ -535,10 +536,25 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             const analystPromises = analysts.map(async analyst => {
                 const toolPrompt = toolRegistry.list().length > 0 ? `\n\n${toolRegistry.renderPromptSchema()}` : '';
                 analyst.setSystemInstruction(ANALYST_SYSTEM_INSTRUCTION + toolPrompt);
-                const analystPrompt = `Task: ${task}\nMetadata: ${JSON.stringify(profile)}\nHistorical Baselines: ${historicalContext}\nData Chunk [${i + 1}/${chunks.length}]:\n${chunk}`;
+                const chunkPromptText = chunks.length > 1 ? `Chunk ${i + 1}/${chunks.length}\n${chunk}` : chunk;
+
+                const analystPrompt = `Task: ${task}\nMetadata: ${JSON.stringify(profile)}\nHistorical Baselines: ${historicalContext}\nData Chunk [${i + 1}/${chunks.length}]:\n${chunkPromptText}`;
 
                 try {
-                    const rawOutput = await analyst.run(analystPrompt, context, { responseMimeType: "application/json" });
+                    let rawOutput: any;
+                    try {
+                        rawOutput = await analyst.run(analystPrompt, context, { 
+                            responseMimeType: "application/json",
+                            zodSchema: AnalystResponseSchema
+                        });
+                    } catch (innerErr: any) {
+                        SwarmTracer.getInstance().logEvent({
+                            agentRole: 'Analyst',
+                            action: 'Fatal Analyst Error',
+                            error: innerErr?.stack || innerErr?.message || String(innerErr)
+                        });
+                        throw innerErr;
+                    }
                     
                     // Parse and execute any tool calls emitted in output
                     const rawStr = typeof rawOutput === 'string' ? rawOutput : JSON.stringify(rawOutput);
@@ -567,11 +583,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     return resData;
                 } catch (err: any) {
                     const errDetail = err?.stack || err?.message || String(err);
-                    return {
-                        insights: [`${analyst.role} was unable to process this chunk: ${errDetail}`],
-                        anomalies: [`[${analyst.role} Error]: ${errDetail}`],
-                        summary: `Failed to process: ${errDetail}`
-                    };
+                    console.error(`[Analyst Fatal Error] ${analyst.role} failed:`, errDetail);
+                    throw err; // Stop hiding the error! Bubble it up.
                 }
             });
 
@@ -635,7 +648,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             parsedManagerOutput = lifecycleResult.finalProposal;
         } else {
             parsedManagerOutput = await managerAgent.run(dynamicPrompt, context, {
-                responseMimeType: "application/json"
+                responseMimeType: "application/json",
+                zodSchema: ManagerResponseSchema
             });
         }
 

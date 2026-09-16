@@ -53,6 +53,43 @@ describe('Phase 1: Failover, Timeout Guards, and Stream Error Handling', () => {
         expect(duration).toBeLessThan(3000);
     });
 
+    it('cascades to fallback provider immediately when encountering Google high traffic error', async () => {
+        let primaryCallCount = 0;
+        let backupCallCount = 0;
+
+        ProviderRegistry.register({
+            providerName: 'test-primary-traffic' as any,
+            async call() {
+                primaryCallCount++;
+                throw new Error('[GoogleGenAI Error]: The model is experiencing high traffic. Please try again later.');
+            }
+        });
+
+        ProviderRegistry.register({
+            providerName: 'test-backup-traffic-success' as any,
+            async call() {
+                backupCallCount++;
+                return JSON.stringify({ success: true, source: 'backup-after-traffic' });
+            }
+        });
+
+        const agent = new Agent(
+            'Test Traffic Agent',
+            'gemini-3.1-pro',
+            'test-primary-traffic' as any,
+            'key-1',
+            undefined,
+            [{ provider: 'test-backup-traffic-success' as any, apiKey: 'key-2', modelName: 'backup-model' }]
+        );
+
+        const context = new SwarmContext();
+        const result = await agent.run('Analyze', context, { responseMimeType: 'application/json' });
+
+        expect(result.source).toBe('backup-after-traffic');
+        expect(primaryCallCount).toBe(1);
+        expect(backupCallCount).toBe(1);
+    });
+
     it('rejects GeminiAdapter call with timeout error when generateContent hangs', async () => {
         const adapter = new GeminiAdapter();
         const hangingClient: any = {

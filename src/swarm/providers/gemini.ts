@@ -10,9 +10,7 @@ export class GeminiAdapter implements ProviderAdapter {
 
         if (!client && key) {
             client = new GoogleGenAI({
-                apiKey: key,
-                apiVersion: 'v1alpha',
-                httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
+                apiKey: key
             });
         }
 
@@ -26,7 +24,7 @@ export class GeminiAdapter implements ProviderAdapter {
         }
 
         const isJson = options.config?.responseMimeType === 'application/json';
-        const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 45000;
+        const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 120000;
 
         let timeoutId: any;
         const timeoutPromise = new Promise<never>((_, reject) => {
@@ -45,6 +43,9 @@ export class GeminiAdapter implements ProviderAdapter {
                 }),
                 timeoutPromise
             ]);
+        } catch (error: any) {
+            console.error(`[GEMINI ERROR] ${new Date().toISOString()}\nModel: ${options.modelName}\nError: ${JSON.stringify(error, null, 2)}\nFull Error Object: ${error}`);
+            throw error;
         } finally {
             clearTimeout(timeoutId);
         }

@@ -13,7 +13,6 @@ export default defineConfig({
         router: path.resolve(__dirname, 'src/swarm/router.ts'),
         lifecycle: path.resolve(__dirname, 'src/swarm/lifecycle.ts'),
         cache: path.resolve(__dirname, 'src/swarm/cache.ts'),
-        hierarchy: path.resolve(__dirname, 'src/swarm/hierarchy.ts'),
         loadBalancer: path.resolve(__dirname, 'src/swarm/loadBalancer.ts'),
         profiler: path.resolve(__dirname, 'src/swarm/profiler.ts'),
         server: path.resolve(__dirname, 'src/swarm/server.ts'),

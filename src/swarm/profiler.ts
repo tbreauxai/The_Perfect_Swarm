@@ -121,3 +121,54 @@ export function createTokenChunks(
         warning
     };
 }
+
+export interface TraceEvent {
+    id: string;
+    timestamp: number;
+    agentRole?: string;
+    action: string;
+    modelName?: string;
+    provider?: string;
+    durationMs?: number;
+    error?: string;
+    payload?: any;
+}
+
+export class SwarmTracer {
+    private static instance: SwarmTracer;
+    private events: TraceEvent[] = [];
+    private onEventCb?: (event: TraceEvent) => void;
+
+    private constructor() {}
+
+    public static getInstance(): SwarmTracer {
+        if (!SwarmTracer.instance) {
+            SwarmTracer.instance = new SwarmTracer();
+        }
+        return SwarmTracer.instance;
+    }
+
+    public setCallback(cb: (event: TraceEvent) => void) {
+        this.onEventCb = cb;
+    }
+
+    public logEvent(event: Omit<TraceEvent, 'id' | 'timestamp'>) {
+        const fullEvent: TraceEvent = {
+            ...event,
+            id: Math.random().toString(36).substring(7),
+            timestamp: Date.now()
+        };
+        this.events.push(fullEvent);
+        if (this.onEventCb) {
+            this.onEventCb(fullEvent);
+        }
+    }
+
+    public dumpTrace(): TraceEvent[] {
+        return this.events;
+    }
+
+    public clear() {
+        this.events = [];
+    }
+}

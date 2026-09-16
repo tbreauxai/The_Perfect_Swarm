@@ -9,7 +9,6 @@ import {
     AnalysisLifecycle,
     PayloadCache,
     globalPayloadCache,
-    SwarmHierarchy,
     AdaptiveLoadBalancer,
     globalLoadBalancer
 } from './src/swarm/index.ts';
@@ -318,62 +317,6 @@ Synthesizing structured findings.
     // -------------------------------------------------------------
     // PHASE 6: Hierarchical Multi-Specialist Dispatch & Broadcast Reduction
     // -------------------------------------------------------------
-    console.log('\n>>> PHASE 6: Benchmarking Hierarchical Dispatch & Scoped Event Broadcasting...');
-    const hierContext = new SwarmContext();
-    const hierEvents: string[] = [];
-    hierContext.subscribe(e => hierEvents.push(`[${e.agentRole}] ${e.action}`));
-
-    ProviderRegistry.register({
-        providerName: 'sim-specialist-exec',
-        async call(opts) {
-            return JSON.stringify({
-                status: 'completed',
-                analystEcho: (opts as any).agentRole || 'Specialist',
-                findings: `Analysis performed on: ${opts.prompt.substring(0, 35)}`
-            });
-        }
-    });
-
-    const hierarchy = new SwarmHierarchy(hierContext);
-    const l1Triage = new Agent('L1 Gatekeeper', 'llama-3.1-8b-instant', 'sim-specialist-exec', 'k');
-    const amlSpec = new Agent('AML Analyst', 'llama-3.3-70b', 'sim-specialist-exec', 'k');
-    const networkSpec = new Agent('Network Forensics', 'llama-3.3-70b', 'sim-specialist-exec', 'k');
-    const databaseSpec = new Agent('Database Specialist', 'llama-3.3-70b', 'sim-specialist-exec', 'k');
-    const frontendSpec = new Agent('UI Specialist', 'llama-3.3-70b', 'sim-specialist-exec', 'k');
-    const l3Manager = new Agent('L3 Synthesizer', 'gemini-2.5-flash', 'sim-specialist-exec', 'k');
-
-    hierarchy.setTriageNode(l1Triage);
-    hierarchy.addSpecialistNode(amlSpec, 'spec-aml', 'AML Analyst', ['wire', 'kyc', 'sanctions', 'aml', 'transfer']);
-    hierarchy.addSpecialistNode(networkSpec, 'spec-net', 'Network Forensics', ['ip', 'proxy', 'tor', 'botnet', 'geolocation']);
-    hierarchy.addSpecialistNode(databaseSpec, 'spec-db', 'Database Specialist', ['sql', 'postgres', 'index', 'migration']);
-    hierarchy.addSpecialistNode(frontendSpec, 'spec-ui', 'UI Specialist', ['react', 'css', 'dom', 'component']);
-    hierarchy.setSynthesisNode(l3Manager);
-
-    // Targeted dispatch: Task touches AML and IP forensics
-    const hierTask = 'Investigate high-velocity wire transfers originating from anomalous proxy IP addresses';
-    const hierExecution = await hierarchy.execute(hierTask, 'Sample payload data', {
-        maxSpecialists: 2,
-        scope: 'milestones'
-    });
-
-    console.log(`Hierarchy Execution Completed: Specialists Invoked: ${hierExecution.triagePlan.selectedSpecialistIds.join(', ')}`);
-    console.log(`Hierarchy Specialists Bypassed (Broadcast Reduction): ${hierExecution.bypassedSpecialists.join(', ')}`);
-
-    if (!hierExecution.triagePlan.selectedSpecialistIds.includes('spec-aml') || !hierExecution.triagePlan.selectedSpecialistIds.includes('spec-net')) {
-        throw new Error('L1 Triage failed to route to the correct domain specialists');
-    }
-    if (hierExecution.triagePlan.selectedSpecialistIds.includes('spec-db') || hierExecution.triagePlan.selectedSpecialistIds.includes('spec-ui')) {
-        throw new Error('Hierarchy failed to bypass irrelevant specialists (database, ui)');
-    }
-
-    // Verify Scoped Event Filtering
-    const allRawEvents = hierContext.events;
-    const scopedMilestones = hierarchy.filterEventsByScope(allRawEvents, 'milestones');
-    console.log(`Broadcast Event Filtering: Raw Total Events: ${allRawEvents.length} -> Scoped Milestones: ${scopedMilestones.length}`);
-    if (scopedMilestones.length >= allRawEvents.length) {
-        throw new Error('Scoped event filtering did not reduce event stream noise');
-    }
-
     // -------------------------------------------------------------
     // PHASE 7: Real-Time Adaptive Load Balancing & Concurrency Feedback Loop
     // -------------------------------------------------------------

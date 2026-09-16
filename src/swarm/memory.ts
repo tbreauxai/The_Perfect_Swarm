@@ -160,16 +160,16 @@ export interface EmbeddingProvider {
 export class GeminiEmbeddingProvider implements EmbeddingProvider {
     readonly dimension = 768;
     private aiClient: GoogleGenAI;
-    private modelName: string;
+    private modelNames: string[];
     private timeoutMs: number;
 
     constructor(
         aiClient: GoogleGenAI,
-        modelName: string = 'text-embedding-004',
+        modelName: string = 'text-embedding-005',
         timeoutMs: number = 5000
     ) {
         this.aiClient = aiClient;
-        this.modelName = modelName;
+        this.modelNames = [modelName, 'text-embedding-005', 'text-embedding-004'];
         this.timeoutMs = timeoutMs;
     }
 
@@ -181,18 +181,29 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
             }, this.timeoutMs);
         });
 
-        try {
-            const response: any = await Promise.race([
-                this.aiClient.models.embedContent({
-                    model: this.modelName,
-                    contents: text,
-                }),
-                timeoutPromise
-            ]);
-            return response.embeddings?.[0]?.values || [];
-        } finally {
-            clearTimeout(timeoutId);
+        let lastError: any;
+        for (const model of this.modelNames) {
+            try {
+                const response: any = await Promise.race([
+                    this.aiClient.models.embedContent({
+                        model: model,
+                        contents: [text],
+                    }),
+                    timeoutPromise
+                ]);
+                return response.embeddings?.[0]?.values || response.embeddings?.[0]?.value || [];
+            } catch (err: any) {
+                lastError = err;
+                const msg = err.message || '';
+                // If model not found, try the next one in the fallback list
+                if (msg.includes('404') || msg.includes('not found') || msg.includes('not supported')) {
+                    continue;
+                }
+                break;
+            }
         }
+        clearTimeout(timeoutId);
+        throw lastError;
     }
 }
 
@@ -1349,3 +1360,4 @@ export class MemoryCortex {
         return this.storesSinceConsolidation;
     }
 }
+

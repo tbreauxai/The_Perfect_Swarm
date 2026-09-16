@@ -3,7 +3,9 @@ import type { Provider, AgentRunConfig, ProviderCredential } from './types.ts';
 import { SwarmContext } from './context.ts';
 import { ProviderRegistry } from './providers/registry.ts';
 import { sanitizeModelOutput } from './providers/adapter.ts';
+import { SwarmTracer } from './profiler.ts';
 import { globalLoadBalancer, type AdaptiveLoadBalancer } from './loadBalancer.ts';
+import { globalPayloadCache, PayloadCache } from './cache.ts';
 import { parseJsonSafe } from './parser.ts';
 
 /**
@@ -63,7 +65,7 @@ export class Agent {
 
     async run(prompt: string, context: SwarmContext, config?: AgentRunConfig): Promise<any> {
         const startTime = Date.now();
-        const timeoutMs = config?.timeoutMs || 45000;
+        const timeoutMs = config?.timeoutMs || 120000;
 
         const lb = (config?.loadBalancer as AdaptiveLoadBalancer) || this.loadBalancer || globalLoadBalancer;
         const candidateFallbacks = config?.fallbackProviders || this.fallbacks;
@@ -95,38 +97,88 @@ export class Agent {
             for (let attempt = 1; attempt <= maxRetries; attempt++) {
                 try {
                     const adapter = ProviderRegistry.get(currentTarget.provider);
-                    const textOutput = await lb.executeWithTelemetry(
-                        currentTarget.provider,
-                        () => adapter.call({
-                            modelName: currentTarget.modelName || this.modelName,
-                            prompt,
-                            systemInstruction: this.systemInstruction,
-                            apiKey: currentTarget.apiKey,
-                            aiClient: currentTarget.aiClient || this.aiClient,
-                            config,
-                            timeoutMs
-                        })
+                    
+                    const cacheFingerprint = PayloadCache.computeFingerprint(
+                        `agent_run:${this.role}`,
+                        prompt,
+                        { model: currentTarget.modelName || this.modelName }
                     );
+                    
+                    let textOutput: string;
+                    const cachedText = globalPayloadCache.get<string>(cacheFingerprint);
+                    
+                    if (cachedText) {
+                        textOutput = cachedText;
+                        
+                        const cacheHitEvent = {
+                            agentRole: this.role,
+                            action: 'Cache Hit',
+                            modelName: `${currentTarget.provider} / ${currentTarget.modelName || this.modelName}`,
+                            prompt: `[CACHE HIT] ${prompt.substring(0, 100)}...`
+                        };
+                        context.addEvent(cacheHitEvent);
+                        SwarmTracer.getInstance().logEvent(cacheHitEvent);
+                    } else {
+                        textOutput = await lb.executeWithTelemetry(
+                            currentTarget.provider,
+                            () => adapter.call({
+                                modelName: currentTarget.modelName || this.modelName,
+                                prompt,
+                                systemInstruction: this.systemInstruction,
+                                apiKey: currentTarget.apiKey,
+                                aiClient: currentTarget.aiClient || this.aiClient,
+                                config,
+                                timeoutMs
+                            })
+                        );
+                        globalPayloadCache.set(cacheFingerprint, textOutput);
+                    }
 
                     const durationMs = Date.now() - startTime;
                     let parsedOutput: any = textOutput;
+                    let validationSuccess = true;
 
                     if (config?.responseMimeType === 'application/json') {
                         if (textOutput.includes('```tool_call') || textOutput.includes('[TOOL_CALL]')) {
                             parsedOutput = textOutput;
                         } else {
                             parsedOutput = parseJsonSafe(textOutput);
+                            
+                            if (config?.zodSchema) {
+                                const parsed = config.zodSchema.safeParse(parsedOutput);
+                                if (!parsed.success) {
+                                    const errors = parsed.error.issues.map((i: any) => `${i.path.join('.')}: ${i.message}`).join(', ');
+                                    validationSuccess = false;
+                                    
+                                    // Tracing the validation error
+                                    const valErrorEvent = {
+                                        agentRole: this.role,
+                                        action: 'Schema Validation Failed',
+                                        modelName: `${currentTarget.provider} / ${currentTarget.modelName || this.modelName}`,
+                                        prompt,
+                                        error: `Zod Error: ${errors}`
+                                    };
+                                    context.addEvent(valErrorEvent);
+                                    SwarmTracer.getInstance().logEvent(valErrorEvent);
+
+                                    throw new Error(`SCHEMA_VALIDATION_FAILED: ${errors}`);
+                                } else {
+                                    parsedOutput = parsed.data;
+                                }
+                            }
                         }
                     }
 
-                    context.addEvent({
+                    const eventBase = {
                         agentRole: this.role,
                         action: isFallback ? `Completed execution via failover (${currentTarget.provider})` : 'Completed execution',
                         modelName: `${currentTarget.provider} / ${currentTarget.modelName || this.modelName}`,
                         prompt,
                         output: parsedOutput,
                         durationMs
-                    });
+                    };
+                    context.addEvent(eventBase);
+                    SwarmTracer.getInstance().logEvent(eventBase);
 
                     return parsedOutput;
                 } catch (err: any) {
@@ -134,26 +186,60 @@ export class Agent {
                     lastFailedProvider = currentTarget.provider;
                     lastFailedModel = currentTarget.modelName || this.modelName;
                     const errMsg = err?.message || String(err);
+                    const errLower = errMsg.toLowerCase();
                     console.warn(`[${this.role}][${currentTarget.provider}] Attempt ${attempt}/${maxRetries} failed:`, errMsg);
+
+                    // Auto-correction for schema failures (retry same provider once)
+                    if (errMsg.includes('SCHEMA_VALIDATION_FAILED') && attempt < maxRetries) {
+                        prompt = `${prompt}\n\n[SYSTEM: Your previous response failed schema validation. Please correct the following errors and output STRICT JSON only: ${errMsg}]`;
+                        // Insert the current target back into the chain so we don't skip the next fallback
+                        targetChain.splice(targetIdx + 1, 0, currentTarget);
+                    }
+
+                    const errorEvent = {
+                        agentRole: this.role,
+                        action: `Provider Failover Triggered`,
+                        modelName: `${currentTarget.provider} / ${currentTarget.modelName || this.modelName}`,
+                        prompt,
+                        error: errMsg
+                    };
+                    context.addEvent(errorEvent);
+                    SwarmTracer.getInstance().logEvent(errorEvent);
 
                     const isQuotaExhausted =
                         errMsg.includes('RESOURCE_EXHAUSTED') ||
-                        (errMsg.includes('429') && errMsg.includes('quota'));
+                        errLower.includes('quota') ||
+                        (errMsg.includes('429') && errLower.includes('quota'));
 
                     const isFailoverEligible = 
                         errMsg.includes('429') ||
                         errMsg.includes('RATE_LIMIT') ||
-                        errMsg.includes('quota') ||
-                        errMsg.includes('TIMEOUT') ||
                         errMsg.includes('503') ||
                         errMsg.includes('502') ||
+                        errMsg.includes('504') ||
+                        errMsg.includes('500') ||
                         errMsg.includes('SERVER_ERROR') ||
                         errMsg.includes('401') ||
-                        errMsg.includes('403');
+                        errMsg.includes('403') ||
+                        errLower.includes('rate limit') ||
+                        errLower.includes('quota') ||
+                        errLower.includes('timeout') ||
+                        errLower.includes('high traffic') ||
+                        errLower.includes('overloaded') ||
+                        errLower.includes('unavailable') ||
+                        errLower.includes('capacity');
 
                     const isFatal = 
                         errMsg.includes('404') || 
-                        errMsg.includes('NOT_FOUND');
+                        errMsg.includes('NOT_FOUND') ||
+                        errMsg.includes('400') ||
+                        errMsg.includes('401') ||
+                        errMsg.includes('403') ||
+                        errLower.includes('api key not valid') ||
+                        errLower.includes('invalid api key') ||
+                        errLower.includes('not found') ||
+                        errLower.includes('does not exist') ||
+                        errLower.includes('unsupported model');
 
                     const hasNextProvider = targetIdx < targetChain.length - 1;
 
@@ -196,14 +282,16 @@ export class Agent {
         }
 
         const durationMs = Date.now() - startTime;
-        context.addEvent({
+        const errorEvent = {
             agentRole: this.role,
             action: 'Failed execution',
             modelName: `${lastFailedProvider} / ${lastFailedModel}`,
             prompt,
             error: lastError?.stack || lastError?.message || String(lastError),
             durationMs
-        });
+        };
+        context.addEvent(errorEvent);
+        SwarmTracer.getInstance().logEvent(errorEvent);
 
         throw lastError;
     }

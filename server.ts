@@ -20,12 +20,7 @@ async function startServer() {
   app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
   const defaultAi = new GoogleGenAI({
-    apiKey: process.env.GEMINI_API_KEY || 'MISSING_KEY',
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      }
-    }
+    apiKey: process.env.GEMINI_API_KEY || 'MISSING_KEY'
   });
 
   app.get('/api/config/status', (req, res) => {

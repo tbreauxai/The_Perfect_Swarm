@@ -51,22 +51,34 @@ export default function App() {
     qdrantApiKey: '',
     githubToken: '',
     appId: 'perfect-swarm',
-    disableFallback: true,
+    disableFallback: false,
     agents: [
-      { id: 'manager', role: 'Manager Node', provider: 'gemini', model: 'gemini-3.1-pro' },
-      { id: 'a1', role: 'Analyst 1', provider: 'gemini', model: 'gemini-3.1-pro' },
+      { id: 'manager', role: 'Manager Node', provider: 'gemini', model: 'gemini-3.5-flash' },
+      { id: 'a1', role: 'Analyst 1', provider: 'gemini', model: 'gemini-3.5-flash' },
       { id: 'a2', role: 'Analyst 2', provider: 'groq', model: 'llama3-70b-8192' },
       { id: 'a3', role: 'Analyst 3', provider: 'openrouter', model: 'google/gemma-2-9b-it:free' },
       { id: 'a4', role: 'Analyst 4', provider: 'mistral', model: 'mistral-small-latest' }
     ]
   });
 
-  // Load settings on mount
+  // Load settings on mount with automatic migration for fallback settings
   useEffect(() => {
     const saved = localStorage.getItem('swarm_settings');
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
+        let modified = false;
+
+        // Auto-enable fallback if previously defaulted to disabled
+        if (parsed.disableFallback === true && !localStorage.getItem('swarm_disable_fallback_explicit')) {
+          parsed.disableFallback = false;
+          modified = true;
+        }
+
+        if (modified) {
+          localStorage.setItem('swarm_settings', JSON.stringify(parsed));
+        }
+
         setSettings(prev => ({ ...prev, ...parsed }));
       } catch (e) {
         console.error('Failed to parse settings', e);
@@ -74,7 +86,10 @@ export default function App() {
     }
   }, []);
 
-  const updateSetting = (key: keyof AppSettings, value: string) => {
+  const updateSetting = (key: keyof AppSettings, value: any) => {
+    if (key === 'disableFallback') {
+      localStorage.setItem('swarm_disable_fallback_explicit', 'true');
+    }
     const newSettings = { ...settings, [key]: value };
     setSettings(newSettings);
     localStorage.setItem('swarm_settings', JSON.stringify(newSettings));

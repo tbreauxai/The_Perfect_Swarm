@@ -51,12 +51,6 @@
       "require": "./dist/swarm/cache.cjs",
       "default": "./src/swarm/cache.ts"
     },
-    "./hierarchy": {
-      "types": "./dist/swarm/hierarchy.d.ts",
-      "import": "./dist/swarm/hierarchy.js",
-      "require": "./dist/swarm/hierarchy.cjs",
-      "default": "./src/swarm/hierarchy.ts"
-    },
     "./loadBalancer": {
       "types": "./dist/swarm/loadBalancer.d.ts",
       "import": "./dist/swarm/loadBalancer.js",

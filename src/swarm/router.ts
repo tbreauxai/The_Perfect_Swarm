@@ -118,56 +118,11 @@ export class ModelRouter {
     }
 
     /**
-     * Resolves the default recommended model for a given provider and complexity tier.
-     */
-    static getRecommendedModel(provider: Provider, complexity: TaskComplexity): string {
-        const p = (provider || 'gemini').toLowerCase();
-        switch (p) {
-            case 'gemini':
-                // gemini-2.5-flash offers 15 RPM / 1M token window on free tier
-                return 'gemini-2.5-flash';
-            case 'groq':
-                return complexity === 'instant' ? 'llama-3.1-8b-instant' : 'llama3-70b-8192';
-            case 'openrouter':
-                return complexity === 'complex'
-                    ? 'deepseek/deepseek-r1:free'
-                    : complexity === 'instant'
-                    ? 'meta-llama/llama-3.1-8b-instruct:free'
-                    : 'google/gemini-2.0-flash-exp:free';
-            case 'mistral':
-                // mistral-small-latest is available on Mistral free API tier
-                return 'mistral-small-latest';
-            case 'github':
-                // gpt-4o-mini has higher RPM allowance on GitHub Models free tier
-                return 'gpt-4o-mini';
-            default:
-                return 'gemini-2.5-flash';
-        }
-    }
-
-    static isValidModel(model: string): boolean {
-        if (!model) return false;
-        const lower = model.toLowerCase();
-        // Remove restrictive model blacklisting to support modern 3.x series
-        if (lower === 'openai/gpt-oss-120b' ||
-            lower === 'nvidia/nemotron-3-ultra-550b-a55b:free' ||
-            lower === 'open-mistral-nemo' ||
-            lower.includes('gpt-oss')) {
-            return false;
-        }
-        return true;
-    }
-
-    /**
      * Dynamically routes the task to the most efficient model based on complexity.
      */
     static createRoutedAgent(config: RouteConfig): Agent {
         const provider = config.provider || 'gemini';
-        let modelName = config.modelName;
-
-        if (!modelName || !this.isValidModel(modelName)) {
-            modelName = this.getRecommendedModel(provider, config.complexity);
-        }
+        let modelName = config.modelName || '';
 
         const agent = new Agent(
             config.role,

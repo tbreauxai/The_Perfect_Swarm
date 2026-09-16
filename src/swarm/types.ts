@@ -54,6 +54,7 @@ export interface AgentRunConfig {
     maxTokens?: number;
     timeoutMs?: number;
     fallbackProviders?: ProviderCredential[];
+    zodSchema?: any;
     [key: string]: any;
 }
 
