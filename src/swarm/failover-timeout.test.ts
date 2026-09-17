@@ -6,6 +6,7 @@ import { GeminiAdapter } from './providers/gemini.ts';
 import { GeminiEmbeddingProvider } from './memory.ts';
 import { SwarmClient } from './client.ts';
 import { createTokenChunks } from './profiler.ts';
+import { ModelRouter } from './router.ts';
 
 describe('Phase 1: Failover, Timeout Guards, and Stream Error Handling', () => {
     beforeEach(() => {
@@ -165,5 +166,53 @@ describe('Phase 1: Failover, Timeout Guards, and Stream Error Handling', () => {
             // Must not exceed maxTokensPerChunk
             expect(tokens).toBeLessThanOrEqual(maxTokensPerChunk + 10);
         }
+    });
+
+    it('overrides fast track mode and utilizes full swarm when forceFullSwarm is true', async () => {
+        const normalDecision = ModelRouter.evaluateFastPath('ping server', '');
+        expect(normalDecision.eligible).toBe(true);
+
+        const overriddenDecision = ModelRouter.evaluateFastPath('ping server', '', false, true);
+        expect(overriddenDecision.eligible).toBe(false);
+        expect(overriddenDecision.reason).toContain('Full swarm execution explicitly requested');
+
+        ProviderRegistry.register({
+            providerName: 'mock-test-full-swarm' as any,
+            async call(opts) {
+                if (opts.systemInstruction?.includes('Orchestrator') || opts.prompt.includes('Analyst Reports')) {
+                    return JSON.stringify({
+                        ui_title: 'Full Swarm Verification Dashboard',
+                        components: [
+                            { id: 'c1', type: 'MetricCard', props: { title: 'Swarm Status', value: 'Active' } }
+                        ]
+                    });
+                }
+                return JSON.stringify({
+                    summary: 'Full swarm verified summary',
+                    anomalies: [],
+                    insights: ['Full swarm verified']
+                });
+            }
+        });
+
+        const client = new SwarmClient({
+            mode: 'embedded',
+            settings: {
+                forceFullSwarm: true,
+                agents: [
+                    { id: 'manager', role: 'Manager Node', provider: 'mock-test-full-swarm', model: 'mock-model', apiKey: 'k1' },
+                    { id: 'a1', role: 'Analyst 1', provider: 'mock-test-full-swarm', model: 'mock-model', apiKey: 'k2' }
+                ]
+            }
+        });
+
+        const result = await client.analyze({ task: 'ping server', forceFullSwarm: true });
+        const routingEvent = result.events.find(e => e.action === 'Routing & Complexity Classification');
+        expect(routingEvent).toBeDefined();
+        expect(routingEvent?.output?.forceFullSwarm).toBe(true);
+
+        // Fast-path short-circuit event must NOT be present
+        const shortCircuitEvent = result.events.find(e => e.action === 'Fast-Path Short-Circuit Activated');
+        expect(shortCircuitEvent).toBeUndefined();
     });
 });

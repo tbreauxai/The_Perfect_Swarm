@@ -9,3 +9,7 @@
 - **Feedback & State**: Always provide immediate visual feedback for system states (e.g., spinning loaders during execution, distinct colors for Success/Failure, and interactive expandable logs).
 - **Responsive & Scannable**: Data output and swarm execution events should be highly structured and scannable, employing semantic icons (like `lucide-react`) to quickly convey the state (e.g., AlertCircle for errors, Activity for traces).
 - **Graceful Degradation**: If an LLM provider timeouts or fails, the rest of the swarm should continue execution or degrade gracefully, presenting the partial trace and errors clearly.
+
+## Model Configuration & Preservation Guidelines
+- **Zero Model Blacklists**: Never maintain or reintroduce a ban list or rejection list for AI models. Any model string configured by the user is strictly valid.
+- **Respect User Selection**: Never override user-configured model names with assumed or "recommended" defaults. Always execute with the exact model string provided by the user in the settings box.

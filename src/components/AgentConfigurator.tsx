@@ -65,7 +65,7 @@ export const AgentConfigurator: React.FC<AgentConfiguratorProps> = ({
                 const freeModels = providerModels.filter(m => m.free);
                 const paidModels = providerModels.filter(m => !m.free);
                 const apiKey = getApiKeyForProvider(settings, agent.provider);
-                const isKeyRequired = agent.provider !== 'none' && agent.provider !== 'openrouter' && !apiKey;
+                const isKeyRequired = agent.provider !== 'none' && agent.provider !== 'openrouter' && agent.provider !== 'simulated' && !apiKey;
 
                 return (
                     <div key={agent.id} className="p-3 bg-neutral-50 rounded-xl border border-neutral-200 space-y-2">
@@ -85,6 +85,7 @@ export const AgentConfigurator: React.FC<AgentConfiguratorProps> = ({
                                     className="w-full px-3 py-2 rounded-lg border border-neutral-300 outline-none text-sm bg-white focus:border-indigo-500"
                                 >
                                     <option value="none">None / Disabled</option>
+                                    <option value="simulated">Simulated / Mock</option>
                                     <option value="gemini">Gemini</option>
                                     <option value="groq">Groq</option>
                                     <option value="openrouter">OpenRouter</option>

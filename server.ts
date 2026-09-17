@@ -49,12 +49,15 @@ async function startServer() {
         return res.status(400).json({ error: 'Task is required.' });
       }
 
+      const forceFullSwarm = req.body.forceFullSwarm ?? req.body.settings?.forceFullSwarm ?? req.body.settings?.disableFastPath;
+
       const result = await executeSwarmWorkflow({
         task,
         data,
         settings,
         defaultAi,
         enableDeepAnalysis: enableDeepAnalysis ?? settings?.enableDeepAnalysis,
+        forceFullSwarm,
         complexityOverride
       });
 
@@ -71,6 +74,9 @@ async function startServer() {
       const data = (req.method === 'POST' ? req.body.data : req.query.data) as string;
       const settings = (req.method === 'POST' ? req.body.settings : {}) || {};
       const enableDeepAnalysis = req.method === 'POST' ? req.body.enableDeepAnalysis : req.query.enableDeepAnalysis === 'true';
+      const forceFullSwarm = req.method === 'POST'
+        ? (req.body.forceFullSwarm ?? req.body.settings?.forceFullSwarm ?? req.body.settings?.disableFastPath)
+        : (req.query.forceFullSwarm === 'true' || req.query.disableFastPath === 'true');
       const complexityOverride = req.method === 'POST' ? req.body.complexityOverride : req.query.complexityOverride;
 
       if (!task) {
@@ -83,6 +89,7 @@ async function startServer() {
         settings,
         defaultAi,
         enableDeepAnalysis,
+        forceFullSwarm,
         complexityOverride
       });
     } catch (error: any) {

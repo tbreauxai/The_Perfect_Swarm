@@ -14,6 +14,7 @@ export interface SwarmClientConfig {
     qdrantUrl?: string;
     qdrantApiKey?: string;
     enableDeepAnalysis?: boolean;
+    forceFullSwarm?: boolean;
     persistPath?: string;
     autoSave?: boolean;
 }
@@ -23,6 +24,7 @@ export interface AnalyzeRequest {
     data?: string;
     settings?: any;
     enableDeepAnalysis?: boolean;
+    forceFullSwarm?: boolean;
 }
 
 export interface AnalyzeResponse {
@@ -58,6 +60,7 @@ export class SwarmClient {
         this.defaultSettings = {
             appId: this.appId,
             enableDeepAnalysis: config.enableDeepAnalysis,
+            forceFullSwarm: config.forceFullSwarm,
             persistPath: config.persistPath,
             autoSave: config.autoSave,
             ...(config.settings || {})
@@ -103,6 +106,7 @@ export class SwarmClient {
             data: request.data,
             settings: mergedSettings,
             enableDeepAnalysis: request.enableDeepAnalysis ?? this.defaultSettings.enableDeepAnalysis,
+            forceFullSwarm: request.forceFullSwarm ?? this.defaultSettings.forceFullSwarm,
             cortex: this.cortex
         });
 
@@ -130,7 +134,8 @@ export class SwarmClient {
                     ...this.defaultSettings,
                     ...(request.settings || {})
                 },
-                enableDeepAnalysis: request.enableDeepAnalysis ?? this.defaultSettings.enableDeepAnalysis
+                enableDeepAnalysis: request.enableDeepAnalysis ?? this.defaultSettings.enableDeepAnalysis,
+                forceFullSwarm: request.forceFullSwarm ?? this.defaultSettings.forceFullSwarm
             })
         });
 
@@ -180,6 +185,7 @@ export class SwarmClient {
             data: request.data,
             settings: mergedSettings,
             enableDeepAnalysis: request.enableDeepAnalysis ?? this.defaultSettings.enableDeepAnalysis,
+            forceFullSwarm: request.forceFullSwarm ?? this.defaultSettings.forceFullSwarm,
             cortex: this.cortex,
             onEvent: (event) => {
                 pushItem({ type: 'event', event });
@@ -231,7 +237,8 @@ export class SwarmClient {
                     ...this.defaultSettings,
                     ...(request.settings || {})
                 },
-                enableDeepAnalysis: request.enableDeepAnalysis ?? this.defaultSettings.enableDeepAnalysis
+                enableDeepAnalysis: request.enableDeepAnalysis ?? this.defaultSettings.enableDeepAnalysis,
+                forceFullSwarm: request.forceFullSwarm ?? this.defaultSettings.forceFullSwarm
             })
         });
 

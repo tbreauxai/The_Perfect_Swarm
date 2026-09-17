@@ -4,7 +4,6 @@ import {
     MemoryCortex,
     ModelRouter,
     PayloadCache,
-    SwarmHierarchy,
     AdaptiveLoadBalancer,
     ProviderRegistry,
     createSwarmServer,
@@ -21,7 +20,7 @@ async function runDistVerification() {
 
     // 1. Verify exports presence
     console.log('Verifying compiled library exports:');
-    if (!executeSwarmWorkflow || !SwarmEngine || !MemoryCortex || !ModelRouter || !PayloadCache || !SwarmHierarchy || !AdaptiveLoadBalancer || !ProviderRegistry || !createSwarmServer || !handleSwarmSse || !serverFromSubpath || !createSwarmClient || !clientFromSubpath) {
+    if (!executeSwarmWorkflow || !SwarmEngine || !MemoryCortex || !ModelRouter || !PayloadCache || !AdaptiveLoadBalancer || !ProviderRegistry || !createSwarmServer || !handleSwarmSse || !serverFromSubpath || !createSwarmClient || !clientFromSubpath) {
         throw new Error('Missing core exports in compiled dist bundle');
     }
     const distClient = clientFromSubpath({ mode: 'embedded', appId: 'dist-client-app' });

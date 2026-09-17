@@ -1,26 +1,20 @@
 [
   {
-    "id": "goal-1-isolate-root-cause",
-    "description": "Isolate the exact mechanics causing persistent 'high traffic' errors and execution trace stalling after three cards.",
+    "id": "goal-1-instrument-key-metrics",
+    "description": "Instrument key execution metrics (task completion rate, latency percentiles p50/p95/EMA, provider/agent performance baselines) in src/swarm/profiler.ts and src/swarm/engine.ts.",
     "status": "completed",
-    "verification": "Root causes confirmed: hardcoded gemini-3.1-pro (unreleased/bogus model returning Google 503 capacity sheds), experimental v1alpha apiVersion, disableFallback: true default, and case-sensitive error heuristics missing 'high traffic'."
+    "verification": "Unit tests verify accurate calculation of task completion rate, p50/p95/EMA latency, and structured telemetry emission across successful and failed executions."
   },
   {
-    "id": "goal-2-remediate-model-and-api-version",
-    "description": "Migrate default model from gemini-3.1-pro to gemini-2.5-flash in App.tsx and auto-migrate stale localStorage values, and normalize GoogleGenAI apiVersion.",
+    "id": "goal-2-semantic-baseline-caching",
+    "description": "Deploy lightweight semantic baseline caching in src/swarm/cache.ts to match near-identical tasks and baseline queries, immediately lowering token cost.",
     "status": "completed",
-    "verification": "App.tsx and SettingsModal updated to gemini-2.5-flash and disableFallback: false with automatic localStorage migration; experimental v1alpha removed from gemini.ts and engine.ts."
+    "verification": "Unit tests verify semantic cache hits on high-similarity prompts, avoidance of downstream LLM calls, and preservation of response quality."
   },
   {
-    "id": "goal-3-harden-failover-detection",
-    "description": "Update agent.ts failover heuristics to catch 'high traffic', 'overloaded', 'UNAVAILABLE', and enable fallback by default.",
+    "id": "goal-3-reinforcement-learning-adaptive-scheduling",
+    "description": "Introduce reinforcement learning capability profiling (multi-armed bandit / UCB1 reward scoring) in src/swarm/loadBalancer.ts to adaptively schedule specialist agents based on historical verification ratings, completion rates, and latency.",
     "status": "completed",
-    "verification": "agent.ts failover heuristics expanded with case-insensitive matching for high traffic, overloaded, capacity, timeout, and status codes; tested and passing in vitest."
-  },
-  {
-    "id": "goal-4-verify-trace-progression",
-    "description": "Execute test suite and end-to-end swarm execution verifying trace progresses through all stages without halting.",
-    "status": "completed",
-    "verification": "100% of portable, simulation, dist, cli, and server tests passing with verified trace event completions."
+    "verification": "Unit tests verify dynamic specialist capability learning from verified outcomes and adaptive route selection favoring higher-performing specialists."
   }
 ]

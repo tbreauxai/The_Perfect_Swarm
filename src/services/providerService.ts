@@ -12,6 +12,15 @@ export interface ModelOption {
 export async function fetchAvailableModels(provider: string, apiKey?: string): Promise<ModelOption[]> {
     try {
         switch (provider) {
+            case 'simulated': {
+                return [
+                    {
+                        id: 'simulated-swarm-v1',
+                        name: 'Simulated Swarm Model (Zero-API-Key)',
+                        free: true
+                    }
+                ];
+            }
             case 'openrouter': {
                 // OpenRouter public models endpoint (no key required)
                 const res = await fetch('https://openrouter.ai/api/v1/models');

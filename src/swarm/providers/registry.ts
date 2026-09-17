@@ -4,6 +4,7 @@ import { GroqAdapter } from './groq.ts';
 import { OpenRouterAdapter } from './openrouter.ts';
 import { MistralAdapter } from './mistral.ts';
 import { GitHubAdapter } from './github.ts';
+import { SimulatedAdapter } from './simulated.ts';
 
 export class ProviderRegistry {
     private static adapters: Map<string, ProviderAdapter> = new Map();
@@ -14,6 +15,7 @@ export class ProviderRegistry {
         this.register(new OpenRouterAdapter());
         this.register(new MistralAdapter());
         this.register(new GitHubAdapter());
+        this.register(new SimulatedAdapter());
     }
 
     static register(adapter: ProviderAdapter): void {

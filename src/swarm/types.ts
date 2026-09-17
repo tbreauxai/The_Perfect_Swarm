@@ -1,6 +1,6 @@
 import type { GoogleGenAI } from '@google/genai';
 
-export const KNOWN_PROVIDERS = ['gemini', 'groq', 'openrouter', 'github', 'mistral'] as const;
+export const KNOWN_PROVIDERS = ['gemini', 'groq', 'openrouter', 'github', 'mistral', 'simulated'] as const;
 
 export type Provider = typeof KNOWN_PROVIDERS[number] | string;
 
@@ -19,6 +19,8 @@ export interface SwarmEngineSettings {
     mistralApiKey?: string;
     githubToken?: string;
     disableFallback?: boolean;
+    forceFullSwarm?: boolean;
+    disableFastPath?: boolean;
     critic?: AgentConfig;
     agents?: AgentConfig[];
     [key: string]: any;

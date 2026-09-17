@@ -52,6 +52,7 @@ export default function App() {
     githubToken: '',
     appId: 'perfect-swarm',
     disableFallback: false,
+    forceFullSwarm: false,
     agents: [
       { id: 'manager', role: 'Manager Node', provider: 'gemini', model: 'gemini-3.5-flash' },
       { id: 'a1', role: 'Analyst 1', provider: 'gemini', model: 'gemini-3.5-flash' },

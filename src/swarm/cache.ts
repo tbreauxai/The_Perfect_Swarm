@@ -31,6 +31,7 @@ export interface CacheStats {
 export interface FingerprintOptions {
     appId?: string;
     deepAnalysis?: boolean;
+    forceFullSwarm?: boolean;
     complexity?: string;
     model?: string;
 }
@@ -59,6 +60,7 @@ export class PayloadCache {
             `data:${(data || '').trim()}`,
             `complexity:${options?.complexity || 'auto'}`,
             `deep:${Boolean(options?.deepAnalysis)}`,
+            `forceFullSwarm:${Boolean(options?.forceFullSwarm)}`,
             `model:${options?.model || 'default'}`
         ].join('||');
 
@@ -185,6 +187,32 @@ export class PayloadCache {
         return this.entries.delete(fingerprint);
     }
 
+    private semanticCache?: SemanticBaselineCache;
+
+    /**
+     * Obtains the dedicated semantic baseline cache instance.
+     */
+    getSemanticCache(): SemanticBaselineCache {
+        if (!this.semanticCache) {
+            this.semanticCache = new SemanticBaselineCache();
+        }
+        return this.semanticCache;
+    }
+
+    /**
+     * Looks up an existing analysis payload matching the semantic intent of the task.
+     */
+    findSemanticMatch<T = any>(task: string, options?: { data?: string; threshold?: number }): SemanticMatchResult<T> {
+        return this.getSemanticCache().findMatch<T>(task, options);
+    }
+
+    /**
+     * Stores an analysis payload into the semantic baseline cache.
+     */
+    setSemantic<T = any>(task: string, payload: T, options?: { data?: string; ttlMs?: number; metadata?: Record<string, any> }): void {
+        this.getSemanticCache().set<T>(task, payload, options);
+    }
+
     /**
      * Clears all cached payloads and resets counters.
      */
@@ -193,6 +221,9 @@ export class PayloadCache {
         this.hitsCount = 0;
         this.missesCount = 0;
         this.evictionsCount = 0;
+        if (this.semanticCache) {
+            this.semanticCache.clear();
+        }
     }
 
     /**
@@ -211,7 +242,316 @@ export class PayloadCache {
     }
 }
 
+export interface SemanticCacheEntry<T = any> {
+    id: string;
+    task: string;
+    dataSample: string;
+    normalizedTask: string;
+    taskTokens: string[];
+    taskTrigrams: Set<string>;
+    payload: T;
+    createdAt: number;
+    expiresAt: number;
+    hits: number;
+    lastAccessedAt: number;
+    metadata?: Record<string, any>;
+}
+
+export interface SemanticCacheStats {
+    size: number;
+    maxEntries: number;
+    hits: number;
+    misses: number;
+    evictions: number;
+    hitRatio: number;
+    estimatedTokensSaved: number;
+}
+
+export interface SemanticCacheConfig {
+    maxEntries?: number;          // default: 200
+    defaultTtlMs?: number;        // default: 30 minutes (1,800,000 ms)
+    similarityThreshold?: number; // default: 0.80 (80% similarity required for hit)
+}
+
+export interface SemanticMatchResult<T = any> {
+    hit: boolean;
+    entry?: SemanticCacheEntry<T>;
+    similarity: number;
+    matchedTask?: string;
+    reason?: string;
+}
+
+/**
+ * High-performance, zero-dependency lexical-semantic similarity engine.
+ * Combines token set Jaccard matching with character trigram Dice coefficient.
+ */
+export class SemanticSimilarityEngine {
+    private static STOP_WORDS = new Set([
+        'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for', 'from',
+        'has', 'he', 'in', 'is', 'it', 'its', 'of', 'on', 'that', 'the',
+        'to', 'was', 'were', 'will', 'with', 'this', 'but', 'they',
+        'have', 'had', 'what', 'when', 'where', 'who', 'which', 'why', 'how'
+    ]);
+
+    static normalizeText(text: string): string {
+        return (text || '')
+            .toLowerCase()
+            .replace(/[^\w\s]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    static tokenize(text: string): string[] {
+        const normalized = this.normalizeText(text);
+        if (!normalized) return [];
+        return normalized
+            .split(' ')
+            .filter(w => w.length > 1 && !this.STOP_WORDS.has(w));
+    }
+
+    static extractTrigrams(text: string): Set<string> {
+        const normalized = this.normalizeText(text);
+        const trigrams = new Set<string>();
+        if (normalized.length < 3) {
+            if (normalized.length > 0) trigrams.add(normalized);
+            return trigrams;
+        }
+        for (let i = 0; i <= normalized.length - 3; i++) {
+            trigrams.add(normalized.substring(i, i + 3));
+        }
+        return trigrams;
+    }
+
+    static tokenSimilarity(tokensA: string[], tokensB: string[]): number {
+        if (tokensA.length === 0 && tokensB.length === 0) return 1.0;
+        if (tokensA.length === 0 || tokensB.length === 0) return 0.0;
+
+        const setB = new Set(tokensB);
+        let matchScore = 0;
+        const matchedB = new Set<string>();
+
+        for (const tA of tokensA) {
+            if (setB.has(tA)) {
+                matchScore += 1.0;
+                matchedB.add(tA);
+            } else {
+                for (const tB of tokensB) {
+                    if (!matchedB.has(tB)) {
+                        let commonPrefixLen = 0;
+                        const minLen = Math.min(tA.length, tB.length);
+                        while (commonPrefixLen < minLen && tA[commonPrefixLen] === tB[commonPrefixLen]) {
+                            commonPrefixLen++;
+                        }
+                        if (commonPrefixLen >= 4 || (commonPrefixLen >= 3 && (tA.startsWith(tB) || tB.startsWith(tA)))) {
+                            matchScore += 0.85;
+                            matchedB.add(tB);
+                            break;
+                        }
+                        if (tA.length >= 4 && tB.length >= 4 && (tA.includes(tB) || tB.includes(tA))) {
+                            matchScore += 0.75;
+                            matchedB.add(tB);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        const totalTokens = Math.max(tokensA.length, tokensB.length);
+        return totalTokens === 0 ? 0 : Math.min(1.0, matchScore / totalTokens);
+    }
+
+    static trigramDice(trigramsA: Set<string>, trigramsB: Set<string>): number {
+        if (trigramsA.size === 0 && trigramsB.size === 0) return 1.0;
+        if (trigramsA.size === 0 || trigramsB.size === 0) return 0.0;
+
+        let intersection = 0;
+        for (const tri of trigramsA) {
+            if (trigramsB.has(tri)) intersection++;
+        }
+
+        return (2 * intersection) / (trigramsA.size + trigramsB.size);
+    }
+
+    static computeSimilarity(
+        taskA: string,
+        taskB: string,
+        precomputed?: {
+            tokensA?: string[];
+            trigramsA?: Set<string>;
+            tokensB?: string[];
+            trigramsB?: Set<string>;
+        }
+    ): number {
+        const tokensA = precomputed?.tokensA ?? this.tokenize(taskA);
+        const trigramsA = precomputed?.trigramsA ?? this.extractTrigrams(taskA);
+
+        const tokensB = precomputed?.tokensB ?? this.tokenize(taskB);
+        const trigramsB = precomputed?.trigramsB ?? this.extractTrigrams(taskB);
+
+        const tokenSim = this.tokenSimilarity(tokensA, tokensB);
+        const dice = this.trigramDice(trigramsA, trigramsB);
+
+        const score = (tokenSim * 0.60) + (dice * 0.40);
+        return Math.round(score * 1000) / 1000;
+    }
+}
+
+/**
+ * Lightweight Semantic Baseline Cache to match near-identical tasks and baseline queries,
+ * immediately lowering token expenditure and bypassing redundant LLM executions.
+ */
+export class SemanticBaselineCache {
+    private maxEntries: number;
+    private defaultTtlMs: number;
+    private similarityThreshold: number;
+    private entries: Map<string, SemanticCacheEntry> = new Map();
+    private hitsCount: number = 0;
+    private missesCount: number = 0;
+    private evictionsCount: number = 0;
+    private totalEstimatedTokensSaved: number = 0;
+
+    constructor(config?: SemanticCacheConfig) {
+        this.maxEntries = config?.maxEntries ?? 200;
+        this.defaultTtlMs = config?.defaultTtlMs ?? 30 * 60 * 1000;
+        this.similarityThreshold = config?.similarityThreshold ?? 0.80;
+    }
+
+    set<T = any>(
+        task: string,
+        payload: T,
+        options?: { data?: string; ttlMs?: number; metadata?: Record<string, any>; estimatedTokens?: number }
+    ): void {
+        const now = Date.now();
+        const duration = options?.ttlMs ?? this.defaultTtlMs;
+        const normalizedTask = SemanticSimilarityEngine.normalizeText(task);
+        if (!normalizedTask) return;
+
+        const id = PayloadCache.hashString(`semantic:${normalizedTask}`).substring(0, 32);
+
+        if (this.entries.has(id)) {
+            this.entries.delete(id);
+        } else if (this.entries.size >= this.maxEntries) {
+            const oldestKey = this.entries.keys().next().value;
+            if (oldestKey) {
+                this.entries.delete(oldestKey);
+                this.evictionsCount++;
+            }
+        }
+
+        this.entries.set(id, {
+            id,
+            task,
+            dataSample: (options?.data || '').substring(0, 500),
+            normalizedTask,
+            taskTokens: SemanticSimilarityEngine.tokenize(task),
+            taskTrigrams: SemanticSimilarityEngine.extractTrigrams(task),
+            payload,
+            createdAt: now,
+            expiresAt: now + duration,
+            hits: 0,
+            lastAccessedAt: now,
+            metadata: options?.metadata
+        });
+    }
+
+    findMatch<T = any>(
+        task: string,
+        options?: { data?: string; threshold?: number }
+    ): SemanticMatchResult<T> {
+        const threshold = options?.threshold ?? this.similarityThreshold;
+        const now = Date.now();
+
+        if (!task || this.entries.size === 0) {
+            this.missesCount++;
+            return { hit: false, similarity: 0 };
+        }
+
+        let bestMatch: SemanticCacheEntry<T> | undefined;
+        let highestSimilarity = 0;
+
+        const queryTokens = SemanticSimilarityEngine.tokenize(task);
+        const queryTrigrams = SemanticSimilarityEngine.extractTrigrams(task);
+
+        for (const [id, entry] of this.entries.entries()) {
+            if (now > entry.expiresAt) {
+                this.entries.delete(id);
+                continue;
+            }
+
+            const sim = SemanticSimilarityEngine.computeSimilarity(
+                task,
+                entry.task,
+                {
+                    tokensA: queryTokens,
+                    trigramsA: queryTrigrams,
+                    tokensB: entry.taskTokens,
+                    trigramsB: entry.taskTrigrams
+                }
+            );
+
+            if (sim > highestSimilarity) {
+                highestSimilarity = sim;
+                bestMatch = entry as SemanticCacheEntry<T>;
+            }
+        }
+
+        if (bestMatch && highestSimilarity >= threshold) {
+            this.entries.delete(bestMatch.id);
+            bestMatch.hits++;
+            bestMatch.lastAccessedAt = now;
+            this.entries.set(bestMatch.id, bestMatch);
+
+            this.hitsCount++;
+            const estTokens = Math.max(50, Math.ceil((task.length + (options?.data?.length || 0)) / 4));
+            this.totalEstimatedTokensSaved += estTokens;
+
+            return {
+                hit: true,
+                entry: bestMatch,
+                similarity: highestSimilarity,
+                matchedTask: bestMatch.task,
+                reason: `Semantic match with ${(highestSimilarity * 100).toFixed(1)}% confidence against baseline '${bestMatch.task.substring(0, 50)}'`
+            };
+        }
+
+        this.missesCount++;
+        return {
+            hit: false,
+            similarity: highestSimilarity,
+            matchedTask: bestMatch?.task,
+            reason: highestSimilarity > 0 ? `Highest similarity ${(highestSimilarity * 100).toFixed(1)}% fell below threshold ${(threshold * 100).toFixed(0)}%` : 'No similar baseline found'
+        };
+    }
+
+    getStats(): SemanticCacheStats {
+        const total = this.hitsCount + this.missesCount;
+        return {
+            size: this.entries.size,
+            maxEntries: this.maxEntries,
+            hits: this.hitsCount,
+            misses: this.missesCount,
+            evictions: this.evictionsCount,
+            hitRatio: total === 0 ? 0 : Number((this.hitsCount / total).toFixed(4)),
+            estimatedTokensSaved: this.totalEstimatedTokensSaved
+        };
+    }
+
+    clear(): void {
+        this.entries.clear();
+        this.hitsCount = 0;
+        this.missesCount = 0;
+        this.evictionsCount = 0;
+        this.totalEstimatedTokensSaved = 0;
+    }
+}
+
 /**
  * Global shared payload cache singleton for cross-invocation persistence.
  */
 export const globalPayloadCache = new PayloadCache({ maxEntries: 300, defaultTtlMs: 60 * 60 * 1000 });
+
+/**
+ * Global shared lightweight semantic baseline cache singleton.
+ */
+export const globalSemanticCache = new SemanticBaselineCache({ maxEntries: 300, defaultTtlMs: 60 * 60 * 1000, similarityThreshold: 0.80 });

@@ -107,6 +107,15 @@ async function runPortableValidation() {
         throw new Error('ModelRouter complexity tier mapping failure');
     }
 
+    const forceFullSwarmDecision = ModelRouter.evaluateFastPath('What is 2 + 2?', '', false, true);
+    const forceFullSwarmComplexity = ModelRouter.inferComplexity('Hello world', 0, 1, true);
+    if (forceFullSwarmDecision.eligible || forceFullSwarmDecision.targetTier === 'instant') {
+        throw new Error('Fast-path override failed to disable fast-path eligibility when forceFullSwarm=true');
+    }
+    if (forceFullSwarmComplexity === 'instant') {
+        throw new Error('ModelRouter complexity tier failed to upgrade instant when forceFullSwarm=true');
+    }
+
     /*
     console.log('\n=== Step 4b: Guaranteed Free-Tier Model Routing & OpenRouter :free Resolution ===');
     const orComplex = ModelRouter.getRecommendedModel('openrouter', 'complex');

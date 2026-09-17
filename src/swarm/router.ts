@@ -27,10 +27,24 @@ export class ModelRouter {
      * Prevents low-complexity intents (< 35 tokens, e.g. quick summaries, greetings, direct questions)
      * from triggering heavy multi-agent profiling, chunk partitioning, Qdrant vector retrieval, and critic loops.
      */
-    static evaluateFastPath(task: string, data: string = "", deepAnalysisRequested: boolean = false): FastPathDecision {
+    static evaluateFastPath(
+        task: string,
+        data: string = "",
+        deepAnalysisRequested: boolean = false,
+        forceFullSwarm: boolean = false
+    ): FastPathDecision {
         const taskClean = (task || '').trim();
         const dataClean = (data || '').trim();
         const estimatedTokens = Math.ceil((taskClean.length + dataClean.length) / 4);
+
+        if (forceFullSwarm) {
+            return {
+                eligible: false,
+                reason: 'Full swarm execution explicitly requested via settings override; fast-path short-circuit bypassed.',
+                targetTier: 'simple',
+                estimatedTokens
+            };
+        }
 
         if (deepAnalysisRequested) {
             return {
@@ -87,8 +101,13 @@ export class ModelRouter {
     /**
      * Quick boolean check for fast-path short-circuiting.
      */
-    static isFastPathEligible(task: string, dataLength: number = 0, deepAnalysisRequested: boolean = false): boolean {
-        if (deepAnalysisRequested || dataLength >= 256) return false;
+    static isFastPathEligible(
+        task: string,
+        dataLength: number = 0,
+        deepAnalysisRequested: boolean = false,
+        forceFullSwarm: boolean = false
+    ): boolean {
+        if (forceFullSwarm || deepAnalysisRequested || dataLength >= 256) return false;
         const taskClean = (task || '').trim();
         const estTokens = Math.ceil((taskClean.length + dataLength) / 4);
         if (estTokens >= 35) return false;
@@ -101,8 +120,13 @@ export class ModelRouter {
     /**
      * Infers task complexity based on task description, data payload size, and chunk count.
      */
-    static inferComplexity(task: string, dataLength: number = 0, chunkCount: number = 1): TaskComplexity {
-        if (this.isFastPathEligible(task, dataLength)) {
+    static inferComplexity(
+        task: string,
+        dataLength: number = 0,
+        chunkCount: number = 1,
+        forceFullSwarm: boolean = false
+    ): TaskComplexity {
+        if (!forceFullSwarm && this.isFastPathEligible(task, dataLength, false, forceFullSwarm)) {
             return 'instant';
         }
         const lower = (task || '').toLowerCase();
@@ -118,11 +142,47 @@ export class ModelRouter {
     }
 
     /**
+     * Resolves the default recommended model for a given provider and complexity tier.
+     */
+    static getRecommendedModel(provider: Provider, complexity: TaskComplexity): string {
+        const p = (provider || 'gemini').toLowerCase();
+        switch (p) {
+            case 'gemini':
+                // gemini-2.5-flash offers 15 RPM / 1M token window on free tier
+                return 'gemini-2.5-flash';
+            case 'groq':
+                return complexity === 'instant' ? 'llama-3.1-8b-instant' : 'llama3-70b-8192';
+            case 'openrouter':
+                return complexity === 'complex'
+                    ? 'deepseek/deepseek-r1:free'
+                    : complexity === 'instant'
+                    ? 'meta-llama/llama-3.1-8b-instruct:free'
+                    : 'google/gemini-2.0-flash-exp:free';
+            case 'mistral':
+                // mistral-small-latest is available on Mistral free API tier
+                return 'mistral-small-latest';
+            case 'github':
+                // gpt-4o-mini has higher RPM allowance on GitHub Models free tier
+                return 'gpt-4o-mini';
+            default:
+                return 'gemini-2.5-flash';
+        }
+    }
+
+    static isValidModel(model: string): boolean {
+        return typeof model === 'string' && model.trim().length > 0;
+    }
+
+    /**
      * Dynamically routes the task to the most efficient model based on complexity.
      */
     static createRoutedAgent(config: RouteConfig): Agent {
         const provider = config.provider || 'gemini';
-        let modelName = config.modelName || '';
+        let modelName = config.modelName;
+
+        if (!modelName || !this.isValidModel(modelName)) {
+            modelName = this.getRecommendedModel(provider, config.complexity);
+        }
 
         const agent = new Agent(
             config.role,

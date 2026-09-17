@@ -3,14 +3,15 @@ import { Agent } from './agent.ts';
 import { MemoryCortex } from './memory.ts';
 import { SwarmContext } from './context.ts';
 import type { SwarmEvent, ProviderCredential, Provider, LearnedMemoryEvent, AgentRunConfig, SwarmEngineSettings, AgentConfig } from './types.ts';
-import { profileData, createTokenChunks, SwarmTracer } from './profiler.ts';
+import { profileData, createTokenChunks, SwarmTracer, globalMetricsCollector, SwarmMetricsCollector, type SwarmBaselineReport } from './profiler.ts';
 import { ModelRouter, type TaskComplexity } from './router.ts';
 import { AnalysisLifecycle } from './lifecycle.ts';
-import { PayloadCache, globalPayloadCache } from './cache.ts';
+import { PayloadCache, globalPayloadCache, globalSemanticCache, type SemanticMatchResult } from './cache.ts';
 import { AnalystResponseSchema, ManagerResponseSchema } from './schemas.ts';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { ToolRegistry, globalToolRegistry, type SwarmTool } from './tools/index.ts';
 import { guardAnalystResponse, guardManagerResponse, parseJsonSafe } from './parser.ts';
+import { globalSpecialistRouter, globalTokenBudgetManager, globalSpecialistProfiler, type SpecialistRoutingPlan } from './loadBalancer.ts';
 
 export interface ProviderResolution {
     key: string;
@@ -32,6 +33,10 @@ export function sanitizeApiKey(k: string | undefined | null): string {
  * Validates provider-specific key conventions and throws descriptive errors.
  */
 export function validateProviderKey(provider: Provider, key: string, role: string = 'Agent'): void {
+    if (provider === 'simulated' || provider === 'mock' || provider === 'custom-mock') {
+        return;
+    }
+
     if (!key) {
         throw new Error(`Missing API Key for ${role} provider (${provider}). Please configure it in settings.`);
     }
@@ -138,6 +143,7 @@ export interface SwarmWorkflowParams {
     settings?: SwarmEngineSettings;
     defaultAi?: GoogleGenAI;
     enableDeepAnalysis?: boolean;
+    forceFullSwarm?: boolean;
     complexityOverride?: TaskComplexity;
     onEvent?: (event: SwarmEvent) => void;
     onMemoryLearned?: (event: LearnedMemoryEvent) => void;
@@ -149,6 +155,7 @@ export interface SwarmWorkflowParams {
 export interface SwarmWorkflowResult {
     events: SwarmEvent[];
     finalAnalysis: any;
+    metrics?: SwarmBaselineReport;
 }
 
 /**
@@ -173,6 +180,7 @@ export function getOrCreateDefaultCortex(appId: string, aiClient?: GoogleGenAI):
  * -> Multi-analyst parallel execution -> Manager synthesis & Critic verification -> Memory reinforcement.
  */
 export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise<SwarmWorkflowResult> {
+    const workflowStartTime = Date.now();
     const { task, data, settings, defaultAi, enableDeepAnalysis, complexityOverride, onEvent } = params;
     const context = params.context || new SwarmContext();
     if (onEvent) {
@@ -234,17 +242,19 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
 
 
     // 0. Infer Task Complexity via ModelRouter
-    const complexity: TaskComplexity = complexityOverride || ModelRouter.inferComplexity(task, (data || '').length);
+    const forceFullSwarm = params.forceFullSwarm ?? settings?.forceFullSwarm ?? settings?.disableFastPath ?? false;
+    const complexity: TaskComplexity = complexityOverride || ModelRouter.inferComplexity(task, (data || '').length, 1, forceFullSwarm);
     const deepAnalysisRequested = enableDeepAnalysis ?? settings?.enableDeepAnalysis ?? (complexity === 'complex');
 
     // 0b. Check Deterministic Payload Cache for Zero-Drift Short-Circuit
     const cacheKey = PayloadCache.computeFingerprint(task, data || "", {
         appId: targetAppId,
         deepAnalysis: deepAnalysisRequested,
-        complexity
+        complexity,
+        forceFullSwarm
     });
 
-    const cachedAnalysis = globalPayloadCache.get(cacheKey);
+    const cachedAnalysis = forceFullSwarm ? null : globalPayloadCache.get(cacheKey);
     if (cachedAnalysis) {
         context.addEvent({
             agentRole: 'Payload Cache',
@@ -259,9 +269,53 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             durationMs: 0
         });
 
+        const workflowDurationMs = Date.now() - workflowStartTime;
+        globalMetricsCollector.recordTaskExecution({
+            success: true,
+            durationMs: workflowDurationMs,
+            agentRole: 'Payload Cache'
+        });
+        const metrics = globalMetricsCollector.getBaselineReport();
+
         return {
             events: context.events,
-            finalAnalysis: cachedAnalysis
+            finalAnalysis: cachedAnalysis,
+            metrics
+        };
+    }
+
+    // 0c. Check Lightweight Semantic Baseline Cache for Near-Identical Query Matching
+    const semanticMatch: SemanticMatchResult = forceFullSwarm
+        ? { hit: false, similarity: 0 }
+        : globalSemanticCache.findMatch(task, { data, threshold: 0.80 });
+
+    if (semanticMatch.hit && semanticMatch.entry) {
+        context.addEvent({
+            agentRole: 'Semantic Baseline Cache',
+            action: 'Cache Hit (Semantic Zero-Drift Baseline)',
+            modelName: 'Local/SemanticCache',
+            prompt: `Semantic baseline cache hit: ${semanticMatch.reason || `similarity ${semanticMatch.similarity}`}`,
+            output: {
+                matchedTask: semanticMatch.matchedTask,
+                similarity: semanticMatch.similarity,
+                cached: true,
+                bypassed: '100% LLM token consumption & provider API calls'
+            },
+            durationMs: 0
+        });
+
+        const workflowDurationMs = Date.now() - workflowStartTime;
+        globalMetricsCollector.recordTaskExecution({
+            success: true,
+            durationMs: workflowDurationMs,
+            agentRole: 'Semantic Baseline Cache'
+        });
+        const metrics = globalMetricsCollector.getBaselineReport();
+
+        return {
+            events: context.events,
+            finalAnalysis: semanticMatch.entry.payload,
+            metrics
         };
     }
 
@@ -310,7 +364,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     for (const ac of analystConfigs) {
         const { key: aKey, client: aClient } = resolveProvider(ac.provider, settings, defaultAi);
         const finalAKey = ac.apiKey ? sanitizeApiKey(ac.apiKey) : aKey;
-        if (finalAKey) {
+        if (finalAKey || ac.provider === 'simulated' || ac.provider === 'mock' || ac.provider === 'custom-mock') {
             const aModel = ac.model || '';
             const aFallbacks = (ac as any).disableFallback || (ac as any).strictProvider
                 ? []
@@ -325,7 +379,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     if (dedicatedCriticConfig) {
         const { key: cKey, client: cClient } = resolveProvider(dedicatedCriticConfig.provider, settings, defaultAi);
         const finalCKey = dedicatedCriticConfig.apiKey ? sanitizeApiKey(dedicatedCriticConfig.apiKey) : cKey;
-        if (finalCKey) {
+        if (finalCKey || dedicatedCriticConfig.provider === 'simulated' || dedicatedCriticConfig.provider === 'mock' || dedicatedCriticConfig.provider === 'custom-mock') {
             const cModel = dedicatedCriticConfig.model || '';
             const cFallbacks = availableFallbacks.filter(f => f.provider !== dedicatedCriticConfig.provider);
             dedicatedCriticAgent = new Agent(dedicatedCriticConfig.role || 'Verification Critic', cModel, dedicatedCriticConfig.provider, finalCKey, cClient, cFallbacks);
@@ -336,17 +390,18 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         throw new Error('No active Analysts found. Please configure at least one Analyst agent in settings and ensure its API key is provided.');
     }
 
-    const fastPathDecision = ModelRouter.evaluateFastPath(task, data || "", deepAnalysisRequested);
+    const fastPathDecision = ModelRouter.evaluateFastPath(task, data || "", deepAnalysisRequested, forceFullSwarm);
 
     context.addEvent({
         agentRole: 'Model Router',
         action: 'Routing & Complexity Classification',
         modelName: 'Local/TypeScript',
-        prompt: `Routing task with inferred complexity='${complexity}', fastPathEligible=${fastPathDecision.eligible}`,
+        prompt: `Routing task with inferred complexity='${complexity}', fastPathEligible=${fastPathDecision.eligible}${forceFullSwarm ? ' (Fast track overridden: forceFullSwarm=true)' : ''}`,
         output: {
             complexity,
             fastPath: fastPathDecision,
             deepAnalysis: deepAnalysisRequested,
+            forceFullSwarm,
             manager: { provider: managerConfig.provider, model: managerModel },
             analysts: analysts.map(a => ({ role: a.role, provider: a.provider, model: a.modelName }))
         },
@@ -408,6 +463,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
 
             if (finalAnalysis && !finalAnalysis.ui_title?.includes("Error")) {
                 globalPayloadCache.set(cacheKey, finalAnalysis);
+                globalSemanticCache.set(task, finalAnalysis, { data });
                 if (memoryCortex) {
                     const content = `Task: ${task}\nResult: ${finalAnalysis.ui_title || 'Fast analysis complete'}`;
                     const meta = {
@@ -438,9 +494,27 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 }
             }
 
+            const workflowDurationMs = Date.now() - workflowStartTime;
+            globalMetricsCollector.recordTaskExecution({
+                success: true,
+                durationMs: workflowDurationMs,
+                agentRole: fastAnalyst.role,
+                provider: fastAnalyst.provider
+            });
+            const metrics = globalMetricsCollector.getBaselineReport();
+            context.addEvent({
+                agentRole: 'System Profiler',
+                action: 'Workflow Metrics Baseline',
+                modelName: 'Local/MetricsCollector',
+                prompt: `Fast-path baseline recorded: completionRate=${metrics.overallCompletionRatePercent}%, latency=${workflowDurationMs}ms, totalTasks=${metrics.totalTasks}`,
+                output: metrics,
+                durationMs: workflowDurationMs
+            });
+
             return {
                 events: context.events,
-                finalAnalysis
+                finalAnalysis,
+                metrics
             };
         } catch (err: any) {
             console.warn(`[Fast-Path] Short-circuit failed, falling back to full swarm pipeline:`, err);
@@ -527,25 +601,82 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             historicalContext = "Failed to retrieve baselines from memory. Proceeding without historical context.";
         }
 
-        // Step 4: Run Analysts across Chunks
+        // Step 4: Dynamic Specialist Routing & Chunk Distribution
         const allAnalystReports: any[][] = analysts.map(() => []);
 
-        for (let i = 0; i < chunks.length; i++) {
-            const chunk = chunks[i];
+        if (analysts.length > 0 && chunks.length > 0) {
+            let routingPlan: SpecialistRoutingPlan;
+            if (chunks.length > 1) {
+                // Multi-chunk workload: Route chunks across specialists based on affinity and token quotas
+                routingPlan = globalSpecialistRouter.planDistribution(task, chunks, analysts);
+            } else {
+                // Single-chunk workload: Evaluate domain affinity & allocate budget across specialists
+                const estTokens = Math.max(10, Math.ceil(chunks[0].length / 4));
+                const assignments = analysts.map(analyst => {
+                    const { score: affinity, matchedDomain } = globalSpecialistRouter.scoreAffinity(analyst.role, `${task}\n${chunks[0]}`);
+                    globalTokenBudgetManager.recordUsage(analyst.provider, estTokens, analyst.role);
+                    return {
+                        chunkIndex: 0,
+                        estimatedTokens: estTokens,
+                        agentId: (analyst as any).id || analyst.role,
+                        agentRole: analyst.role,
+                        provider: analyst.provider,
+                        affinityScore: affinity,
+                        allocatedTokens: estTokens,
+                        reason: matchedDomain
+                            ? `Matched '${matchedDomain}' domain affinity (${Math.round(affinity * 100)}%)`
+                            : `Domain perspective analysis (${Math.round(affinity * 100)}%)`
+                    };
+                });
 
-            const analystPromises = analysts.map(async analyst => {
+                const specialistSummary: Record<string, { role: string; chunksAssigned: number; tokensAllocated: number }> = {};
+                for (const a of analysts) {
+                    specialistSummary[a.role] = {
+                        role: a.role,
+                        chunksAssigned: 1,
+                        tokensAllocated: estTokens
+                    };
+                }
+
+                routingPlan = {
+                    totalChunks: 1,
+                    totalEstimatedTokens: estTokens * analysts.length,
+                    assignments,
+                    specialistSummary
+                };
+            }
+
+            // Emit structured Specialist Dynamic Routing event
+            context.addEvent({
+                agentRole: 'Dynamic Task Router',
+                action: 'Specialist Dynamic Routing',
+                modelName: 'Local/AffinityRouter',
+                prompt: `Dynamic specialist routing plan for ${chunks.length} chunk(s) across ${analysts.length} specialist(s)`,
+                output: {
+                    totalChunks: routingPlan.totalChunks,
+                    totalEstimatedTokens: routingPlan.totalEstimatedTokens,
+                    assignments: routingPlan.assignments,
+                    specialistSummary: routingPlan.specialistSummary,
+                    tokenBudgets: globalTokenBudgetManager.getMetrics(),
+                    capabilityProfiles: globalSpecialistProfiler.getAllProfiles()
+                },
+                durationMs: 0
+            });
+
+            // Helper to execute an individual analyst on a chunk
+            const executeAnalyst = async (analyst: Agent, chunk: string, chunkIdx: number) => {
+                const startTime = Date.now();
                 const toolPrompt = toolRegistry.list().length > 0 ? `\n\n${toolRegistry.renderPromptSchema()}` : '';
                 analyst.setSystemInstruction(ANALYST_SYSTEM_INSTRUCTION + toolPrompt);
-                const chunkPromptText = chunks.length > 1 ? `Chunk ${i + 1}/${chunks.length}\n${chunk}` : chunk;
+                const chunkPromptText = chunks.length > 1 ? `Chunk ${chunkIdx + 1}/${chunks.length}\n${chunk}` : chunk;
 
-                const analystPrompt = `Task: ${task}\nMetadata: ${JSON.stringify(profile)}\nHistorical Baselines: ${historicalContext}\nData Chunk [${i + 1}/${chunks.length}]:\n${chunkPromptText}`;
+                const analystPrompt = `Task: ${task}\nMetadata: ${JSON.stringify(profile)}\nHistorical Baselines: ${historicalContext}\nData Chunk [${chunkIdx + 1}/${chunks.length}]:\n${chunkPromptText}`;
 
                 try {
                     let rawOutput: any;
                     try {
                         rawOutput = await analyst.run(analystPrompt, context, { 
-                            responseMimeType: "application/json",
-                            zodSchema: AnalystResponseSchema
+                            responseMimeType: "application/json"
                         });
                     } catch (innerErr: any) {
                         SwarmTracer.getInstance().logEvent({
@@ -580,37 +711,80 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                             resData.insights.push(`[Tool Result: ${tr.tool}]: ${JSON.stringify(tr.result)}`);
                         }
                     }
+                    (resData as any)._chunkIndex = chunkIdx;
+
+                    // Record response token telemetry
+                    const outTokens = Math.max(10, Math.ceil((typeof rawOutput === 'string' ? rawOutput.length : JSON.stringify(rawOutput).length) / 4));
+                    globalTokenBudgetManager.recordUsage(analyst.provider, outTokens, analyst.role);
+
+                    const durationMs = Date.now() - startTime;
+                    globalSpecialistProfiler.recordOutcome(analyst.role, {
+                        success: true,
+                        durationMs,
+                        tokensUsed: outTokens
+                    });
+
                     return resData;
                 } catch (err: any) {
                     const errDetail = err?.stack || err?.message || String(err);
+                    const durationMs = Date.now() - startTime;
+                    globalSpecialistProfiler.recordOutcome(analyst.role, {
+                        success: false,
+                        durationMs,
+                        error: errDetail
+                    });
                     console.error(`[Analyst Fatal Error] ${analyst.role} failed:`, errDetail);
                     throw err; // Stop hiding the error! Bubble it up.
                 }
-            });
+            };
 
-            const chunkReports = await Promise.all(analystPromises);
-            for (let a = 0; a < analysts.length; a++) {
-                allAnalystReports[a].push(chunkReports[a]);
-            }
+            if (chunks.length > 1) {
+                // Execute routed chunk assignments
+                for (let i = 0; i < chunks.length; i++) {
+                    const chunk = chunks[i];
+                    const assignment = routingPlan.assignments.find(asn => asn.chunkIndex === i);
+                    const assignedAnalyst = analysts.find(a => a.role === assignment?.agentRole) || analysts[i % analysts.length];
+                    const analystIdx = analysts.indexOf(assignedAnalyst);
 
-            if (i < chunks.length - 1) {
-                context.addEvent({
-                    agentRole: 'System Orchestrator',
-                    action: 'Batch Delay',
-                    modelName: 'Local/TypeScript',
-                    prompt: `Rate limit prevention: Waiting 2s before processing chunk ${i + 2}/${chunks.length}...`
-                });
-                await new Promise(resolve => setTimeout(resolve, 2000));
+                    const resData = await executeAnalyst(assignedAnalyst, chunk, i);
+                    if (analystIdx >= 0) {
+                        allAnalystReports[analystIdx].push(resData);
+                    }
+
+                    if (i < chunks.length - 1) {
+                        context.addEvent({
+                            agentRole: 'System Orchestrator',
+                            action: 'Batch Delay',
+                            modelName: 'Local/TypeScript',
+                            prompt: `Rate limit prevention: Waiting 2s before processing chunk ${i + 2}/${chunks.length}...`
+                        });
+                        await new Promise(resolve => setTimeout(resolve, 2000));
+                    }
+                }
+            } else {
+                // Single chunk: execute all analysts in parallel (full domain perspective)
+                const chunkReports = await Promise.all(
+                    analysts.map((analyst) => executeAnalyst(analyst, chunks[0], 0))
+                );
+                for (let a = 0; a < analysts.length; a++) {
+                    allAnalystReports[a].push(chunkReports[a]);
+                }
             }
         }
 
         // Step 5: Manager Node Synthesis & Deep Analysis Verification
         const compiledReports = analysts.map((a, i) => {
-            const combinedStr = allAnalystReports[i]
-                .map((r, chunkIdx) => `--- Chunk ${chunkIdx + 1} ---\n${typeof r === 'string' ? r : JSON.stringify(r, null, 2)}`)
+            const reports = allAnalystReports[i];
+            if (!reports || reports.length === 0) return null;
+            const combinedStr = reports
+                .map((r) => {
+                    const chunkLabel = r._chunkIndex !== undefined ? `--- Chunk ${r._chunkIndex + 1} ---` : '--- Report ---';
+                    const content = typeof r === 'string' ? r : JSON.stringify(r, null, 2);
+                    return `${chunkLabel}\n${content}`;
+                })
                 .join('\n\n');
             return `[${a.role} Report]:\n${combinedStr}`;
-        }).join('\n\n');
+        }).filter(Boolean).join('\n\n');
 
         managerAgent.setSystemInstruction(MANAGER_SYSTEM_INSTRUCTION);
         const dynamicPrompt = `Task: ${task}\n\nHistorical Baselines:\n${historicalContext}\n\nAnalyst Reports:\n${compiledReports}`;
@@ -655,6 +829,16 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
 
         finalAnalysis = guardManagerResponse(parsedManagerOutput, "Executive Swarm Synthesis");
 
+        if (lifecycleResult?.computedRating && analysts.length > 0) {
+            const isVerifiedSuccess = !finalAnalysis?.ui_title?.includes("Error");
+            for (const analyst of analysts) {
+                globalSpecialistProfiler.recordOutcome(analyst.role, {
+                    success: isVerifiedSuccess,
+                    qualityRating: lifecycleResult.computedRating
+                });
+            }
+        }
+
         if (memoryCortex && finalAnalysis && !finalAnalysis.ui_title?.includes("Error")) {
             const targetAppId = settings?.appId || 'perfect-swarm';
             const qualityRating = lifecycleResult
@@ -690,18 +874,45 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 console.warn(`[Swarm] Memory storage failed:`, err);
             }
         }
-    } catch (swarmErr) {
+    } catch (swarmErr: any) {
+        const workflowDurationMs = Date.now() - workflowStartTime;
+        globalMetricsCollector.recordTaskExecution({
+            success: false,
+            durationMs: workflowDurationMs,
+            agentRole: 'System Orchestrator',
+            error: swarmErr?.message || String(swarmErr)
+        });
         console.error("Swarm execution failed:", swarmErr);
         throw swarmErr;
     }
 
     if (finalAnalysis && !finalAnalysis.ui_title?.includes("Error")) {
         globalPayloadCache.set(cacheKey, finalAnalysis);
+        globalSemanticCache.set(task, finalAnalysis, { data });
     }
+
+    const workflowDurationMs = Date.now() - workflowStartTime;
+    const isSuccess = !finalAnalysis?.ui_title?.includes("Error");
+    globalMetricsCollector.recordTaskExecution({
+        success: isSuccess,
+        durationMs: workflowDurationMs,
+        agentRole: managerAgent?.role || 'Manager Node',
+        provider: managerAgent?.provider
+    });
+    const metrics = globalMetricsCollector.getBaselineReport();
+    context.addEvent({
+        agentRole: 'System Profiler',
+        action: 'Workflow Metrics Baseline',
+        modelName: 'Local/MetricsCollector',
+        prompt: `Workflow baseline telemetry: completionRate=${metrics.overallCompletionRatePercent}%, p50=${metrics.overallLatency.p50Ms}ms, p95=${metrics.overallLatency.p95Ms}ms, totalTasks=${metrics.totalTasks}`,
+        output: metrics,
+        durationMs: workflowDurationMs
+    });
 
     return {
         events: context.events,
-        finalAnalysis
+        finalAnalysis,
+        metrics
     };
 }
 

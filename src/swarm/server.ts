@@ -62,8 +62,12 @@ export async function handleSwarmSse(
         clearInterval(heartbeatTimer);
     };
 
-    res.on('close', cleanup);
-    req.on('aborted', cleanup);
+    if (typeof (res as any).on === 'function') {
+        res.on('close', cleanup);
+    }
+    if (typeof (req as any).on === 'function') {
+        req.on('aborted', cleanup);
+    }
 
     const sendEvent = (eventType: string, data: any) => {
         console.log(`[sendEvent] isFinished: ${isFinished}, res.writableEnded: ${res.writableEnded}, eventType: ${eventType}`);

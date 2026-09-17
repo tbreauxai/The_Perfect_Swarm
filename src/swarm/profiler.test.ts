@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createTokenChunks, profileData } from './profiler';
+import { createTokenChunks, profileData, calculateLatencyDistribution, SwarmMetricsCollector, globalMetricsCollector, SwarmTracer } from './profiler';
 
 describe('Token Budget & Metadata Chunk Preservation', () => {
     it('creates token chunks with expanded capacity (up to 8 chunks by default)', () => {
@@ -36,5 +36,81 @@ describe('Token Budget & Metadata Chunk Preservation', () => {
         const combinedContent = result.chunks.join('\n');
         expect(combinedContent).toContain('START_METADATA_HEADER');
         expect(combinedContent).toContain('END_METADATA_TRAILER');
+    });
+});
+
+describe('Key Metrics & Latency Baseline Instrumentation', () => {
+    it('accurately computes latency distribution percentiles (p50, p90, p95, p99, EMA)', () => {
+        // 100 sample latencies from 1ms to 100ms
+        const latencies = Array.from({ length: 100 }, (_, i) => i + 1);
+        const dist = calculateLatencyDistribution(latencies, 50, 0.2);
+
+        expect(dist.minMs).toBe(1);
+        expect(dist.maxMs).toBe(100);
+        expect(dist.avgMs).toBe(51);
+        expect(dist.p50Ms).toBe(50);
+        expect(dist.p90Ms).toBe(90);
+        expect(dist.p95Ms).toBe(95);
+        expect(dist.p99Ms).toBe(99);
+        expect(dist.sampleCount).toBe(100);
+    });
+
+    it('handles empty latency distribution gracefully', () => {
+        const dist = calculateLatencyDistribution([]);
+        expect(dist.minMs).toBe(0);
+        expect(dist.maxMs).toBe(0);
+        expect(dist.avgMs).toBe(0);
+        expect(dist.p50Ms).toBe(0);
+        expect(dist.p95Ms).toBe(0);
+        expect(dist.sampleCount).toBe(0);
+    });
+
+    it('instruments task completion rate and per-provider/agent baselines in SwarmMetricsCollector', () => {
+        const collector = new SwarmMetricsCollector();
+
+        // 8 successful tasks, 2 failures = 80% completion rate
+        collector.recordTaskExecution({ success: true, durationMs: 100, provider: 'gemini', agentRole: 'Manager' });
+        collector.recordTaskExecution({ success: true, durationMs: 150, provider: 'gemini', agentRole: 'Manager' });
+        collector.recordTaskExecution({ success: true, durationMs: 200, provider: 'groq', agentRole: 'Analyst' });
+        collector.recordTaskExecution({ success: false, durationMs: 300, provider: 'groq', agentRole: 'Analyst', error: 'Rate limit' });
+        collector.recordTaskExecution({ success: true, durationMs: 120, provider: 'mistral', agentRole: 'Critic' });
+
+        const report = collector.getBaselineReport();
+
+        expect(report.totalTasks).toBe(5);
+        expect(report.successCount).toBe(4);
+        expect(report.failureCount).toBe(1);
+        expect(report.overallCompletionRatePercent).toBe(80);
+
+        // Verify provider breakdown
+        expect(report.providers['gemini'].totalTasks).toBe(2);
+        expect(report.providers['gemini'].completionRatePercent).toBe(100);
+        expect(report.providers['gemini'].latency.p50Ms).toBe(100);
+
+        expect(report.providers['groq'].totalTasks).toBe(2);
+        expect(report.providers['groq'].completionRatePercent).toBe(50);
+        expect(report.providers['groq'].lastError).toBe('Rate limit');
+
+        // Verify agent breakdown
+        expect(report.agents['Manager'].totalTasks).toBe(2);
+        expect(report.agents['Analyst'].totalTasks).toBe(2);
+        expect(report.agents['Critic'].totalTasks).toBe(1);
+    });
+
+    it('auto-instruments metrics from SwarmTracer duration events', () => {
+        globalMetricsCollector.reset();
+        const tracer = SwarmTracer.getInstance();
+
+        tracer.logEvent({
+            action: 'Completed execution',
+            durationMs: 85,
+            provider: 'test-prov',
+            agentRole: 'Test Role'
+        });
+
+        const report = globalMetricsCollector.getBaselineReport();
+        expect(report.totalTasks).toBeGreaterThanOrEqual(1);
+        expect(report.providers['test-prov']).toBeDefined();
+        expect(report.providers['test-prov'].latency.minMs).toBe(85);
     });
 });
