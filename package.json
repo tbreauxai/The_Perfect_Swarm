@@ -92,6 +92,12 @@
       "import": "./dist/swarm/client.js",
       "require": "./dist/swarm/client.cjs",
       "default": "./src/swarm/client.ts"
+    },
+    "./communication": {
+      "types": "./dist/swarm/communication.d.ts",
+      "import": "./dist/swarm/communication.js",
+      "require": "./dist/swarm/communication.cjs",
+      "default": "./src/swarm/communication.ts"
     }
   },
   "scripts": {

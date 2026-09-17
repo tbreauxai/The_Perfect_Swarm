@@ -224,4 +224,70 @@ describe('Dynamic Task Routing & Token Allocation in Engine Step 4', () => {
         expect(perfMetrics.totalSlotsReleased).toBeGreaterThanOrEqual(1);
         expect(perfMetrics.totalSlotsAcquired).toBe(perfMetrics.totalSlotsReleased);
     });
+
+    it('emits Hierarchical Swarm Communication event with cluster digests and token reduction', async () => {
+        ProviderRegistry.register({
+            providerName: 'hierarchical-test-prov',
+            async call(options) {
+                if (options.systemInstruction?.includes('Orchestrator') || options.prompt?.includes('Analyst Reports') || options.prompt?.includes('Cluster Digests')) {
+                    return JSON.stringify({
+                        ui_title: 'Hierarchical Swarm Dashboard',
+                        components: [
+                            { id: 'c1', type: 'MetricCard', props: { title: 'Status', value: 'Active' } }
+                        ]
+                    });
+                }
+                if (options.modelName === 'sec-model') {
+                    return JSON.stringify({
+                        insights: ['JWT token validated', 'Token expiration set to 15m'],
+                        anomalies: ['Missing CSP header'],
+                        summary: 'Security audit complete'
+                    });
+                }
+                return JSON.stringify({
+                    insights: ['P99 latency within 20ms baseline', 'Throughput healthy'],
+                    anomalies: [],
+                    summary: 'Performance audit complete'
+                });
+            }
+        });
+
+        const result = await executeSwarmWorkflow({
+            task: 'Analyze system telemetry for auth vulnerabilities and latency',
+            data: 'test auth and latency telemetry block',
+            forceFullSwarm: true,
+            settings: {
+                appId: 'test-hierarchical-comm',
+                agents: [
+                    { id: 'manager', role: 'Manager Node', provider: 'hierarchical-test-prov', apiKey: 'k', model: 'mgr-model' },
+                    { id: 'sec-spec', role: 'Security Specialist', provider: 'hierarchical-test-prov', apiKey: 'k', model: 'sec-model' },
+                    { id: 'sec-audit', role: 'Security Auditor', provider: 'hierarchical-test-prov', apiKey: 'k', model: 'sec-model' },
+                    { id: 'perf-spec', role: 'Performance Engineer', provider: 'hierarchical-test-prov', apiKey: 'k', model: 'perf-model' }
+                ]
+            }
+        });
+
+        // 1. Verify Hierarchical Swarm Communication event emission
+        const commEvent = result.events.find(e => e.action === 'Hierarchical Swarm Communication');
+        expect(commEvent).toBeDefined();
+        expect(commEvent?.agentRole).toBe('Hierarchical Communication Layer');
+        expect(commEvent?.modelName).toBe('Local/HierarchicalBus');
+
+        // 2. Verify cluster digests generated for both pods
+        const digests = commEvent?.output.digests;
+        expect(digests).toBeDefined();
+        expect(digests['security-pod']).toBeDefined();
+        expect(digests['performance-pod']).toBeDefined();
+
+        expect(digests['security-pod'].specialistRoles).toContain('Security Specialist');
+        expect(digests['security-pod'].keyFindings).toContain('JWT token validated');
+        expect(digests['security-pod'].anomalies).toContain('Missing CSP header');
+
+        // 3. Verify bus metrics
+        const metrics = commEvent?.output.metrics;
+        expect(metrics).toBeDefined();
+        expect(metrics.totalSent).toBeGreaterThanOrEqual(2);
+        expect(metrics.digestsGenerated).toBeGreaterThanOrEqual(2);
+        expect(metrics.overallCompressionRatio).toBeGreaterThan(0);
+    });
 });

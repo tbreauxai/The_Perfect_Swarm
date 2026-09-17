@@ -8,10 +8,13 @@ import {
     ProviderRegistry,
     createSwarmServer,
     handleSwarmSse,
-    createSwarmClient
+    createSwarmClient,
+    HierarchicalMessageBus,
+    globalHierarchicalMessageBus
 } from './dist/swarm/index.js';
 import { createSwarmServer as serverFromSubpath } from './dist/swarm/server.js';
 import { createSwarmClient as clientFromSubpath } from './dist/swarm/client.js';
+import { HierarchicalMessageBus as CommBusFromSubpath } from './dist/swarm/communication.js';
 import { ToolRegistry, calculatorTool } from './dist/swarm/tools.js';
 import { repairJson, parseJsonSafe } from './dist/swarm/parser.js';
 
@@ -91,6 +94,28 @@ async function runDistVerification() {
     if (!repaired || repaired.unquoted_key !== true || repaired.count !== 10) {
         throw new Error('Compiled parser failed repair');
     }
+
+    // 6. Verify compiled HierarchicalMessageBus and Communication subpath
+    if (!HierarchicalMessageBus || !globalHierarchicalMessageBus || !CommBusFromSubpath) {
+        throw new Error('HierarchicalMessageBus exports missing');
+    }
+    const testBus = new CommBusFromSubpath();
+    testBus.registerNode({ id: 'mgr', role: 'Manager', layer: 'root', clusterId: 'root-pod' });
+    testBus.registerNode({ id: 'sec', role: 'Security Specialist', layer: 'specialist', clusterId: 'sec-pod' });
+    const received = [];
+    testBus.subscribe('mgr', (msg) => received.push(msg));
+    const dispatchRes = await testBus.dispatch({
+        senderId: 'sec',
+        senderRole: 'Security Specialist',
+        senderLayer: 'specialist',
+        clusterId: 'sec-pod',
+        scope: 'upward',
+        payload: { summary: 'threat detected' }
+    });
+    if (dispatchRes.deliveredCount === 0 || received.length === 0) {
+        throw new Error('Compiled HierarchicalMessageBus dispatch failed');
+    }
+    console.log('✓ Compiled HierarchicalMessageBus upward routing:', received[0]?.payload?.summary);
 
     console.log('\n✓ ALL COMPILED SWARM DISTRIBUTION BUNDLE TESTS PASSED SUCCESSFULLY!\n');
 }

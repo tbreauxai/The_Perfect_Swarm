@@ -31,13 +31,14 @@ export const SwarmEventTimeline: React.FC<SwarmEventTimelineProps> = ({
                 const isError = !!event.error;
                 const isCompletion = event.action.includes("Completed");
                 const isRouter = event.agentRole === 'Dynamic Task Router' || event.action === 'Specialist Dynamic Routing';
+                const isComm = event.agentRole === 'Hierarchical Communication Layer' || event.action === 'Hierarchical Swarm Communication';
 
                 return (
                     <div key={event.id} className="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group is-active">
-                        <div className={`flex items-center justify-center w-10 h-10 rounded-full border-4 border-white shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 shadow-sm ${isError ? 'bg-red-500' : isRouter ? 'bg-purple-600' : isCompletion ? 'bg-green-500' : 'bg-blue-500'}`}>
+                        <div className={`flex items-center justify-center w-10 h-10 rounded-full border-4 border-white shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 shadow-sm ${isError ? 'bg-red-500' : isRouter ? 'bg-purple-600' : isComm ? 'bg-emerald-600' : isCompletion ? 'bg-green-500' : 'bg-blue-500'}`}>
                             {isError ? (
                                 <AlertCircle className="w-4 h-4 text-white" />
-                            ) : isRouter ? (
+                            ) : isRouter || isComm ? (
                                 <GitFork className="w-4 h-4 text-white" />
                             ) : isCompletion ? (
                                 <CheckCircle2 className="w-4 h-4 text-white" />
@@ -191,6 +192,74 @@ export const SwarmEventTimeline: React.FC<SwarmEventTimelineProps> = ({
                                                     </div>
                                                 </div>
                                             )}
+                                        </div>
+                                    ) : event.action === 'Hierarchical Swarm Communication' && event.output?.digests ? (
+                                        <div className="space-y-4 pt-1">
+                                            {/* Hierarchical Metrics Bar */}
+                                            <div className="grid grid-cols-4 gap-2 text-center">
+                                                <div className="p-2.5 bg-neutral-50 rounded-lg border border-neutral-100">
+                                                    <span className="text-[10px] text-neutral-500 uppercase tracking-wider font-semibold block">Clusters</span>
+                                                    <span className="text-base font-bold text-neutral-800">{Object.keys(event.output.digests).length}</span>
+                                                </div>
+                                                <div className="p-2.5 bg-neutral-50 rounded-lg border border-neutral-100">
+                                                    <span className="text-[10px] text-neutral-500 uppercase tracking-wider font-semibold block">Messages</span>
+                                                    <span className="text-base font-bold text-blue-600">{event.output.metrics?.totalSent ?? 0}</span>
+                                                </div>
+                                                <div className="p-2.5 bg-neutral-50 rounded-lg border border-neutral-100">
+                                                    <span className="text-[10px] text-neutral-500 uppercase tracking-wider font-semibold block">Deduped</span>
+                                                    <span className="text-base font-bold text-amber-600">{event.output.metrics?.duplicatesSuppressed ?? 0}</span>
+                                                </div>
+                                                <div className="p-2.5 bg-neutral-50 rounded-lg border border-neutral-100">
+                                                    <span className="text-[10px] text-neutral-500 uppercase tracking-wider font-semibold block">Token Savings</span>
+                                                    <span className="text-base font-bold text-emerald-600">{Math.round((event.output.metrics?.overallCompressionRatio || 0) * 100)}%</span>
+                                                </div>
+                                            </div>
+
+                                            {/* Cluster Pod Digests */}
+                                            <div className="space-y-2">
+                                                <span className="font-semibold text-neutral-700 text-xs block mb-1">Consolidated Cluster Pod Digests:</span>
+                                                {Object.entries(event.output.digests).map(([cId, digest]: [string, any]) => (
+                                                    <div key={cId} className="p-3 bg-neutral-50 rounded-lg border border-neutral-200/80 text-xs space-y-2">
+                                                        <div className="flex items-center justify-between">
+                                                            <span className="font-semibold text-neutral-900 flex items-center gap-1.5">
+                                                                <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-800 border border-emerald-200 rounded text-[10px] font-mono">{cId}</span>
+                                                                <span className="text-neutral-500 font-normal">({digest.specialistRoles?.join(', ')})</span>
+                                                            </span>
+                                                            <span className="text-[10px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 font-medium">
+                                                                {Math.round((digest.tokenReductionRatio || 0) * 100)}% token reduction
+                                                            </span>
+                                                        </div>
+
+                                                        {/* Key Findings */}
+                                                        {digest.keyFindings?.length > 0 && (
+                                                            <div>
+                                                                <span className="text-[10px] font-semibold text-neutral-500 uppercase tracking-wider block mb-1">Key Findings:</span>
+                                                                <ul className="list-disc list-inside text-neutral-700 space-y-0.5 text-[11px]">
+                                                                    {digest.keyFindings.map((f: string, fIdx: number) => (
+                                                                        <li key={fIdx} className="truncate">{f}</li>
+                                                                    ))}
+                                                                </ul>
+                                                            </div>
+                                                        )}
+
+                                                        {/* Anomalies */}
+                                                        {digest.anomalies?.length > 0 && (
+                                                            <div>
+                                                                <span className="text-[10px] font-semibold text-amber-700 uppercase tracking-wider block mb-0.5">Anomalies Flagged:</span>
+                                                                <ul className="list-disc list-inside text-amber-800 space-y-0.5 text-[11px]">
+                                                                    {digest.anomalies.map((a: string, aIdx: number) => (
+                                                                        <li key={aIdx} className="truncate">{a}</li>
+                                                                    ))}
+                                                                </ul>
+                                                            </div>
+                                                        )}
+
+                                                        {digest.summary && (
+                                                            <p className="text-[11px] text-neutral-500 italic border-t border-neutral-200/50 pt-1.5">{digest.summary}</p>
+                                                        )}
+                                                    </div>
+                                                ))}
+                                            </div>
                                         </div>
                                     ) : event.output ? (
                                         <div>

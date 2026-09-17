@@ -18,7 +18,8 @@ export default defineConfig({
         server: path.resolve(__dirname, 'src/swarm/server.ts'),
         tools: path.resolve(__dirname, 'src/swarm/tools/index.ts'),
         parser: path.resolve(__dirname, 'src/swarm/parser.ts'),
-        client: path.resolve(__dirname, 'src/swarm/client.ts')
+        client: path.resolve(__dirname, 'src/swarm/client.ts'),
+        communication: path.resolve(__dirname, 'src/swarm/communication.ts')
       },
       formats: ['es', 'cjs'],
       fileName: (format, entryName) => `${entryName}.${format === 'es' ? 'js' : 'cjs'}`

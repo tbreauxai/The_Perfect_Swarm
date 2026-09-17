@@ -12,6 +12,7 @@ import { zodToJsonSchema } from 'zod-to-json-schema';
 import { ToolRegistry, globalToolRegistry, type SwarmTool } from './tools/index.ts';
 import { guardAnalystResponse, guardManagerResponse, parseJsonSafe } from './parser.ts';
 import { globalSpecialistRouter, globalTokenBudgetManager, globalSpecialistProfiler, globalNodeCapacityManager, type SpecialistRoutingPlan } from './loadBalancer.ts';
+import { globalHierarchicalMessageBus, type ClusterNode, type ClusterDigest, type SpecialistReportInput } from './communication.ts';
 
 export interface ProviderResolution {
     key: string;
@@ -608,6 +609,47 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         // Step 4: Dynamic Specialist Routing & Chunk Distribution
         const allAnalystReports: any[][] = analysts.map(() => []);
 
+        // Initialize Hierarchical Communication Topology
+        globalHierarchicalMessageBus.reset();
+        const rootManagerId = managerAgent.id || managerAgent.role || 'manager';
+        globalHierarchicalMessageBus.registerNode({
+            id: rootManagerId,
+            role: managerAgent.role,
+            layer: 'root',
+            clusterId: 'core-cluster'
+        });
+
+        const analystClusterMap = new Map<string, string>();
+        for (const a of analysts) {
+            const aId = a.id || a.role;
+            const roleLower = a.role.toLowerCase();
+            let cluster = 'general-pod';
+            let domain = 'general';
+            if (roleLower.includes('sec') || roleLower.includes('auth') || roleLower.includes('crypt') || roleLower.includes('audit')) {
+                cluster = 'security-pod';
+                domain = 'security';
+            } else if (roleLower.includes('perf') || roleLower.includes('latency') || roleLower.includes('optim') || roleLower.includes('speed')) {
+                cluster = 'performance-pod';
+                domain = 'performance';
+            } else if (roleLower.includes('data') || roleLower.includes('sql') || roleLower.includes('schema') || roleLower.includes('db')) {
+                cluster = 'data-pod';
+                domain = 'data';
+            } else if (roleLower.includes('arch') || roleLower.includes('design') || roleLower.includes('system')) {
+                cluster = 'architecture-pod';
+                domain = 'architecture';
+            }
+            analystClusterMap.set(aId, cluster);
+
+            const isLead = roleLower.includes('lead') || roleLower.includes('architect') || !globalHierarchicalMessageBus.getClusterLead(cluster);
+            globalHierarchicalMessageBus.registerNode({
+                id: aId,
+                role: a.role,
+                layer: isLead ? 'cluster-lead' : 'specialist',
+                clusterId: cluster,
+                domain
+            });
+        }
+
         if (analysts.length > 0 && chunks.length > 0) {
             let routingPlan: SpecialistRoutingPlan;
             if (chunks.length > 1) {
@@ -733,6 +775,23 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                         tokensUsed: outTokens
                     });
 
+                    // In-flight upward dispatch to hierarchical communication bus
+                    const nodeCluster = analystClusterMap.get(nodeKey) || 'general-pod';
+                    await globalHierarchicalMessageBus.dispatch({
+                        senderId: nodeKey,
+                        senderRole: analyst.role,
+                        senderLayer: 'specialist',
+                        clusterId: nodeCluster,
+                        scope: 'upward',
+                        payload: {
+                            specialistRole: analyst.role,
+                            chunkIndex: chunkIdx,
+                            insights: resData.insights,
+                            anomalies: resData.anomalies,
+                            summary: resData.summary
+                        }
+                    }).catch(err => console.warn('[HierarchicalBus] Dispatch error:', err));
+
                     return resData;
                 } catch (err: any) {
                     const errDetail = err?.stack || err?.message || String(err);
@@ -783,6 +842,42 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             }
         }
 
+        // Hierarchical Communication Layer: Aggregate Cluster Digests & Emit Telemetry
+        const clusterReportsMap: Record<string, SpecialistReportInput[]> = {};
+        for (let a = 0; a < analysts.length; a++) {
+            const analyst = analysts[a];
+            const aId = analyst.id || analyst.role;
+            const cluster = analystClusterMap.get(aId) || 'general-pod';
+            if (!clusterReportsMap[cluster]) clusterReportsMap[cluster] = [];
+
+            for (const rep of allAnalystReports[a]) {
+                clusterReportsMap[cluster].push({
+                    specialistRole: analyst.role,
+                    insights: rep.insights,
+                    anomalies: rep.anomalies,
+                    summary: rep.summary
+                });
+            }
+        }
+
+        const clusterDigests: Record<string, ClusterDigest> = {};
+        for (const [cId, reps] of Object.entries(clusterReportsMap)) {
+            clusterDigests[cId] = globalHierarchicalMessageBus.aggregateClusterReports(cId, reps);
+        }
+        const busMetrics = globalHierarchicalMessageBus.getMetrics();
+
+        context.addEvent({
+            agentRole: 'Hierarchical Communication Layer',
+            action: 'Hierarchical Swarm Communication',
+            modelName: 'Local/HierarchicalBus',
+            prompt: `Consolidated ${analysts.length} specialist reports across ${Object.keys(clusterDigests).length} cluster(s) with ${Math.round(busMetrics.overallCompressionRatio * 100)}% token reduction`,
+            output: {
+                digests: clusterDigests,
+                metrics: busMetrics
+            },
+            durationMs: 0
+        });
+
         // Step 5: Manager Node Synthesis & Deep Analysis Verification
         const compiledReports = analysts.map((a, i) => {
             const reports = allAnalystReports[i];
@@ -797,8 +892,17 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             return `[${a.role} Report]:\n${combinedStr}`;
         }).filter(Boolean).join('\n\n');
 
+        const clusterDigestText = Object.values(clusterDigests).length > 0
+            ? `Cluster Digests:\n` + Object.values(clusterDigests).map(d =>
+                `[Cluster: ${d.clusterId}] (Specialists: ${d.specialistRoles.join(', ')} | Token Reduction: ${Math.round(d.tokenReductionRatio * 100)}%)\n` +
+                `• Key Findings: ${d.keyFindings.join('; ')}\n` +
+                `• Anomalies: ${d.anomalies.length > 0 ? d.anomalies.join('; ') : 'None'}\n` +
+                `• Summary: ${d.summary}`
+            ).join('\n\n') + '\n\n'
+            : '';
+
         managerAgent.setSystemInstruction(MANAGER_SYSTEM_INSTRUCTION);
-        const dynamicPrompt = `Task: ${task}\n\nHistorical Baselines:\n${historicalContext}\n\nAnalyst Reports:\n${compiledReports}`;
+        const dynamicPrompt = `Task: ${task}\n\nHistorical Baselines:\n${historicalContext}\n\n${clusterDigestText}Analyst Reports:\n${compiledReports}`;
 
         let parsedManagerOutput: any = null;
         let lifecycleResult: any = null;

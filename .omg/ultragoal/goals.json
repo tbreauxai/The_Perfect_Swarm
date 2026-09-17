@@ -1,20 +1,20 @@
 [
   {
-    "id": "goal-1-node-capacity-manager",
-    "description": "Implement NodeCapacityManager in src/swarm/loadBalancer.ts to model per-node concurrency limits, track active in-flight requests, and calculate real-time node capacity headroom.",
+    "id": "goal-1-hierarchical-communication-bus",
+    "description": "Implement HierarchicalMessageBus, ClusterNode, CommunicationLayer, and scoped routing (local, cluster, upward, targeted) in src/swarm/communication.ts with comprehensive unit tests.",
     "status": "completed",
-    "verification": "Unit tests verify node registration, slot acquisition/release, saturation calculation, and capacity metrics reporting."
+    "verification": "Unit tests verify multi-tier node registration, scoped message delivery, upward aggregation, and isolation between clusters."
   },
   {
-    "id": "goal-2-capacity-aware-routing",
-    "description": "Extend SpecialistAffinityRouter in src/swarm/loadBalancer.ts to schedule tasks based on node capacity headroom, preventing saturation and dynamically spilling over to available nodes.",
+    "id": "goal-2-semantic-message-compression-and-dedup",
+    "description": "Implement in-flight message deduplication, cluster digest aggregation, and downward directive filtering in HierarchicalMessageBus to reduce message overhead and tokens.",
     "status": "completed",
-    "verification": "Unit tests verify capacity-weighted chunk distribution, saturation avoidance, and fallback spillover when node capacity is exhausted."
+    "verification": "Unit tests verify duplicate suppression, digest generation, downward domain filtering, and token reduction metrics."
   },
   {
-    "id": "goal-3-engine-slot-lifecycle-and-verification",
-    "description": "Integrate node capacity slot acquisition and release into src/swarm/engine.ts (Step 4), emit node capacity telemetry events, and verify across all test suites.",
+    "id": "goal-3-engine-hierarchical-layer-integration-and-verification",
+    "description": "Integrate hierarchical communication into src/swarm/engine.ts, emit telemetry events, update UI timeline, and verify across all test suites.",
     "status": "completed",
-    "verification": "Unit and integration tests verify concurrency throttle adherence, slot release on error/completion, build passes, and all 5 E2E suites pass 100%."
+    "verification": "End-to-end execution passes with reduced message count, builds pass, and all 5 E2E suites and Vitest tests pass 100%."
   }
 ]

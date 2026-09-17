@@ -40,6 +40,17 @@ async function testCjsImport() {
     if (!repairedCjs || repairedCjs.status !== true || repairedCjs.val !== 99) {
         throw new Error('CommonJS parser failed safe repair');
     }
+
+    const commCjs = require('./dist/swarm/communication.cjs');
+    if (!commCjs.HierarchicalMessageBus || !commCjs.globalHierarchicalMessageBus) {
+        throw new Error('CommonJS communication exports missing');
+    }
+    const bus = new commCjs.HierarchicalMessageBus();
+    bus.registerNode({ id: 'n1', role: 'Root', layer: 'root', clusterId: 'c1' });
+    if (!bus.getNode('n1')) {
+        throw new Error('CommonJS HierarchicalMessageBus registration failed');
+    }
+    console.log('✓ CJS communication subpath and HierarchicalMessageBus verified');
     console.log('✓ CJS tools, parser, and client subpaths verified');
 
     console.log('✓ ALL COMMONJS SWARM DISTRIBUTION TESTS PASSED!\n');
