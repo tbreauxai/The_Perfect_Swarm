@@ -11,7 +11,7 @@ import { AnalystResponseSchema, ManagerResponseSchema } from './schemas.ts';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { ToolRegistry, globalToolRegistry, type SwarmTool } from './tools/index.ts';
 import { guardAnalystResponse, guardManagerResponse, parseJsonSafe } from './parser.ts';
-import { globalSpecialistRouter, globalTokenBudgetManager, globalSpecialistProfiler, type SpecialistRoutingPlan } from './loadBalancer.ts';
+import { globalSpecialistRouter, globalTokenBudgetManager, globalSpecialistProfiler, globalNodeCapacityManager, type SpecialistRoutingPlan } from './loadBalancer.ts';
 
 export interface ProviderResolution {
     key: string;
@@ -359,6 +359,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     const managerModel = managerConfig.model || '';
     const managerFallbacks = availableFallbacks.filter(f => f.provider !== managerConfig.provider);
     const managerAgent = new Agent('Manager Node', managerModel, managerConfig.provider, finalMKey, mClient, managerFallbacks);
+    managerAgent.id = managerConfig.id || managerConfig.role || 'manager';
 
     const analysts: Agent[] = [];
     for (const ac of analystConfigs) {
@@ -369,7 +370,9 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             const aFallbacks = (ac as any).disableFallback || (ac as any).strictProvider
                 ? []
                 : availableFallbacks.filter(f => f.provider !== ac.provider);
-            analysts.push(new Agent(ac.role || 'Analyst', aModel, ac.provider, finalAKey, aClient, aFallbacks));
+            const analyst = new Agent(ac.role || 'Analyst', aModel, ac.provider, finalAKey, aClient, aFallbacks);
+            analyst.id = ac.id || ac.role;
+            analysts.push(analyst);
         } else {
             console.warn(`Skipping ${ac.role}: missing API key for ${ac.provider}`);
         }
@@ -383,6 +386,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             const cModel = dedicatedCriticConfig.model || '';
             const cFallbacks = availableFallbacks.filter(f => f.provider !== dedicatedCriticConfig.provider);
             dedicatedCriticAgent = new Agent(dedicatedCriticConfig.role || 'Verification Critic', cModel, dedicatedCriticConfig.provider, finalCKey, cClient, cFallbacks);
+            dedicatedCriticAgent.id = dedicatedCriticConfig.id || dedicatedCriticConfig.role || 'critic';
         }
     }
 
@@ -658,13 +662,18 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     assignments: routingPlan.assignments,
                     specialistSummary: routingPlan.specialistSummary,
                     tokenBudgets: globalTokenBudgetManager.getMetrics(),
-                    capabilityProfiles: globalSpecialistProfiler.getAllProfiles()
+                    capabilityProfiles: globalSpecialistProfiler.getAllProfiles(),
+                    nodeCapacity: globalNodeCapacityManager.getAllNodeMetrics()
                 },
                 durationMs: 0
             });
 
             // Helper to execute an individual analyst on a chunk
             const executeAnalyst = async (analyst: Agent, chunk: string, chunkIdx: number) => {
+                const nodeKey = (analyst as any).id || analyst.role;
+                const capacitySlot = globalNodeCapacityManager.tryAcquireSlot(nodeKey) ||
+                                     globalNodeCapacityManager.tryAcquireSlot(analyst.provider);
+
                 const startTime = Date.now();
                 const toolPrompt = toolRegistry.list().length > 0 ? `\n\n${toolRegistry.renderPromptSchema()}` : '';
                 analyst.setSystemInstruction(ANALYST_SYSTEM_INSTRUCTION + toolPrompt);
@@ -735,6 +744,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     });
                     console.error(`[Analyst Fatal Error] ${analyst.role} failed:`, errDetail);
                     throw err; // Stop hiding the error! Bubble it up.
+                } finally {
+                    capacitySlot?.release();
                 }
             };
 

@@ -19,6 +19,7 @@ export class Agent {
     public role: string;
     public modelName: string;
     public provider: Provider;
+    public id?: string;
     private apiKey: string;
     private aiClient?: GoogleGenAI;
     private systemInstruction?: string;
@@ -32,7 +33,8 @@ export class Agent {
         apiKey: string,
         aiClient?: GoogleGenAI,
         fallbacks: ProviderCredential[] = [],
-        loadBalancer?: AdaptiveLoadBalancer
+        loadBalancer?: AdaptiveLoadBalancer,
+        id?: string
     ) {
         this.role = role;
         this.modelName = modelName;
@@ -41,6 +43,7 @@ export class Agent {
         this.aiClient = aiClient;
         this.fallbacks = [...fallbacks];
         this.loadBalancer = loadBalancer;
+        this.id = id;
     }
 
     setSystemInstruction(instruction: string): void {

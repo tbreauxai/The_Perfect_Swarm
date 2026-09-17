@@ -3,7 +3,8 @@ import {
     TokenBudgetManager, 
     SpecialistAffinityRouter, 
     AdaptiveLoadBalancer,
-    SpecialistCapabilityProfiler
+    SpecialistCapabilityProfiler,
+    NodeCapacityManager
 } from './loadBalancer.ts';
 
 describe('TokenBudgetManager & SpecialistAffinityRouter', () => {
@@ -266,6 +267,179 @@ describe('TokenBudgetManager & SpecialistAffinityRouter', () => {
             expect(plan.assignments[0].agentRole).toBe('Security Specialist A');
             expect(plan.assignments[0].rlScore).toBeDefined();
             expect(plan.assignments[0].reason).toContain('RL UCB');
+        });
+    });
+
+    describe('NodeCapacityManager', () => {
+        let capacityManager: NodeCapacityManager;
+
+        beforeEach(() => {
+            capacityManager = new NodeCapacityManager({
+                defaultMaxConcurrency: 4,
+                nodeConcurrencyLimits: {
+                    groq: 2,
+                    mistral: 3,
+                    gemini: 8
+                }
+            });
+        });
+
+        it('initializes with default and node-specific concurrency limits', () => {
+            expect(capacityManager.getMaxConcurrency('groq')).toBe(2);
+            expect(capacityManager.getMaxConcurrency('mistral')).toBe(3);
+            expect(capacityManager.getMaxConcurrency('gemini')).toBe(8);
+            expect(capacityManager.getMaxConcurrency('unregistered-node')).toBe(4);
+
+            capacityManager.setMaxConcurrency('custom-analyst', 6);
+            expect(capacityManager.getMaxConcurrency('custom-analyst')).toBe(6);
+        });
+
+        it('acquires capacity slots and decrements available headroom accurately', () => {
+            expect(capacityManager.getCapacityHeadroom('groq')).toBe(2);
+            expect(capacityManager.hasCapacity('groq')).toBe(true);
+
+            const slot1 = capacityManager.tryAcquireSlot('groq');
+            expect(slot1).toBeDefined();
+            expect(slot1?.nodeKey).toBe('groq');
+            expect(capacityManager.getActiveInFlight('groq')).toBe(1);
+            expect(capacityManager.getCapacityHeadroom('groq')).toBe(1);
+            expect(capacityManager.getUtilizationRatio('groq')).toBe(0.5);
+            expect(capacityManager.isSaturated('groq')).toBe(false);
+
+            const slot2 = capacityManager.tryAcquireSlot('groq');
+            expect(slot2).toBeDefined();
+            expect(capacityManager.getActiveInFlight('groq')).toBe(2);
+            expect(capacityManager.getCapacityHeadroom('groq')).toBe(0);
+            expect(capacityManager.getUtilizationRatio('groq')).toBe(1.0);
+            expect(capacityManager.isSaturated('groq')).toBe(true);
+
+            // Third acquisition should be rejected
+            const slot3 = capacityManager.tryAcquireSlot('groq');
+            expect(slot3).toBeNull();
+        });
+
+        it('releases slots and restores headroom via slot.release() and manager.releaseSlot()', () => {
+            const slot1 = capacityManager.tryAcquireSlot('mistral');
+            const slot2 = capacityManager.tryAcquireSlot('mistral');
+            expect(capacityManager.getActiveInFlight('mistral')).toBe(2);
+
+            // Release via slot helper
+            slot1?.release();
+            expect(capacityManager.getActiveInFlight('mistral')).toBe(1);
+            expect(capacityManager.getCapacityHeadroom('mistral')).toBe(2);
+
+            // Multiple releases on same slot are idempotent
+            slot1?.release();
+            expect(capacityManager.getActiveInFlight('mistral')).toBe(1);
+
+            // Release via manager
+            capacityManager.releaseSlot(slot2!);
+            expect(capacityManager.getActiveInFlight('mistral')).toBe(0);
+            expect(capacityManager.getCapacityHeadroom('mistral')).toBe(3);
+        });
+
+        it('reports structured metrics across nodes and resets cleanly', () => {
+            const slot = capacityManager.tryAcquireSlot('gemini');
+            const metrics = capacityManager.getNodeMetrics('gemini');
+
+            expect(metrics.nodeKey).toBe('gemini');
+            expect(metrics.maxConcurrency).toBe(8);
+            expect(metrics.activeInFlight).toBe(1);
+            expect(metrics.availableHeadroom).toBe(7);
+            expect(metrics.utilizationPercent).toBe(13);
+            expect(metrics.totalSlotsAcquired).toBe(1);
+            expect(metrics.isSaturated).toBe(false);
+
+            slot?.release();
+            const afterRelease = capacityManager.getNodeMetrics('gemini');
+            expect(afterRelease.totalSlotsReleased).toBe(1);
+            expect(afterRelease.activeInFlight).toBe(0);
+
+            capacityManager.reset();
+            expect(capacityManager.getActiveInFlight('gemini')).toBe(0);
+            expect(capacityManager.getNodeMetrics('gemini').totalSlotsAcquired).toBe(0);
+        });
+    });
+
+    describe('Capacity-Aware Task Allocation & Spillover Routing', () => {
+        let tokenManager: TokenBudgetManager;
+        let loadBalancer: AdaptiveLoadBalancer;
+        let profiler: SpecialistCapabilityProfiler;
+        let capacityManager: NodeCapacityManager;
+        let router: SpecialistAffinityRouter;
+
+        beforeEach(() => {
+            tokenManager = new TokenBudgetManager();
+            loadBalancer = new AdaptiveLoadBalancer();
+            profiler = new SpecialistCapabilityProfiler();
+            capacityManager = new NodeCapacityManager({
+                defaultMaxConcurrency: 4,
+                nodeConcurrencyLimits: {
+                    'sec-spec': 1, // Constrained to 1 concurrent slot
+                    'sec-standby': 5,
+                    groq: 2,
+                    gemini: 10
+                }
+            });
+            router = new SpecialistAffinityRouter(tokenManager, loadBalancer, profiler, capacityManager);
+        });
+
+        it('dynamically spills over tasks when primary specialist node is saturated', () => {
+            const specialists = [
+                { id: 'sec-spec', role: 'Security Specialist', provider: 'groq' },
+                { id: 'sec-standby', role: 'Security Auditor Standby', provider: 'gemini' }
+            ];
+
+            // Saturate primary specialist node
+            const activeSlot = capacityManager.tryAcquireSlot('sec-spec');
+            expect(activeSlot).toBeDefined();
+            expect(capacityManager.isSaturated('sec-spec')).toBe(true);
+
+            const chunks = ['Audit authentication tokens and JWT expiration'];
+            const plan = router.planDistribution('Security verification', chunks, specialists);
+
+            expect(plan.assignments).toHaveLength(1);
+            // Saturated primary specialist is bypassed, spilling over to standby node
+            expect(plan.assignments[0].agentId).toBe('sec-standby');
+            expect(plan.assignments[0].isSpillover).toBe(true);
+            expect(plan.assignments[0].reason).toContain('Spillover reroute');
+
+            // Free slot and verify primary is selected again
+            activeSlot?.release();
+            expect(capacityManager.isSaturated('sec-spec')).toBe(false);
+
+            const normalPlan = router.planDistribution('Security verification', chunks, specialists);
+            expect(normalPlan.assignments[0].agentId).toBe('sec-spec');
+            expect(normalPlan.assignments[0].isSpillover).toBe(false);
+        });
+
+        it('balances multi-chunk distribution across nodes respecting concurrency limits per batch', () => {
+            const specialists = [
+                { id: 'sec-spec', role: 'Security Specialist', provider: 'groq' },
+                { id: 'sec-standby', role: 'Security Auditor Standby', provider: 'gemini' }
+            ];
+
+            // Primary node limit is 1, so assigning 2 security chunks must distribute chunk 0 to primary and chunk 1 to standby
+            const chunks = [
+                'Chunk 1: Audit auth tokens and API keys',
+                'Chunk 2: Verify TLS certificates and cryptographic keys'
+            ];
+
+            const plan = router.planDistribution('Security verification multi-chunk', chunks, specialists);
+
+            expect(plan.totalChunks).toBe(2);
+            expect(plan.assignments).toHaveLength(2);
+
+            // Chunk 0 goes to primary
+            expect(plan.assignments[0].agentId).toBe('sec-spec');
+
+            // Chunk 1 spills over to standby due to primary node reaching batch capacity limit
+            expect(plan.assignments[1].agentId).toBe('sec-standby');
+
+            // Verify specialist summary reports nodeHeadroom and saturation
+            expect(plan.specialistSummary['Security Specialist'].chunksAssigned).toBe(1);
+            expect(plan.specialistSummary['Security Specialist'].isSaturated).toBe(true);
+            expect(plan.specialistSummary['Security Auditor Standby'].chunksAssigned).toBe(1);
         });
     });
 });

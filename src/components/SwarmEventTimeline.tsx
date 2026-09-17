@@ -105,6 +105,9 @@ export const SwarmEventTimeline: React.FC<SwarmEventTimelineProps> = ({
                                                             <div className="flex items-center justify-between">
                                                                 <span className="font-medium text-neutral-900 flex items-center gap-1.5">
                                                                     <span className="px-1.5 py-0.5 bg-neutral-200 text-neutral-700 rounded text-[10px] font-mono">Chunk {asn.chunkIndex + 1}</span>
+                                                                    {asn.isSpillover && (
+                                                                        <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 border border-amber-200 rounded text-[9px] font-semibold">Spillover</span>
+                                                                    )}
                                                                     → {asn.agentRole}
                                                                 </span>
                                                                 <span className="text-[10px] text-neutral-500 bg-white px-2 py-0.5 rounded border border-neutral-200 font-mono">
@@ -119,6 +122,11 @@ export const SwarmEventTimeline: React.FC<SwarmEventTimelineProps> = ({
                                                                         style={{ width: `${Math.min(100, Math.round((asn.affinityScore || 0) * 100))}%` }} 
                                                                     />
                                                                 </div>
+                                                                {asn.nodeHeadroom !== undefined && (
+                                                                    <span className="text-[10px] text-neutral-400 font-mono">
+                                                                        {Math.round(asn.nodeHeadroom * 100)}% cap
+                                                                    </span>
+                                                                )}
                                                             </div>
                                                             {asn.reason && (
                                                                 <p className="text-[11px] text-neutral-500 italic">{asn.reason}</p>
@@ -148,6 +156,34 @@ export const SwarmEventTimeline: React.FC<SwarmEventTimelineProps> = ({
                                                                     </div>
                                                                     <div className="mt-1 text-[10px] text-neutral-400">
                                                                         Cumulative: {b.totalCumulativeTokens?.toLocaleString()} tokens
+                                                                    </div>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {/* Node Capacity & Headroom */}
+                                            {event.output.nodeCapacity && Object.keys(event.output.nodeCapacity).length > 0 && (
+                                                <div>
+                                                    <span className="font-semibold text-neutral-700 text-xs block mb-2">Node Concurrency & Capacity Headroom:</span>
+                                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                                        {Object.entries(event.output.nodeCapacity).map(([nodeId, n]: [string, any]) => {
+                                                            const satPct = Math.round((n.saturationRate || 0) * 100);
+                                                            const capColor = satPct >= 90 ? 'bg-red-500' : satPct >= 60 ? 'bg-amber-500' : 'bg-blue-500';
+                                                            return (
+                                                                <div key={nodeId} className="p-2.5 bg-neutral-50 rounded-lg border border-neutral-100 text-xs">
+                                                                    <div className="flex justify-between items-center mb-1">
+                                                                        <span className="font-semibold text-neutral-800 text-[10px] tracking-wide truncate max-w-[130px]">{nodeId}</span>
+                                                                        <span className="text-[10px] text-neutral-500">{n.activeInFlight} / {n.maxConcurrency} in-flight</span>
+                                                                    </div>
+                                                                    <div className="bg-neutral-200 h-1.5 rounded-full overflow-hidden">
+                                                                        <div className={`${capColor} h-full rounded-full transition-all`} style={{ width: `${Math.min(100, satPct)}%` }} />
+                                                                    </div>
+                                                                    <div className="mt-1 flex justify-between text-[10px] text-neutral-400">
+                                                                        <span>Headroom: {Math.round((n.headroom || 0) * 100)}%</span>
+                                                                        <span>Slots: {n.totalSlotsAcquired} acq</span>
                                                                     </div>
                                                                 </div>
                                                             );

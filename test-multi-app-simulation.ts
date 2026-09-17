@@ -10,7 +10,9 @@ import {
     PayloadCache,
     globalPayloadCache,
     AdaptiveLoadBalancer,
-    globalLoadBalancer
+    globalLoadBalancer,
+    SpecialistAffinityRouter,
+    NodeCapacityManager
 } from './src/swarm/index.ts';
 
 async function runMultiAppSimulation() {
@@ -317,9 +319,117 @@ Synthesizing structured findings.
     // -------------------------------------------------------------
     // PHASE 6: Hierarchical Multi-Specialist Dispatch & Broadcast Reduction
     // -------------------------------------------------------------
-    // -------------------------------------------------------------
-    // PHASE 7: Real-Time Adaptive Load Balancing & Concurrency Feedback Loop
-    // -------------------------------------------------------------
+    console.log('\n>>> PHASE 6: Benchmarking Hierarchical Multi-Specialist Dispatch & Broadcast Reduction...');
+
+    // Register mock specialist execution providers
+    ProviderRegistry.register({
+        providerName: 'sim-spec-sec',
+        async call(opts) {
+            return JSON.stringify({
+                status: 'success',
+                specialist: 'Security Specialist',
+                findings: ['JWT token expiration verified: 3600s', 'No credential replay vulnerabilities']
+            });
+        }
+    });
+
+    ProviderRegistry.register({
+        providerName: 'sim-spec-perf',
+        async call(opts) {
+            return JSON.stringify({
+                status: 'success',
+                specialist: 'Performance Engineer',
+                findings: ['P99 latency within 25ms SLA', 'Throughput sustained at 4500 RPS']
+            });
+        }
+    });
+
+    ProviderRegistry.register({
+        providerName: 'sim-spec-data',
+        async call(opts) {
+            return JSON.stringify({
+                status: 'success',
+                specialist: 'Database Analyst',
+                findings: ['B-Tree index active on tenant_id', 'Connection pool headroom at 65%']
+            });
+        }
+    });
+
+    const specialistAgents = [
+        new Agent('Security Specialist', 'mock-sec', 'sim-spec-sec', 'k-sec'),
+        new Agent('Performance Engineer', 'mock-perf', 'sim-spec-perf', 'k-perf'),
+        new Agent('Database Analyst', 'mock-data', 'sim-spec-data', 'k-data')
+    ];
+    specialistAgents[0].id = 'sec-node';
+    specialistAgents[1].id = 'perf-node';
+    specialistAgents[2].id = 'data-node';
+
+    const simNodeCap = new NodeCapacityManager();
+    simNodeCap.setMaxConcurrency('sec-node', 1);
+    simNodeCap.setMaxConcurrency('perf-node', 1);
+    simNodeCap.setMaxConcurrency('data-node', 1);
+
+    const simRouter = new SpecialistAffinityRouter(undefined, undefined, undefined, simNodeCap);
+
+    const taskDomain = 'Comprehensive multi-tenant infrastructure security audit, query indexing, and latency benchmarking';
+    const testChunks = [
+        'JWT token signature verification, OAuth2 authorization flow, session expiration attack vector analysis, credential leak prevention',
+        'Database query execution plan, B-tree index scan on foreign keys, sql transaction deadlocks, connection pool exhaustion',
+        'Server latency percentiles, p95 and p99 response times, thread pool bottleneck, memory cpu cache eviction'
+    ];
+
+    const distributionPlan = simRouter.planDistribution(taskDomain, testChunks, specialistAgents);
+    console.log(`Specialist Plan: ${distributionPlan.assignments.length} assignments planned for ${distributionPlan.totalChunks} chunks.`);
+
+    // Broadcast comparison: Full broadcast would require 3 specialists * 3 chunks = 9 runs
+    const fullBroadcastCalls = specialistAgents.length * testChunks.length;
+    const targetedCalls = distributionPlan.assignments.length;
+    const callReductionPercent = ((fullBroadcastCalls - targetedCalls) / fullBroadcastCalls) * 100;
+    console.log(`Broadcast Reduction: ${fullBroadcastCalls} broadcast calls reduced to ${targetedCalls} targeted calls (${callReductionPercent.toFixed(1)}% call & token reduction)`);
+
+    if (callReductionPercent < 50) {
+        throw new Error(`Specialist router did not achieve broadcast reduction: expected >=50%, got ${callReductionPercent}%`);
+    }
+
+    // Verify appropriate domain routing
+    const secAsn = distributionPlan.assignments.find(a => a.chunkIndex === 0);
+    const dataAsn = distributionPlan.assignments.find(a => a.chunkIndex === 1);
+    const perfAsn = distributionPlan.assignments.find(a => a.chunkIndex === 2);
+
+    if (secAsn?.agentRole !== 'Security Specialist') {
+        throw new Error(`Expected chunk 0 to route to Security Specialist, got ${secAsn?.agentRole}`);
+    }
+    if (dataAsn?.agentRole !== 'Database Analyst') {
+        throw new Error(`Expected chunk 1 to route to Database Analyst, got ${dataAsn?.agentRole}`);
+    }
+    if (perfAsn?.agentRole !== 'Performance Engineer') {
+        throw new Error(`Expected chunk 2 to route to Performance Engineer, got ${perfAsn?.agentRole}`);
+    }
+
+    // Now test capacity saturation spillover: Saturate Security Specialist (concurrency=1)
+    const activeSecSlot = simNodeCap.tryAcquireSlot('sec-node');
+    if (!activeSecSlot) throw new Error('Failed to acquire initial slot for sec-node');
+
+    // Planning another security chunk should now detect saturation and trigger spillover
+    const overflowSecurityChunk = ['Authentication credential rotation breach vector under emergency conditions'];
+    const spilloverPlan = simRouter.planDistribution('Security breach emergency response', overflowSecurityChunk, specialistAgents);
+    const spilloverAsn = spilloverPlan.assignments[0];
+
+    console.log(`Saturation Spillover: Saturated Security Specialist redirected to '${spilloverAsn.agentRole}' (isSpillover=${spilloverAsn.isSpillover}, reason='${spilloverAsn.reason}')`);
+    if (!spilloverAsn.isSpillover) {
+        throw new Error('Specialist router failed to mark spillover when node capacity is saturated');
+    }
+    if (spilloverAsn.agentRole === 'Security Specialist') {
+        throw new Error('Specialist router assigned saturated node instead of spilling over');
+    }
+
+    // Release slot and verify zero leaks
+    activeSecSlot.release();
+    const finalSecMetrics = simNodeCap.getNodeMetrics('sec-node');
+    if (finalSecMetrics.activeInFlight !== 0) {
+        throw new Error(`Node capacity slot leak detected: ${finalSecMetrics.activeInFlight} active in-flight remaining`);
+    }
+    console.log(`Node capacity slot lifecycle verified with zero in-flight leaks.`);
     console.log('\n>>> PHASE 7: Benchmarking Adaptive Load Balancer & Dynamic 429 Cooldown Feedback...');
     let burstGroqCount = 0;
     ProviderRegistry.register({

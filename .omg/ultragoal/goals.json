@@ -1,20 +1,20 @@
 [
   {
-    "id": "goal-1-instrument-key-metrics",
-    "description": "Instrument key execution metrics (task completion rate, latency percentiles p50/p95/EMA, provider/agent performance baselines) in src/swarm/profiler.ts and src/swarm/engine.ts.",
+    "id": "goal-1-node-capacity-manager",
+    "description": "Implement NodeCapacityManager in src/swarm/loadBalancer.ts to model per-node concurrency limits, track active in-flight requests, and calculate real-time node capacity headroom.",
     "status": "completed",
-    "verification": "Unit tests verify accurate calculation of task completion rate, p50/p95/EMA latency, and structured telemetry emission across successful and failed executions."
+    "verification": "Unit tests verify node registration, slot acquisition/release, saturation calculation, and capacity metrics reporting."
   },
   {
-    "id": "goal-2-semantic-baseline-caching",
-    "description": "Deploy lightweight semantic baseline caching in src/swarm/cache.ts to match near-identical tasks and baseline queries, immediately lowering token cost.",
+    "id": "goal-2-capacity-aware-routing",
+    "description": "Extend SpecialistAffinityRouter in src/swarm/loadBalancer.ts to schedule tasks based on node capacity headroom, preventing saturation and dynamically spilling over to available nodes.",
     "status": "completed",
-    "verification": "Unit tests verify semantic cache hits on high-similarity prompts, avoidance of downstream LLM calls, and preservation of response quality."
+    "verification": "Unit tests verify capacity-weighted chunk distribution, saturation avoidance, and fallback spillover when node capacity is exhausted."
   },
   {
-    "id": "goal-3-reinforcement-learning-adaptive-scheduling",
-    "description": "Introduce reinforcement learning capability profiling (multi-armed bandit / UCB1 reward scoring) in src/swarm/loadBalancer.ts to adaptively schedule specialist agents based on historical verification ratings, completion rates, and latency.",
+    "id": "goal-3-engine-slot-lifecycle-and-verification",
+    "description": "Integrate node capacity slot acquisition and release into src/swarm/engine.ts (Step 4), emit node capacity telemetry events, and verify across all test suites.",
     "status": "completed",
-    "verification": "Unit tests verify dynamic specialist capability learning from verified outcomes and adaptive route selection favoring higher-performing specialists."
+    "verification": "Unit and integration tests verify concurrency throttle adherence, slot release on error/completion, build passes, and all 5 E2E suites pass 100%."
   }
 ]

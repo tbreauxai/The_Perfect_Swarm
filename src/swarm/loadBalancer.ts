@@ -361,6 +361,218 @@ export class TokenBudgetManager {
 
 export const globalTokenBudgetManager = new TokenBudgetManager();
 
+export interface NodeCapacityConfig {
+    defaultMaxConcurrency?: number;               // default 5
+    nodeConcurrencyLimits?: Record<string, number>; // per-node or per-provider concurrency limits
+    saturationThreshold?: number;                 // threshold ratio (e.g. 0.90 or 1.0) for saturation flag
+}
+
+export interface CapacitySlot {
+    slotId: string;
+    nodeKey: string;
+    acquiredAt: number;
+    weight: number;
+    metadata?: Record<string, any>;
+    release: () => void;
+}
+
+export interface NodeCapacityMetrics {
+    nodeKey: string;
+    maxConcurrency: number;
+    activeInFlight: number;
+    availableHeadroom: number;
+    utilizationRatio: number;      // 0.0 to 1.0
+    utilizationPercent: number;    // 0 to 100
+    isSaturated: boolean;
+    totalSlotsAcquired: number;
+    totalSlotsReleased: number;
+}
+
+/**
+ * Manages per-node and per-provider concurrency capacity, tracks in-flight workload slots,
+ * and calculates real-time node capacity headroom to prevent resource exhaustion and 429 bottlenecks.
+ */
+export class NodeCapacityManager {
+    private concurrencyLimits: Map<string, number> = new Map();
+    private activeSlots: Map<string, Map<string, CapacitySlot>> = new Map();
+    private totalAcquiredCount: Map<string, number> = new Map();
+    private totalReleasedCount: Map<string, number> = new Map();
+    private defaultMaxConcurrency: number;
+    private saturationThreshold: number;
+
+    constructor(config?: NodeCapacityConfig) {
+        this.defaultMaxConcurrency = config?.defaultMaxConcurrency ?? 5;
+        this.saturationThreshold = config?.saturationThreshold ?? 1.0;
+
+        // Calibrated default provider / node concurrency limits:
+        const defaultLimits: Record<string, number> = {
+            groq: 2,             // Free tier TPM / RPM tight limit (1-2 concurrent)
+            mistral: 3,          // Free tier moderate concurrency
+            github: 4,           // GitHub Models free tier
+            openrouter: 4,       // Free tier routing
+            gemini: 10,          // Gemini high concurrency limit
+            simulated: 50,       // Mock / test
+            mock: 50,
+            'custom-mock': 50,
+            ...(config?.nodeConcurrencyLimits || {})
+        };
+
+        for (const [key, limit] of Object.entries(defaultLimits)) {
+            this.concurrencyLimits.set(key.toLowerCase(), Math.max(1, limit));
+        }
+    }
+
+    private normalizeKey(nodeKey: string): string {
+        return (nodeKey || '').toLowerCase().trim();
+    }
+
+    getMaxConcurrency(nodeKey: string): number {
+        const key = this.normalizeKey(nodeKey);
+        return this.concurrencyLimits.get(key) ?? this.defaultMaxConcurrency;
+    }
+
+    setMaxConcurrency(nodeKey: string, limit: number): void {
+        const key = this.normalizeKey(nodeKey);
+        this.concurrencyLimits.set(key, Math.max(1, Math.round(limit)));
+    }
+
+    getActiveInFlight(nodeKey: string): number {
+        const key = this.normalizeKey(nodeKey);
+        const slots = this.activeSlots.get(key);
+        return slots ? slots.size : 0;
+    }
+
+    getCapacityHeadroom(nodeKey: string): number {
+        const max = this.getMaxConcurrency(nodeKey);
+        const active = this.getActiveInFlight(nodeKey);
+        return Math.max(0, max - active);
+    }
+
+    getUtilizationRatio(nodeKey: string): number {
+        const max = this.getMaxConcurrency(nodeKey);
+        if (max <= 0) return 1.0;
+        const active = this.getActiveInFlight(nodeKey);
+        return Math.min(1.0, Math.max(0, active / max));
+    }
+
+    isSaturated(nodeKey: string): boolean {
+        return this.getUtilizationRatio(nodeKey) >= this.saturationThreshold;
+    }
+
+    hasCapacity(nodeKey: string, weight: number = 1): boolean {
+        return this.getCapacityHeadroom(nodeKey) >= weight;
+    }
+
+    tryAcquireSlot(
+        nodeKey: string,
+        options?: { weight?: number; metadata?: Record<string, any> }
+    ): CapacitySlot | null {
+        const key = this.normalizeKey(nodeKey);
+        const weight = Math.max(1, options?.weight ?? 1);
+
+        if (!this.hasCapacity(key, weight)) {
+            return null;
+        }
+
+        let slots = this.activeSlots.get(key);
+        if (!slots) {
+            slots = new Map();
+            this.activeSlots.set(key, slots);
+        }
+
+        const slotId = `slot-${key}-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+        let released = false;
+
+        const slot: CapacitySlot = {
+            slotId,
+            nodeKey: key,
+            acquiredAt: Date.now(),
+            weight,
+            metadata: options?.metadata,
+            release: () => {
+                if (!released) {
+                    released = true;
+                    this.releaseSlot(slot);
+                }
+            }
+        };
+
+        slots.set(slotId, slot);
+        this.totalAcquiredCount.set(key, (this.totalAcquiredCount.get(key) || 0) + 1);
+
+        return slot;
+    }
+
+    releaseSlot(slotOrId: CapacitySlot | string, nodeKey?: string): boolean {
+        const slotId = typeof slotOrId === 'string' ? slotOrId : slotOrId.slotId;
+        const targetNode = typeof slotOrId === 'string'
+            ? (nodeKey ? this.normalizeKey(nodeKey) : undefined)
+            : slotOrId.nodeKey;
+
+        if (targetNode) {
+            const slots = this.activeSlots.get(targetNode);
+            if (slots && slots.has(slotId)) {
+                slots.delete(slotId);
+                this.totalReleasedCount.set(targetNode, (this.totalReleasedCount.get(targetNode) || 0) + 1);
+                return true;
+            }
+        } else {
+            for (const [k, slots] of this.activeSlots.entries()) {
+                if (slots.has(slotId)) {
+                    slots.delete(slotId);
+                    this.totalReleasedCount.set(k, (this.totalReleasedCount.get(k) || 0) + 1);
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    getNodeMetrics(nodeKey: string): NodeCapacityMetrics {
+        const key = this.normalizeKey(nodeKey);
+        const max = this.getMaxConcurrency(key);
+        const active = this.getActiveInFlight(key);
+        const headroom = Math.max(0, max - active);
+        const ratio = max > 0 ? active / max : 1.0;
+
+        return {
+            nodeKey: key,
+            maxConcurrency: max,
+            activeInFlight: active,
+            availableHeadroom: headroom,
+            utilizationRatio: Math.round(ratio * 1000) / 1000,
+            utilizationPercent: Math.min(100, Math.round(ratio * 100)),
+            isSaturated: ratio >= this.saturationThreshold,
+            totalSlotsAcquired: this.totalAcquiredCount.get(key) || 0,
+            totalSlotsReleased: this.totalReleasedCount.get(key) || 0
+        };
+    }
+
+    getAllNodeMetrics(): Record<string, NodeCapacityMetrics> {
+        const result: Record<string, NodeCapacityMetrics> = {};
+        const allKeys = new Set([
+            ...this.concurrencyLimits.keys(),
+            ...this.activeSlots.keys(),
+            ...this.totalAcquiredCount.keys()
+        ]);
+
+        for (const k of allKeys) {
+            result[k] = this.getNodeMetrics(k);
+        }
+
+        return result;
+    }
+
+    reset(): void {
+        this.activeSlots.clear();
+        this.totalAcquiredCount.clear();
+        this.totalReleasedCount.clear();
+    }
+}
+
+export const globalNodeCapacityManager = new NodeCapacityManager();
+
 export interface SpecialistOutcomeFeedback {
     success: boolean;
     qualityRating?: number;   // 0.0 to 1.0 (from critic or default 0.85)
@@ -585,6 +797,8 @@ export interface ChunkAssignment {
     provider: string;
     affinityScore: number;
     rlScore?: number;
+    nodeHeadroom?: number;
+    isSpillover?: boolean;
     allocatedTokens: number;
     reason: string;
 }
@@ -593,7 +807,13 @@ export interface SpecialistRoutingPlan {
     totalChunks: number;
     totalEstimatedTokens: number;
     assignments: ChunkAssignment[];
-    specialistSummary: Record<string, { role: string; chunksAssigned: number; tokensAllocated: number }>;
+    specialistSummary: Record<string, {
+        role: string;
+        chunksAssigned: number;
+        tokensAllocated: number;
+        nodeHeadroom?: number;
+        isSaturated?: boolean;
+    }>;
 }
 
 export interface SpecialistCandidate {
@@ -638,15 +858,18 @@ export class SpecialistAffinityRouter {
     private tokenManager: TokenBudgetManager;
     private loadBalancer: AdaptiveLoadBalancer;
     private capabilityProfiler: SpecialistCapabilityProfiler;
+    private capacityManager: NodeCapacityManager;
 
     constructor(
         tokenManager?: TokenBudgetManager,
         loadBalancer?: AdaptiveLoadBalancer,
-        capabilityProfiler?: SpecialistCapabilityProfiler
+        capabilityProfiler?: SpecialistCapabilityProfiler,
+        capacityManager?: NodeCapacityManager
     ) {
         this.tokenManager = tokenManager || globalTokenBudgetManager;
         this.loadBalancer = loadBalancer || globalLoadBalancer;
         this.capabilityProfiler = capabilityProfiler || globalSpecialistProfiler;
+        this.capacityManager = capacityManager || globalNodeCapacityManager;
     }
 
     /**
@@ -693,7 +916,8 @@ export class SpecialistAffinityRouter {
     }
 
     /**
-     * Generates a balanced, token-aware assignment plan for chunks across specialist agents.
+     * Generates a balanced, token-aware, capacity-governed assignment plan for chunks across specialist agents.
+     * Prevents node saturation and dynamically spills over tasks to available candidate nodes.
      */
     planDistribution<T extends SpecialistCandidate>(task: string, chunks: string[], agents: T[]): SpecialistRoutingPlan {
         if (!agents || agents.length === 0) {
@@ -701,10 +925,27 @@ export class SpecialistAffinityRouter {
         }
 
         const assignments: ChunkAssignment[] = [];
-        const specialistSummary: Record<string, { role: string; chunksAssigned: number; tokensAllocated: number }> = {};
+        const specialistSummary: Record<string, {
+            role: string;
+            chunksAssigned: number;
+            tokensAllocated: number;
+            nodeHeadroom?: number;
+            isSaturated?: boolean;
+        }> = {};
         
         for (const a of agents) {
-            specialistSummary[a.role] = { role: a.role, chunksAssigned: 0, tokensAllocated: 0 };
+            const nodeKey = a.id || a.role;
+            const initHeadroom = Math.min(
+                this.capacityManager.getCapacityHeadroom(nodeKey),
+                this.capacityManager.getCapacityHeadroom(a.provider)
+            );
+            specialistSummary[a.role] = {
+                role: a.role,
+                chunksAssigned: 0,
+                tokensAllocated: 0,
+                nodeHeadroom: initHeadroom,
+                isSaturated: initHeadroom <= 0
+            };
         }
 
         let totalEstTokens = 0;
@@ -716,28 +957,61 @@ export class SpecialistAffinityRouter {
             const combinedContent = `${task}\n${chunk}`;
 
             const candidates = agents.map(agent => {
+                const nodeKey = agent.id || agent.role;
                 const { score: affinity, matchedDomain } = this.scoreAffinity(agent.role, combinedContent);
+
+                const currentAssigned = specialistSummary[agent.role]?.chunksAssigned || 0;
+                const rawNodeHeadroom = this.capacityManager.getCapacityHeadroom(nodeKey);
+                const rawProvHeadroom = this.capacityManager.getCapacityHeadroom(agent.provider);
+                const baseHeadroom = Math.min(rawNodeHeadroom, rawProvHeadroom);
+                const effectiveHeadroom = Math.max(0, baseHeadroom - currentAssigned);
+
+                const maxConcurrency = Math.min(
+                    this.capacityManager.getMaxConcurrency(nodeKey),
+                    this.capacityManager.getMaxConcurrency(agent.provider)
+                );
+                const activeInFlight = Math.max(
+                    this.capacityManager.getActiveInFlight(nodeKey),
+                    this.capacityManager.getActiveInFlight(agent.provider)
+                );
+                const effectiveUtilization = maxConcurrency > 0
+                    ? Math.min(1.0, (activeInFlight + currentAssigned) / maxConcurrency)
+                    : 1.0;
+
+                const isNodeSaturated = effectiveHeadroom <= 0 ||
+                    this.capacityManager.isSaturated(nodeKey) ||
+                    this.capacityManager.isSaturated(agent.provider);
+
+                // Node capacity score: heavily downrank saturated nodes to spill over
+                const nodeCapacityScore = isNodeSaturated ? 0.01 : Math.max(0.1, 1.0 - effectiveUtilization);
+
+                // Token budget capacity score
                 const provRemaining = this.tokenManager.getRemainingBudget(agent.provider);
                 const provUtilization = this.tokenManager.getUtilizationRatio(agent.provider);
+                const tokenCapacityScore = provRemaining < estTokens ? 0.05 : (1.0 - provUtilization * 0.5);
 
-                // Capacity score: heavily penalize if provider would exceed remaining token limit
-                const capacityScore = provRemaining < estTokens ? 0.05 : (1.0 - provUtilization * 0.5);
+                // Combined capacity score (50% node concurrency headroom + 50% token budget)
+                const capacityScore = (nodeCapacityScore * 0.50) + (tokenCapacityScore * 0.50);
 
                 // Workload distribution: balance number of chunks assigned per agent
-                const currentAssigned = specialistSummary[agent.role]?.chunksAssigned || 0;
                 const balanceScore = 1.0 / (1 + currentAssigned * 0.5);
 
                 // RL Capability Score (UCB1)
                 const ucbScore = this.capabilityProfiler.getUcb1Score(agent.role, matchedDomain);
                 const normalizedUcb = Math.min(1.0, Math.max(0.05, ucbScore / 1.5));
 
-                // 35% affinity + 25% RL capability (UCB1) + 25% token capacity + 15% workload distribution
-                const combinedScore = (affinity * 0.35) + (normalizedUcb * 0.25) + (capacityScore * 0.25) + (balanceScore * 0.15);
+                // 30% affinity + 25% RL capability (UCB1) + 30% capacity (node + token) + 15% workload distribution
+                const combinedScore = (affinity * 0.30) + (normalizedUcb * 0.25) + (capacityScore * 0.30) + (balanceScore * 0.15);
 
                 return {
                     agent,
+                    nodeKey,
                     affinity,
                     matchedDomain,
+                    effectiveHeadroom,
+                    isNodeSaturated,
+                    nodeCapacityScore,
+                    tokenCapacityScore,
                     capacityScore,
                     combinedScore,
                     normalizedUcb,
@@ -750,9 +1024,19 @@ export class SpecialistAffinityRouter {
             const best = candidates[0];
             const chosen = best.agent;
 
-            const reason = best.matchedDomain
-                ? `Matched '${best.matchedDomain}' (affinity ${(best.affinity * 100).toFixed(0)}%, RL UCB ${(best.normalizedUcb * 100).toFixed(0)}%, token cap ${(best.capacityScore * 100).toFixed(0)}%)`
-                : `Balanced allocation (RL UCB ${(best.normalizedUcb * 100).toFixed(0)}%, capacity ${(best.capacityScore * 100).toFixed(0)}%)`;
+            // Detect whether spillover occurred from a saturated candidate with equal or higher affinity
+            const saturatedCandidates = candidates.filter(c => c.isNodeSaturated);
+            const spilloverFrom = saturatedCandidates.find(c => c.agent !== chosen && c.affinity >= best.affinity - 0.05);
+            const isSpillover = !!spilloverFrom;
+
+            let reason = '';
+            if (isSpillover && spilloverFrom) {
+                reason = `Spillover reroute: '${spilloverFrom.agent.role}' capacity saturated (0 headroom); allocated to '${chosen.role}' (headroom ${best.effectiveHeadroom})`;
+            } else if (best.matchedDomain) {
+                reason = `Matched '${best.matchedDomain}' (affinity ${(best.affinity * 100).toFixed(0)}%, headroom ${best.effectiveHeadroom}, RL UCB ${(best.normalizedUcb * 100).toFixed(0)}%)`;
+            } else {
+                reason = `Capacity allocation (headroom ${best.effectiveHeadroom}, RL UCB ${(best.normalizedUcb * 100).toFixed(0)}%)`;
+            }
 
             assignments.push({
                 chunkIndex: i,
@@ -762,12 +1046,16 @@ export class SpecialistAffinityRouter {
                 provider: chosen.provider,
                 affinityScore: best.affinity,
                 rlScore: Math.round(best.normalizedUcb * 100) / 100,
+                nodeHeadroom: best.effectiveHeadroom,
+                isSpillover,
                 allocatedTokens: estTokens,
                 reason
             });
 
             specialistSummary[chosen.role].chunksAssigned++;
             specialistSummary[chosen.role].tokensAllocated += estTokens;
+            specialistSummary[chosen.role].nodeHeadroom = Math.max(0, best.effectiveHeadroom - 1);
+            specialistSummary[chosen.role].isSaturated = specialistSummary[chosen.role].nodeHeadroom <= 0;
 
             this.tokenManager.recordUsage(chosen.provider, estTokens, chosen.role);
         }

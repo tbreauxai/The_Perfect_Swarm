@@ -1,12 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { executeSwarmWorkflow } from './engine.ts';
 import { ProviderRegistry } from './providers/registry.ts';
-import { globalTokenBudgetManager, globalSpecialistProfiler } from './loadBalancer.ts';
+import { globalTokenBudgetManager, globalSpecialistProfiler, globalNodeCapacityManager } from './loadBalancer.ts';
 
 describe('Dynamic Task Routing & Token Allocation in Engine Step 4', () => {
     beforeEach(() => {
         globalTokenBudgetManager.reset();
         globalSpecialistProfiler.reset();
+        globalNodeCapacityManager.reset();
     });
 
     it('emits Specialist Dynamic Routing event and tracks token budget for single-chunk workloads', async () => {
@@ -14,7 +15,7 @@ describe('Dynamic Task Routing & Token Allocation in Engine Step 4', () => {
             providerName: 'custom-mock',
             async call(options) {
                 return JSON.stringify({
-                    insights: [`Analysis from ${options.model || 'model'}`],
+                    insights: [`Analysis from ${options.modelName || 'model'}`],
                     anomalies: [],
                     summary: 'Analysis completed successfully'
                 });
@@ -184,5 +185,43 @@ describe('Dynamic Task Routing & Token Allocation in Engine Step 4', () => {
         expect(secProfile?.successes).toBeGreaterThanOrEqual(1);
         expect(secProfile?.completionRate).toBe(1.0);
         expect(secProfile?.averageReward).toBeGreaterThan(0.70);
+    });
+
+    it('emits nodeCapacity metrics in routing event and manages slot lifecycle without leaks', async () => {
+        ProviderRegistry.register({
+            providerName: 'capacity-test-prov',
+            async call() {
+                return JSON.stringify({
+                    insights: ['Capacity verified insight'],
+                    anomalies: [],
+                    summary: 'Capacity analysis complete'
+                });
+            }
+        });
+
+        const result = await executeSwarmWorkflow({
+            task: 'Audit system performance under high concurrency',
+            data: 'test payload',
+            forceFullSwarm: true,
+            settings: {
+                appId: 'test-node-capacity',
+                agents: [
+                    { id: 'manager', role: 'Manager Node', provider: 'capacity-test-prov', apiKey: 'k', model: 'm' },
+                    { id: 'perf-node', role: 'Performance Engineer', provider: 'capacity-test-prov', apiKey: 'k', model: 'm' }
+                ]
+            }
+        });
+
+        // 1. Verify routing event contains nodeCapacity telemetry
+        const routingEvent = result.events.find(e => e.action === 'Specialist Dynamic Routing');
+        expect(routingEvent).toBeDefined();
+        expect(routingEvent?.output.nodeCapacity).toBeDefined();
+
+        // 2. Verify all slots were released after execution (0 in-flight)
+        const perfMetrics = globalNodeCapacityManager.getNodeMetrics('perf-node');
+        expect(perfMetrics.activeInFlight).toBe(0);
+        expect(perfMetrics.totalSlotsAcquired).toBeGreaterThanOrEqual(1);
+        expect(perfMetrics.totalSlotsReleased).toBeGreaterThanOrEqual(1);
+        expect(perfMetrics.totalSlotsAcquired).toBe(perfMetrics.totalSlotsReleased);
     });
 });
