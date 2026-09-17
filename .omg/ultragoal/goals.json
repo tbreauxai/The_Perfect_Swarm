@@ -1,20 +1,20 @@
 [
   {
-    "id": "goal-1-hierarchical-communication-bus",
-    "description": "Implement HierarchicalMessageBus, ClusterNode, CommunicationLayer, and scoped routing (local, cluster, upward, targeted) in src/swarm/communication.ts with comprehensive unit tests.",
+    "id": "goal-1-server-and-client-multi-stage-sse",
+    "description": "Implement swarm_stage SSE events in src/swarm/server.ts, extend StreamEventPayload in src/swarm/client.ts, and add stage emission in src/swarm/engine.ts.",
     "status": "completed",
-    "verification": "Unit tests verify multi-tier node registration, scoped message delivery, upward aggregation, and isolation between clusters."
+    "verification": "Unit tests and server streaming tests confirm swarm_stage event emission with cluster digests prior to manager synthesis completion."
   },
   {
-    "id": "goal-2-semantic-message-compression-and-dedup",
-    "description": "Implement in-flight message deduplication, cluster digest aggregation, and downward directive filtering in HierarchicalMessageBus to reduce message overhead and tokens.",
+    "id": "goal-2-ui-progressive-digest-rendering",
+    "description": "Add progressive cluster digest state and live preview cards in src/App.tsx during active manager synthesis.",
     "status": "completed",
-    "verification": "Unit tests verify duplicate suppression, digest generation, downward domain filtering, and token reduction metrics."
+    "verification": "App.tsx parses swarm_stage events, renders interim cluster digests while loading is true, and replaces them seamlessly when finalAnalysis arrives."
   },
   {
-    "id": "goal-3-engine-hierarchical-layer-integration-and-verification",
-    "description": "Integrate hierarchical communication into src/swarm/engine.ts, emit telemetry events, update UI timeline, and verify across all test suites.",
+    "id": "goal-3-verification-and-bundle-build",
+    "description": "Add multi-stage SSE verification in test-sse-server.mjs, rebuild client and swarm distribution bundles, and verify across all test suites.",
     "status": "completed",
-    "verification": "End-to-end execution passes with reduced message count, builds pass, and all 5 E2E suites and Vitest tests pass 100%."
+    "verification": "test-sse-server.mjs receives swarm_stage event, all 10 Vitest suites pass, and all 5 E2E test suites pass 100%."
   }
 ]

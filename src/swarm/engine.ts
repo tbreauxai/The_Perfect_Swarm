@@ -138,6 +138,14 @@ Example of expected output structure:
   ]
 }`;
 
+export interface SwarmStagePayload {
+    stage: 'routing' | 'cluster_aggregation' | 'manager_synthesis' | 'critic_verification' | 'completed';
+    task?: string;
+    digests?: Record<string, ClusterDigest>;
+    metrics?: any;
+    [key: string]: any;
+}
+
 export interface SwarmWorkflowParams {
     task: string;
     data?: string;
@@ -148,6 +156,7 @@ export interface SwarmWorkflowParams {
     complexityOverride?: TaskComplexity;
     onEvent?: (event: SwarmEvent) => void;
     onMemoryLearned?: (event: LearnedMemoryEvent) => void;
+    onStage?: (stagePayload: SwarmStagePayload) => void;
     context?: SwarmContext;
     cortex?: MemoryCortex;
     tools?: SwarmTool[] | ToolRegistry;
@@ -430,6 +439,11 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             durationMs: 0
         });
 
+        params.onStage?.({
+            stage: 'manager_synthesis',
+            task
+        });
+
         fastAnalyst.setSystemInstruction(ANALYST_SYSTEM_INSTRUCTION);
         const fastPrompt = `Task: ${task}\nData:\n${data || "(No additional data payload)"}`;
 
@@ -516,6 +530,12 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 durationMs: workflowDurationMs
             });
 
+            params.onStage?.({
+                stage: 'completed',
+                task,
+                finalAnalysis
+            });
+
             return {
                 events: context.events,
                 finalAnalysis,
@@ -525,6 +545,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             console.warn(`[Fast-Path] Short-circuit failed, falling back to full swarm pipeline:`, err);
         }
     }
+
+    let latestClusterDigests: Record<string, ClusterDigest> | undefined;
 
     try {
         // Step 1: Data Profiling
@@ -864,6 +886,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         for (const [cId, reps] of Object.entries(clusterReportsMap)) {
             clusterDigests[cId] = globalHierarchicalMessageBus.aggregateClusterReports(cId, reps);
         }
+        latestClusterDigests = clusterDigests;
         const busMetrics = globalHierarchicalMessageBus.getMetrics();
 
         context.addEvent({
@@ -876,6 +899,14 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 metrics: busMetrics
             },
             durationMs: 0
+        });
+
+        // Multi-Stage Progressive Stream: Cluster Digests Ready
+        params.onStage?.({
+            stage: 'cluster_aggregation',
+            task,
+            digests: clusterDigests,
+            metrics: busMetrics
         });
 
         // Step 5: Manager Node Synthesis & Deep Analysis Verification
@@ -900,6 +931,12 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 `• Summary: ${d.summary}`
             ).join('\n\n') + '\n\n'
             : '';
+
+        params.onStage?.({
+            stage: 'manager_synthesis',
+            task,
+            digests: clusterDigests
+        });
 
         managerAgent.setSystemInstruction(MANAGER_SYSTEM_INSTRUCTION);
         const dynamicPrompt = `Task: ${task}\n\nHistorical Baselines:\n${historicalContext}\n\n${clusterDigestText}Analyst Reports:\n${compiledReports}`;
@@ -1022,6 +1059,13 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         prompt: `Workflow baseline telemetry: completionRate=${metrics.overallCompletionRatePercent}%, p50=${metrics.overallLatency.p50Ms}ms, p95=${metrics.overallLatency.p95Ms}ms, totalTasks=${metrics.totalTasks}`,
         output: metrics,
         durationMs: workflowDurationMs
+    });
+
+    params.onStage?.({
+        stage: 'completed',
+        task,
+        digests: latestClusterDigests,
+        finalAnalysis
     });
 
     return {

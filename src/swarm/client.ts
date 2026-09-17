@@ -1,4 +1,4 @@
-import { executeSwarmWorkflow, type SwarmWorkflowResult, getOrCreateDefaultCortex } from './engine.ts';
+import { executeSwarmWorkflow, type SwarmWorkflowResult, type SwarmStagePayload, getOrCreateDefaultCortex } from './engine.ts';
 import { MemoryCortex, type RetrievalOptions, type MemorySnapshot, type ExportMemoriesOptions, type ImportMemoriesOptions, type ImportMemoriesResult, type MemoryMetadata } from './memory.ts';
 import type { SwarmEvent } from './types.ts';
 
@@ -33,8 +33,9 @@ export interface AnalyzeResponse {
 }
 
 export interface StreamEventPayload {
-    type: 'event' | 'complete' | 'error';
+    type: 'event' | 'stage' | 'complete' | 'error';
     event?: SwarmEvent;
+    stagePayload?: SwarmStagePayload;
     finalAnalysis?: any;
     error?: string;
 }
@@ -189,6 +190,9 @@ export class SwarmClient {
             cortex: this.cortex,
             onEvent: (event) => {
                 pushItem({ type: 'event', event });
+            },
+            onStage: (stagePayload) => {
+                pushItem({ type: 'stage', stagePayload });
             }
         }).then(result => {
             pushItem({ type: 'complete', finalAnalysis: result.finalAnalysis });
@@ -278,6 +282,8 @@ export class SwarmClient {
                     const parsedData = JSON.parse(dataStr);
                     if (eventType === 'swarm_event') {
                         yield { type: 'event', event: parsedData };
+                    } else if (eventType === 'swarm_stage') {
+                        yield { type: 'stage', stagePayload: parsedData };
                     } else if (eventType === 'swarm_complete') {
                         yield { type: 'complete', finalAnalysis: parsedData.finalAnalysis };
                     } else if (eventType === 'swarm_error') {

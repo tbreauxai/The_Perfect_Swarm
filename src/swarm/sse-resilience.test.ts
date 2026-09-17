@@ -108,4 +108,72 @@ describe('Phase 2: Server-Side Streaming & Heartbeat Resilience', () => {
         const finalCount = writes.filter(w => w === ':keepalive\n\n').length;
         expect(finalCount).toBe(initialCount);
     });
+
+    it('streams swarm_stage events with cluster digests before manager synthesis completes', async () => {
+        ProviderRegistry.register({
+            providerName: 'stage-stream-provider' as any,
+            async call(options) {
+                if (options.systemInstruction?.includes('Orchestrator') || options.prompt?.includes('Analyst Reports')) {
+                    return JSON.stringify({
+                        ui_title: 'Synthesized Title',
+                        components: [{ id: '1', type: 'InsightList', props: { title: 'T', insights: [] } }]
+                    });
+                }
+                return JSON.stringify({
+                    insights: ['Sec insight A'],
+                    anomalies: ['Sec anomaly A'],
+                    summary: 'Pod analysis'
+                });
+            }
+        });
+
+        const req: any = new EventEmitter();
+        const writes: string[] = [];
+
+        const res: any = {
+            writeHead: vi.fn(),
+            write: vi.fn((chunk: string) => writes.push(chunk)),
+            flushHeaders: vi.fn(),
+            end: vi.fn()
+        };
+
+        const params: any = {
+            task: 'Analyze security telemetry',
+            data: 'auth logs',
+            forceFullSwarm: true,
+            settings: {
+                agents: [
+                    { id: 'manager', role: 'Manager Node', provider: 'stage-stream-provider', model: 'mock-mgr', apiKey: 'k' },
+                    { id: 'sec-spec', role: 'Security Specialist', provider: 'stage-stream-provider', model: 'mock-sec', apiKey: 'k' }
+                ]
+            }
+        };
+
+        await handleSwarmSse(req, res, params);
+
+        // Find swarm_stage events
+        const stageWrites = writes.filter(w => w.startsWith('event: swarm_stage\n'));
+        expect(stageWrites.length).toBeGreaterThanOrEqual(2);
+
+        // Extract payloads
+        const stagePayloads = stageWrites.map(w => {
+            const dataLine = w.split('\n').find(l => l.startsWith('data: '));
+            return JSON.parse(dataLine!.replace('data: ', ''));
+        });
+
+        const clusterAggStage = stagePayloads.find(p => p.stage === 'cluster_aggregation');
+        expect(clusterAggStage).toBeDefined();
+        expect(clusterAggStage.digests['security-pod']).toBeDefined();
+        expect(clusterAggStage.digests['security-pod'].keyFindings).toContain('Sec insight A');
+
+        const managerStage = stagePayloads.find(p => p.stage === 'manager_synthesis');
+        expect(managerStage).toBeDefined();
+
+        const completedStage = stagePayloads.find(p => p.stage === 'completed');
+        expect(completedStage).toBeDefined();
+
+        // Verify swarm_complete is sent last
+        const lastEvent = writes[writes.length - 1];
+        expect(lastEvent).toContain('event: swarm_complete\n');
+    });
 });

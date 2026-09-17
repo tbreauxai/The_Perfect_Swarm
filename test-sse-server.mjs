@@ -86,6 +86,7 @@ async function runSseServerTests() {
         // Step D: Full Server-Sent Events (SSE) streaming
         console.log('\n[Test 4] POST /api/swarm/stream (SSE Stream)');
         const sseEvents = [];
+        const sseStages = [];
         let sseCompleteReceived = false;
 
         await new Promise((resolve, reject) => {
@@ -120,6 +121,13 @@ async function runSseServerTests() {
                                 sseEvents.push(parsed);
                                 console.log(`  → SSE Swarm Event: [${parsed.agentRole}] ${parsed.action}`);
                             }
+                        } else if (block.startsWith('event: swarm_stage')) {
+                            const dataLine = block.split('\n').find(l => l.startsWith('data: '));
+                            if (dataLine) {
+                                const parsed = JSON.parse(dataLine.replace('data: ', ''));
+                                sseStages.push(parsed);
+                                console.log(`  → SSE Swarm Stage: [${parsed.stage}]`);
+                            }
                         } else if (block.startsWith('event: swarm_complete')) {
                             sseCompleteReceived = true;
                             const dataLine = block.split('\n').find(l => l.startsWith('data: '));
@@ -145,7 +153,51 @@ async function runSseServerTests() {
 
         if (!sseCompleteReceived) throw new Error('Failed to receive event: swarm_complete');
         if (sseEvents.length === 0) throw new Error('Failed to receive any event: swarm_event');
-        console.log(`✓ SSE streaming successfully verified with ${sseEvents.length} live swarm events.`);
+        if (sseStages.length === 0) throw new Error('Failed to receive any event: swarm_stage');
+        console.log(`✓ SSE streaming successfully verified with ${sseEvents.length} live swarm events and ${sseStages.length} stage transitions.`);
+
+        // Step 4b: Multi-specialist SSE stream with cluster digest progressive stage
+        console.log('\n[Test 4b] POST /api/swarm/stream with forceFullSwarm (Cluster Digest Stage)');
+        const fullSwarmStages = [];
+        await new Promise((resolve, reject) => {
+            const req = http.request(`${baseUrl}/api/swarm/stream`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'text/event-stream'
+                }
+            }, (res) => {
+                let buffer = '';
+                res.on('data', (chunk) => {
+                    buffer += chunk.toString('utf8');
+                    const lines = buffer.split('\n\n');
+                    buffer = lines.pop() || '';
+                    for (const block of lines) {
+                        if (block.startsWith('event: swarm_stage')) {
+                            const dataLine = block.split('\n').find(l => l.startsWith('data: '));
+                            if (dataLine) {
+                                const parsed = JSON.parse(dataLine.replace('data: ', ''));
+                                fullSwarmStages.push(parsed);
+                                console.log(`  → Full Swarm Stage: [${parsed.stage}]`);
+                            }
+                        }
+                    }
+                });
+                res.on('end', resolve);
+                res.on('error', reject);
+            });
+            req.on('error', reject);
+            req.write(JSON.stringify({
+                task: 'Audit authentication latency and vulnerability profile',
+                data: 'auth telemetry sample',
+                forceFullSwarm: true
+            }));
+            req.end();
+        });
+
+        const clusterStage = fullSwarmStages.find(s => s.stage === 'cluster_aggregation');
+        if (!clusterStage) throw new Error('Missing cluster_aggregation stage in full swarm SSE stream');
+        console.log('✓ Multi-stage cluster digest SSE stage verified with pods:', Object.keys(clusterStage.digests || {}));
 
         // Step E: Direct JSON endpoint POST /api/swarm/analyze
         console.log('\n[Test 5] POST /api/swarm/analyze (Standard JSON)');

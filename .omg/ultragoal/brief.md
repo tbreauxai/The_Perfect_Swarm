@@ -1,19 +1,19 @@
-# Ultragoal Brief: Hierarchical Communication Layers
+# Ultragoal Brief: Manager Multi-Stage Streaming
 
 ## Objective
-Introduce hierarchical communication layers to reduce message overhead, eliminate O(N^2) broadcast explosion, and minimize inter-agent latency among swarm agents:
-1. **Hierarchical Topology & Scoped Routing**: Establish structured multi-tier topology (Root Manager -> Cluster Leads / Aggregators -> Leaf Specialist Workers) with scoped routing (`local`, `cluster`, `upward`, `targeted`).
-2. **In-Flight Message Deduplication & Semantic Compression**: Deduplicate redundant messages, filter irrelevant downward broadcasts, and distill cluster outputs into compact `ClusterDigest` summaries.
-3. **Engine Integration & Latency Reduction**: Integrate hierarchical digests into workflow Step 4 (specialist execution) and Step 5/6 (critic and manager synthesis), drastically decreasing prompt token overhead and serialization latency.
+Stream real-time hierarchical cluster digests over SSE before Manager synthesis completes:
+1. **Multi-Stage SSE Protocol**: Introduce `swarm_stage` event type in `src/swarm/server.ts` and `src/swarm/client.ts` (`stage: 'cluster_aggregation' | 'manager_synthesis'`), enabling clients to consume interim findings without waiting for the full synthesis LLM response.
+2. **Progressive UI Visualization**: Render interim cluster digests, key findings, and anomalies in `src/App.tsx` / `src/components/AnalysisViewer.tsx` while Manager synthesis is actively executing.
+3. **End-to-End Verification**: Validate multi-stage event delivery across `test-sse-server.mjs`, client SDK, Vite builds, and all Vitest suites.
 
 ## Architecture Boundaries & Constraints
 1. **Zero Model Blacklists**: Never add or check any model ban lists. Any user-configured model is strictly valid.
 2. **Strict User Model Preservation**: Never alter, override, or default model strings configured by the user in settings.
 3. **Zero-Crash Worker Guarding**: All worker analyst outputs must flow through `guardAnalystResponse`.
-4. **Fallback & Graceful Degradation**: If no cluster hierarchy is defined, the system must seamlessly treat all specialists as a flat cluster without errors.
+4. **SSE Stream Resiliency**: Keepalive comments (`:keepalive`) and header flushing must remain intact without stream aborts or memory leaks.
 5. **Non-Breaking Compatibility**: Maintain 100% backward compatibility across all 5 test suites (`test:portable`, `test:simulation`, `test:dist`, `test:cli`, `test:server`) and Vitest test suites.
 
 ## Micro-Goal Breakdown
-1. `goal-1-hierarchical-communication-bus`: Implement `HierarchicalMessageBus`, `ClusterNode`, `CommunicationLayer`, and scoped message routing in `src/swarm/communication.ts`.
-2. `goal-2-semantic-message-compression-and-dedup`: Implement in-flight message deduplication, cluster digest aggregation, and downward directive filtering.
-3. `goal-3-engine-hierarchical-layer-integration-and-verification`: Integrate hierarchical communication into `src/swarm/engine.ts`, emit telemetry events, update UI timeline, and verify 100% across all test suites.
+1. `goal-1-server-and-client-multi-stage-sse`: Implement `swarm_stage` event emission in `src/swarm/server.ts`, extend `StreamEventPayload` in `src/swarm/client.ts`, and add `onStageUpdate` hook in `src/swarm/engine.ts`.
+2. `goal-2-ui-progressive-digest-rendering`: Add progressive cluster digest state and interim preview banner in `src/App.tsx` while Manager node synthesis is executing.
+3. `goal-3-verification-and-bundle-build`: Add SSE multi-stage verification in `test-sse-server.mjs` and vitest, rebuild production bundles, and verify 100% passing tests.

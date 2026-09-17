@@ -84,6 +84,12 @@ export async function handleSwarmSse(
                 if (params.onEvent) {
                     params.onEvent(event);
                 }
+            },
+            onStage: (stagePayload) => {
+                sendEvent('swarm_stage', stagePayload);
+                if (params.onStage) {
+                    params.onStage(stagePayload);
+                }
             }
         });
 

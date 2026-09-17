@@ -15,6 +15,11 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [events, setEvents] = useState<SwarmTimelineEvent[]>([]);
   const [finalAnalysis, setFinalAnalysis] = useState<any>(null);
+  const [progressiveStage, setProgressiveStage] = useState<{
+    stage: string;
+    digests?: Record<string, any>;
+    metrics?: any;
+  } | null>(null);
   const [error, setError] = useState('');
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -127,6 +132,7 @@ export default function App() {
     setError('');
     setEvents([]);
     setFinalAnalysis(null);
+    setProgressiveStage(null);
 
     let safeData = data;
     if (safeData.length > 500000) {
@@ -189,7 +195,10 @@ export default function App() {
             const parsedData = JSON.parse(dataStr);
             if (eventType === 'swarm_event') {
               setEvents(prev => [...prev, parsedData]);
+            } else if (eventType === 'swarm_stage') {
+              setProgressiveStage(parsedData);
             } else if (eventType === 'swarm_complete') {
+              setProgressiveStage(null);
               if (parsedData.finalAnalysis) {
                 setFinalAnalysis(parsedData.finalAnalysis);
               }
@@ -315,7 +324,7 @@ export default function App() {
 
           {/* Right Column: Execution Trace and Analysis Output */}
           <div className="lg:col-span-8 space-y-6">
-            {(events.length > 0 || finalAnalysis) ? (
+            {(events.length > 0 || finalAnalysis || progressiveStage?.digests) ? (
               <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200">
                 <h2 className="text-xl font-medium flex items-center justify-between border-b border-neutral-100 pb-4 mb-6">
                   <span className="flex items-center gap-2">
@@ -336,7 +345,11 @@ export default function App() {
                   onToggleEvent={toggleEvent}
                 />
 
-                <AnalysisViewer finalAnalysis={finalAnalysis} />
+                <AnalysisViewer
+                  finalAnalysis={finalAnalysis}
+                  interimDigests={progressiveStage?.digests}
+                  isSynthesizing={loading && progressiveStage?.stage === 'manager_synthesis'}
+                />
               </div>
             ) : loading ? (
               <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200 h-full flex flex-col items-center justify-center text-center space-y-3 min-h-[400px]">
