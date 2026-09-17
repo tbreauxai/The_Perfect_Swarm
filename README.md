@@ -339,10 +339,12 @@ npm run test:server       # HTTP & SSE streaming tests
 | `@perfect-swarm/core/memory` | Qdrant & in-memory hybrid RRF vector cortex |
 | `@perfect-swarm/core/router` | Complexity classifier and model router |
 | `@perfect-swarm/core/lifecycle` | RLAIF evaluation & verification loops |
-| `@perfect-swarm/core/cache` | Deterministic payload LRU cache |
-| `@perfect-swarm/core/hierarchy` | Hierarchical gatekeeping & scoped event broadcasting |
-| `@perfect-swarm/core/loadBalancer` | Adaptive EMA latency and 429 cooldown load balancer |
+| `@perfect-swarm/core/cache` | Semantic similarity engine & deterministic payload LRU cache |
+| `@perfect-swarm/core/loadBalancer` | Adaptive EMA latency, capacity slots, and 429 cooldown load balancer |
 | `@perfect-swarm/core/profiler` | Token chunking and data profiling utilities |
+| `@perfect-swarm/core/communication` | Hierarchical message bus, cluster topology manager, and digest compression |
+| `@perfect-swarm/core/vectorIndex` | O(log n) VP-Tree and HNSW sub-linear metric vector indexing |
+| `@perfect-swarm/core/speculative` | Speculative parallel execution, dependency DAGs, and conflict resolution |
 
 ---
 
