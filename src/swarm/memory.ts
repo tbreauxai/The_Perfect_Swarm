@@ -2,6 +2,7 @@ import { QdrantClient } from '@qdrant/js-client-rest';
 import { GoogleGenAI } from '@google/genai';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { createVectorIndex, type VectorIndex, type VectorIndexMetrics } from './vectorIndex.ts';
 
 export interface MemoryMetadata {
     appId?: string;
@@ -214,9 +215,9 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
 export class DeterministicLocalEmbeddingProvider implements EmbeddingProvider {
     readonly dimension = 768;
 
-    async embed(text: string): Promise<number[]> {
-        const vector = new Array(this.dimension).fill(0);
-        const tokens = text.toLowerCase().match(/\b\w+\b/g) || [];
+    static computeVector(text: string, dimension: number = 768): number[] {
+        const vector = new Array(dimension).fill(0);
+        const tokens = (text || '').toLowerCase().match(/\b\w+\b/g) || [];
         if (tokens.length === 0) return vector;
 
         for (const token of tokens) {
@@ -225,16 +226,20 @@ export class DeterministicLocalEmbeddingProvider implements EmbeddingProvider {
                 hash = ((hash << 5) + hash) + token.charCodeAt(i);
                 hash |= 0;
             }
-            const index = Math.abs(hash) % this.dimension;
+            const index = Math.abs(hash) % dimension;
             vector[index] += 1;
         }
 
         let sumSq = 0;
-        for (let i = 0; i < this.dimension; i++) sumSq += vector[i] * vector[i];
+        for (let i = 0; i < dimension; i++) sumSq += vector[i] * vector[i];
         const norm = Math.sqrt(sumSq) || 1;
-        for (let i = 0; i < this.dimension; i++) vector[i] /= norm;
+        for (let i = 0; i < dimension; i++) vector[i] /= norm;
 
         return vector;
+    }
+
+    async embed(text: string): Promise<number[]> {
+        return DeterministicLocalEmbeddingProvider.computeVector(text, this.dimension);
     }
 }
 
@@ -264,6 +269,7 @@ export interface MemoryCortexConfig {
  */
 export class MemoryCortex {
     private static globalFallbackStores = new Map<string, StoredMemoryPoint[]>();
+    private static globalVectorIndexes = new Map<string, VectorIndex<StoredMemoryPoint>>();
     private qdrant: QdrantClient | null = null;
     private embeddingProvider: EmbeddingProvider;
     private collectionName: string;
@@ -271,6 +277,7 @@ export class MemoryCortex {
     private initialized: boolean = false;
     private isAvailable: boolean = false;
     private fallbackStore: StoredMemoryPoint[];
+    private vectorIndex: VectorIndex<StoredMemoryPoint>;
     private storesSinceConsolidation: number = 0;
     private autoConsolidateThreshold: number = 50;
     private autoConsolidationOptions?: ConsolidationOptions;
@@ -281,6 +288,25 @@ export class MemoryCortex {
     static clearFallbackStore(collectionName: string = "pwa_swarm_dev_cortex_v2"): void {
         const store = MemoryCortex.globalFallbackStores.get(collectionName);
         if (store) store.length = 0;
+        const index = MemoryCortex.globalVectorIndexes.get(collectionName);
+        if (index) index.clear();
+    }
+
+    /**
+     * Synchronizes the in-memory vector index with current fallbackStore items.
+     */
+    private syncVectorIndex(): void {
+        this.vectorIndex.clear();
+        for (const pt of this.fallbackStore) {
+            this.vectorIndex.insert(pt.id, pt.denseVector, pt);
+        }
+    }
+
+    /**
+     * Returns real-time metrics of the in-memory sub-linear vector index.
+     */
+    getIndexMetrics(): VectorIndexMetrics {
+        return this.vectorIndex.getMetrics();
     }
 
     // Safe embedding wrapper that permanently downgrades to local embeddings if the API fails
@@ -320,11 +346,24 @@ export class MemoryCortex {
 
         if (config.isolatedStore) {
             this.fallbackStore = [];
+            this.vectorIndex = createVectorIndex<StoredMemoryPoint>('vptree', { metric: 'cosine' });
         } else {
             if (!MemoryCortex.globalFallbackStores.has(this.collectionName)) {
                 MemoryCortex.globalFallbackStores.set(this.collectionName, []);
             }
             this.fallbackStore = MemoryCortex.globalFallbackStores.get(this.collectionName)!;
+
+            if (!MemoryCortex.globalVectorIndexes.has(this.collectionName)) {
+                const idx = createVectorIndex<StoredMemoryPoint>('vptree', { metric: 'cosine' });
+                for (const pt of this.fallbackStore) {
+                    idx.insert(pt.id, pt.denseVector, pt);
+                }
+                MemoryCortex.globalVectorIndexes.set(this.collectionName, idx);
+            }
+            this.vectorIndex = MemoryCortex.globalVectorIndexes.get(this.collectionName)!;
+            if (this.fallbackStore.length > 0 && this.vectorIndex.size !== this.fallbackStore.length) {
+                this.syncVectorIndex();
+            }
         }
 
         if (url) {
@@ -578,28 +617,29 @@ export class MemoryCortex {
                 const sparseVector = SparseTokenizer.encode(content);
 
                 if (deduplicate) {
-                    for (const existing of this.fallbackStore) {
-                        if (existing.payload.appId === appId) {
-                            const sim = this.cosineSimilarity(denseVector, existing.denseVector);
-                            if (sim >= 0.92) {
-                                existing.payload.frequency = (existing.payload.frequency || 1) + 1;
-                                existing.payload.lastSeen = now;
-                                if (metadata.qualityRating !== undefined) {
-                                    existing.payload.qualityRating = Math.max(metadata.qualityRating, existing.payload.qualityRating || 0);
-                                }
-                                if (metadata.verified !== undefined) {
-                                    existing.payload.verified = metadata.verified;
-                                }
-                                storedId = existing.id;
-                                break;
-                            }
+                    const match = this.vectorIndex.findMostSimilar(
+                        denseVector,
+                        0.92,
+                        (item) => item.data.payload.appId === appId
+                    );
+
+                    if (match) {
+                        const existing = match.data;
+                        existing.payload.frequency = (existing.payload.frequency || 1) + 1;
+                        existing.payload.lastSeen = now;
+                        if (metadata.qualityRating !== undefined) {
+                            existing.payload.qualityRating = Math.max(metadata.qualityRating, existing.payload.qualityRating || 0);
                         }
+                        if (metadata.verified !== undefined) {
+                            existing.payload.verified = metadata.verified;
+                        }
+                        storedId = existing.id;
                     }
                 }
 
                 if (!storedId) {
                     const id = crypto.randomUUID();
-                    this.fallbackStore.push({
+                    const newPoint: StoredMemoryPoint = {
                         id,
                         denseVector,
                         sparseVector,
@@ -613,7 +653,9 @@ export class MemoryCortex {
                             lastSeen: now,
                             ...metadata
                         }
-                    });
+                    };
+                    this.fallbackStore.push(newPoint);
+                    this.vectorIndex.insert(id, denseVector, newPoint);
                     storedId = id;
                 }
             } catch (err: any) {
@@ -744,7 +786,7 @@ export class MemoryCortex {
     private async retrieveFromFallback(query: string, options: RetrievalOptions): Promise<any[]> {
         if (this.fallbackStore.length === 0) return [];
 
-        const candidates = this.fallbackStore.filter(pt => {
+        const filterPredicate = (pt: StoredMemoryPoint) => {
             if (options.appId) {
                 if (options.includeShared) {
                     if (pt.payload.appId !== options.appId && pt.payload.appId !== 'global' && pt.payload.appId !== 'shared') {
@@ -759,21 +801,33 @@ export class MemoryCortex {
             if (options.minRating !== undefined && (pt.payload.qualityRating ?? 0) < options.minRating) return false;
             if (options.verifiedOnly && !pt.payload.verified) return false;
             return true;
-        });
-
-        if (candidates.length === 0) return [];
+        };
 
         const queryDense = await this.safeEmbed(query);
         const querySparse = SparseTokenizer.encode(query);
 
-        // Dense ranking
-        const denseRanked = [...candidates].map(candidate => ({
-            candidate,
-            score: this.cosineSimilarity(queryDense, candidate.denseVector)
-        })).sort((a, b) => b.score - a.score);
+        // Sub-linear O(log n) candidate retrieval from vector index
+        const searchK = Math.min(this.vectorIndex.size, Math.max((options.limit || 3) * 3, 15));
+        const indexHits = this.vectorIndex.search(queryDense, {
+            k: searchK,
+            filter: (item) => filterPredicate(item.data)
+        });
 
+        let candidates: StoredMemoryPoint[];
         const denseRankMap = new Map<string, number>();
-        denseRanked.forEach((item, idx) => denseRankMap.set(item.candidate.id, idx));
+
+        if (indexHits.length > 0) {
+            candidates = indexHits.map(h => h.data);
+            indexHits.forEach((hit, idx) => denseRankMap.set(hit.id, idx));
+        } else {
+            candidates = this.fallbackStore.filter(filterPredicate);
+            if (candidates.length === 0) return [];
+            const denseRanked = [...candidates].map(candidate => ({
+                candidate,
+                score: this.cosineSimilarity(queryDense, candidate.denseVector)
+            })).sort((a, b) => b.score - a.score);
+            denseRanked.forEach((item, idx) => denseRankMap.set(item.candidate.id, idx));
+        }
 
         // Sparse ranking
         const sparseRanked = [...candidates].map(candidate => ({
@@ -947,6 +1001,9 @@ export class MemoryCortex {
             }
             this.fallbackStore.length = 0;
             this.fallbackStore.push(...remaining);
+            for (const pId of prunedIds) {
+                this.vectorIndex.delete(pId);
+            }
         }
 
         // Process Qdrant store if available
@@ -1266,23 +1323,23 @@ export class MemoryCortex {
             // Ephemeral fallback
             let isDup = false;
             if (deduplicate) {
-                for (const existing of this.fallbackStore) {
-                    if (existing.payload.appId === metadata.appId) {
-                        const sim = this.cosineSimilarity(denseVector, existing.denseVector);
-                        if (sim >= 0.92) {
-                            isDup = true;
-                            existing.payload.frequency = (existing.payload.frequency || 1) + 1;
-                            existing.payload.qualityRating = Math.max(metadata.qualityRating ?? 0, existing.payload.qualityRating || 0);
-                            deduplicated++;
-                            importedIds.push(existing.id);
-                            break;
-                        }
-                    }
+                const match = this.vectorIndex.findMostSimilar(
+                    denseVector,
+                    0.92,
+                    (item) => item.data.payload.appId === metadata.appId
+                );
+                if (match) {
+                    isDup = true;
+                    const existing = match.data;
+                    existing.payload.frequency = (existing.payload.frequency || 1) + 1;
+                    existing.payload.qualityRating = Math.max(metadata.qualityRating ?? 0, existing.payload.qualityRating || 0);
+                    deduplicated++;
+                    importedIds.push(existing.id);
                 }
             }
 
             if (!isDup) {
-                this.fallbackStore.push({
+                const newPoint: StoredMemoryPoint = {
                     id: pointId,
                     denseVector,
                     sparseVector,
@@ -1296,7 +1353,9 @@ export class MemoryCortex {
                         lastSeen: now,
                         ...metadata
                     }
-                });
+                };
+                this.fallbackStore.push(newPoint);
+                this.vectorIndex.insert(pointId, denseVector, newPoint);
                 imported++;
                 importedIds.push(pointId);
             }
@@ -1319,6 +1378,7 @@ export class MemoryCortex {
      */
     async wipeCollection(): Promise<boolean> {
         this.fallbackStore.length = 0;
+        this.vectorIndex.clear();
         this.storesSinceConsolidation = 0;
         if (this.persistPath && fs.existsSync(this.persistPath)) {
             try {

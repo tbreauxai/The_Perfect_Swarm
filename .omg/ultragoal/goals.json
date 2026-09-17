@@ -1,20 +1,20 @@
 [
   {
-    "id": "goal-1-cluster-topology-manager-and-lead-election",
-    "description": "Implement ClusterTopologyManager, dynamic domain clustering, and capability/capacity-based lead election in src/swarm/communication.ts with comprehensive unit tests.",
+    "id": "goal-1-vector-index-engine-hnsw-and-vptree",
+    "description": "Implement zero-dependency pure TypeScript VectorIndex interface, VpTreeIndex, and HnswVectorIndex in src/swarm/vectorIndex.ts with O(log n) search, radius deduplication, and unit tests.",
     "status": "completed",
-    "verification": "Unit tests verify dynamic pod clustering, lead election based on capability/headroom scores, and fallback defaults."
+    "verification": "Unit tests in src/swarm/vectorIndex.test.ts verify O(log n) nearest neighbor retrieval, radius deduplication, insertion, deletion, and triangle inequality pruning."
   },
   {
-    "id": "goal-2-engine-topology-integration-and-rebalancing",
-    "description": "Integrate dynamic cluster auto-discovery and elected cluster leads into src/swarm/engine.ts Step 4, registering lead nodes and emitting topology telemetry.",
+    "id": "goal-2-cortex-and-cache-vector-indexing-integration",
+    "description": "Integrate logarithmic vector indexing into MemoryCortex (src/swarm/memory.ts) and SemanticBaselineCache (src/swarm/cache.ts) for O(log n) deduplication and hybrid candidate retrieval.",
     "status": "completed",
-    "verification": "Integration tests verify dynamic lead nodes registered in HierarchicalMessageBus and lead-routed upward digests emitted in events."
+    "verification": "Unit and integration tests verify MemoryCortex store deduplication and retrieval candidate scoring scale sub-linearly with zero regressions in existing tests."
   },
   {
     "id": "goal-3-verification-and-bundle-build",
-    "description": "Build client and swarm distribution bundles and verify 100% passing across all Vitest suites and 5 E2E test scripts.",
+    "description": "Export vectorIndex from library exports, rebuild client and swarm distribution bundles, and verify 100% passing across all Vitest suites and 5 E2E test scripts.",
     "status": "completed",
-    "verification": "build:client and build:swarm pass cleanly, all 10 Vitest suites pass, and all 5 E2E test suites pass 100%."
+    "verification": "build:client and build:swarm pass cleanly, all Vitest test suites pass, and all 5 E2E test suites pass 100%."
   }
 ]

@@ -60,6 +60,18 @@ async function testCjsImport() {
     console.log('✓ CJS communication subpath, HierarchicalMessageBus, and ClusterTopologyManager verified');
     console.log('✓ CJS tools, parser, and client subpaths verified');
 
+    const vecCjs = require('./dist/swarm/vectorIndex.cjs');
+    if (!vecCjs.VpTreeIndex || !vecCjs.HnswVectorIndex || !vecCjs.createVectorIndex) {
+        throw new Error('CommonJS vectorIndex exports missing');
+    }
+    const cjsIdx = vecCjs.createVectorIndex('vptree', { metric: 'cosine' });
+    cjsIdx.insert('c1', [1, 0, 0], { name: 'cjs-v1' });
+    const cjsHits = cjsIdx.search([0.9, 0.1, 0], { k: 1 });
+    if (cjsHits.length !== 1 || cjsHits[0].id !== 'c1') {
+        throw new Error('CommonJS VpTreeIndex search failed');
+    }
+    console.log('✓ CJS vectorIndex subpath, VpTreeIndex, and HnswVectorIndex verified');
+
     console.log('✓ ALL COMMONJS SWARM DISTRIBUTION TESTS PASSED!\n');
 }
 

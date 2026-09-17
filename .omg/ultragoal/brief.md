@@ -1,20 +1,20 @@
-# Ultragoal Brief: Dynamic Cluster Auto-Discovery & Rebalancing
+# Ultragoal Brief: Semantic Memory Vector Indexing (O(log n) Retrieval)
 
 ## Objective
-Introduce dynamic cluster auto-discovery, capability-based cluster lead election, and workload-aware pod rebalancing:
-1. **Dynamic Cluster Auto-Discovery**: Automatically group specialist agents into affinity-based cluster pods dynamically according to task domain requirements and data chunk profiles rather than static regex matching.
-2. **Capability-Driven Cluster Lead Election**: Elect cluster leads dynamically per pod based on RL capability scores (UCB1) and capacity headroom, promoting the most reliable and available node to aggregate and summarize cluster reports.
-3. **Engine Topology Integration & Telemetry**: Wire dynamic topology discovery and cluster lead nodes into `HierarchicalMessageBus` and `src/swarm/engine.ts`, emitting topology rebalancing metrics in swarm events.
-4. **Verification**: Verify auto-discovery, lead election, and rebalancing across unit tests, distribution builds, and all E2E verification suites.
+Deploy high-performance semantic memory vector indexing to replace linear $O(N)$ memory scans with sub-linear $O(\log N)$ nearest-neighbor search and deduplication:
+1. **Logarithmic Vector Index Engine**: Implement a zero-dependency, pure-TypeScript metric vector indexing engine (`VpTreeIndex` and `HnswVectorIndex`) supporting cosine and Euclidean distance metrics, $O(\log N)$ nearest-neighbor search, dynamic point insertion, and radius-threshold deduplication in `src/swarm/vectorIndex.ts`.
+2. **MemoryCortex & Cache Integration**: Integrate vector indexing into `MemoryCortex` (`src/swarm/memory.ts`) for $O(\log N)$ deduplication on `store` and $O(\log N)$ candidate generation on `retrieve`, plus multi-tenant `appId` namespacing, persistence synchronization, and index telemetry.
+3. **Verification & Distribution**: Export vector index primitives from `./src/swarm/index.ts`, rebuild client and swarm distribution bundles (`dist/` and `dist/swarm/`), and verify 100% pass rate across all Vitest suites and all 5 E2E test suites.
 
 ## Architecture Boundaries & Constraints
-1. **Zero Model Blacklists**: Never add or check any model ban lists. Any user-configured model is strictly valid.
+1. **Zero External Native Dependencies**: The vector indexing engine must be 100% pure TypeScript/JavaScript to preserve portability across Node.js, CLI, Vite browser runtime, and serverless environments.
 2. **Strict User Model Preservation**: Never alter, override, or default model strings configured by the user in settings.
-3. **Zero-Crash Worker Guarding**: All worker analyst outputs must flow through `guardAnalystResponse`.
-4. **Fallback & Backward Compatibility**: If dynamic clustering produces empty or single-node clusters, degrade gracefully to default pod topologies without throwing errors.
-5. **Non-Breaking Compatibility**: Maintain 100% backward compatibility across all test suites (`test:portable`, `test:simulation`, `test:dist`, `test:cli`, `test:server`) and Vitest test suites.
+3. **Zero Model Blacklists**: Never add or check any model ban lists.
+4. **Zero-Crash Worker Guarding**: All worker analyst outputs must flow through `guardAnalystResponse`.
+5. **Exact Metric Triangle Inequality Pruning**: Vantage-Point Tree and HNSW implementations must strictly adhere to distance metric axioms to guarantee pruning soundness.
+6. **Backward Compatibility**: Maintain 100% compatibility with existing `MemoryCortex` and `SemanticBaselineCache` APIs, snapshots, and tests.
 
 ## Micro-Goal Breakdown
-1. `goal-1-cluster-topology-manager-and-lead-election`: Implement `ClusterTopologyManager`, dynamic domain grouping, and capability/capacity-based cluster lead election in `src/swarm/communication.ts` with comprehensive unit tests.
-2. `goal-2-engine-topology-integration-and-rebalancing`: Wire dynamic topology discovery into `src/swarm/engine.ts` (Step 4), registering elected cluster leads in `HierarchicalMessageBus` and routing upward digests through leads.
-3. `goal-3-verification-and-bundle-build`: Rebuild distribution bundles, add integration tests in `engine-routing.test.ts`, and verify 100% pass rate across all Vitest and E2E suites.
+1. `goal-1-vector-index-engine-hnsw-and-vptree`: Implement `VectorIndex` interface, `VpTreeIndex`, and `HnswVectorIndex` in `src/swarm/vectorIndex.ts` with comprehensive unit tests in `src/swarm/vectorIndex.test.ts`.
+2. `goal-2-cortex-and-cache-vector-indexing-integration`: Integrate $O(\log N)$ vector indexing into `MemoryCortex` (`src/swarm/memory.ts`) and `SemanticBaselineCache` (`src/swarm/cache.ts`), verifying logarithmic retrieval speedup, radius deduplication, and multi-tenant isolation.
+3. `goal-3-verification-and-bundle-build`: Update library exports in `src/swarm/index.ts` and `package.json`, rebuild client and swarm distribution bundles, and verify 100% passing across all Vitest and 5 E2E test suites.

@@ -12,11 +12,15 @@ import {
     HierarchicalMessageBus,
     globalHierarchicalMessageBus,
     ClusterTopologyManager,
-    globalClusterTopologyManager
+    globalClusterTopologyManager,
+    VpTreeIndex,
+    HnswVectorIndex,
+    createVectorIndex
 } from './dist/swarm/index.js';
 import { createSwarmServer as serverFromSubpath } from './dist/swarm/server.js';
 import { createSwarmClient as clientFromSubpath } from './dist/swarm/client.js';
 import { HierarchicalMessageBus as CommBusFromSubpath, ClusterTopologyManager as CommTopologyFromSubpath } from './dist/swarm/communication.js';
+import { VpTreeIndex as VpTreeFromSubpath, HnswVectorIndex as HnswFromSubpath, createVectorIndex as createVectorFromSubpath } from './dist/swarm/vectorIndex.js';
 import { ToolRegistry, calculatorTool } from './dist/swarm/tools.js';
 import { repairJson, parseJsonSafe } from './dist/swarm/parser.js';
 
@@ -131,6 +135,27 @@ async function runDistVerification() {
         throw new Error('Compiled ClusterTopologyManager discoverTopology failed');
     }
     console.log('✓ Compiled ClusterTopologyManager auto-discovery:', Object.keys(topology.pods));
+
+    // 7. Verify compiled VectorIndex (VpTreeIndex & HnswVectorIndex)
+    if (!VpTreeIndex || !HnswVectorIndex || !createVectorIndex || !VpTreeFromSubpath || !HnswFromSubpath || !createVectorFromSubpath) {
+        throw new Error('Compiled VectorIndex exports missing');
+    }
+    const vptree = createVectorFromSubpath('vptree', { metric: 'cosine' });
+    vptree.insert('v1', [1, 0, 0], { label: 'vec1' });
+    vptree.insert('v2', [0, 1, 0], { label: 'vec2' });
+    const searchRes = vptree.search([0.9, 0.1, 0], { k: 1 });
+    if (searchRes.length !== 1 || searchRes[0].id !== 'v1') {
+        throw new Error('Compiled VpTreeIndex search failed');
+    }
+
+    const hnsw = new HnswFromSubpath({ metric: 'cosine', m: 8, efSearch: 16 });
+    hnsw.insert('h1', [0, 0, 1], { label: 'hvec1' });
+    hnsw.insert('h2', [0, 1, 0], { label: 'hvec2' });
+    const hnswRes = hnsw.search([0.05, 0.05, 0.99], { k: 1 });
+    if (hnswRes.length !== 1 || hnswRes[0].id !== 'h1') {
+        throw new Error('Compiled HnswVectorIndex search failed');
+    }
+    console.log('✓ Compiled VectorIndex subpath, VpTreeIndex, and HnswVectorIndex verified');
 
     console.log('\n✓ ALL COMPILED SWARM DISTRIBUTION BUNDLE TESTS PASSED SUCCESSFULLY!\n');
 }

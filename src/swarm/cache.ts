@@ -3,6 +3,7 @@
  * Prevents LLM context window drift, duplicate token expenditures, and redundant network calls
  * across identical or repetitive analysis tasks.
  */
+import { createVectorIndex, type VectorIndex } from './vectorIndex.ts';
 
 export interface CacheEntry<T = any> {
     fingerprint: string;
@@ -395,6 +396,32 @@ export class SemanticSimilarityEngine {
         const score = (tokenSim * 0.60) + (dice * 0.40);
         return Math.round(score * 1000) / 1000;
     }
+
+    /**
+     * Generates a deterministic normalized dense vector representation of text for O(log n) indexing.
+     */
+    static computeVector(text: string, dimension: number = 128): number[] {
+        const vector = new Array(dimension).fill(0);
+        const tokens = this.tokenize(text);
+        if (tokens.length === 0) return vector;
+
+        for (const token of tokens) {
+            let hash = 5381;
+            for (let i = 0; i < token.length; i++) {
+                hash = ((hash << 5) + hash) + token.charCodeAt(i);
+                hash |= 0;
+            }
+            const index = Math.abs(hash) % dimension;
+            vector[index] += 1;
+        }
+
+        let sumSq = 0;
+        for (let i = 0; i < dimension; i++) sumSq += vector[i] * vector[i];
+        const norm = Math.sqrt(sumSq) || 1;
+        for (let i = 0; i < dimension; i++) vector[i] /= norm;
+
+        return vector;
+    }
 }
 
 /**
@@ -406,6 +433,7 @@ export class SemanticBaselineCache {
     private defaultTtlMs: number;
     private similarityThreshold: number;
     private entries: Map<string, SemanticCacheEntry> = new Map();
+    private vectorIndex: VectorIndex<SemanticCacheEntry> = createVectorIndex('vptree', { metric: 'cosine' });
     private hitsCount: number = 0;
     private missesCount: number = 0;
     private evictionsCount: number = 0;
@@ -431,15 +459,17 @@ export class SemanticBaselineCache {
 
         if (this.entries.has(id)) {
             this.entries.delete(id);
+            this.vectorIndex.delete(id);
         } else if (this.entries.size >= this.maxEntries) {
             const oldestKey = this.entries.keys().next().value;
             if (oldestKey) {
                 this.entries.delete(oldestKey);
+                this.vectorIndex.delete(oldestKey);
                 this.evictionsCount++;
             }
         }
 
-        this.entries.set(id, {
+        const entry: SemanticCacheEntry<T> = {
             id,
             task,
             dataSample: (options?.data || '').substring(0, 500),
@@ -452,7 +482,11 @@ export class SemanticBaselineCache {
             hits: 0,
             lastAccessedAt: now,
             metadata: options?.metadata
-        });
+        };
+
+        this.entries.set(id, entry);
+        const vector = SemanticSimilarityEngine.computeVector(normalizedTask);
+        this.vectorIndex.insert(id, vector, entry);
     }
 
     findMatch<T = any>(
@@ -473,9 +507,22 @@ export class SemanticBaselineCache {
         const queryTokens = SemanticSimilarityEngine.tokenize(task);
         const queryTrigrams = SemanticSimilarityEngine.extractTrigrams(task);
 
-        for (const [id, entry] of this.entries.entries()) {
+        // Retrieve candidate entries: use sub-linear vector index when cache exceeds threshold
+        const candidateEntries: SemanticCacheEntry<T>[] = [];
+        if (this.entries.size > 20) {
+            const queryVec = SemanticSimilarityEngine.computeVector(SemanticSimilarityEngine.normalizeText(task));
+            const hits = this.vectorIndex.search(queryVec, { k: Math.min(25, this.entries.size) });
+            for (const h of hits) {
+                if (h.data) candidateEntries.push(h.data as SemanticCacheEntry<T>);
+            }
+        } else {
+            candidateEntries.push(...(Array.from(this.entries.values()) as SemanticCacheEntry<T>[]));
+        }
+
+        for (const entry of candidateEntries) {
             if (now > entry.expiresAt) {
-                this.entries.delete(id);
+                this.entries.delete(entry.id);
+                this.vectorIndex.delete(entry.id);
                 continue;
             }
 
@@ -539,10 +586,15 @@ export class SemanticBaselineCache {
 
     clear(): void {
         this.entries.clear();
+        this.vectorIndex.clear();
         this.hitsCount = 0;
         this.missesCount = 0;
         this.evictionsCount = 0;
         this.totalEstimatedTokensSaved = 0;
+    }
+
+    getIndexMetrics() {
+        return this.vectorIndex.getMetrics();
     }
 }
 
