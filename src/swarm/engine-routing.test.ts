@@ -289,5 +289,92 @@ describe('Dynamic Task Routing & Token Allocation in Engine Step 4', () => {
         expect(metrics.totalSent).toBeGreaterThanOrEqual(2);
         expect(metrics.digestsGenerated).toBeGreaterThanOrEqual(2);
         expect(metrics.overallCompressionRatio).toBeGreaterThan(0);
+
+        // 4. Verify topology auto-discovery & lead election output
+        const topology = commEvent?.output.topology;
+        expect(topology).toBeDefined();
+        expect(topology.totalPods).toBeGreaterThanOrEqual(2);
+        expect(topology.pods['security-pod']).toBeDefined();
+        expect(topology.pods['performance-pod']).toBeDefined();
+        expect(topology.pods['security-pod'].leadNodeId).toBeDefined();
+        expect(topology.pods['performance-pod'].leadNodeId).toBeDefined();
+        expect(topology.leadNodeIds).toContain(topology.pods['security-pod'].leadNodeId);
+        expect(topology.leadNodeIds).toContain(topology.pods['performance-pod'].leadNodeId);
+    });
+
+    it('auto-discovers domain pods and elects cluster leads based on capability profile and headroom', async () => {
+        ProviderRegistry.register({
+            providerName: 'lead-election-prov',
+            async call(options) {
+                if (options.systemInstruction?.includes('Orchestrator') || options.prompt?.includes('Analyst Reports') || options.prompt?.includes('Cluster Digests')) {
+                    return JSON.stringify({
+                        ui_title: 'Lead Election Dashboard',
+                        components: [{ id: 'c1', type: 'MetricCard', props: { title: 'Clusters', value: '2' } }]
+                    });
+                }
+                return JSON.stringify({
+                    insights: [`Analysis from ${options.modelName || 'agent'}`],
+                    anomalies: [],
+                    summary: 'Pod analysis finished'
+                });
+            }
+        });
+
+        // Boost capability profile for 'Senior Security Lead'
+        globalSpecialistProfiler.recordOutcome('Senior Security Lead', {
+            success: true,
+            qualityRating: 0.98,
+            durationMs: 400
+        });
+        globalSpecialistProfiler.recordOutcome('Senior Security Lead', {
+            success: true,
+            qualityRating: 0.99,
+            durationMs: 350
+        });
+
+        // 'Junior Security Analyst' has lower rating
+        globalSpecialistProfiler.recordOutcome('Junior Security Analyst', {
+            success: true,
+            qualityRating: 0.70,
+            durationMs: 1200
+        });
+
+        const stagePayloads: any[] = [];
+        const result = await executeSwarmWorkflow({
+            task: 'Audit authentication token security and investigate memory cache latency',
+            data: 'test auth and cache data',
+            forceFullSwarm: true,
+            onStage: (payload) => {
+                stagePayloads.push(payload);
+            },
+            settings: {
+                appId: 'test-lead-election',
+                agents: [
+                    { id: 'manager', role: 'Manager Node', provider: 'lead-election-prov', apiKey: 'k', model: 'mgr' },
+                    { id: 'sec-senior', role: 'Senior Security Lead', provider: 'lead-election-prov', apiKey: 'k', model: 'm1' },
+                    { id: 'sec-junior', role: 'Junior Security Analyst', provider: 'lead-election-prov', apiKey: 'k', model: 'm2' },
+                    { id: 'perf-expert', role: 'Performance Engineer', provider: 'lead-election-prov', apiKey: 'k', model: 'm3' }
+                ]
+            }
+        });
+
+        const commEvent = result.events.find(e => e.action === 'Hierarchical Swarm Communication');
+        expect(commEvent).toBeDefined();
+
+        const topology = commEvent?.output.topology;
+        expect(topology).toBeDefined();
+        expect(topology.totalPods).toBe(2);
+
+        // Security pod should have elected 'sec-senior' due to higher UCB1 capability score
+        expect(topology.pods['security-pod'].leadNodeId).toBe('sec-senior');
+        expect(topology.pods['performance-pod'].leadNodeId).toBe('perf-expert');
+        expect(topology.leadNodeIds).toContain('sec-senior');
+        expect(topology.leadNodeIds).toContain('perf-expert');
+
+        // Verify onStage received cluster_aggregation stage with topology
+        const clusterStage = stagePayloads.find(p => p.stage === 'cluster_aggregation');
+        expect(clusterStage).toBeDefined();
+        expect(clusterStage.topology).toBeDefined();
+        expect(clusterStage.topology.pods['security-pod'].leadNodeId).toBe('sec-senior');
     });
 });

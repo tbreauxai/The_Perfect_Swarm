@@ -42,7 +42,7 @@ async function testCjsImport() {
     }
 
     const commCjs = require('./dist/swarm/communication.cjs');
-    if (!commCjs.HierarchicalMessageBus || !commCjs.globalHierarchicalMessageBus) {
+    if (!commCjs.HierarchicalMessageBus || !commCjs.globalHierarchicalMessageBus || !commCjs.ClusterTopologyManager || !commCjs.globalClusterTopologyManager) {
         throw new Error('CommonJS communication exports missing');
     }
     const bus = new commCjs.HierarchicalMessageBus();
@@ -50,7 +50,14 @@ async function testCjsImport() {
     if (!bus.getNode('n1')) {
         throw new Error('CommonJS HierarchicalMessageBus registration failed');
     }
-    console.log('✓ CJS communication subpath and HierarchicalMessageBus verified');
+    const cjsTopMgr = new commCjs.ClusterTopologyManager();
+    const cjsTop = cjsTopMgr.discoverTopology({
+        specialists: [{ id: 's1', role: 'Security Specialist' }]
+    });
+    if (!cjsTop.pods['security-pod']) {
+        throw new Error('CommonJS ClusterTopologyManager auto-discovery failed');
+    }
+    console.log('✓ CJS communication subpath, HierarchicalMessageBus, and ClusterTopologyManager verified');
     console.log('✓ CJS tools, parser, and client subpaths verified');
 
     console.log('✓ ALL COMMONJS SWARM DISTRIBUTION TESTS PASSED!\n');

@@ -448,6 +448,10 @@ export class NodeCapacityManager {
         return Math.max(0, max - active);
     }
 
+    getNodeHeadroom(nodeKey: string): number {
+        return this.getCapacityHeadroom(nodeKey);
+    }
+
     getUtilizationRatio(nodeKey: string): number {
         const max = this.getMaxConcurrency(nodeKey);
         if (max <= 0) return 1.0;
@@ -753,6 +757,25 @@ export class SpecialistCapabilityProfiler {
         const ucb = meanReward + explorationBonus;
 
         return Math.round(ucb * 1000) / 1000;
+    }
+
+    /**
+     * Calculates empirical capability score based on verification rewards and task completion rate
+     * without Multi-Armed Bandit exploration inflation. Ideal for stable cluster lead election.
+     */
+    getCapabilityScore(agentRole: string, domain?: string): number {
+        const profile = this.profiles.get((agentRole || '').trim());
+        if (!profile || profile.trials === 0) {
+            return 0.85;
+        }
+
+        let meanReward = profile.averageReward;
+        if (domain && profile.domainStats[domain] && profile.domainStats[domain].trials > 0) {
+            const ds = profile.domainStats[domain];
+            meanReward = (ds.averageReward * 0.70) + (profile.averageReward * 0.30);
+        }
+
+        return Math.round(meanReward * profile.completionRate * 1000) / 1000;
     }
 
     getProfile(agentRole: string): SpecialistCapabilityProfile | undefined {

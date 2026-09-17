@@ -10,11 +10,13 @@ import {
     handleSwarmSse,
     createSwarmClient,
     HierarchicalMessageBus,
-    globalHierarchicalMessageBus
+    globalHierarchicalMessageBus,
+    ClusterTopologyManager,
+    globalClusterTopologyManager
 } from './dist/swarm/index.js';
 import { createSwarmServer as serverFromSubpath } from './dist/swarm/server.js';
 import { createSwarmClient as clientFromSubpath } from './dist/swarm/client.js';
-import { HierarchicalMessageBus as CommBusFromSubpath } from './dist/swarm/communication.js';
+import { HierarchicalMessageBus as CommBusFromSubpath, ClusterTopologyManager as CommTopologyFromSubpath } from './dist/swarm/communication.js';
 import { ToolRegistry, calculatorTool } from './dist/swarm/tools.js';
 import { repairJson, parseJsonSafe } from './dist/swarm/parser.js';
 
@@ -96,8 +98,8 @@ async function runDistVerification() {
     }
 
     // 6. Verify compiled HierarchicalMessageBus and Communication subpath
-    if (!HierarchicalMessageBus || !globalHierarchicalMessageBus || !CommBusFromSubpath) {
-        throw new Error('HierarchicalMessageBus exports missing');
+    if (!HierarchicalMessageBus || !globalHierarchicalMessageBus || !CommBusFromSubpath || !ClusterTopologyManager || !globalClusterTopologyManager || !CommTopologyFromSubpath) {
+        throw new Error('HierarchicalMessageBus or ClusterTopologyManager exports missing');
     }
     const testBus = new CommBusFromSubpath();
     testBus.registerNode({ id: 'mgr', role: 'Manager', layer: 'root', clusterId: 'root-pod' });
@@ -116,6 +118,19 @@ async function runDistVerification() {
         throw new Error('Compiled HierarchicalMessageBus dispatch failed');
     }
     console.log('✓ Compiled HierarchicalMessageBus upward routing:', received[0]?.payload?.summary);
+
+    const topMgr = new CommTopologyFromSubpath();
+    const topology = topMgr.discoverTopology({
+        specialists: [
+            { id: 's1', role: 'Security Specialist' },
+            { id: 'p1', role: 'Performance Engineer' }
+        ],
+        task: 'Audit authentication token security'
+    });
+    if (topology.totalPods !== 2 || !topology.pods['security-pod']) {
+        throw new Error('Compiled ClusterTopologyManager discoverTopology failed');
+    }
+    console.log('✓ Compiled ClusterTopologyManager auto-discovery:', Object.keys(topology.pods));
 
     console.log('\n✓ ALL COMPILED SWARM DISTRIBUTION BUNDLE TESTS PASSED SUCCESSFULLY!\n');
 }

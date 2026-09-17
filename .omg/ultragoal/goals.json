@@ -1,20 +1,20 @@
 [
   {
-    "id": "goal-1-server-and-client-multi-stage-sse",
-    "description": "Implement swarm_stage SSE events in src/swarm/server.ts, extend StreamEventPayload in src/swarm/client.ts, and add stage emission in src/swarm/engine.ts.",
+    "id": "goal-1-cluster-topology-manager-and-lead-election",
+    "description": "Implement ClusterTopologyManager, dynamic domain clustering, and capability/capacity-based lead election in src/swarm/communication.ts with comprehensive unit tests.",
     "status": "completed",
-    "verification": "Unit tests and server streaming tests confirm swarm_stage event emission with cluster digests prior to manager synthesis completion."
+    "verification": "Unit tests verify dynamic pod clustering, lead election based on capability/headroom scores, and fallback defaults."
   },
   {
-    "id": "goal-2-ui-progressive-digest-rendering",
-    "description": "Add progressive cluster digest state and live preview cards in src/App.tsx during active manager synthesis.",
+    "id": "goal-2-engine-topology-integration-and-rebalancing",
+    "description": "Integrate dynamic cluster auto-discovery and elected cluster leads into src/swarm/engine.ts Step 4, registering lead nodes and emitting topology telemetry.",
     "status": "completed",
-    "verification": "App.tsx parses swarm_stage events, renders interim cluster digests while loading is true, and replaces them seamlessly when finalAnalysis arrives."
+    "verification": "Integration tests verify dynamic lead nodes registered in HierarchicalMessageBus and lead-routed upward digests emitted in events."
   },
   {
     "id": "goal-3-verification-and-bundle-build",
-    "description": "Add multi-stage SSE verification in test-sse-server.mjs, rebuild client and swarm distribution bundles, and verify across all test suites.",
+    "description": "Build client and swarm distribution bundles and verify 100% passing across all Vitest suites and 5 E2E test scripts.",
     "status": "completed",
-    "verification": "test-sse-server.mjs receives swarm_stage event, all 10 Vitest suites pass, and all 5 E2E test suites pass 100%."
+    "verification": "build:client and build:swarm pass cleanly, all 10 Vitest suites pass, and all 5 E2E test suites pass 100%."
   }
 ]

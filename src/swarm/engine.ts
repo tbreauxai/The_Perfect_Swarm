@@ -12,7 +12,15 @@ import { zodToJsonSchema } from 'zod-to-json-schema';
 import { ToolRegistry, globalToolRegistry, type SwarmTool } from './tools/index.ts';
 import { guardAnalystResponse, guardManagerResponse, parseJsonSafe } from './parser.ts';
 import { globalSpecialistRouter, globalTokenBudgetManager, globalSpecialistProfiler, globalNodeCapacityManager, type SpecialistRoutingPlan } from './loadBalancer.ts';
-import { globalHierarchicalMessageBus, type ClusterNode, type ClusterDigest, type SpecialistReportInput } from './communication.ts';
+import {
+    globalHierarchicalMessageBus,
+    globalClusterTopologyManager,
+    type ClusterNode,
+    type ClusterDigest,
+    type SpecialistReportInput,
+    type SpecialistNodeInput,
+    type SwarmTopology
+} from './communication.ts';
 
 export interface ProviderResolution {
     key: string;
@@ -631,45 +639,33 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         // Step 4: Dynamic Specialist Routing & Chunk Distribution
         const allAnalystReports: any[][] = analysts.map(() => []);
 
-        // Initialize Hierarchical Communication Topology
-        globalHierarchicalMessageBus.reset();
+        // Dynamic Cluster Auto-Discovery & Capability Lead Election
         const rootManagerId = managerAgent.id || managerAgent.role || 'manager';
-        globalHierarchicalMessageBus.registerNode({
-            id: rootManagerId,
-            role: managerAgent.role,
-            layer: 'root',
-            clusterId: 'core-cluster'
+        const specialistInputs: SpecialistNodeInput[] = analysts.map(a => ({
+            id: a.id || a.role,
+            role: a.role,
+            provider: a.provider,
+            model: a.modelName
+        }));
+
+        const topology: SwarmTopology = globalClusterTopologyManager.discoverTopology({
+            specialists: specialistInputs,
+            task,
+            rootNodeId: rootManagerId,
+            capabilityScorer: (role) => globalSpecialistProfiler.getCapabilityScore(role),
+            capacityHeadroomGetter: (nodeKey) => globalNodeCapacityManager.getNodeHeadroom(nodeKey)
         });
 
-        const analystClusterMap = new Map<string, string>();
-        for (const a of analysts) {
-            const aId = a.id || a.role;
-            const roleLower = a.role.toLowerCase();
-            let cluster = 'general-pod';
-            let domain = 'general';
-            if (roleLower.includes('sec') || roleLower.includes('auth') || roleLower.includes('crypt') || roleLower.includes('audit')) {
-                cluster = 'security-pod';
-                domain = 'security';
-            } else if (roleLower.includes('perf') || roleLower.includes('latency') || roleLower.includes('optim') || roleLower.includes('speed')) {
-                cluster = 'performance-pod';
-                domain = 'performance';
-            } else if (roleLower.includes('data') || roleLower.includes('sql') || roleLower.includes('schema') || roleLower.includes('db')) {
-                cluster = 'data-pod';
-                domain = 'data';
-            } else if (roleLower.includes('arch') || roleLower.includes('design') || roleLower.includes('system')) {
-                cluster = 'architecture-pod';
-                domain = 'architecture';
-            }
-            analystClusterMap.set(aId, cluster);
+        // Apply discovered topology and elected cluster leads to message bus
+        globalClusterTopologyManager.applyTopologyToBus(
+            globalHierarchicalMessageBus,
+            topology,
+            { id: rootManagerId, role: managerAgent.role }
+        );
 
-            const isLead = roleLower.includes('lead') || roleLower.includes('architect') || !globalHierarchicalMessageBus.getClusterLead(cluster);
-            globalHierarchicalMessageBus.registerNode({
-                id: aId,
-                role: a.role,
-                layer: isLead ? 'cluster-lead' : 'specialist',
-                clusterId: cluster,
-                domain
-            });
+        const analystClusterMap = new Map<string, string>();
+        for (const [nodeId, clusterId] of Object.entries(topology.nodeClusterMap)) {
+            analystClusterMap.set(nodeId, clusterId);
         }
 
         if (analysts.length > 0 && chunks.length > 0) {
@@ -896,7 +892,12 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             prompt: `Consolidated ${analysts.length} specialist reports across ${Object.keys(clusterDigests).length} cluster(s) with ${Math.round(busMetrics.overallCompressionRatio * 100)}% token reduction`,
             output: {
                 digests: clusterDigests,
-                metrics: busMetrics
+                metrics: busMetrics,
+                topology: {
+                    pods: topology.pods,
+                    leadNodeIds: topology.leadNodeIds,
+                    totalPods: topology.totalPods
+                }
             },
             durationMs: 0
         });
@@ -906,7 +907,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             stage: 'cluster_aggregation',
             task,
             digests: clusterDigests,
-            metrics: busMetrics
+            metrics: busMetrics,
+            topology
         });
 
         // Step 5: Manager Node Synthesis & Deep Analysis Verification

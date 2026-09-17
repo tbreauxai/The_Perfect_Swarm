@@ -2,8 +2,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
     HierarchicalMessageBus,
     globalHierarchicalMessageBus,
+    ClusterTopologyManager,
+    globalClusterTopologyManager,
     type ClusterNode,
-    type HierarchicalMessage
+    type HierarchicalMessage,
+    type SpecialistNodeInput
 } from './communication.ts';
 
 describe('HierarchicalMessageBus: Multi-Tier Scoped Routing', () => {
@@ -501,5 +504,134 @@ describe('HierarchicalMessageBus: Multi-Tier Scoped Routing', () => {
 
         const metrics = bus.getMetrics();
         expect(metrics.downwardDirectivesFiltered).toBe(2); // perf-lead & perf-w filtered out
+    });
+});
+
+describe('ClusterTopologyManager: Dynamic Auto-Discovery & Lead Election', () => {
+    let topologyManager: ClusterTopologyManager;
+
+    beforeEach(() => {
+        topologyManager = new ClusterTopologyManager();
+    });
+
+    it('auto-discovers domain pods based on specialist roles and task keywords', () => {
+        const specialists: SpecialistNodeInput[] = [
+            { id: 's1', role: 'Security Auditor' },
+            { id: 's2', role: 'Auth & JWT Specialist' },
+            { id: 'p1', role: 'Latency Benchmark Engineer' },
+            { id: 'p2', role: 'Memory Allocation Profiler' },
+            { id: 'd1', role: 'SQL Schema Analyst' },
+            { id: 'g1', role: 'Generalist Worker' }
+        ];
+
+        const topology = topologyManager.discoverTopology({
+            specialists,
+            task: 'Audit system authentication vulnerabilities and API throughput bottlenecks'
+        });
+
+        expect(topology.totalSpecialists).toBe(6);
+        expect(topology.totalPods).toBe(4); // security-pod, performance-pod, data-pod, general-pod
+
+        expect(topology.pods['security-pod']).toBeDefined();
+        expect(topology.pods['security-pod'].memberNodeIds).toEqual(expect.arrayContaining(['s1', 's2']));
+
+        expect(topology.pods['performance-pod']).toBeDefined();
+        expect(topology.pods['performance-pod'].memberNodeIds).toEqual(expect.arrayContaining(['p1', 'p2']));
+
+        expect(topology.pods['data-pod']).toBeDefined();
+        expect(topology.pods['data-pod'].memberNodeIds).toEqual(['d1']);
+
+        expect(topology.pods['general-pod']).toBeDefined();
+        expect(topology.pods['general-pod'].memberNodeIds).toEqual(['g1']);
+    });
+
+    it('elects cluster leads based on capability scores and capacity headroom', () => {
+        const specialists: SpecialistNodeInput[] = [
+            { id: 'sec-junior', role: 'Junior Security Auditor' },
+            { id: 'sec-senior', role: 'Senior Security Architect' }
+        ];
+
+        // Custom capability scorer favoring Senior Architect
+        const capabilityScorer = (role: string) => {
+            return role.includes('Senior') ? 1.95 : 0.80;
+        };
+
+        const headroomGetter = (nodeKey: string) => {
+            return nodeKey === 'sec-senior' ? 3 : 1;
+        };
+
+        const topology = topologyManager.discoverTopology({
+            specialists,
+            capabilityScorer,
+            capacityHeadroomGetter: headroomGetter
+        });
+
+        const secPod = topology.pods['security-pod'];
+        expect(secPod).toBeDefined();
+        expect(secPod.leadNodeId).toBe('sec-senior');
+        expect(secPod.leadRole).toBe('Senior Security Architect');
+        expect(secPod.electionReason).toContain('capability score');
+    });
+
+    it('rebalances cluster leads when active lead becomes saturated', () => {
+        const specialists: SpecialistNodeInput[] = [
+            { id: 'p1', role: 'Performance Engineer 1' },
+            { id: 'p2', role: 'Performance Engineer 2' }
+        ];
+
+        const initialTopology = topologyManager.discoverTopology({
+            specialists,
+            capabilityScorer: (role) => (role.includes('1') ? 1.5 : 1.2)
+        });
+
+        expect(initialTopology.pods['performance-pod'].leadNodeId).toBe('p1');
+
+        // Now p1 is saturated
+        const rebalanced = topologyManager.rebalanceTopology(initialTopology, ['p1']);
+        expect(rebalanced.pods['performance-pod'].leadNodeId).toBe('p2');
+        expect(rebalanced.pods['performance-pod'].leadRole).toBe('Performance Engineer 2');
+        expect(rebalanced.pods['performance-pod'].electionReason).toContain('Rebalanced');
+    });
+
+    it('applies discovered topology to HierarchicalMessageBus and verifies routing', async () => {
+        const bus = new HierarchicalMessageBus();
+        const specialists: SpecialistNodeInput[] = [
+            { id: 'sec-lead-node', role: 'Principal Security Lead' },
+            { id: 'sec-worker-node', role: 'Security Analyst' }
+        ];
+
+        const topology = topologyManager.discoverTopology({
+            specialists,
+            capabilityScorer: (r) => (r.includes('Principal') ? 1.9 : 1.0)
+        });
+
+        topologyManager.applyTopologyToBus(bus, topology, { id: 'root-mgr', role: 'Manager Node' });
+
+        expect(bus.getRootNode()?.id).toBe('root-mgr');
+        expect(bus.getClusterLead('security-pod')?.id).toBe('sec-lead-node');
+
+        const secNodes = bus.getClusterNodes('security-pod');
+        expect(secNodes).toHaveLength(2);
+
+        const leadNode = bus.getNode('sec-lead-node');
+        const workerNode = bus.getNode('sec-worker-node');
+        expect(leadNode?.layer).toBe('cluster-lead');
+        expect(workerNode?.layer).toBe('specialist');
+
+        // Verify upward dispatch from worker reaches cluster lead
+        const leadReceived: any[] = [];
+        bus.subscribe('sec-lead-node', m => leadReceived.push(m));
+
+        await bus.dispatch({
+            senderId: 'sec-worker-node',
+            senderRole: 'Security Analyst',
+            senderLayer: 'specialist',
+            clusterId: 'security-pod',
+            scope: 'upward',
+            payload: { finding: 'Insecure direct object reference detected' }
+        });
+
+        expect(leadReceived).toHaveLength(1);
+        expect(leadReceived[0].payload.finding).toBe('Insecure direct object reference detected');
     });
 });
