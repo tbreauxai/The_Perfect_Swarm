@@ -72,6 +72,33 @@ async function testCjsImport() {
     }
     console.log('✓ CJS vectorIndex subpath, VpTreeIndex, and HnswVectorIndex verified');
 
+    const specCjs = require('./dist/swarm/speculative.cjs');
+    if (!specCjs.DependencyGraph || !specCjs.ConflictResolver || !specCjs.SpeculativeExecutionCoordinator) {
+        throw new Error('CommonJS speculative exports missing');
+    }
+    const cjsDep = new specCjs.DependencyGraph();
+    cjsDep.addNode({ id: 'cjs-task-1', chunkIndex: 0, dependencies: [], payload: 'Task 1' });
+    cjsDep.addNode({ id: 'cjs-task-2', chunkIndex: 1, dependencies: [], payload: 'Task 2' });
+    const cjsBatches = cjsDep.getExecutionBatches();
+    if (cjsBatches.length !== 1 || cjsBatches[0].length !== 2) {
+        throw new Error('CommonJS DependencyGraph parallel batching failed');
+    }
+    const cjsResolver = new specCjs.ConflictResolver();
+    const cjsConflicts = cjsResolver.detectConflicts([
+        {
+            role: 'Analyst 1',
+            insights: ['Identical finding on server performance nominal']
+        },
+        {
+            role: 'Analyst 2',
+            insights: ['Identical finding on server performance nominal']
+        }
+    ]);
+    if (cjsConflicts.length === 0 || cjsConflicts[0].conflictType !== 'duplicate') {
+        throw new Error('CommonJS ConflictResolver duplicate detection failed');
+    }
+    console.log('✓ CJS speculative subpath, DependencyGraph, and ConflictResolver verified');
+
     console.log('✓ ALL COMMONJS SWARM DISTRIBUTION TESTS PASSED!\n');
 }
 

@@ -1,20 +1,22 @@
-# Ultragoal Brief: Semantic Memory Vector Indexing (O(log n) Retrieval)
+# Ultragoal Brief: Speculative Parallel Execution with Conflict Resolution
 
 ## Objective
-Deploy high-performance semantic memory vector indexing to replace linear $O(N)$ memory scans with sub-linear $O(\log N)$ nearest-neighbor search and deduplication:
-1. **Logarithmic Vector Index Engine**: Implement a zero-dependency, pure-TypeScript metric vector indexing engine (`VpTreeIndex` and `HnswVectorIndex`) supporting cosine and Euclidean distance metrics, $O(\log N)$ nearest-neighbor search, dynamic point insertion, and radius-threshold deduplication in `src/swarm/vectorIndex.ts`.
-2. **MemoryCortex & Cache Integration**: Integrate vector indexing into `MemoryCortex` (`src/swarm/memory.ts`) for $O(\log N)$ deduplication on `store` and $O(\log N)$ candidate generation on `retrieve`, plus multi-tenant `appId` namespacing, persistence synchronization, and index telemetry.
-3. **Verification & Distribution**: Export vector index primitives from `./src/swarm/index.ts`, rebuild client and swarm distribution bundles (`dist/` and `dist/swarm/`), and verify 100% pass rate across all Vitest suites and all 5 E2E test suites.
+Enable speculative parallel execution with conflict resolution for independent subtasks and multi-chunk workloads across swarm agent pods to reduce end-to-end analysis latency by 40-60%.
 
-## Architecture Boundaries & Constraints
-1. **Zero External Native Dependencies**: The vector indexing engine must be 100% pure TypeScript/JavaScript to preserve portability across Node.js, CLI, Vite browser runtime, and serverless environments.
-2. **Strict User Model Preservation**: Never alter, override, or default model strings configured by the user in settings.
-3. **Zero Model Blacklists**: Never add or check any model ban lists.
-4. **Zero-Crash Worker Guarding**: All worker analyst outputs must flow through `guardAnalystResponse`.
-5. **Exact Metric Triangle Inequality Pruning**: Vantage-Point Tree and HNSW implementations must strictly adhere to distance metric axioms to guarantee pruning soundness.
-6. **Backward Compatibility**: Maintain 100% compatibility with existing `MemoryCortex` and `SemanticBaselineCache` APIs, snapshots, and tests.
+## Background & Problem Statement
+In multi-chunk and multi-subtask workloads, `src/swarm/engine.ts` currently processes chunks sequentially in a loop with artificial 2000ms delay between chunks to avoid rate-limits. This results in $O(N)$ serial latency ($N \times (\text{latency} + 2\text{s})$) even when chunks or subtasks are completely independent.
 
-## Micro-Goal Breakdown
-1. `goal-1-vector-index-engine-hnsw-and-vptree`: Implement `VectorIndex` interface, `VpTreeIndex`, and `HnswVectorIndex` in `src/swarm/vectorIndex.ts` with comprehensive unit tests in `src/swarm/vectorIndex.test.ts`.
-2. `goal-2-cortex-and-cache-vector-indexing-integration`: Integrate $O(\log N)$ vector indexing into `MemoryCortex` (`src/swarm/memory.ts`) and `SemanticBaselineCache` (`src/swarm/cache.ts`), verifying logarithmic retrieval speedup, radius deduplication, and multi-tenant isolation.
-3. `goal-3-verification-and-bundle-build`: Update library exports in `src/swarm/index.ts` and `package.json`, rebuild client and swarm distribution bundles, and verify 100% passing across all Vitest and 5 E2E test suites.
+## Architecture Boundaries
+1. **Speculative Execution Engine (`src/swarm/speculative.ts`)**:
+   - `DependencyGraph`: Analyze subtask/chunk dependencies and determine parallel independence.
+   - `SpeculativeExecutionCoordinator`: Concurrently dispatch independent chunk/subtask executions across specialists bounded by `NodeCapacityManager` concurrency slots.
+   - `ConflictResolver`: Reconcile conflicting findings, overlapping anomaly claims, and contradictory metrics between concurrent speculative outputs using confidence weighting, source specialist reliability, and semantic deduplication.
+2. **Swarm Engine Integration (`src/swarm/engine.ts`)**:
+   - Support `settings.speculativeParallel` (default: true for multi-chunk tasks).
+   - Concurrently execute independent chunks using `SpeculativeExecutionCoordinator`.
+   - Pass parallel reports through `ConflictResolver` before cluster aggregation and manager synthesis.
+   - Emit `Speculative Parallel Execution` and `Conflict Resolution` telemetry events with measured latency savings percentage.
+3. **Distribution & Backward Compatibility**:
+   - Zero external dependencies (pure TypeScript).
+   - ESM/CJS exports in `dist/swarm` and `package.json`.
+   - 100% passing tests across all unit and E2E suites.

@@ -15,12 +15,16 @@ import {
     globalClusterTopologyManager,
     VpTreeIndex,
     HnswVectorIndex,
-    createVectorIndex
+    createVectorIndex,
+    DependencyGraph,
+    ConflictResolver,
+    SpeculativeExecutionCoordinator
 } from './dist/swarm/index.js';
 import { createSwarmServer as serverFromSubpath } from './dist/swarm/server.js';
 import { createSwarmClient as clientFromSubpath } from './dist/swarm/client.js';
 import { HierarchicalMessageBus as CommBusFromSubpath, ClusterTopologyManager as CommTopologyFromSubpath } from './dist/swarm/communication.js';
 import { VpTreeIndex as VpTreeFromSubpath, HnswVectorIndex as HnswFromSubpath, createVectorIndex as createVectorFromSubpath } from './dist/swarm/vectorIndex.js';
+import { DependencyGraph as DepGraphFromSubpath, ConflictResolver as ConflictFromSubpath, SpeculativeExecutionCoordinator as SpecCoordFromSubpath } from './dist/swarm/speculative.js';
 import { ToolRegistry, calculatorTool } from './dist/swarm/tools.js';
 import { repairJson, parseJsonSafe } from './dist/swarm/parser.js';
 
@@ -155,7 +159,45 @@ async function runDistVerification() {
     if (hnswRes.length !== 1 || hnswRes[0].id !== 'h1') {
         throw new Error('Compiled HnswVectorIndex search failed');
     }
-    console.log('✓ Compiled VectorIndex subpath, VpTreeIndex, and HnswVectorIndex verified');
+    // 8. Verify compiled Speculative Execution (DependencyGraph, ConflictResolver, SpeculativeExecutionCoordinator)
+    if (!DependencyGraph || !ConflictResolver || !SpeculativeExecutionCoordinator || !DepGraphFromSubpath || !ConflictFromSubpath || !SpecCoordFromSubpath) {
+        throw new Error('Compiled Speculative module exports missing');
+    }
+    const depGraph = new DepGraphFromSubpath();
+    depGraph.addNode({ id: 'task-a', chunkIndex: 0, dependencies: [], payload: 'Task A' });
+    depGraph.addNode({ id: 'task-b', chunkIndex: 1, dependencies: ['task-a'], payload: 'Task B' });
+    const batches = depGraph.getExecutionBatches();
+    if (batches.length !== 2 || batches[0][0].id !== 'task-a' || batches[1][0].id !== 'task-b') {
+        throw new Error('Compiled DependencyGraph batching failed');
+    }
+
+    const resolver = new ConflictFromSubpath();
+    const mockReports = [
+        {
+            role: 'Security Specialist',
+            insights: ['Auth token leak detected in login service'],
+            anomalies: ['Critical authentication token exposed']
+        },
+        {
+            role: 'Performance Engineer',
+            insights: ['Auth token nominal in login service'],
+            anomalies: []
+        }
+    ];
+    const reconciled = resolver.reconcileReports(mockReports, { strategy: 'conservative_pessimistic' });
+    if (reconciled.conflicts.length === 0 || !reconciled.anomalies.some(a => a.includes('Critical authentication'))) {
+        throw new Error('Compiled ConflictResolver resolution failed');
+    }
+
+    const coord = new SpecCoordFromSubpath(new ConflictFromSubpath());
+    const coordRun = await coord.executeSpeculative([
+        { id: 'sub-1', chunkIndex: 0, payload: 'p1', execute: async () => ({ role: 'Agent1', insights: ['Insight 1'], anomalies: [] }) },
+        { id: 'sub-2', chunkIndex: 1, payload: 'p2', execute: async () => ({ role: 'Agent2', insights: ['Insight 2'], anomalies: [] }) }
+    ], { maxConcurrency: 2 });
+    if (coordRun.results.length !== 2 || coordRun.totalTasks !== 2) {
+        throw new Error('Compiled SpeculativeExecutionCoordinator failed');
+    }
+    console.log('✓ Compiled Speculative module subpath, DependencyGraph, and ConflictResolver verified');
 
     console.log('\n✓ ALL COMPILED SWARM DISTRIBUTION BUNDLE TESTS PASSED SUCCESSFULLY!\n');
 }

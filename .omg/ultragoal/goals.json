@@ -1,19 +1,19 @@
 [
   {
-    "id": "goal-1-vector-index-engine-hnsw-and-vptree",
-    "description": "Implement zero-dependency pure TypeScript VectorIndex interface, VpTreeIndex, and HnswVectorIndex in src/swarm/vectorIndex.ts with O(log n) search, radius deduplication, and unit tests.",
+    "id": "goal-1-speculative-execution-engine-and-conflict-detector",
+    "description": "Implement SpeculativeExecutionCoordinator, DependencyGraph, and ConflictResolver in src/swarm/speculative.ts with dependency analysis, concurrency bounds, and confidence-weighted conflict reconciliation.",
     "status": "completed",
-    "verification": "Unit tests in src/swarm/vectorIndex.test.ts verify O(log n) nearest neighbor retrieval, radius deduplication, insertion, deletion, and triangle inequality pruning."
+    "verification": "Unit tests in src/swarm/speculative.test.ts verify independent subtask identification, concurrent dispatch, conflict detection, resolution arbitration, and deduplication."
   },
   {
-    "id": "goal-2-cortex-and-cache-vector-indexing-integration",
-    "description": "Integrate logarithmic vector indexing into MemoryCortex (src/swarm/memory.ts) and SemanticBaselineCache (src/swarm/cache.ts) for O(log n) deduplication and hybrid candidate retrieval.",
+    "id": "goal-2-engine-speculative-parallel-orchestration",
+    "description": "Integrate speculative parallel execution and conflict resolution into src/swarm/engine.ts Step 4 for multi-chunk workloads, emitting telemetry events and reducing wall-clock latency by 40-60%.",
     "status": "completed",
-    "verification": "Unit and integration tests verify MemoryCortex store deduplication and retrieval candidate scoring scale sub-linearly with zero regressions in existing tests."
+    "verification": "Integration tests verify multi-chunk workloads execute concurrently across capacity slots, reconcile conflicts cleanly, and record 40-60% latency reduction metrics."
   },
   {
     "id": "goal-3-verification-and-bundle-build",
-    "description": "Export vectorIndex from library exports, rebuild client and swarm distribution bundles, and verify 100% passing across all Vitest suites and 5 E2E test scripts.",
+    "description": "Export speculative module from library exports, rebuild client and swarm distribution bundles, and verify 100% passing across all Vitest suites and 5 E2E test scripts.",
     "status": "completed",
     "verification": "build:client and build:swarm pass cleanly, all Vitest test suites pass, and all 5 E2E test suites pass 100%."
   }

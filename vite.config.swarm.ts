@@ -20,7 +20,8 @@ export default defineConfig({
         parser: path.resolve(__dirname, 'src/swarm/parser.ts'),
         client: path.resolve(__dirname, 'src/swarm/client.ts'),
         communication: path.resolve(__dirname, 'src/swarm/communication.ts'),
-        vectorIndex: path.resolve(__dirname, 'src/swarm/vectorIndex.ts')
+        vectorIndex: path.resolve(__dirname, 'src/swarm/vectorIndex.ts'),
+        speculative: path.resolve(__dirname, 'src/swarm/speculative.ts')
       },
       formats: ['es', 'cjs'],
       fileName: (format, entryName) => `${entryName}.${format === 'es' ? 'js' : 'cjs'}`

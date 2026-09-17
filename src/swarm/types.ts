@@ -21,6 +21,9 @@ export interface SwarmEngineSettings {
     disableFallback?: boolean;
     forceFullSwarm?: boolean;
     disableFastPath?: boolean;
+    speculativeParallel?: boolean;
+    maxSpeculativeConcurrency?: number;
+    conflictResolutionStrategy?: 'confidence_weighted' | 'conservative_pessimistic' | 'majority_consensus' | 'deduplicate_union';
     critic?: AgentConfig;
     agents?: AgentConfig[];
     [key: string]: any;

@@ -104,6 +104,12 @@
       "import": "./dist/swarm/vectorIndex.js",
       "require": "./dist/swarm/vectorIndex.cjs",
       "default": "./src/swarm/vectorIndex.ts"
+    },
+    "./speculative": {
+      "types": "./dist/swarm/speculative.d.ts",
+      "import": "./dist/swarm/speculative.js",
+      "require": "./dist/swarm/speculative.cjs",
+      "default": "./src/swarm/speculative.ts"
     }
   },
   "scripts": {

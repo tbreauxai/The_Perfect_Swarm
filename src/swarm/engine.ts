@@ -21,6 +21,14 @@ import {
     type SpecialistNodeInput,
     type SwarmTopology
 } from './communication.ts';
+import {
+    DependencyGraph,
+    ConflictResolver,
+    SpeculativeExecutionCoordinator,
+    type SpeculativeTask,
+    type SpeculativeExecutionResult,
+    type ConflictResolutionStrategy
+} from './speculative.ts';
 
 export interface ProviderResolution {
     key: string;
@@ -161,6 +169,8 @@ export interface SwarmWorkflowParams {
     defaultAi?: GoogleGenAI;
     enableDeepAnalysis?: boolean;
     forceFullSwarm?: boolean;
+    speculativeParallel?: boolean;
+    maxSpeculativeConcurrency?: number;
     complexityOverride?: TaskComplexity;
     onEvent?: (event: SwarmEvent) => void;
     onMemoryLearned?: (event: LearnedMemoryEvent) => void;
@@ -826,27 +836,103 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 }
             };
 
-            if (chunks.length > 1) {
-                // Execute routed chunk assignments
-                for (let i = 0; i < chunks.length; i++) {
-                    const chunk = chunks[i];
-                    const assignment = routingPlan.assignments.find(asn => asn.chunkIndex === i);
-                    const assignedAnalyst = analysts.find(a => a.role === assignment?.agentRole) || analysts[i % analysts.length];
-                    const analystIdx = analysts.indexOf(assignedAnalyst);
+            const useSpeculativeParallel = settings?.speculativeParallel !== false && params.speculativeParallel !== false;
 
-                    const resData = await executeAnalyst(assignedAnalyst, chunk, i);
-                    if (analystIdx >= 0) {
-                        allAnalystReports[analystIdx].push(resData);
+            if (chunks.length > 1) {
+                if (useSpeculativeParallel) {
+                    const depGraph = DependencyGraph.fromChunks(chunks, task);
+                    const speculativeCoordinator = new SpeculativeExecutionCoordinator();
+                    const maxConcurrency = settings?.maxSpeculativeConcurrency || params.maxSpeculativeConcurrency || 4;
+
+                    const specTasks: SpeculativeTask[] = chunks.map((chunk, i) => {
+                        const assignment = routingPlan.assignments.find(asn => asn.chunkIndex === i);
+                        const assignedAnalyst = analysts.find(a => a.role === assignment?.agentRole) || analysts[i % analysts.length];
+                        const node = depGraph.getNode(`chunk-${i}`);
+                        return {
+                            id: `chunk-${i}`,
+                            chunkIndex: i,
+                            payload: chunk,
+                            dependencies: node?.dependencies || [],
+                            execute: () => executeAnalyst(assignedAnalyst, chunk, i)
+                        };
+                    });
+
+                    const specResult = await speculativeCoordinator.executeSpeculative(specTasks, {
+                        maxConcurrency,
+                        staggerDelayMs: 25,
+                        conflictOptions: {
+                            strategy: settings?.conflictResolutionStrategy || 'conservative_pessimistic',
+                            capabilityScorer: (role) => globalSpecialistProfiler.getCapabilityScore(role)
+                        }
+                    });
+
+                    // Distribute outputs to corresponding analyst report arrays
+                    for (const resData of specResult.results) {
+                        const chunkIdx = (resData as any)._chunkIndex ?? 0;
+                        const assignment = routingPlan.assignments.find(asn => asn.chunkIndex === chunkIdx);
+                        const assignedAnalyst = analysts.find(a => a.role === assignment?.agentRole) || analysts[chunkIdx % analysts.length];
+                        const analystIdx = analysts.indexOf(assignedAnalyst);
+                        if (analystIdx >= 0) {
+                            allAnalystReports[analystIdx].push(resData);
+                        }
                     }
 
-                    if (i < chunks.length - 1) {
+                    // Emit Speculative Parallel Execution telemetry event
+                    context.addEvent({
+                        agentRole: 'Speculative Execution Coordinator',
+                        action: 'Speculative Parallel Execution',
+                        modelName: 'Local/SpeculativeCoordinator',
+                        prompt: `Speculatively executed ${chunks.length} independent chunk(s) across ${analysts.length} specialist(s) (Peak Concurrency: ${specResult.concurrencyPeak})`,
+                        output: {
+                            totalChunks: chunks.length,
+                            concurrencyPeak: specResult.concurrencyPeak,
+                            actualWallClockDurationMs: specResult.actualWallClockDurationMs,
+                            serialDurationEstimateMs: specResult.serialDurationEstimateMs,
+                            latencyReductionPercent: specResult.latencyReductionPercent,
+                            conflictsDetected: specResult.reconciledReport.conflicts.length,
+                            conflictsResolved: specResult.reconciledReport.resolutions.length,
+                            duplicateInsightsMerged: specResult.reconciledReport.duplicateCount
+                        },
+                        durationMs: specResult.actualWallClockDurationMs
+                    });
+
+                    // If conflicts were detected, emit Conflict Resolution event
+                    if (specResult.reconciledReport.conflicts.length > 0) {
                         context.addEvent({
-                            agentRole: 'System Orchestrator',
-                            action: 'Batch Delay',
-                            modelName: 'Local/TypeScript',
-                            prompt: `Rate limit prevention: Waiting 2s before processing chunk ${i + 2}/${chunks.length}...`
+                            agentRole: 'Conflict Resolver',
+                            action: 'Conflict Resolution',
+                            modelName: 'Local/ConflictResolver',
+                            prompt: `Resolved ${specResult.reconciledReport.conflicts.length} conflicting assertions across speculative branches`,
+                            output: {
+                                conflicts: specResult.reconciledReport.conflicts,
+                                resolutions: specResult.reconciledReport.resolutions,
+                                strategy: settings?.conflictResolutionStrategy || 'conservative_pessimistic'
+                            },
+                            durationMs: 0
                         });
-                        await new Promise(resolve => setTimeout(resolve, 2000));
+                    }
+                } else {
+                    // Execute routed chunk assignments sequentially
+                    for (let i = 0; i < chunks.length; i++) {
+                        const chunk = chunks[i];
+                        const assignment = routingPlan.assignments.find(asn => asn.chunkIndex === i);
+                        const assignedAnalyst = analysts.find(a => a.role === assignment?.agentRole) || analysts[i % analysts.length];
+                        const analystIdx = analysts.indexOf(assignedAnalyst);
+
+                        const resData = await executeAnalyst(assignedAnalyst, chunk, i);
+                        if (analystIdx >= 0) {
+                            allAnalystReports[analystIdx].push(resData);
+                        }
+
+                        if (i < chunks.length - 1) {
+                            context.addEvent({
+                                agentRole: 'System Orchestrator',
+                                action: 'Batch Delay',
+                                modelName: 'Local/TypeScript',
+                                prompt: `Rate limit prevention: Waiting 2s before processing chunk ${i + 2}/${chunks.length}...`
+                            });
+                            await new Promise(resolve => setTimeout(resolve, 2000));
+                        }
                     }
                 }
             } else {
