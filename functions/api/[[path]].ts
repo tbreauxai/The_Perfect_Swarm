@@ -1,5 +1,5 @@
 import { handle } from 'hono/cloudflare-pages';
-import { createSwarmServer } from '../src/swarm/server.ts';
+import { createSwarmServer } from '../../src/swarm/server.ts';
 import { GoogleGenAI } from '@google/genai';
 
 // In a Cloudflare Pages Function environment, process.env is replaced by `env` passed to the request.
