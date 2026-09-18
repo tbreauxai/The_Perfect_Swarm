@@ -29,6 +29,15 @@ export interface SwarmCompressionSettings {
     stripBoilerplate?: boolean;
 }
 
+export interface SwarmSchedulingSettings {
+    enabled?: boolean;
+    strategy?: 'priority' | 'shortest-job-first' | 'least-loaded' | 'fair-share' | 'work-stealing';
+    maxConcurrency?: number;
+    enableRateLimiting?: boolean;
+    agingThresholdMs?: number;
+    rateLimits?: Record<string, { maxRpm?: number; maxTpm?: number }>;
+}
+
 export interface SwarmEngineSettings {
     geminiApiKey?: string;
     openRouterApiKey?: string;
@@ -45,6 +54,7 @@ export interface SwarmEngineSettings {
     agents?: AgentConfig[];
     experimentSettings?: SwarmExperimentSettings;
     compressionSettings?: SwarmCompressionSettings;
+    schedulingSettings?: SwarmSchedulingSettings;
     [key: string]: any;
 }
 

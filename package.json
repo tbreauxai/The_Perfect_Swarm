@@ -122,6 +122,12 @@
       "import": "./dist/swarm/compression.js",
       "require": "./dist/swarm/compression.cjs",
       "default": "./src/swarm/compression.ts"
+    },
+    "./scheduler": {
+      "types": "./dist/swarm/scheduler.d.ts",
+      "import": "./dist/swarm/scheduler.js",
+      "require": "./dist/swarm/scheduler.cjs",
+      "default": "./src/swarm/scheduler.ts"
     }
   },
   "scripts": {

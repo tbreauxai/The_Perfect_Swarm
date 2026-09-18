@@ -43,6 +43,15 @@ import {
     type CompressionOptions,
     type CompressedPromptResult
 } from './compression.ts';
+import {
+    AdaptiveTaskScheduler,
+    globalTaskScheduler,
+    type ScheduledTask,
+    type SchedulerExecutionResult,
+    type SchedulerConfig,
+    type TaskPriority,
+    type SchedulingStrategy
+} from './scheduler.ts';
 
 export interface ProviderResolution {
     key: string;
@@ -210,6 +219,16 @@ export interface SwarmWorkflowResult {
         tokensSaved: number;
         reductionRatio: number;
         deduplicatedSegmentsCount: number;
+    };
+    scheduling?: {
+        totalTasks: number;
+        successfulTasks: number;
+        failedTasks: number;
+        totalQueueWaitMs: number;
+        averageQueueWaitMs: number;
+        totalExecutionMs: number;
+        totalBackpressureDelayMs: number;
+        stolenTaskCount: number;
     };
 }
 
@@ -503,6 +522,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     let workflowCompressedPromptTokens: number = 0;
     let workflowPromptTokensSaved: number = 0;
     let workflowDeduplicatedCount: number = 0;
+    let workflowSchedulingResult: SchedulerExecutionResult | undefined;
 
     if (fastPathDecision.eligible && analysts.length > 0) {
         const fastAnalyst = analysts[0];
@@ -1008,9 +1028,116 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 }
             };
 
-            const useSpeculativeParallel = settings?.speculativeParallel !== false && params.speculativeParallel !== false;
+            const useScheduling = settings?.schedulingSettings?.enabled === true;
+            const useSpeculativeParallel = !useScheduling && settings?.speculativeParallel !== false && params.speculativeParallel !== false;
 
-            if (chunks.length > 1) {
+            if (useScheduling) {
+                const schedConfig = settings?.schedulingSettings;
+                const scheduler = new AdaptiveTaskScheduler({
+                    strategy: schedConfig?.strategy || 'work-stealing',
+                    maxConcurrency: schedConfig?.maxConcurrency || settings?.maxSpeculativeConcurrency || 4,
+                    enableRateLimiting: schedConfig?.enableRateLimiting !== false,
+                    agingThresholdMs: schedConfig?.agingThresholdMs,
+                    rateLimits: schedConfig?.rateLimits,
+                    onEvent: (evt) => {
+                        if (evt.type === 'backpressure_delay') {
+                            context.addEvent({
+                                agentRole: 'Rate Limiter',
+                                action: 'Queue Backpressure Delayed',
+                                modelName: 'Local/TokenBucket',
+                                prompt: `Provider '${evt.provider}' rate limit backpressure: delaying task '${evt.taskId}' by ${evt.delayMs}ms`,
+                                output: { taskId: evt.taskId, provider: evt.provider, delayMs: evt.delayMs }
+                            });
+                        } else if (evt.type === 'work_stolen') {
+                            context.addEvent({
+                                agentRole: 'Work Stealing Pool',
+                                action: 'Work Stolen',
+                                modelName: 'Local/WorkStealing',
+                                prompt: `Worker '${evt.workerId}' stole task '${evt.taskId}' from '${evt.metadata?.stolenFrom}'`,
+                                output: { taskId: evt.taskId, workerId: evt.workerId, stolenFrom: evt.metadata?.stolenFrom }
+                            });
+                        } else if (evt.type === 'task_scheduled') {
+                            context.addEvent({
+                                agentRole: 'Adaptive Task Scheduler',
+                                action: 'Task Scheduled',
+                                modelName: 'Local/AdaptiveScheduler',
+                                prompt: `Scheduled task '${evt.taskId}' for worker '${evt.workerId}' (Priority: ${evt.priority})`,
+                                output: { taskId: evt.taskId, workerId: evt.workerId, priority: evt.priority, provider: evt.provider }
+                            });
+                        }
+                    }
+                });
+
+                let schedTasks: ScheduledTask[];
+                if (chunks.length > 1) {
+                    schedTasks = chunks.map((chunk, i) => {
+                        const assignment = routingPlan.assignments.find(asn => asn.chunkIndex === i);
+                        const assignedAnalyst = analysts.find(a => a.role === assignment?.agentRole) || analysts[i % analysts.length];
+                        const estTokens = assignment?.estimatedTokens || Math.max(10, Math.ceil(chunk.length / 4));
+                        return {
+                            id: `chunk-task-${i}`,
+                            priority: (i === 0 ? 'high' : 'normal') as TaskPriority,
+                            assignedWorkerId: assignedAnalyst.role,
+                            targetProvider: assignedAnalyst.provider,
+                            domain: assignedAnalyst.role,
+                            estimatedTokens: estTokens,
+                            payload: chunk,
+                            execute: () => executeAnalyst(assignedAnalyst, chunk, i)
+                        };
+                    });
+                } else {
+                    const estTokens = Math.max(10, Math.ceil(chunks[0].length / 4));
+                    schedTasks = analysts.map((analyst, i) => {
+                        return {
+                            id: `analyst-task-${i}`,
+                            priority: 'normal' as TaskPriority,
+                            assignedWorkerId: analyst.role,
+                            targetProvider: analyst.provider,
+                            domain: analyst.role,
+                            estimatedTokens: estTokens,
+                            payload: chunks[0],
+                            execute: () => executeAnalyst(analyst, chunks[0], 0)
+                        };
+                    });
+                }
+
+                workflowSchedulingResult = await scheduler.executeScheduled(schedTasks, {
+                    strategy: schedConfig?.strategy,
+                    maxConcurrency: schedConfig?.maxConcurrency
+                });
+
+                // Distribute results to analyst reports
+                for (const item of workflowSchedulingResult.results) {
+                    if (item.success && item.result) {
+                        const resData = item.result;
+                        const chunkIdx = (resData as any)._chunkIndex ?? 0;
+                        const assignedAnalyst = analysts.find(a => a.role === item.workerId) || analysts[chunkIdx % analysts.length];
+                        const analystIdx = analysts.indexOf(assignedAnalyst);
+                        if (analystIdx >= 0) {
+                            allAnalystReports[analystIdx].push(resData);
+                        }
+                    }
+                }
+
+                // Emit Adaptive Task Scheduling summary telemetry event
+                context.addEvent({
+                    agentRole: 'Adaptive Task Scheduler',
+                    action: 'Adaptive Task Scheduling',
+                    modelName: 'Local/AdaptiveScheduler',
+                    prompt: `Adaptive scheduling executed ${schedTasks.length} task(s) using '${schedConfig?.strategy || 'work-stealing'}' strategy (Queue Wait: ${workflowSchedulingResult.averageQueueWaitMs}ms, Stolen: ${workflowSchedulingResult.stolenTaskCount}, Backpressure: ${workflowSchedulingResult.totalBackpressureDelayMs}ms)`,
+                    output: {
+                        totalTasks: workflowSchedulingResult.totalTasks,
+                        successfulTasks: workflowSchedulingResult.successfulTasks,
+                        failedTasks: workflowSchedulingResult.failedTasks,
+                        averageQueueWaitMs: workflowSchedulingResult.averageQueueWaitMs,
+                        totalExecutionMs: workflowSchedulingResult.totalExecutionMs,
+                        totalBackpressureDelayMs: workflowSchedulingResult.totalBackpressureDelayMs,
+                        stolenTaskCount: workflowSchedulingResult.stolenTaskCount,
+                        strategy: schedConfig?.strategy || 'work-stealing'
+                    },
+                    durationMs: workflowSchedulingResult.totalExecutionMs
+                });
+            } else if (chunks.length > 1) {
                 if (useSpeculativeParallel) {
                     const depGraph = DependencyGraph.fromChunks(chunks, task);
                     const speculativeCoordinator = new SpeculativeExecutionCoordinator();
@@ -1488,6 +1615,16 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             tokensSaved: workflowPromptTokensSaved,
             reductionRatio: Math.round((workflowPromptTokensSaved / workflowOriginalPromptTokens) * 1000) / 1000,
             deduplicatedSegmentsCount: workflowDeduplicatedCount
+        } : undefined,
+        scheduling: workflowSchedulingResult ? {
+            totalTasks: workflowSchedulingResult.totalTasks,
+            successfulTasks: workflowSchedulingResult.successfulTasks,
+            failedTasks: workflowSchedulingResult.failedTasks,
+            totalQueueWaitMs: workflowSchedulingResult.totalQueueWaitMs,
+            averageQueueWaitMs: workflowSchedulingResult.averageQueueWaitMs,
+            totalExecutionMs: workflowSchedulingResult.totalExecutionMs,
+            totalBackpressureDelayMs: workflowSchedulingResult.totalBackpressureDelayMs,
+            stolenTaskCount: workflowSchedulingResult.stolenTaskCount
         } : undefined
     };
 }

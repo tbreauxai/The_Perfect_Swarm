@@ -1,19 +1,19 @@
 [
   {
-    "id": "goal-1-prompt-compression-engine-and-semantic-dedup",
-    "description": "Implement TokenAwarePromptCompressor, SemanticDeduplicator, token budgeting, and priority pruning in src/swarm/compression.ts with unit tests.",
+    "id": "goal-1-adaptive-task-scheduler-and-work-stealing",
+    "description": "Implement AdaptiveTaskScheduler, PriorityTaskQueue, TokenBucketRateLimiter, PredictiveLatencyModel, and WorkStealingPool in src/swarm/scheduler.ts with unit tests.",
     "status": "completed",
-    "verification": "Unit tests in src/swarm/compression.test.ts verify token counting, semantic deduplication, 30-50% context reduction on redundant inputs, and preservation of critical constraints and anomalies."
+    "verification": "Unit tests in src/swarm/scheduler.test.ts verify priority queueing, work-stealing across workers, token bucket rate limiting backpressure, and predictive latency estimation."
   },
   {
-    "id": "goal-2-engine-prompt-compression-integration",
-    "description": "Integrate token-aware prompt compression and semantic deduplication into src/swarm/engine.ts and src/swarm/types.ts with integration tests.",
+    "id": "goal-2-engine-adaptive-scheduler-integration",
+    "description": "Integrate AdaptiveTaskScheduler into src/swarm/engine.ts and src/swarm/types.ts with integration tests.",
     "status": "completed",
-    "verification": "Integration tests in src/swarm/compression-engine.test.ts verify prompt compression during analyst and manager synthesis execution, telemetry event emission, and metrics tracking."
+    "verification": "Integration tests in src/swarm/scheduler-engine.test.ts verify scheduled task execution, rate-limit backpressure handling, telemetry event emission, and scheduling metrics tracking."
   },
   {
     "id": "goal-3-verification-and-bundle-build",
-    "description": "Export compression module, rebuild client and swarm bundles, update test-dist-import, and verify 100% passing across all Vitest suites and 5 E2E test scripts.",
+    "description": "Export scheduler module, rebuild client and swarm bundles, update test-dist-import, and verify 100% passing across all Vitest suites and 5 E2E test scripts.",
     "status": "completed",
     "verification": "build:client and build:swarm pass cleanly, test-dist-import verifies exports, all Vitest test suites pass, and all 5 E2E test suites pass 100%."
   }

@@ -26,7 +26,13 @@ import {
     TokenAwarePromptCompressor,
     TokenEstimator,
     SemanticDeduplicator,
-    globalPromptCompressor
+    globalPromptCompressor,
+    AdaptiveTaskScheduler,
+    PriorityTaskQueue,
+    TokenBucketRateLimiter,
+    PredictiveLatencyModel,
+    WorkStealingPool,
+    globalTaskScheduler
 } from './dist/swarm/index.js';
 import { createSwarmServer as serverFromSubpath } from './dist/swarm/server.js';
 import { createSwarmClient as clientFromSubpath } from './dist/swarm/client.js';
@@ -35,6 +41,7 @@ import { VpTreeIndex as VpTreeFromSubpath, HnswVectorIndex as HnswFromSubpath, c
 import { DependencyGraph as DepGraphFromSubpath, ConflictResolver as ConflictFromSubpath, SpeculativeExecutionCoordinator as SpecCoordFromSubpath } from './dist/swarm/speculative.js';
 import { AgentExperimentManager as ExpMgrFromSubpath, AgentExperiment as ExpFromSubpath, StatisticalAnalyzer as StatFromSubpath } from './dist/swarm/experiment.js';
 import { TokenAwarePromptCompressor as CompressorFromSubpath, TokenEstimator as TokenEstimatorFromSubpath, SemanticDeduplicator as DedupFromSubpath, globalPromptCompressor as globalCompressorFromSubpath } from './dist/swarm/compression.js';
+import { AdaptiveTaskScheduler as SchedulerFromSubpath, PriorityTaskQueue as QueueFromSubpath, TokenBucketRateLimiter as LimiterFromSubpath, PredictiveLatencyModel as LatencyFromSubpath, WorkStealingPool as WorkStealingFromSubpath, globalTaskScheduler as globalSchedulerFromSubpath } from './dist/swarm/scheduler.js';
 import { ToolRegistry, calculatorTool } from './dist/swarm/tools.js';
 import { repairJson, parseJsonSafe } from './dist/swarm/parser.js';
 
@@ -255,6 +262,34 @@ async function runDistVerification() {
         throw new Error('Compiled SemanticDeduplicator similarity check failed');
     }
     console.log('✓ Compiled Compression module subpath, TokenAwarePromptCompressor, and SemanticDeduplicator verified');
+
+    // 11. Verify compiled Adaptive Task Scheduler & Work Stealing Engine
+    if (!AdaptiveTaskScheduler || !PriorityTaskQueue || !TokenBucketRateLimiter || !PredictiveLatencyModel || !WorkStealingPool || !globalTaskScheduler || !SchedulerFromSubpath || !QueueFromSubpath || !LimiterFromSubpath) {
+        throw new Error('Compiled Scheduler module exports missing');
+    }
+
+    const testScheduler = new SchedulerFromSubpath({
+        strategy: 'work-stealing',
+        maxConcurrency: 2,
+        enableRateLimiting: false
+    });
+
+    const schedExecRes = await testScheduler.executeScheduled([
+        { id: 'dist-task-1', assignedWorkerId: 'worker-1', priority: 'high', execute: async () => 'result-1' },
+        { id: 'dist-task-2', assignedWorkerId: 'worker-2', priority: 'normal', execute: async () => 'result-2' }
+    ]);
+
+    if (schedExecRes.totalTasks !== 2 || schedExecRes.successfulTasks !== 2) {
+        throw new Error('Compiled AdaptiveTaskScheduler execution failed');
+    }
+
+    const testLimiter = new LimiterFromSubpath({
+        test: { maxRpm: 60, maxTpm: 10000 }
+    });
+    if (!testLimiter.canAcquire('test', 100)) {
+        throw new Error('Compiled TokenBucketRateLimiter acquisition failed');
+    }
+    console.log('✓ Compiled Scheduler module subpath, AdaptiveTaskScheduler, and TokenBucketRateLimiter verified');
 
     console.log('\n✓ ALL COMPILED SWARM DISTRIBUTION BUNDLE TESTS PASSED SUCCESSFULLY!\n');
 }

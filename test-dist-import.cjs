@@ -137,6 +137,20 @@ async function testCjsImport() {
     }
     console.log('✓ CJS compression subpath, TokenAwarePromptCompressor, and SemanticDeduplicator verified');
 
+    const schedCjs = require('./dist/swarm/scheduler.cjs');
+    if (!schedCjs.AdaptiveTaskScheduler || !schedCjs.PriorityTaskQueue || !schedCjs.TokenBucketRateLimiter || !schedCjs.PredictiveLatencyModel || !schedCjs.WorkStealingPool || !schedCjs.globalTaskScheduler) {
+        throw new Error('CommonJS scheduler exports missing');
+    }
+    const cjsScheduler = new schedCjs.AdaptiveTaskScheduler({ strategy: 'work-stealing', maxConcurrency: 2, enableRateLimiting: false });
+    const cjsSchedRes = await cjsScheduler.executeScheduled([
+        { id: 'cjs-task-1', assignedWorkerId: 'w1', priority: 'high', execute: async () => 'cjs-res-1' },
+        { id: 'cjs-task-2', assignedWorkerId: 'w2', priority: 'normal', execute: async () => 'cjs-res-2' }
+    ]);
+    if (cjsSchedRes.totalTasks !== 2 || cjsSchedRes.successfulTasks !== 2) {
+        throw new Error('CommonJS AdaptiveTaskScheduler execution failed');
+    }
+    console.log('✓ CJS scheduler subpath, AdaptiveTaskScheduler, and WorkStealingPool verified');
+
     console.log('✓ ALL COMMONJS SWARM DISTRIBUTION TESTS PASSED!\n');
 }
 
