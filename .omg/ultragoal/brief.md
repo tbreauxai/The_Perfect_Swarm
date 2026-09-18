@@ -1,28 +1,20 @@
-# Ultragoal Brief: Resilient Generative UI Trend Normalization & Schema Validation Safeguard
+# Ultragoal Brief: Parallel Async Model Health Checks, TTL Caching, Two-Tier Verification & Circuit Breaker
 
 ## Objective
-Eliminate runtime `SCHEMA_VALIDATION_FAILED` errors caused by non-strict LLM trend strings in Generative UI `MetricCard` components (e.g. `components.3.props.trend: Invalid option: expected one of "up"|"down"|"neutral"`).
+Implement high-throughput, low-latency health verification and fault isolation for LLM models across all providers (Gemini, Groq, OpenRouter, Mistral, GitHub, Simulated):
+1. **Parallel Async Health Checks**: Execute model probes concurrently with a short 2-3 second timeout per model via `AbortController`.
+2. **5-10 Minute TTL Caching**: Cache health results (latency, tier outcomes, circuit status) for 5-10 minutes to prevent provider rate limits and supply instant, near real-time model dropdown filtering.
+3. **Two-Tier Check**:
+   - Tier 1: Lightweight HEAD/metadata request to verify endpoint reachability with zero token spend.
+   - Tier 2: Minimal inference ping (prompt "ping" / max_tokens=1) to verify active inference serving. Skip Tier 2 if Tier 1 fails.
+4. **Circuit Breaker Pattern**:
+   - States: `CLOSED` (healthy), `OPEN` (tripped after consecutive failures, e.g. 3), `HALF_OPEN` (trial probe after cooldown, e.g. 30-60s).
+   - Temporarily disable repeatedly failing models to protect user workflows and prevent execution hangs.
+5. **UI Dropdown Filtering**:
+   - Integrate health and circuit status into `src/services/providerService.ts` and `src/components/AgentConfigurator.tsx` for real-time visual health badges and filtering options.
 
-## Problem Analysis
-When Manager/Orchestrator LLMs synthesize dashboard cards, models frequently emit natural language variations or synonyms for trend:
-- `"increasing"`, `"upward"`, `"positive"`, `"rising"`, `"UP"`, `"+"`
-- `"decreasing"`, `"downward"`, `"negative"`, `"falling"`, `"DOWN"`, `"-"`
-- `"flat"`, `"stable"`, `"none"`, `"no change"`, `"even"`, `"neutral"`
-- Or unexpected text/numbers/null.
-
-Under the previous strict `z.enum(["up", "down", "neutral"])` definition:
-1. `config.zodSchema.safeParse(parsedOutput)` in `src/swarm/agent.ts` throws a fatal `SCHEMA_VALIDATION_FAILED` error.
-2. The entire analysis fails, even though the dashboard title, other cards, insight lists, and data tables are completely valid.
-
-## Architecture Boundaries & Solution
-1. **Schema-Level Normalization (`src/swarm/schemas.ts`)**:
-   - In `ManagerResponseSchema` -> `MetricCard` -> `props.trend`:
-     Use `z.preprocess` to normalize casing, map common synonyms (`increasing`/`upward` -> `'up'`, `decreasing`/`downward` -> `'down'`, `flat`/`stable` -> `'neutral'`), and map unrecognized strings or invalid values to `undefined` rather than throwing fatal validation errors.
-   - In `InsightList` -> `props.insights` -> `type`:
-     Preprocess to map synonyms (`alert`, `danger` -> `warning`, `notice` -> `info`) to prevent similar enum failures.
-2. **Parser Guarding (`src/swarm/parser.ts`)**:
-   - Standardize `normalizeTrend` helper across both `parser.ts` and `schemas.ts`.
-3. **Agent Self-Healing (`src/swarm/agent.ts`)**:
-   - In `agent.run()`, if `config.zodSchema` validation fails and the output has generative UI structure (`components`), invoke `guardManagerResponse` to salvage the payload before throwing `SCHEMA_VALIDATION_FAILED`.
-4. **Verification**:
-   - Unit tests covering case-insensitivity, synonyms, arbitrary string fallback, null/undefined safety, and agent recovery without error.
+## Architecture Boundaries
+- Zero external runtime dependencies; pure TypeScript.
+- Core logic in `src/swarm/health.ts` for reuse across SwarmEngine, ModelRouter, CLI, and Web UI.
+- Client integration in `src/services/providerService.ts` and `src/components/AgentConfigurator.tsx`.
+- 100% backward compatibility with existing tests and provider configurations.

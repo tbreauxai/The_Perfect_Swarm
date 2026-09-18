@@ -309,6 +309,17 @@ async function testCjsImport() {
     }
     console.log('✓ CJS coordination subpath, HierarchicalTaskDecomposer, and HypothesisValidationLayer verified');
 
+    const healthCjs = require('./dist/swarm/health.cjs');
+    if (!healthCjs.TwoTierModelHealthChecker || !healthCjs.ModelCircuitBreaker || !healthCjs.ModelHealthCache || !healthCjs.globalModelHealthChecker) {
+        throw new Error('CommonJS health exports missing');
+    }
+    const cjsChecker = new healthCjs.TwoTierModelHealthChecker();
+    const cjsHealth = await cjsChecker.checkModel({ provider: 'simulated', modelId: 'cjs-sim' });
+    if (!cjsHealth.healthy || cjsHealth.circuitState !== 'CLOSED') {
+        throw new Error('CommonJS TwoTierModelHealthChecker simulation failed');
+    }
+    console.log('✓ CJS health subpath, TwoTierModelHealthChecker, and ModelCircuitBreaker verified');
+
     console.log('✓ ALL COMMONJS SWARM DISTRIBUTION TESTS PASSED!\n');
 }
 

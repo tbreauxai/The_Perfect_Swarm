@@ -158,6 +158,12 @@
       "import": "./dist/swarm/coordination.js",
       "require": "./dist/swarm/coordination.cjs",
       "default": "./src/swarm/coordination.ts"
+    },
+    "./health": {
+      "types": "./dist/swarm/health.d.ts",
+      "import": "./dist/swarm/health.js",
+      "require": "./dist/swarm/health.cjs",
+      "default": "./src/swarm/health.ts"
     }
   },
   "scripts": {

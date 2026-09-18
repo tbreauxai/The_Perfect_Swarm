@@ -2,11 +2,21 @@
  * Client-side provider service for querying available models.
  */
 
+import {
+    globalModelHealthChecker,
+    TwoTierModelHealthChecker,
+    type ModelHealthStatus,
+    type HealthCheckOptions,
+    type ModelTarget,
+    type CircuitState
+} from '../swarm/health.ts';
+
 export interface ModelOption {
     id: string;
     name: string;
     context_length?: number;
     free?: boolean;
+    health?: ModelHealthStatus;
 }
 
 export async function fetchAvailableModels(provider: string, apiKey?: string): Promise<ModelOption[]> {
@@ -95,3 +105,35 @@ export async function fetchAvailableModels(provider: string, apiKey?: string): P
         throw error;
     }
 }
+
+/**
+ * Executes parallel async health checks for provider models, cached for 5-10m with circuit breaking.
+ */
+export async function checkProviderModelsHealth(
+    provider: string,
+    models: ModelOption[],
+    apiKey?: string,
+    options?: HealthCheckOptions
+): Promise<Record<string, ModelHealthStatus>> {
+    if (!models || models.length === 0) return {};
+    const targets: ModelTarget[] = models.map(m => ({
+        provider,
+        modelId: m.id,
+        apiKey
+    }));
+    const map = await globalModelHealthChecker.checkModelsInParallel(targets, options);
+    const result: Record<string, ModelHealthStatus> = {};
+    for (const [key, status] of map.entries()) {
+        result[key] = status;
+    }
+    return result;
+}
+
+export function getModelHealth(provider: string, modelId: string): ModelHealthStatus | undefined {
+    return globalModelHealthChecker.cache.get(provider, modelId);
+}
+
+export function getModelCircuitState(provider: string, modelId: string): CircuitState {
+    return globalModelHealthChecker.circuitBreaker.getState(provider, modelId);
+}
+

@@ -63,8 +63,18 @@ import {
     globalMessageChannel,
     globalTaskDecomposer,
     globalHypothesisLayer,
-    globalShapedRewardPolicy
+    globalShapedRewardPolicy,
+    TwoTierModelHealthChecker,
+    ModelCircuitBreaker,
+    ModelHealthCache,
+    globalModelHealthChecker
 } from './dist/swarm/index.js';
+import {
+    TwoTierModelHealthChecker as CheckerFromSubpath,
+    ModelCircuitBreaker as BreakerFromSubpath,
+    ModelHealthCache as CacheFromSubpath,
+    globalModelHealthChecker as globalCheckerFromSubpath
+} from './dist/swarm/health.js';
 import {
     SharedKnowledgeGraph as GraphFromSubpath,
     globalKnowledgeGraph as globalGraphFromSubpath
@@ -594,6 +604,22 @@ async function runDistVerification() {
         throw new Error('Compiled ShapedRewardPolicy calculation failed');
     }
     console.log('✓ Compiled KnowledgeGraph & Coordination subpaths, SharedKnowledgeGraph, HypothesisValidationLayer, and AdaptiveLearningRateManager verified');
+
+    const distChecker = new CheckerFromSubpath();
+    const distCheckResult = await distChecker.checkModel({
+        provider: 'simulated',
+        modelId: 'dist-sim-model'
+    });
+    if (!distCheckResult.healthy || distCheckResult.circuitState !== 'CLOSED') {
+        throw new Error('Compiled TwoTierModelHealthChecker simulation check failed');
+    }
+    const distBreaker = new BreakerFromSubpath({ failureThreshold: 2 });
+    distBreaker.recordFailure('p', 'm');
+    distBreaker.recordFailure('p', 'm');
+    if (distBreaker.getState('p', 'm') !== 'OPEN') {
+        throw new Error('Compiled ModelCircuitBreaker tripping failed');
+    }
+    console.log('✓ Compiled Health subpath, TwoTierModelHealthChecker, ModelCircuitBreaker, and ModelHealthCache verified');
 
     console.log('\n✓ ALL COMPILED SWARM DISTRIBUTION BUNDLE TESTS PASSED SUCCESSFULLY!\n');
 }

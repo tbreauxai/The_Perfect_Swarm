@@ -81,4 +81,49 @@ describe('AgentConfigurator & SettingsModal Swarm Agents Tab', () => {
         expect(html).toContain('API Key required');
         expect(html).toContain('Model ID (API Key required to load list)');
     });
+
+    it('renders the Filter Healthy Only dropdown control', () => {
+        const html = renderToString(
+            React.createElement(AgentConfigurator, {
+                agents: mockAgents,
+                onUpdateAgent: () => {},
+                settings: mockSettings
+            })
+        );
+        expect(html).toContain('Filter Healthy Only (Near Real-Time)');
+    });
+
+    it('providerService health checking integrates with circuit breaker and 5-10m TTL cache', async () => {
+        const { checkProviderModelsHealth, getModelHealth, getModelCircuitState } = await import('../services/providerService');
+        const { globalModelHealthChecker } = await import('../swarm/health');
+
+        const testModels = [
+            { id: 'sim-model-1', name: 'Simulated Model 1', free: true },
+            { id: 'sim-model-2', name: 'Simulated Model 2', free: true }
+        ];
+
+        const results = await checkProviderModelsHealth('simulated', testModels);
+        expect(results['simulated:sim-model-1']).toBeDefined();
+        expect(results['simulated:sim-model-1'].healthy).toBe(true);
+        expect(results['simulated:sim-model-1'].circuitState).toBe('CLOSED');
+
+        // Cached lookup
+        const cached = getModelHealth('simulated', 'sim-model-1');
+        expect(cached).toBeDefined();
+        expect(cached?.healthy).toBe(true);
+
+        const state = getModelCircuitState('simulated', 'sim-model-1');
+        expect(state).toBe('CLOSED');
+
+        // Verify circuit breaker tripping reflects in service
+        globalModelHealthChecker.circuitBreaker.recordFailure('simulated', 'sim-model-1');
+        globalModelHealthChecker.circuitBreaker.recordFailure('simulated', 'sim-model-1');
+        globalModelHealthChecker.circuitBreaker.recordFailure('simulated', 'sim-model-1');
+
+        expect(getModelCircuitState('simulated', 'sim-model-1')).toBe('OPEN');
+
+        // Cleanup
+        globalModelHealthChecker.circuitBreaker.resetAll();
+        globalModelHealthChecker.cache.clear();
+    });
 });

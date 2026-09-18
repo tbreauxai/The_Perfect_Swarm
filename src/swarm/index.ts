@@ -38,3 +38,5 @@ export * from './tieredCache.ts';
 export * from './feedback.ts';
 export * from './knowledgeGraph.ts';
 export * from './coordination.ts';
+export * from './health.ts';
+
