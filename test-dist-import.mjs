@@ -32,7 +32,13 @@ import {
     TokenBucketRateLimiter,
     PredictiveLatencyModel,
     WorkStealingPool,
-    globalTaskScheduler
+    globalTaskScheduler,
+    HierarchicalSpecialistTree,
+    HierarchicalRouter,
+    globalHierarchicalRouter,
+    classifyAgentTier,
+    identifyPrimaryDomain,
+    DOMAIN_TAXONOMY
 } from './dist/swarm/index.js';
 import { createSwarmServer as serverFromSubpath } from './dist/swarm/server.js';
 import { createSwarmClient as clientFromSubpath } from './dist/swarm/client.js';
@@ -42,6 +48,12 @@ import { DependencyGraph as DepGraphFromSubpath, ConflictResolver as ConflictFro
 import { AgentExperimentManager as ExpMgrFromSubpath, AgentExperiment as ExpFromSubpath, StatisticalAnalyzer as StatFromSubpath } from './dist/swarm/experiment.js';
 import { TokenAwarePromptCompressor as CompressorFromSubpath, TokenEstimator as TokenEstimatorFromSubpath, SemanticDeduplicator as DedupFromSubpath, globalPromptCompressor as globalCompressorFromSubpath } from './dist/swarm/compression.js';
 import { AdaptiveTaskScheduler as SchedulerFromSubpath, PriorityTaskQueue as QueueFromSubpath, TokenBucketRateLimiter as LimiterFromSubpath, PredictiveLatencyModel as LatencyFromSubpath, WorkStealingPool as WorkStealingFromSubpath, globalTaskScheduler as globalSchedulerFromSubpath } from './dist/swarm/scheduler.js';
+import {
+    HierarchicalSpecialistTree as TreeFromSubpath,
+    HierarchicalRouter as RouterFromSubpath,
+    classifyAgentTier as classifyFromSubpath,
+    identifyPrimaryDomain as identifyFromSubpath
+} from './dist/swarm/hierarchy.js';
 import { ToolRegistry, calculatorTool } from './dist/swarm/tools.js';
 import { repairJson, parseJsonSafe } from './dist/swarm/parser.js';
 
@@ -290,6 +302,37 @@ async function runDistVerification() {
         throw new Error('Compiled TokenBucketRateLimiter acquisition failed');
     }
     console.log('✓ Compiled Scheduler module subpath, AdaptiveTaskScheduler, and TokenBucketRateLimiter verified');
+
+    // 12. Verify compiled Hierarchical Agent Specialization & Dynamic Routing Engine
+    if (!HierarchicalSpecialistTree || !HierarchicalRouter || !globalHierarchicalRouter || !classifyAgentTier || !TreeFromSubpath || !RouterFromSubpath || !classifyFromSubpath) {
+        throw new Error('Compiled Hierarchy module exports missing');
+    }
+
+    const testTier = classifyFromSubpath('Security Architect');
+    if (testTier.tier !== 1 || testTier.tierRole !== 'cluster_lead') {
+        throw new Error('Compiled classifyAgentTier failed');
+    }
+
+    const testTree = TreeFromSubpath.buildFromAgents([
+        { id: 'root', role: 'Manager Node', provider: 'mock' },
+        { id: 'sec-lead', role: 'Security Architect', provider: 'mock' },
+        { id: 'sec-spec', role: 'Vulnerability Specialist', provider: 'mock' }
+    ]);
+    if (testTree.getAllNodes().length !== 3 || testTree.getTreeDepth() !== 3) {
+        throw new Error('Compiled HierarchicalSpecialistTree buildFromAgents failed');
+    }
+
+    const testRouter = new RouterFromSubpath();
+    const routeDec = testRouter.routeHierarchical('Audit auth token vulnerability', 'JWT payload', 0, testTree);
+    if (routeDec.targetRole !== 'Vulnerability Specialist' || routeDec.delegationChain.length !== 3) {
+        throw new Error('Compiled HierarchicalRouter routeHierarchical failed');
+    }
+
+    const escRec = testRouter.escalate('task-1', 'sec-spec', testTree, 2, 'Anomalies detected');
+    if (escRec.toNodeId !== 'sec-lead' || escRec.anomalyCount !== 2) {
+        throw new Error('Compiled HierarchicalRouter escalate failed');
+    }
+    console.log('✓ Compiled Hierarchy module subpath, HierarchicalSpecialistTree, and HierarchicalRouter verified');
 
     console.log('\n✓ ALL COMPILED SWARM DISTRIBUTION BUNDLE TESTS PASSED SUCCESSFULLY!\n');
 }

@@ -1,29 +1,35 @@
-# Ultragoal Brief: Adaptive Load-Balancing & Task-Scheduling for Optimal Resource Allocation
+# Ultragoal Brief: Hierarchical Agent Specialization with Dynamic Routing
 
 ## Objective
-Introduce adaptive load-balancing and task-scheduling across swarm specialist nodes and model providers to achieve optimal resource allocation, eliminate rate-limit (429) bottlenecks, minimize tail latency, and enable priority-aware work-stealing.
+Implement hierarchical agent specialization with dynamic routing based on task complexity and domain expertise across multi-tier specialist trees to optimize resource allocation, prevent cognitive overload, and enable autonomous delegation and escalation.
 
 ## Background & Problem Statement
-As swarm workflows execute larger payloads with parallel specialists:
-1. Free-tier and rate-constrained LLM providers (e.g. Groq 30 RPM, Mistral, GitHub Models) suffer from burst exhaustion when multiple specialist tasks dispatch concurrently.
-2. Static or simple Promise.all dispatches cause queue head-of-line blocking where slow or stalled specialists delay the entire synthesis phase.
-3. Heterogeneous subtask complexities create imbalanced worker loads where fast analysts finish early while overloaded analysts remain saturated.
-4. Without predictive latency modeling and priority queueing, critical-path analytical tasks are treated with the same urgency as background telemetry or non-blocking summaries.
+In multi-agent systems, flat coordination architectures become inefficient as team size and task complexity scale:
+1. Manager nodes suffer from cognitive bottlenecks when directly coordinating dozens of heterogeneous specialist agents.
+2. Flat task routing maps chunks without considering hierarchical capability tiers (e.g. generalist leads vs deep sub-specialists vs deterministic leaf operators).
+3. Complex multi-domain tasks (e.g. security breach analysis requiring memory forensics, network analysis, and legal compliance) require structured hierarchical delegation where domain leads direct sub-specialists and synthesize localized findings before reporting upwards.
+4. Trivial tasks waste high-tier reasoning capacity if not routed directly to low-complexity leaf specialists or tools.
 
 ## Architecture Boundaries
-1. **Adaptive Task Scheduler (`src/swarm/scheduler.ts`)**:
-   - `AdaptiveTaskScheduler`: Priority-queued task scheduling (`urgent`, `high`, `normal`, `background`) with preemption/reordering.
-   - `SchedulingStrategy`: Pluggable strategies (`priority`, `fair-share`, `least-loaded`, `shortest-job-first`, `work-stealing`).
-   - `TokenBucketRateLimiter`: Token bucket and sliding window rate limiter tracking RPM and TPM per provider with automatic backpressure pacing.
-   - `WorkStealingPool`: Per-worker queues allowing idle specialist agents to steal pending tasks from saturated queues.
-   - `PredictiveLatencyModel`: Exponential Weighted Moving Average (EWMA) latency and execution time predictor by domain and complexity.
+1. **Hierarchical Specialization Engine (`src/swarm/hierarchy.ts`)**:
+   - `HierarchicalSpecialistTree`: Directed multi-tier agent tree:
+     - Tier 0: Root Coordinator / Manager Node.
+     - Tier 1: Domain Cluster Leads / Lead Architects.
+     - Tier 2: Specialized Deep Analysts.
+     - Tier 3: Leaf Micro-Agents / Deterministic Tool Operators.
+   - `HierarchicalRouter`:
+     - Multi-factor dynamic routing score:
+       `Score = (DomainExpertise * 0.40) + (ComplexityFitness * 0.30) + (HistoricalSuccessRL * 0.20) + (CapacityHeadroom * 0.10)`
+     - Dynamic task decomposition by complexity (`trivial`, `moderate`, `complex`, `critical`) and domain taxonomy.
+     - Delegation and escalation protocol (downward subtask delegation, upward anomaly escalation, lateral cross-cluster consultation).
 2. **Swarm Engine Integration (`src/swarm/engine.ts` & `src/swarm/types.ts`)**:
-   - Add `SwarmSchedulingSettings` to `SwarmEngineSettings`.
-   - Dispatch analyst subtasks (Step 4) and speculative tasks through `AdaptiveTaskScheduler`.
-   - Emit telemetry events: `Task Scheduled`, `Work Stolen`, `Queue Backpressure Delayed`.
-   - Record scheduling metrics (queueWaitMs, executionMs, workStolenCount, backpressureWaitMs) in `SwarmWorkflowResult`.
+   - Add `SwarmHierarchySettings` to `SwarmEngineSettings`.
+   - Dynamically build and evaluate hierarchical agent tree based on configured agents and discovered topology.
+   - Dispatch tasks hierarchically through cluster leads to deep specialists.
+   - Emit telemetry events: `Hierarchical Routing Plan`, `Specialist Delegation`, `Specialist Escalation`.
+   - Record hierarchical execution metrics (treeDepth, tiersEngaged, delegatedCount, escalationCount) in `SwarmWorkflowResult`.
 3. **Distribution & Backward Compatibility**:
-   - Zero external runtime dependencies (pure TypeScript algorithmic scheduler).
-   - Subpath export `@perfect-swarm/core/scheduler`.
-   - Dual ESM/CJS distribution bundles.
+   - Zero external runtime dependencies (pure TypeScript algorithmic hierarchy).
+   - Subpath export `@perfect-swarm/core/hierarchy`.
+   - Dual ESM/CJS distribution bundles with TypeScript declarations.
    - 100% passing Vitest suites and all 5 E2E test scripts.

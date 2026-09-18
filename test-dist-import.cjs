@@ -151,6 +151,29 @@ async function testCjsImport() {
     }
     console.log('✓ CJS scheduler subpath, AdaptiveTaskScheduler, and WorkStealingPool verified');
 
+    const hierCjs = require('./dist/swarm/hierarchy.cjs');
+    if (!hierCjs.HierarchicalSpecialistTree || !hierCjs.HierarchicalRouter || !hierCjs.globalHierarchicalRouter || !hierCjs.classifyAgentTier) {
+        throw new Error('CommonJS hierarchy exports missing');
+    }
+    const cjsTier = hierCjs.classifyAgentTier('Security Architect');
+    if (cjsTier.tier !== 1 || cjsTier.tierRole !== 'cluster_lead') {
+        throw new Error('CommonJS classifyAgentTier failed');
+    }
+    const cjsTree = hierCjs.HierarchicalSpecialistTree.buildFromAgents([
+        { id: 'root', role: 'Manager Node', provider: 'mock' },
+        { id: 'sec-lead', role: 'Security Architect', provider: 'mock' },
+        { id: 'sec-spec', role: 'Vulnerability Specialist', provider: 'mock' }
+    ]);
+    if (cjsTree.getAllNodes().length !== 3 || cjsTree.getTreeDepth() !== 3) {
+        throw new Error('CommonJS HierarchicalSpecialistTree buildFromAgents failed');
+    }
+    const cjsRouter = new hierCjs.HierarchicalRouter();
+    const cjsRoute = cjsRouter.routeHierarchical('Audit auth token vulnerability', 'JWT payload', 0, cjsTree);
+    if (cjsRoute.targetRole !== 'Vulnerability Specialist' || cjsRoute.delegationChain.length !== 3) {
+        throw new Error('CommonJS HierarchicalRouter routeHierarchical failed');
+    }
+    console.log('✓ CJS hierarchy subpath, HierarchicalSpecialistTree, and HierarchicalRouter verified');
+
     console.log('✓ ALL COMMONJS SWARM DISTRIBUTION TESTS PASSED!\n');
 }
 

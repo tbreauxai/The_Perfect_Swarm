@@ -38,6 +38,13 @@ export interface SwarmSchedulingSettings {
     rateLimits?: Record<string, { maxRpm?: number; maxTpm?: number }>;
 }
 
+export interface SwarmHierarchySettings {
+    enabled?: boolean;
+    autoDiscoverTree?: boolean;
+    delegationEnabled?: boolean;
+    escalationEnabled?: boolean;
+}
+
 export interface SwarmEngineSettings {
     geminiApiKey?: string;
     openRouterApiKey?: string;
@@ -55,6 +62,7 @@ export interface SwarmEngineSettings {
     experimentSettings?: SwarmExperimentSettings;
     compressionSettings?: SwarmCompressionSettings;
     schedulingSettings?: SwarmSchedulingSettings;
+    hierarchySettings?: SwarmHierarchySettings;
     [key: string]: any;
 }
 

@@ -33,3 +33,4 @@ export * from './speculative.ts';
 export * from './experiment.ts';
 export * from './compression.ts';
 export * from './scheduler.ts';
+export * from './hierarchy.ts';

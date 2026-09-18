@@ -1,19 +1,19 @@
 [
   {
-    "id": "goal-1-adaptive-task-scheduler-and-work-stealing",
-    "description": "Implement AdaptiveTaskScheduler, PriorityTaskQueue, TokenBucketRateLimiter, PredictiveLatencyModel, and WorkStealingPool in src/swarm/scheduler.ts with unit tests.",
+    "id": "goal-1-hierarchical-specialist-tree-and-router",
+    "description": "Implement HierarchicalSpecialistTree, HierarchicalRouter, multi-tier agent classification, domain expertise ontology matching, and delegation/escalation protocols in src/swarm/hierarchy.ts with unit tests.",
     "status": "completed",
-    "verification": "Unit tests in src/swarm/scheduler.test.ts verify priority queueing, work-stealing across workers, token bucket rate limiting backpressure, and predictive latency estimation."
+    "verification": "Unit tests in src/swarm/hierarchy.test.ts verify tree construction, multi-tier routing score calculation, task decomposition by complexity, downward delegation, and upward escalation."
   },
   {
-    "id": "goal-2-engine-adaptive-scheduler-integration",
-    "description": "Integrate AdaptiveTaskScheduler into src/swarm/engine.ts and src/swarm/types.ts with integration tests.",
+    "id": "goal-2-engine-hierarchical-routing-integration",
+    "description": "Integrate HierarchicalRouter into src/swarm/engine.ts and src/swarm/types.ts with telemetry event emission and integration tests.",
     "status": "completed",
-    "verification": "Integration tests in src/swarm/scheduler-engine.test.ts verify scheduled task execution, rate-limit backpressure handling, telemetry event emission, and scheduling metrics tracking."
+    "verification": "Integration tests in src/swarm/hierarchy-engine.test.ts verify hierarchical task dispatching through cluster leads to deep specialists, telemetry events, and hierarchical execution metrics."
   },
   {
     "id": "goal-3-verification-and-bundle-build",
-    "description": "Export scheduler module, rebuild client and swarm bundles, update test-dist-import, and verify 100% passing across all Vitest suites and 5 E2E test scripts.",
+    "description": "Export hierarchy module, rebuild client and swarm bundles, update test-dist-import, and verify 100% passing across all Vitest suites and 5 E2E test scripts.",
     "status": "completed",
     "verification": "build:client and build:swarm pass cleanly, test-dist-import verifies exports, all Vitest test suites pass, and all 5 E2E test suites pass 100%."
   }

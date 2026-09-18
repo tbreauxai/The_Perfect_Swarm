@@ -24,7 +24,8 @@ export default defineConfig({
         speculative: path.resolve(__dirname, 'src/swarm/speculative.ts'),
         experiment: path.resolve(__dirname, 'src/swarm/experiment.ts'),
         compression: path.resolve(__dirname, 'src/swarm/compression.ts'),
-        scheduler: path.resolve(__dirname, 'src/swarm/scheduler.ts')
+        scheduler: path.resolve(__dirname, 'src/swarm/scheduler.ts'),
+        hierarchy: path.resolve(__dirname, 'src/swarm/hierarchy.ts')
       },
       formats: ['es', 'cjs'],
       fileName: (format, entryName) => `${entryName}.${format === 'es' ? 'js' : 'cjs'}`

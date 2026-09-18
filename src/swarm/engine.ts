@@ -52,6 +52,14 @@ import {
     type TaskPriority,
     type SchedulingStrategy
 } from './scheduler.ts';
+import {
+    HierarchicalSpecialistTree,
+    HierarchicalRouter,
+    globalHierarchicalRouter,
+    type HierarchicalRouteDecision,
+    type SpecialistNode,
+    type HierarchyMetrics
+} from './hierarchy.ts';
 
 export interface ProviderResolution {
     key: string;
@@ -229,6 +237,13 @@ export interface SwarmWorkflowResult {
         totalExecutionMs: number;
         totalBackpressureDelayMs: number;
         stolenTaskCount: number;
+    };
+    hierarchy?: {
+        treeDepth: number;
+        totalNodes: number;
+        tierCounts: Record<number, number>;
+        delegatedTasksCount: number;
+        escalatedTasksCount: number;
     };
 }
 
@@ -523,6 +538,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     let workflowPromptTokensSaved: number = 0;
     let workflowDeduplicatedCount: number = 0;
     let workflowSchedulingResult: SchedulerExecutionResult | undefined;
+    let workflowHierarchyMetrics: HierarchyMetrics | undefined;
 
     if (fastPathDecision.eligible && analysts.length > 0) {
         const fastAnalyst = analysts[0];
@@ -840,6 +856,63 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             analystClusterMap.set(nodeId, clusterId);
         }
 
+        let specialistTree: HierarchicalSpecialistTree | undefined;
+        let hierarchicalDecisions: HierarchicalRouteDecision[] = [];
+        let hierarchicalDelegationCount = 0;
+        let hierarchicalEscalationCount = 0;
+
+        if (settings?.hierarchySettings?.enabled !== false && analysts.length > 0) {
+            specialistTree = HierarchicalSpecialistTree.buildFromAgents([managerAgent, ...analysts], task);
+
+            const chunksToRoute = chunks.length > 0 ? chunks : [data || task];
+            chunksToRoute.forEach((chk, i) => {
+                const decision = globalHierarchicalRouter.routeHierarchical(
+                    task,
+                    chk,
+                    i,
+                    specialistTree!,
+                    (role) => globalSpecialistProfiler.getCapabilityScore(role)
+                );
+                hierarchicalDecisions.push(decision);
+                if (decision.delegationChain.length > 1) {
+                    hierarchicalDelegationCount++;
+                    if (settings?.hierarchySettings?.delegationEnabled !== false) {
+                        context.addEvent({
+                            agentRole: 'Hierarchical Router',
+                            action: 'Specialist Delegation',
+                            modelName: 'Local/HierarchyRouter',
+                            prompt: `Delegated task chunk ${i + 1} down hierarchy: ${decision.delegationChain.join(' -> ')}`,
+                            output: {
+                                chunkIndex: i,
+                                targetRole: decision.targetRole,
+                                targetTier: decision.targetTier,
+                                tierRole: decision.tierRole,
+                                delegationChain: decision.delegationChain,
+                                complexity: decision.complexity,
+                                primaryDomain: decision.primaryDomain,
+                                routingScore: decision.routingScore,
+                                reason: decision.reason
+                            },
+                            durationMs: 0
+                        });
+                    }
+                }
+            });
+
+            const treeMetrics = specialistTree.getMetrics();
+            context.addEvent({
+                agentRole: 'Hierarchical Router',
+                action: 'Hierarchical Routing Plan',
+                modelName: 'Local/HierarchyRouter',
+                prompt: `Organized ${treeMetrics.totalNodes} agents across depth ${treeMetrics.treeDepth} with ${hierarchicalDecisions.length} hierarchical routing decisions`,
+                output: {
+                    treeMetrics,
+                    decisions: hierarchicalDecisions
+                },
+                durationMs: 0
+            });
+        }
+
         if (analysts.length > 0 && chunks.length > 0) {
             let routingPlan: SpecialistRoutingPlan;
             if (chunks.length > 1) {
@@ -1011,6 +1084,35 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                             summary: resData.summary
                         }
                     }).catch(err => console.warn('[HierarchicalBus] Dispatch error:', err));
+
+                    // Upward escalation protocol for detected anomalies
+                    if (resData.anomalies && resData.anomalies.length > 0 && specialistTree && settings?.hierarchySettings?.escalationEnabled !== false) {
+                        const escalationRecord = globalHierarchicalRouter.escalate(
+                            `chunk-${chunkIdx}`,
+                            nodeKey,
+                            specialistTree,
+                            resData.anomalies.length,
+                            `Detected ${resData.anomalies.length} anomaly/anomalies in chunk ${chunkIdx + 1}: ${resData.anomalies.join('; ')}`
+                        );
+                        hierarchicalEscalationCount++;
+                        const targetNode = specialistTree.getNode(escalationRecord.toNodeId);
+                        context.addEvent({
+                            agentRole: 'Hierarchical Router',
+                            action: 'Specialist Escalation',
+                            modelName: 'Local/HierarchyRouter',
+                            prompt: `Upward escalation from ${analyst.role} to ${targetNode?.role || escalationRecord.toNodeId} due to ${resData.anomalies.length} anomaly/anomalies`,
+                            output: {
+                                taskId: escalationRecord.taskId,
+                                fromRole: analyst.role,
+                                fromNodeId: escalationRecord.fromNodeId,
+                                toRole: targetNode?.role || escalationRecord.toNodeId,
+                                toNodeId: escalationRecord.toNodeId,
+                                anomalyCount: escalationRecord.anomalyCount,
+                                reason: escalationRecord.reason
+                            },
+                            durationMs: 0
+                        });
+                    }
 
                     return resData;
                 } catch (err: any) {
@@ -1243,6 +1345,13 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     allAnalystReports[a].push(chunkReports[a]);
                 }
             }
+        }
+
+        if (specialistTree) {
+            const metrics = specialistTree.getMetrics();
+            metrics.delegationsCount = hierarchicalDelegationCount;
+            metrics.escalationsCount = hierarchicalEscalationCount;
+            workflowHierarchyMetrics = metrics;
         }
 
         // Hierarchical Communication Layer: Aggregate Cluster Digests & Emit Telemetry
@@ -1625,6 +1734,13 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             totalExecutionMs: workflowSchedulingResult.totalExecutionMs,
             totalBackpressureDelayMs: workflowSchedulingResult.totalBackpressureDelayMs,
             stolenTaskCount: workflowSchedulingResult.stolenTaskCount
+        } : undefined,
+        hierarchy: workflowHierarchyMetrics ? {
+            treeDepth: workflowHierarchyMetrics.treeDepth,
+            totalNodes: workflowHierarchyMetrics.totalNodes,
+            tierCounts: workflowHierarchyMetrics.tierCounts,
+            delegatedTasksCount: workflowHierarchyMetrics.delegationsCount,
+            escalatedTasksCount: workflowHierarchyMetrics.escalationsCount
         } : undefined
     };
 }
