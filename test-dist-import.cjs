@@ -99,6 +99,29 @@ async function testCjsImport() {
     }
     console.log('✓ CJS speculative subpath, DependencyGraph, and ConflictResolver verified');
 
+    const expCjs = require('./dist/swarm/experiment.cjs');
+    if (!expCjs.AgentExperimentManager || !expCjs.AgentExperiment || !expCjs.StatisticalAnalyzer || !expCjs.globalAgentExperimentManager) {
+        throw new Error('CommonJS experiment exports missing');
+    }
+    const cjsTTest = expCjs.StatisticalAnalyzer.welchTTest([10, 11, 10, 12, 11], [5, 6, 5, 6, 5]);
+    if (cjsTTest.pValue >= 0.05) {
+        throw new Error('CommonJS StatisticalAnalyzer t-test failed');
+    }
+    const cjsExpMgr = new expCjs.AgentExperimentManager();
+    const cjsExp = cjsExpMgr.createExperiment({
+        id: 'cjs-exp',
+        name: 'CJS Experiment Test',
+        variants: [
+            { variantId: 'c1', name: 'Control', trafficWeight: 1, isBaseline: true },
+            { variantId: 'c2', name: 'Treatment', trafficWeight: 1 }
+        ]
+    });
+    const cjsAlloc = cjsExp.allocateVariant('key-123');
+    if (!cjsAlloc || !['c1', 'c2'].includes(cjsAlloc.variantId)) {
+        throw new Error('CommonJS AgentExperiment allocation failed');
+    }
+    console.log('✓ CJS experiment subpath, StatisticalAnalyzer, and AgentExperimentManager verified');
+
     console.log('✓ ALL COMMONJS SWARM DISTRIBUTION TESTS PASSED!\n');
 }
 

@@ -1,22 +1,24 @@
-# Ultragoal Brief: Speculative Parallel Execution with Conflict Resolution
+# Ultragoal Brief: Continuous Learning Loops with Automated A/B Testing
 
 ## Objective
-Enable speculative parallel execution with conflict resolution for independent subtasks and multi-chunk workloads across swarm agent pods to reduce end-to-end analysis latency by 40-60%.
+Deploy continuous learning loops with automated A/B testing of agent configurations against production metrics (RLAIF quality scores, wall-clock latency, token efficiency, and error rates) with statistical significance evaluation, automated promotion of superior configurations, and fail-safe circuit breaker rollbacks.
 
 ## Background & Problem Statement
-In multi-chunk and multi-subtask workloads, `src/swarm/engine.ts` currently processes chunks sequentially in a loop with artificial 2000ms delay between chunks to avoid rate-limits. This results in $O(N)$ serial latency ($N \times (\text{latency} + 2\text{s})$) even when chunks or subtasks are completely independent.
+Currently, swarm agent configurations (roles, prompts, temperature, model provider assignments, and specialist parameters) are static or manually calibrated. While `SpecialistCapabilityProfiler` tracks specialist performance via UCB1, there is no end-to-end experiment engine that can test alternative configuration variants (e.g. Prompt V1 vs V2, differing specialist temperature/models, or topology strategies) against real production workloads, measure multi-dimensional performance metrics, and automatically promote winning configurations or roll back regressions.
 
 ## Architecture Boundaries
-1. **Speculative Execution Engine (`src/swarm/speculative.ts`)**:
-   - `DependencyGraph`: Analyze subtask/chunk dependencies and determine parallel independence.
-   - `SpeculativeExecutionCoordinator`: Concurrently dispatch independent chunk/subtask executions across specialists bounded by `NodeCapacityManager` concurrency slots.
-   - `ConflictResolver`: Reconcile conflicting findings, overlapping anomaly claims, and contradictory metrics between concurrent speculative outputs using confidence weighting, source specialist reliability, and semantic deduplication.
-2. **Swarm Engine Integration (`src/swarm/engine.ts`)**:
-   - Support `settings.speculativeParallel` (default: true for multi-chunk tasks).
-   - Concurrently execute independent chunks using `SpeculativeExecutionCoordinator`.
-   - Pass parallel reports through `ConflictResolver` before cluster aggregation and manager synthesis.
-   - Emit `Speculative Parallel Execution` and `Conflict Resolution` telemetry events with measured latency savings percentage.
+1. **A/B Testing & Statistical Evaluation Engine (`src/swarm/experiment.ts`)**:
+   - `AgentExperimentManager`: Experiment lifecycle (draft, active, concluded, rolled_back), variant definition (control/baseline vs treatment/candidate), deterministic hashing or bandit allocation.
+   - `StatisticalAnalyzer`: Metric comparison (mean, variance, Welch's t-test / p-value calculation, confidence intervals, effect size).
+   - Multi-metric scoring: Composite utility function balancing RLAIF quality score (critic rating), wall-clock latency, and token consumption.
+   - Automated Promotion & Circuit Breaker: Auto-promote treatment to active configuration when min sample size is reached and p < 0.05 with positive delta; instantly abort and roll back if error rate spikes or quality drops below safety threshold.
+2. **Swarm Engine & Learning Loop Integration (`src/swarm/engine.ts`)**:
+   - Support `settings.experimentSettings` in `SwarmEngineSettings`.
+   - Resolve active variant configuration before workflow execution.
+   - Attach variant metadata to context and telemetry events (`Agent A/B Variant Dispatched`, `Agent Experiment Evaluated`, `Agent Configuration Promoted`).
+   - Feed post-synthesis production metrics (critic verification score, duration, tokens, anomalies) directly back into the experiment manager and continuous learning loop.
 3. **Distribution & Backward Compatibility**:
-   - Zero external dependencies (pure TypeScript).
-   - ESM/CJS exports in `dist/swarm` and `package.json`.
-   - 100% passing tests across all unit and E2E suites.
+   - Zero external runtime dependencies (pure TypeScript statistical analysis).
+   - Export from `@perfect-swarm/core` and subpath `@perfect-swarm/core/experiment`.
+   - Dual ESM/CJS distribution bundles.
+   - 100% passing Vitest suites and all 5 E2E test suites.

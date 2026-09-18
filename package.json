@@ -110,6 +110,12 @@
       "import": "./dist/swarm/speculative.js",
       "require": "./dist/swarm/speculative.cjs",
       "default": "./src/swarm/speculative.ts"
+    },
+    "./experiment": {
+      "types": "./dist/swarm/experiment.d.ts",
+      "import": "./dist/swarm/experiment.js",
+      "require": "./dist/swarm/experiment.cjs",
+      "default": "./src/swarm/experiment.ts"
     }
   },
   "scripts": {

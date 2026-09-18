@@ -18,13 +18,18 @@ import {
     createVectorIndex,
     DependencyGraph,
     ConflictResolver,
-    SpeculativeExecutionCoordinator
+    SpeculativeExecutionCoordinator,
+    AgentExperimentManager,
+    AgentExperiment,
+    StatisticalAnalyzer,
+    globalAgentExperimentManager
 } from './dist/swarm/index.js';
 import { createSwarmServer as serverFromSubpath } from './dist/swarm/server.js';
 import { createSwarmClient as clientFromSubpath } from './dist/swarm/client.js';
 import { HierarchicalMessageBus as CommBusFromSubpath, ClusterTopologyManager as CommTopologyFromSubpath } from './dist/swarm/communication.js';
 import { VpTreeIndex as VpTreeFromSubpath, HnswVectorIndex as HnswFromSubpath, createVectorIndex as createVectorFromSubpath } from './dist/swarm/vectorIndex.js';
 import { DependencyGraph as DepGraphFromSubpath, ConflictResolver as ConflictFromSubpath, SpeculativeExecutionCoordinator as SpecCoordFromSubpath } from './dist/swarm/speculative.js';
+import { AgentExperimentManager as ExpMgrFromSubpath, AgentExperiment as ExpFromSubpath, StatisticalAnalyzer as StatFromSubpath } from './dist/swarm/experiment.js';
 import { ToolRegistry, calculatorTool } from './dist/swarm/tools.js';
 import { repairJson, parseJsonSafe } from './dist/swarm/parser.js';
 
@@ -198,6 +203,35 @@ async function runDistVerification() {
         throw new Error('Compiled SpeculativeExecutionCoordinator failed');
     }
     console.log('✓ Compiled Speculative module subpath, DependencyGraph, and ConflictResolver verified');
+
+    // 9. Verify compiled A/B Testing & Continuous Learning Engine
+    if (!AgentExperimentManager || !AgentExperiment || !StatisticalAnalyzer || !globalAgentExperimentManager || !ExpMgrFromSubpath || !ExpFromSubpath || !StatFromSubpath) {
+        throw new Error('Compiled Experiment module exports missing');
+    }
+
+    const tTest = StatFromSubpath.welchTTest([10, 11, 10, 12, 11], [5, 6, 5, 6, 5]);
+    if (tTest.pValue >= 0.05 || tTest.tStat <= 0) {
+        throw new Error('Compiled StatisticalAnalyzer Welch t-test failed');
+    }
+
+    const expMgr = new ExpMgrFromSubpath();
+    const testExp = expMgr.createExperiment({
+        id: 'dist-exp',
+        name: 'Distribution Test Experiment',
+        variants: [
+            { variantId: 'ctrl', name: 'Control', trafficWeight: 1, isBaseline: true },
+            { variantId: 'treat', name: 'Treatment', trafficWeight: 1 }
+        ]
+    });
+    const allocated = testExp.allocateVariant('user-123:task-abc');
+    if (!allocated || !['ctrl', 'treat'].includes(allocated.variantId)) {
+        throw new Error('Compiled AgentExperiment allocateVariant failed');
+    }
+    const outcome = testExp.recordOutcome(allocated.variantId, { durationMs: 450, rlaifScore: 0.95 });
+    if (!outcome || outcome.experimentId !== 'dist-exp') {
+        throw new Error('Compiled AgentExperiment recordOutcome failed');
+    }
+    console.log('✓ Compiled Experiment module subpath, StatisticalAnalyzer, and AgentExperimentManager verified');
 
     console.log('\n✓ ALL COMPILED SWARM DISTRIBUTION BUNDLE TESTS PASSED SUCCESSFULLY!\n');
 }

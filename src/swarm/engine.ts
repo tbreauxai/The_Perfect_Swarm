@@ -29,6 +29,13 @@ import {
     type SpeculativeExecutionResult,
     type ConflictResolutionStrategy
 } from './speculative.ts';
+import {
+    AgentExperiment,
+    type AgentVariantConfig,
+    type ExecutionMetrics,
+    type ExperimentDecision,
+    globalAgentExperimentManager
+} from './experiment.ts';
 
 export interface ProviderResolution {
     key: string;
@@ -184,6 +191,12 @@ export interface SwarmWorkflowResult {
     events: SwarmEvent[];
     finalAnalysis: any;
     metrics?: SwarmBaselineReport;
+    experiment?: {
+        experimentId: string;
+        variantId: string;
+        variantName?: string;
+        decision?: ExperimentDecision;
+    };
 }
 
 /**
@@ -347,8 +360,39 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         };
     }
 
-    // 1. Resolve Manager, Analysts, and Critic
-    const rawAgents = settings?.agents || [];
+    // 0d. Resolve A/B Testing Experiment Variant
+    const experimentManager = settings?.experimentSettings?.experimentManager || globalAgentExperimentManager;
+    const activeExperiment = settings?.experimentSettings?.experimentId
+        ? experimentManager.getExperiment(settings.experimentSettings.experimentId)
+        : experimentManager.getActiveExperiment();
+
+    let activeVariant: AgentVariantConfig | undefined;
+    const abRoutingKey = settings?.experimentSettings?.routingKey || `${targetAppId}:${task}`;
+
+    if (activeExperiment && activeExperiment.status === 'active' && !settings?.experimentSettings?.disableABTesting) {
+        activeVariant = activeExperiment.allocateVariant(abRoutingKey);
+        context.addEvent({
+            agentRole: 'A/B Testing Engine',
+            action: 'Agent A/B Variant Dispatched',
+            modelName: 'Local/ExperimentManager',
+            prompt: `Allocated variant '${activeVariant.variantId}' (${activeVariant.name}) for experiment '${activeExperiment.name}'`,
+            output: {
+                experimentId: activeExperiment.id,
+                experimentName: activeExperiment.name,
+                variantId: activeVariant.variantId,
+                variantName: activeVariant.name,
+                isBaseline: activeVariant.isBaseline ?? false,
+                trafficWeight: activeVariant.trafficWeight,
+                parameters: activeVariant.parameters
+            },
+            durationMs: 0
+        });
+    }
+
+    // 1. Resolve Manager, Analysts, and Critic (applying variant agent overrides if defined)
+    const rawAgents = (activeVariant?.agents && activeVariant.agents.length > 0)
+        ? activeVariant.agents
+        : (settings?.agents || []);
     let managerConfig = rawAgents.find((a: AgentConfig) => a.id === 'manager' || a.role === 'Manager Node');
     const dedicatedCriticConfig = rawAgents.find((a: AgentConfig) => a.id === 'critic' || a.role?.toLowerCase().includes('critic') || a.role?.toLowerCase().includes('verifier')) || settings?.critic;
     const analystConfigs = rawAgents.filter((a: AgentConfig) => a.id !== 'manager' && a.provider !== 'none');
@@ -462,11 +506,17 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             task
         });
 
-        fastAnalyst.setSystemInstruction(ANALYST_SYSTEM_INSTRUCTION);
+        const fastInstruction = activeVariant?.systemPrompts?.[fastAnalyst.id || fastAnalyst.role]
+            || activeVariant?.systemPrompts?.[fastAnalyst.role]
+            || ANALYST_SYSTEM_INSTRUCTION;
+        fastAnalyst.setSystemInstruction(fastInstruction);
         const fastPrompt = `Task: ${task}\nData:\n${data || "(No additional data payload)"}`;
 
         try {
-            const rawOutput = await fastAnalyst.run(fastPrompt, context, { responseMimeType: "application/json" });
+            const rawOutput = await fastAnalyst.run(fastPrompt, context, {
+                responseMimeType: "application/json",
+                ...activeVariant?.parameters
+            });
             const parsed = AnalystResponseSchema.safeParse(rawOutput);
             if (parsed.success) {
                 finalAnalysis = {
@@ -554,10 +604,48 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 finalAnalysis
             });
 
+            let fastPathExpDecision: ExperimentDecision | undefined;
+            if (activeExperiment && activeVariant && settings?.experimentSettings?.autoRecordMetrics !== false) {
+                const execMetrics: ExecutionMetrics = {
+                    durationMs: workflowDurationMs,
+                    rlaifScore: 0.90,
+                    tokensTotal: fastPathDecision.estimatedTokens || 500,
+                    error: false,
+                    insightsCount: Array.isArray(finalAnalysis?.components?.[0]?.props?.insights)
+                        ? finalAnalysis.components[0].props.insights.length
+                        : 1
+                };
+                fastPathExpDecision = activeExperiment.recordOutcome(activeVariant.variantId, execMetrics);
+                context.addEvent({
+                    agentRole: 'A/B Testing Engine',
+                    action: fastPathExpDecision.action === 'promoted'
+                        ? 'Agent Configuration Promoted'
+                        : (fastPathExpDecision.action === 'circuit_breaker_rollback'
+                            ? 'Circuit Breaker Rollback'
+                            : 'Agent Experiment Evaluated'),
+                    modelName: 'Local/ExperimentManager',
+                    prompt: `Fast-path evaluation: variant='${activeVariant.variantId}', action='${fastPathExpDecision.action}', reason=${fastPathExpDecision.reason}`,
+                    output: {
+                        experimentId: activeExperiment.id,
+                        variantId: activeVariant.variantId,
+                        metrics: execMetrics,
+                        decision: fastPathExpDecision,
+                        performance: activeExperiment.getPerformance(activeVariant.variantId)
+                    },
+                    durationMs: 0
+                });
+            }
+
             return {
                 events: context.events,
                 finalAnalysis,
-                metrics
+                metrics,
+                experiment: activeExperiment && activeVariant ? {
+                    experimentId: activeExperiment.id,
+                    variantId: activeVariant.variantId,
+                    variantName: activeVariant.name,
+                    decision: fastPathExpDecision
+                } : undefined
             };
         } catch (err: any) {
             console.warn(`[Fast-Path] Short-circuit failed, falling back to full swarm pipeline:`, err);
@@ -565,6 +653,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     }
 
     let latestClusterDigests: Record<string, ClusterDigest> | undefined;
+    let workflowLifecycleResult: any = null;
+    let workflowTotalTokens: number = 0;
 
     try {
         // Step 1: Data Profiling
@@ -580,6 +670,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
 
         // Step 2: Token Budgeting & Batch Planning
         const { chunks, originalChunkCount, maxTokensPerChunk, totalTokens, warning } = createTokenChunks(rawInput);
+        workflowTotalTokens = totalTokens;
         context.addEvent({
             agentRole: 'System Profiler',
             action: 'Token Budgeting',
@@ -746,7 +837,10 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
 
                 const startTime = Date.now();
                 const toolPrompt = toolRegistry.list().length > 0 ? `\n\n${toolRegistry.renderPromptSchema()}` : '';
-                analyst.setSystemInstruction(ANALYST_SYSTEM_INSTRUCTION + toolPrompt);
+                const baseInstruction = activeVariant?.systemPrompts?.[(analyst as any).id || analyst.role]
+                    || activeVariant?.systemPrompts?.[analyst.role]
+                    || ANALYST_SYSTEM_INSTRUCTION;
+                analyst.setSystemInstruction(baseInstruction + toolPrompt);
                 const chunkPromptText = chunks.length > 1 ? `Chunk ${chunkIdx + 1}/${chunks.length}\n${chunk}` : chunk;
 
                 const analystPrompt = `Task: ${task}\nMetadata: ${JSON.stringify(profile)}\nHistorical Baselines: ${historicalContext}\nData Chunk [${chunkIdx + 1}/${chunks.length}]:\n${chunkPromptText}`;
@@ -755,7 +849,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     let rawOutput: any;
                     try {
                         rawOutput = await analyst.run(analystPrompt, context, { 
-                            responseMimeType: "application/json"
+                            responseMimeType: "application/json",
+                            ...activeVariant?.parameters
                         });
                     } catch (innerErr: any) {
                         SwarmTracer.getInstance().logEvent({
@@ -1061,13 +1156,21 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
 
             parsedManagerOutput = lifecycleResult.finalProposal;
         } else {
+            const managerInstruction = activeVariant?.systemPrompts?.[managerAgent.id || managerAgent.role]
+                || activeVariant?.systemPrompts?.[managerAgent.role]
+                || activeVariant?.systemPrompts?.['manager']
+                || MANAGER_SYSTEM_INSTRUCTION;
+            managerAgent.setSystemInstruction(managerInstruction);
+
             parsedManagerOutput = await managerAgent.run(dynamicPrompt, context, {
                 responseMimeType: "application/json",
-                zodSchema: ManagerResponseSchema
+                zodSchema: ManagerResponseSchema,
+                ...activeVariant?.parameters
             });
         }
 
         finalAnalysis = guardManagerResponse(parsedManagerOutput, "Executive Swarm Synthesis");
+        workflowLifecycleResult = lifecycleResult;
 
         if (lifecycleResult?.computedRating && analysts.length > 0) {
             const isVerifiedSuccess = !finalAnalysis?.ui_title?.includes("Error");
@@ -1116,6 +1219,14 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         }
     } catch (swarmErr: any) {
         const workflowDurationMs = Date.now() - workflowStartTime;
+        if (activeExperiment && activeVariant && settings?.experimentSettings?.autoRecordMetrics !== false) {
+            activeExperiment.recordOutcome(activeVariant.variantId, {
+                durationMs: workflowDurationMs,
+                error: true,
+                errorMessage: swarmErr?.message || String(swarmErr),
+                rlaifScore: 0.10
+            });
+        }
         globalMetricsCollector.recordTaskExecution({
             success: false,
             durationMs: workflowDurationMs,
@@ -1149,6 +1260,56 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         durationMs: workflowDurationMs
     });
 
+    let workflowExpDecision: ExperimentDecision | undefined;
+    if (activeExperiment && activeVariant && settings?.experimentSettings?.autoRecordMetrics !== false) {
+        const isError = !isSuccess;
+        const rlaifScore = workflowLifecycleResult?.computedRating 
+            ? (workflowLifecycleResult.computedRating / 100) 
+            : (complexity === 'instant' ? 0.90 : 0.85);
+        const tokensTotal = workflowTotalTokens || (metrics?.totalTasks ? metrics.totalTasks * 500 : 1000);
+
+        const execMetrics: ExecutionMetrics = {
+            durationMs: workflowDurationMs,
+            tokensTotal,
+            rlaifScore,
+            error: isError,
+            errorMessage: isError ? finalAnalysis?.ui_title : undefined,
+            anomaliesCount: (finalAnalysis?.components || []).reduce((acc: number, c: any) => {
+                if (c.type === 'InsightList' && Array.isArray(c.props?.insights)) {
+                    return acc + c.props.insights.filter((ins: any) => ins.type === 'alert' || ins.type === 'warning').length;
+                }
+                return acc;
+            }, 0),
+            insightsCount: (finalAnalysis?.components || []).reduce((acc: number, c: any) => {
+                if (c.type === 'InsightList' && Array.isArray(c.props?.insights)) {
+                    return acc + c.props.insights.length;
+                }
+                return acc;
+            }, 0)
+        };
+
+        workflowExpDecision = activeExperiment.recordOutcome(activeVariant.variantId, execMetrics);
+
+        context.addEvent({
+            agentRole: 'A/B Testing Engine',
+            action: workflowExpDecision.action === 'promoted' 
+                ? 'Agent Configuration Promoted'
+                : (workflowExpDecision.action === 'circuit_breaker_rollback' 
+                    ? 'Circuit Breaker Rollback' 
+                    : 'Agent Experiment Evaluated'),
+            modelName: 'Local/ExperimentManager',
+            prompt: `Workflow evaluation: variant='${activeVariant.variantId}', action='${workflowExpDecision.action}', reason=${workflowExpDecision.reason}`,
+            output: {
+                experimentId: activeExperiment.id,
+                variantId: activeVariant.variantId,
+                metrics: execMetrics,
+                decision: workflowExpDecision,
+                performance: activeExperiment.getPerformance(activeVariant.variantId)
+            },
+            durationMs: 0
+        });
+    }
+
     params.onStage?.({
         stage: 'completed',
         task,
@@ -1159,7 +1320,13 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     return {
         events: context.events,
         finalAnalysis,
-        metrics
+        metrics,
+        experiment: activeExperiment && activeVariant ? {
+            experimentId: activeExperiment.id,
+            variantId: activeVariant.variantId,
+            variantName: activeVariant.name,
+            decision: workflowExpDecision
+        } : undefined
     };
 }
 

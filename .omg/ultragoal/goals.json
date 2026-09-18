@@ -1,19 +1,19 @@
 [
   {
-    "id": "goal-1-speculative-execution-engine-and-conflict-detector",
-    "description": "Implement SpeculativeExecutionCoordinator, DependencyGraph, and ConflictResolver in src/swarm/speculative.ts with dependency analysis, concurrency bounds, and confidence-weighted conflict reconciliation.",
+    "id": "goal-1-ab-testing-engine-and-statistical-analyzer",
+    "description": "Implement AgentExperimentManager, ABVariant, StatisticalAnalyzer (Welch's t-test, confidence intervals, composite utility scoring), and automated promotion / circuit-breaker rollback in src/swarm/experiment.ts with unit tests.",
     "status": "completed",
-    "verification": "Unit tests in src/swarm/speculative.test.ts verify independent subtask identification, concurrent dispatch, conflict detection, resolution arbitration, and deduplication."
+    "verification": "Unit tests in src/swarm/experiment.test.ts verify variant allocation, statistical significance calculation, composite utility scoring, auto-promotion of winning configurations, and circuit breaker rollbacks."
   },
   {
-    "id": "goal-2-engine-speculative-parallel-orchestration",
-    "description": "Integrate speculative parallel execution and conflict resolution into src/swarm/engine.ts Step 4 for multi-chunk workloads, emitting telemetry events and reducing wall-clock latency by 40-60%.",
+    "id": "goal-2-engine-continuous-learning-ab-integration",
+    "description": "Integrate automated A/B testing and continuous learning loops into src/swarm/engine.ts (resolving agent variant configurations, routing traffic, capturing production metrics from profiler/critic, and emitting experiment telemetry).",
     "status": "completed",
-    "verification": "Integration tests verify multi-chunk workloads execute concurrently across capacity slots, reconcile conflicts cleanly, and record 40-60% latency reduction metrics."
+    "verification": "Integration tests in src/swarm/experiment-engine.test.ts verify variant resolution during execution, metric feedback recording, event emission, and automatic configuration promotion on production runs."
   },
   {
     "id": "goal-3-verification-and-bundle-build",
-    "description": "Export speculative module from library exports, rebuild client and swarm distribution bundles, and verify 100% passing across all Vitest suites and 5 E2E test scripts.",
+    "description": "Export experiment module from library exports and package.json, rebuild client and swarm distribution bundles, and verify 100% passing across all Vitest suites and 5 E2E test scripts.",
     "status": "completed",
     "verification": "build:client and build:swarm pass cleanly, all Vitest test suites pass, and all 5 E2E test suites pass 100%."
   }

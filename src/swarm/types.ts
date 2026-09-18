@@ -12,6 +12,14 @@ export interface AgentConfig {
     apiKey?: string;
 }
 
+export interface SwarmExperimentSettings {
+    experimentId?: string;
+    experimentManager?: any;
+    disableABTesting?: boolean;
+    routingKey?: string;
+    autoRecordMetrics?: boolean;
+}
+
 export interface SwarmEngineSettings {
     geminiApiKey?: string;
     openRouterApiKey?: string;
@@ -26,8 +34,10 @@ export interface SwarmEngineSettings {
     conflictResolutionStrategy?: 'confidence_weighted' | 'conservative_pessimistic' | 'majority_consensus' | 'deduplicate_union';
     critic?: AgentConfig;
     agents?: AgentConfig[];
+    experimentSettings?: SwarmExperimentSettings;
     [key: string]: any;
 }
+
 
 export interface ProviderCredential {
     provider: Provider;

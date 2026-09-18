@@ -30,3 +30,4 @@ export * from './client.ts';
 export * from './communication.ts';
 export * from './vectorIndex.ts';
 export * from './speculative.ts';
+export * from './experiment.ts';
