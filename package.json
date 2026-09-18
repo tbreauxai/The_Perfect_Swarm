@@ -168,6 +168,8 @@
   },
   "scripts": {
     "dev": "tsx watch server.ts",
+    "dev:edge": "npm run build && wrangler pages dev dist",
+    "deploy": "npm run build && wrangler pages deploy dist",
     "build:client": "vite build",
     "build:swarm": "tsx scripts/build-swarm.ts",
     "build": "npm run build:client && npm run build:swarm",
@@ -201,6 +203,7 @@
     "zod-to-json-schema": "^3.25.2"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260918.1",
     "@types/node": "^22.20.2",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.25.0",
@@ -208,6 +211,7 @@
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.3",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.0",
+    "wrangler": "^4.135.0"
   }
 }

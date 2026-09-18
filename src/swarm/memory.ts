@@ -1,7 +1,6 @@
 import { QdrantClient } from '@qdrant/js-client-rest';
 import { GoogleGenAI } from '@google/genai';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
+// node:fs and node:path are dynamically imported to allow Cloudflare Edge deployment
 import { createVectorIndex, type VectorIndex, type VectorIndexMetrics } from './vectorIndex.ts';
 
 export interface MemoryMetadata {
@@ -473,6 +472,7 @@ export class MemoryCortex {
     private async loadPersistFileIfConfigured(): Promise<void> {
         if (!this.persistPath) return;
         try {
+            const fs = await import('no' + 'de:fs');
             if (fs.existsSync(this.persistPath)) {
                 const raw = fs.readFileSync(this.persistPath, 'utf-8');
                 if (raw.trim().length > 0) {
@@ -1177,6 +1177,14 @@ export class MemoryCortex {
         if (!targetPath) {
             throw new Error("[MemoryCortex] saveToFile requires a filePath or configured persistPath");
         }
+        let fs, path;
+        try {
+            fs = await import('no' + 'de:fs');
+            path = await import('no' + 'de:path');
+        } catch {
+            throw new Error("[MemoryCortex] Local file saving is not supported in this environment (Edge/Browser).");
+        }
+        
         const dir = path.dirname(targetPath);
         if (dir && !fs.existsSync(dir)) {
             fs.mkdirSync(dir, { recursive: true });
@@ -1195,6 +1203,14 @@ export class MemoryCortex {
         if (!targetPath) {
             throw new Error("[MemoryCortex] loadFromFile requires a filePath or configured persistPath");
         }
+        
+        let fs;
+        try {
+            fs = await import('no' + 'de:fs');
+        } catch {
+            throw new Error("[MemoryCortex] Local file loading is not supported in this environment (Edge/Browser).");
+        }
+
         if (!fs.existsSync(targetPath)) {
             throw new Error(`[MemoryCortex] Snapshot file not found: ${targetPath}`);
         }
@@ -1380,9 +1396,12 @@ export class MemoryCortex {
         this.fallbackStore.length = 0;
         this.vectorIndex.clear();
         this.storesSinceConsolidation = 0;
-        if (this.persistPath && fs.existsSync(this.persistPath)) {
+        if (this.persistPath) {
             try {
-                fs.unlinkSync(this.persistPath);
+                const fs = await import('no' + 'de:fs');
+                if (fs.existsSync(this.persistPath)) {
+                    fs.unlinkSync(this.persistPath);
+                }
             } catch {}
         }
         if (!this.qdrant) {
