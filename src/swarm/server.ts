@@ -1,5 +1,6 @@
-import * as http from 'node:http';
-import type { IncomingMessage, ServerResponse } from 'node:http';
+import { Hono } from 'hono';
+import { streamSSE } from 'hono/streaming';
+import type { Context } from 'hono';
 import { executeSwarmWorkflow, type SwarmWorkflowParams, type SwarmWorkflowResult } from './engine.ts';
 import type { SwarmEvent } from './types.ts';
 import type { GoogleGenAI } from '@google/genai';
@@ -14,206 +15,81 @@ export interface SwarmServerOptions {
     cors?: boolean;
 }
 
-export interface SwarmSseOptions {
-    heartbeatIntervalMs?: number;
-    signal?: AbortSignal;
-}
-
 /**
- * Handles Server-Sent Events (SSE) streaming for swarm execution.
- * Compatible with Node.js http, Express, Fastify, and Next.js route handlers.
+ * Handles Server-Sent Events (SSE) streaming for swarm execution using Hono.
+ * Edge-compatible (Cloudflare Workers, Deno, Bun, Node.js).
  */
 export async function handleSwarmSse(
-    req: IncomingMessage,
-    res: ServerResponse,
-    params: SwarmWorkflowParams,
-    options?: SwarmSseOptions
-): Promise<SwarmWorkflowResult> {
-    // Set headers for Server-Sent Events
-    res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache, no-transform',
-        'Connection': 'keep-alive',
-        'X-Accel-Buffering': 'no',
-        'Access-Control-Allow-Origin': '*'
-    });
-
-    if (typeof (res as any).flushHeaders === 'function') {
-        (res as any).flushHeaders();
-    }
-
-    // Send initial handshake
-    res.write(`:connected\n\n`);
-
-    let isFinished = false;
-    const heartbeatIntervalMs = options?.heartbeatIntervalMs ?? 15000;
-    const heartbeatTimer = setInterval(() => {
-        if (!isFinished && !res.writableEnded) {
+    c: Context,
+    params: SwarmWorkflowParams
+) {
+    return streamSSE(c, async (stream) => {
+        const sendEvent = async (eventType: string, data: any) => {
             try {
-                res.write(`:keepalive\n\n`);
-            } catch {
-                cleanup();
+                await stream.writeSSE({
+                    event: eventType,
+                    data: JSON.stringify(data),
+                });
+            } catch (err) {
+                console.error(`[SSE Write Error]:`, err);
             }
-        }
-    }, heartbeatIntervalMs);
+        };
 
-    const cleanup = () => {
-        isFinished = true;
-        clearInterval(heartbeatTimer);
-    };
-
-    if (typeof (res as any).on === 'function') {
-        res.on('close', cleanup);
-    }
-    if (typeof (req as any).on === 'function') {
-        req.on('aborted', cleanup);
-    }
-
-    const sendEvent = (eventType: string, data: any) => {
-        console.log(`[sendEvent] isFinished: ${isFinished}, res.writableEnded: ${res.writableEnded}, eventType: ${eventType}`);
-        if (!isFinished && !res.writableEnded) {
-            res.write(`event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`);
-        }
-    };
-
-    try {
-        const result = await executeSwarmWorkflow({
-            ...params,
-            onEvent: (event: SwarmEvent) => {
-                sendEvent('swarm_event', event);
-                if (params.onEvent) {
-                    params.onEvent(event);
+        try {
+            const result = await executeSwarmWorkflow({
+                ...params,
+                onEvent: async (event: SwarmEvent) => {
+                    await sendEvent('swarm_event', event);
+                    if (params.onEvent) {
+                        params.onEvent(event);
+                    }
+                },
+                onStage: async (stagePayload) => {
+                    await sendEvent('swarm_stage', stagePayload);
+                    if (params.onStage) {
+                        params.onStage(stagePayload);
+                    }
                 }
-            },
-            onStage: (stagePayload) => {
-                sendEvent('swarm_stage', stagePayload);
-                if (params.onStage) {
-                    params.onStage(stagePayload);
-                }
-            }
-        });
+            });
 
-        sendEvent('swarm_complete', result);
-        res.end();
-        return result;
-    } catch (err: any) {
-        sendEvent('swarm_error', { error: err.stack || err.message || String(err) });
-        res.end();
-    } finally {
-        cleanup();
-        if (typeof (req as any).removeListener === 'function') {
-            (req as any).removeListener('close', cleanup);
+            await sendEvent('swarm_complete', result);
+        } catch (err: any) {
+            await sendEvent('swarm_error', { error: err.stack || err.message || String(err) });
         }
-    }
-}
-
-/**
- * Parses JSON body from an incoming HTTP request stream.
- */
-export function parseJsonBody<T = any>(req: IncomingMessage): Promise<T> {
-    return new Promise((resolve, reject) => {
-        let body = '';
-        req.on('data', chunk => {
-            body += chunk;
-            if (body.length > 25 * 1024 * 1024) { // 25MB max
-                reject(new Error('Payload too large'));
-            }
-        });
-        req.on('end', () => {
-            try {
-                resolve(body ? JSON.parse(body) : ({} as T));
-            } catch (e: any) {
-                reject(new Error(`Invalid JSON: ${e.message}`));
-            }
-        });
-        req.on('error', reject);
     });
 }
 
 /**
- * Creates a standalone, zero-external-dependency HTTP & SSE server for headless swarm deployments.
+ * Creates a standalone, zero-external-dependency Hono app for headless swarm deployments.
  */
-export function createSwarmServer(options: SwarmServerOptions = {}): http.Server {
+export function createSwarmServer(options: SwarmServerOptions = {}): Hono {
+    const app = new Hono();
     const defaultSettings = options.defaultSettings || {};
     const defaultAi = options.defaultAi;
     const defaultCortex = options.defaultCortex;
 
-    const server = http.createServer(async (req, res) => {
-        // CORS headers
-        if (options.cors !== false) {
-            res.setHeader('Access-Control-Allow-Origin', '*');
-            res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-            res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-            if (req.method === 'OPTIONS') {
-                res.writeHead(204);
-                res.end();
-                return;
+    if (options.cors !== false) {
+        app.use('*', async (c, next) => {
+            c.header('Access-Control-Allow-Origin', '*');
+            c.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+            c.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+            if (c.req.method === 'OPTIONS') {
+                return c.body(null, 204);
             }
-        }
+            await next();
+        });
+    }
 
-        const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
-        const pathname = url.pathname;
+    app.get('/api/health', (c) => {
+        return c.json({ status: 'ok', edge: true });
+    });
 
+    app.all('/api/swarm/stream', async (c) => {
+        let params: SwarmWorkflowParams;
         try {
-            // Health ping
-            if (pathname === '/api/health' || pathname === '/health') {
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ status: 'ok', uptime: process.uptime() }));
-                return;
-            }
-
-            // Stream endpoint (SSE)
-            if (pathname === '/api/swarm/stream') {
-                let params: SwarmWorkflowParams;
-
-                if (req.method === 'POST') {
-                    const body = await parseJsonBody(req);
-                    params = {
-                        task: body.task,
-                        data: body.data,
-                        settings: { ...defaultSettings, ...body.settings },
-                        defaultAi: body.defaultAi || defaultAi,
-                        cortex: body.cortex || defaultCortex,
-                        enableDeepAnalysis: body.enableDeepAnalysis,
-                        complexityOverride: body.complexityOverride
-                    };
-                } else if (req.method === 'GET') {
-                    const task = url.searchParams.get('task') || '';
-                    const data = url.searchParams.get('data') || '';
-                    const appId = url.searchParams.get('appId') || defaultSettings.appId || 'default';
-                    params = {
-                        task,
-                        data,
-                        settings: { ...defaultSettings, appId },
-                        defaultAi,
-                        cortex: defaultCortex
-                    };
-                } else {
-                    res.writeHead(405, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'Method Not Allowed' }));
-                    return;
-                }
-
-                if (!params.task) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'Missing required parameter: task' }));
-                    return;
-                }
-
-                await handleSwarmSse(req, res, params);
-                return;
-            }
-
-            // Standard JSON Analyze endpoint
-            if (pathname === '/api/swarm/analyze' && req.method === 'POST') {
-                const body = await parseJsonBody(req);
-                if (!body.task) {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'Missing required parameter: task' }));
-                    return;
-                }
-
-                const result = await executeSwarmWorkflow({
+            if (c.req.method === 'POST') {
+                const body = await c.req.json().catch(() => ({}));
+                params = {
                     task: body.task,
                     data: body.data,
                     settings: { ...defaultSettings, ...body.settings },
@@ -221,24 +97,57 @@ export function createSwarmServer(options: SwarmServerOptions = {}): http.Server
                     cortex: body.cortex || defaultCortex,
                     enableDeepAnalysis: body.enableDeepAnalysis,
                     complexityOverride: body.complexityOverride
-                });
-
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify(result));
-                return;
+                };
+            } else if (c.req.method === 'GET') {
+                const url = new URL(c.req.url);
+                const task = url.searchParams.get('task') || '';
+                const data = url.searchParams.get('data') || '';
+                const appId = url.searchParams.get('appId') || defaultSettings.appId || 'default';
+                params = {
+                    task,
+                    data,
+                    settings: { ...defaultSettings, appId },
+                    defaultAi,
+                    cortex: defaultCortex
+                };
+            } else {
+                return c.json({ error: 'Method Not Allowed' }, 405);
             }
 
-            // 404 Not Found
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Not Found', path: pathname }));
+            if (!params.task) {
+                return c.json({ error: 'Missing required parameter: task' }, 400);
+            }
+
+            return handleSwarmSse(c, params);
         } catch (err: any) {
-            console.error('[SwarmServer Error]:', err);
-            if (!res.headersSent) {
-                res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: err.message || 'Internal Server Error' }));
-            }
+            console.error('[SwarmServer Stream Error]:', err);
+            return c.json({ error: err.message || 'Internal Server Error' }, 500);
         }
     });
 
-    return server;
+    app.post('/api/swarm/analyze', async (c) => {
+        try {
+            const body = await c.req.json().catch(() => ({}));
+            if (!body.task) {
+                return c.json({ error: 'Missing required parameter: task' }, 400);
+            }
+
+            const result = await executeSwarmWorkflow({
+                task: body.task,
+                data: body.data,
+                settings: { ...defaultSettings, ...body.settings },
+                defaultAi: body.defaultAi || defaultAi,
+                cortex: body.cortex || defaultCortex,
+                enableDeepAnalysis: body.enableDeepAnalysis,
+                complexityOverride: body.complexityOverride
+            });
+
+            return c.json(result);
+        } catch (err: any) {
+            console.error('[SwarmServer Analyze Error]:', err);
+            return c.json({ error: err.message || 'Internal Server Error' }, 500);
+        }
+    });
+
+    return app;
 }
