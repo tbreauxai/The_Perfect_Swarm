@@ -122,6 +122,21 @@ async function testCjsImport() {
     }
     console.log('✓ CJS experiment subpath, StatisticalAnalyzer, and AgentExperimentManager verified');
 
+    const compCjs = require('./dist/swarm/compression.cjs');
+    if (!compCjs.TokenAwarePromptCompressor || !compCjs.TokenEstimator || !compCjs.SemanticDeduplicator || !compCjs.globalPromptCompressor) {
+        throw new Error('CommonJS compression exports missing');
+    }
+    const cjsComp = new compCjs.TokenAwarePromptCompressor({ targetReductionRatio: 0.35, similarityThreshold: 0.70 });
+    const cjsCompRes = cjsComp.compress('Task: System health check\nAnalyst Reports:\n[DB Specialist]: CPU spiked to 95% on node-2\n[Infra Specialist]: CPU spiked to 95% on node-2 during peak traffic');
+    if (cjsCompRes.originalTokens <= 0 || cjsCompRes.compressedTokens <= 0 || cjsCompRes.tokensSaved <= 0) {
+        throw new Error('CommonJS TokenAwarePromptCompressor compression failed');
+    }
+    const cjsSim = compCjs.SemanticDeduplicator.computeSemanticSimilarity('CPU usage was 95%', 'High CPU usage reached 95%');
+    if (cjsSim < 0.60) {
+        throw new Error('CommonJS SemanticDeduplicator similarity check failed');
+    }
+    console.log('✓ CJS compression subpath, TokenAwarePromptCompressor, and SemanticDeduplicator verified');
+
     console.log('✓ ALL COMMONJS SWARM DISTRIBUTION TESTS PASSED!\n');
 }
 

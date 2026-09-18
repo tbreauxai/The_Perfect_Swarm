@@ -1,20 +1,20 @@
 [
   {
-    "id": "goal-1-ab-testing-engine-and-statistical-analyzer",
-    "description": "Implement AgentExperimentManager, ABVariant, StatisticalAnalyzer (Welch's t-test, confidence intervals, composite utility scoring), and automated promotion / circuit-breaker rollback in src/swarm/experiment.ts with unit tests.",
+    "id": "goal-1-prompt-compression-engine-and-semantic-dedup",
+    "description": "Implement TokenAwarePromptCompressor, SemanticDeduplicator, token budgeting, and priority pruning in src/swarm/compression.ts with unit tests.",
     "status": "completed",
-    "verification": "Unit tests in src/swarm/experiment.test.ts verify variant allocation, statistical significance calculation, composite utility scoring, auto-promotion of winning configurations, and circuit breaker rollbacks."
+    "verification": "Unit tests in src/swarm/compression.test.ts verify token counting, semantic deduplication, 30-50% context reduction on redundant inputs, and preservation of critical constraints and anomalies."
   },
   {
-    "id": "goal-2-engine-continuous-learning-ab-integration",
-    "description": "Integrate automated A/B testing and continuous learning loops into src/swarm/engine.ts (resolving agent variant configurations, routing traffic, capturing production metrics from profiler/critic, and emitting experiment telemetry).",
+    "id": "goal-2-engine-prompt-compression-integration",
+    "description": "Integrate token-aware prompt compression and semantic deduplication into src/swarm/engine.ts and src/swarm/types.ts with integration tests.",
     "status": "completed",
-    "verification": "Integration tests in src/swarm/experiment-engine.test.ts verify variant resolution during execution, metric feedback recording, event emission, and automatic configuration promotion on production runs."
+    "verification": "Integration tests in src/swarm/compression-engine.test.ts verify prompt compression during analyst and manager synthesis execution, telemetry event emission, and metrics tracking."
   },
   {
     "id": "goal-3-verification-and-bundle-build",
-    "description": "Export experiment module from library exports and package.json, rebuild client and swarm distribution bundles, and verify 100% passing across all Vitest suites and 5 E2E test scripts.",
+    "description": "Export compression module, rebuild client and swarm bundles, update test-dist-import, and verify 100% passing across all Vitest suites and 5 E2E test scripts.",
     "status": "completed",
-    "verification": "build:client and build:swarm pass cleanly, all Vitest test suites pass, and all 5 E2E test suites pass 100%."
+    "verification": "build:client and build:swarm pass cleanly, test-dist-import verifies exports, all Vitest test suites pass, and all 5 E2E test suites pass 100%."
   }
 ]

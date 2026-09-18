@@ -22,7 +22,11 @@ import {
     AgentExperimentManager,
     AgentExperiment,
     StatisticalAnalyzer,
-    globalAgentExperimentManager
+    globalAgentExperimentManager,
+    TokenAwarePromptCompressor,
+    TokenEstimator,
+    SemanticDeduplicator,
+    globalPromptCompressor
 } from './dist/swarm/index.js';
 import { createSwarmServer as serverFromSubpath } from './dist/swarm/server.js';
 import { createSwarmClient as clientFromSubpath } from './dist/swarm/client.js';
@@ -30,6 +34,7 @@ import { HierarchicalMessageBus as CommBusFromSubpath, ClusterTopologyManager as
 import { VpTreeIndex as VpTreeFromSubpath, HnswVectorIndex as HnswFromSubpath, createVectorIndex as createVectorFromSubpath } from './dist/swarm/vectorIndex.js';
 import { DependencyGraph as DepGraphFromSubpath, ConflictResolver as ConflictFromSubpath, SpeculativeExecutionCoordinator as SpecCoordFromSubpath } from './dist/swarm/speculative.js';
 import { AgentExperimentManager as ExpMgrFromSubpath, AgentExperiment as ExpFromSubpath, StatisticalAnalyzer as StatFromSubpath } from './dist/swarm/experiment.js';
+import { TokenAwarePromptCompressor as CompressorFromSubpath, TokenEstimator as TokenEstimatorFromSubpath, SemanticDeduplicator as DedupFromSubpath, globalPromptCompressor as globalCompressorFromSubpath } from './dist/swarm/compression.js';
 import { ToolRegistry, calculatorTool } from './dist/swarm/tools.js';
 import { repairJson, parseJsonSafe } from './dist/swarm/parser.js';
 
@@ -232,6 +237,24 @@ async function runDistVerification() {
         throw new Error('Compiled AgentExperiment recordOutcome failed');
     }
     console.log('✓ Compiled Experiment module subpath, StatisticalAnalyzer, and AgentExperimentManager verified');
+
+    // 10. Verify compiled Token-Aware Prompt Compression & Semantic Deduplication Engine
+    if (!TokenAwarePromptCompressor || !TokenEstimator || !SemanticDeduplicator || !globalPromptCompressor || !CompressorFromSubpath || !TokenEstimatorFromSubpath || !DedupFromSubpath) {
+        throw new Error('Compiled Compression module exports missing');
+    }
+
+    const testPrompt = `Task: System health check\nHistorical Baselines: All systems operational\nAnalyst Reports:\n[DB Specialist]: CPU spiked to 95% on node-2\n[Infra Specialist]: CPU spiked to 95% on node-2 during peak traffic`;
+    const comp = new CompressorFromSubpath({ targetReductionRatio: 0.35, similarityThreshold: 0.70 });
+    const compResult = comp.compress(testPrompt);
+    if (compResult.originalTokens <= 0 || compResult.compressedTokens <= 0 || compResult.tokensSaved <= 0 || compResult.reductionRatio <= 0) {
+        throw new Error('Compiled TokenAwarePromptCompressor compression failed');
+    }
+
+    const sim = DedupFromSubpath.computeSemanticSimilarity('CPU usage was 95%', 'High CPU usage reached 95%');
+    if (sim < 0.60) {
+        throw new Error('Compiled SemanticDeduplicator similarity check failed');
+    }
+    console.log('✓ Compiled Compression module subpath, TokenAwarePromptCompressor, and SemanticDeduplicator verified');
 
     console.log('\n✓ ALL COMPILED SWARM DISTRIBUTION BUNDLE TESTS PASSED SUCCESSFULLY!\n');
 }

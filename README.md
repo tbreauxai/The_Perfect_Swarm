@@ -346,6 +346,7 @@ npm run test:server       # HTTP & SSE streaming tests
 | `@perfect-swarm/core/vectorIndex` | O(log n) VP-Tree and HNSW sub-linear metric vector indexing |
 | `@perfect-swarm/core/speculative` | Speculative parallel execution, dependency DAGs, and conflict resolution |
 | `@perfect-swarm/core/experiment` | Continuous learning loops, automated A/B testing, and statistical promotion |
+| `@perfect-swarm/core/compression` | Token-aware prompt compression, semantic deduplication, and priority budgeting |
 
 ---
 

@@ -20,6 +20,15 @@ export interface SwarmExperimentSettings {
     autoRecordMetrics?: boolean;
 }
 
+export interface SwarmCompressionSettings {
+    enabled?: boolean;
+    targetReductionRatio?: number;
+    similarityThreshold?: number;
+    maxTokens?: number;
+    preserveAnomalies?: boolean;
+    stripBoilerplate?: boolean;
+}
+
 export interface SwarmEngineSettings {
     geminiApiKey?: string;
     openRouterApiKey?: string;
@@ -35,6 +44,7 @@ export interface SwarmEngineSettings {
     critic?: AgentConfig;
     agents?: AgentConfig[];
     experimentSettings?: SwarmExperimentSettings;
+    compressionSettings?: SwarmCompressionSettings;
     [key: string]: any;
 }
 

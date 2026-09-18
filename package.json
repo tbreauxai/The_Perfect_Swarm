@@ -116,6 +116,12 @@
       "import": "./dist/swarm/experiment.js",
       "require": "./dist/swarm/experiment.cjs",
       "default": "./src/swarm/experiment.ts"
+    },
+    "./compression": {
+      "types": "./dist/swarm/compression.d.ts",
+      "import": "./dist/swarm/compression.js",
+      "require": "./dist/swarm/compression.cjs",
+      "default": "./src/swarm/compression.ts"
     }
   },
   "scripts": {

@@ -36,6 +36,13 @@ import {
     type ExperimentDecision,
     globalAgentExperimentManager
 } from './experiment.ts';
+import {
+    globalPromptCompressor,
+    TokenAwarePromptCompressor,
+    TokenEstimator,
+    type CompressionOptions,
+    type CompressedPromptResult
+} from './compression.ts';
 
 export interface ProviderResolution {
     key: string;
@@ -196,6 +203,13 @@ export interface SwarmWorkflowResult {
         variantId: string;
         variantName?: string;
         decision?: ExperimentDecision;
+    };
+    compression?: {
+        originalTokens: number;
+        compressedTokens: number;
+        tokensSaved: number;
+        reductionRatio: number;
+        deduplicatedSegmentsCount: number;
     };
 }
 
@@ -485,6 +499,10 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     });
 
     let finalAnalysis: any = null;
+    let workflowOriginalPromptTokens: number = 0;
+    let workflowCompressedPromptTokens: number = 0;
+    let workflowPromptTokensSaved: number = 0;
+    let workflowDeduplicatedCount: number = 0;
 
     if (fastPathDecision.eligible && analysts.length > 0) {
         const fastAnalyst = analysts[0];
@@ -512,8 +530,34 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         fastAnalyst.setSystemInstruction(fastInstruction);
         const fastPrompt = `Task: ${task}\nData:\n${data || "(No additional data payload)"}`;
 
+        let effectiveFastPrompt = fastPrompt;
+        if (settings?.compressionSettings?.enabled) {
+            const comp = globalPromptCompressor.compress(fastPrompt, {
+                targetReductionRatio: settings.compressionSettings.targetReductionRatio,
+                similarityThreshold: settings.compressionSettings.similarityThreshold,
+                maxTokens: settings.compressionSettings.maxTokens,
+                preserveAnomalies: settings.compressionSettings.preserveAnomalies,
+                stripBoilerplate: settings.compressionSettings.stripBoilerplate
+            });
+            if (comp.tokensSaved > 0) {
+                effectiveFastPrompt = comp.compressedText;
+                workflowOriginalPromptTokens += comp.originalTokens;
+                workflowCompressedPromptTokens += comp.compressedTokens;
+                workflowPromptTokensSaved += comp.tokensSaved;
+                workflowDeduplicatedCount += comp.deduplicatedSegmentsCount;
+                context.addEvent({
+                    agentRole: 'Prompt Compression Engine',
+                    action: 'Prompt Compressed',
+                    modelName: 'Local/PromptCompressor',
+                    prompt: `Compressed fast-path prompt: ${comp.originalTokens} -> ${comp.compressedTokens} tokens (${Math.round(comp.reductionRatio * 100)}% reduction)`,
+                    output: comp,
+                    durationMs: comp.processingTimeMs
+                });
+            }
+        }
+
         try {
-            const rawOutput = await fastAnalyst.run(fastPrompt, context, {
+            const rawOutput = await fastAnalyst.run(effectiveFastPrompt, context, {
                 responseMimeType: "application/json",
                 ...activeVariant?.parameters
             });
@@ -645,6 +689,13 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     variantId: activeVariant.variantId,
                     variantName: activeVariant.name,
                     decision: fastPathExpDecision
+                } : undefined,
+                compression: workflowOriginalPromptTokens > 0 ? {
+                    originalTokens: workflowOriginalPromptTokens,
+                    compressedTokens: workflowCompressedPromptTokens,
+                    tokensSaved: workflowPromptTokensSaved,
+                    reductionRatio: Math.round((workflowPromptTokensSaved / workflowOriginalPromptTokens) * 1000) / 1000,
+                    deduplicatedSegmentsCount: workflowDeduplicatedCount
                 } : undefined
             };
         } catch (err: any) {
@@ -845,10 +896,36 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
 
                 const analystPrompt = `Task: ${task}\nMetadata: ${JSON.stringify(profile)}\nHistorical Baselines: ${historicalContext}\nData Chunk [${chunkIdx + 1}/${chunks.length}]:\n${chunkPromptText}`;
 
+                let effectiveAnalystPrompt = analystPrompt;
+                if (settings?.compressionSettings?.enabled) {
+                    const comp = globalPromptCompressor.compress(analystPrompt, {
+                        targetReductionRatio: settings.compressionSettings.targetReductionRatio,
+                        similarityThreshold: settings.compressionSettings.similarityThreshold,
+                        maxTokens: settings.compressionSettings.maxTokens,
+                        preserveAnomalies: settings.compressionSettings.preserveAnomalies,
+                        stripBoilerplate: settings.compressionSettings.stripBoilerplate
+                    });
+                    if (comp.tokensSaved > 0) {
+                        effectiveAnalystPrompt = comp.compressedText;
+                        workflowOriginalPromptTokens += comp.originalTokens;
+                        workflowCompressedPromptTokens += comp.compressedTokens;
+                        workflowPromptTokensSaved += comp.tokensSaved;
+                        workflowDeduplicatedCount += comp.deduplicatedSegmentsCount;
+                        context.addEvent({
+                            agentRole: 'Prompt Compression Engine',
+                            action: 'Prompt Compressed',
+                            modelName: 'Local/PromptCompressor',
+                            prompt: `Compressed Analyst prompt [${analyst.role}]: ${comp.originalTokens} -> ${comp.compressedTokens} tokens (${Math.round(comp.reductionRatio * 100)}% reduction)`,
+                            output: comp,
+                            durationMs: comp.processingTimeMs
+                        });
+                    }
+                }
+
                 try {
                     let rawOutput: any;
                     try {
-                        rawOutput = await analyst.run(analystPrompt, context, { 
+                        rawOutput = await analyst.run(effectiveAnalystPrompt, context, { 
                             responseMimeType: "application/json",
                             ...activeVariant?.parameters
                         });
@@ -1124,6 +1201,84 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         managerAgent.setSystemInstruction(MANAGER_SYSTEM_INSTRUCTION);
         const dynamicPrompt = `Task: ${task}\n\nHistorical Baselines:\n${historicalContext}\n\n${clusterDigestText}Analyst Reports:\n${compiledReports}`;
 
+        let effectiveDynamicPrompt = dynamicPrompt;
+        let effectiveCompiledReports = compiledReports;
+        let effectiveHistoricalContext = historicalContext;
+
+        if (settings?.compressionSettings?.enabled) {
+            const rawReportsForComp = analysts.map((a, i) => {
+                const reports = allAnalystReports[i];
+                if (!reports || reports.length === 0) return null;
+                const content = reports.map(r => typeof r === 'string' ? r : JSON.stringify(r, null, 2)).join('\n');
+                return { role: a.role, content };
+            }).filter(Boolean) as Array<{ role: string; content: string }>;
+
+            if (rawReportsForComp.length > 0) {
+                const reportComp = globalPromptCompressor.compressAnalystReports(rawReportsForComp, {
+                    targetReductionRatio: settings.compressionSettings.targetReductionRatio,
+                    similarityThreshold: settings.compressionSettings.similarityThreshold,
+                    preserveAnomalies: settings.compressionSettings.preserveAnomalies
+                });
+
+                if (reportComp.tokensSaved > 0) {
+                    effectiveCompiledReports = reportComp.compressedReportsText;
+                    workflowPromptTokensSaved += reportComp.tokensSaved;
+                    workflowOriginalPromptTokens += reportComp.originalTokens;
+                    workflowCompressedPromptTokens += reportComp.compressedTokens;
+                    workflowDeduplicatedCount += reportComp.deduplicatedSegmentsCount;
+
+                    context.addEvent({
+                        agentRole: 'Prompt Compression Engine',
+                        action: 'Prompt Compressed',
+                        modelName: 'Local/PromptCompressor',
+                        prompt: `Deduplicated and compressed ${rawReportsForComp.length} specialist reports: ${reportComp.originalTokens} -> ${reportComp.compressedTokens} tokens (${Math.round(reportComp.reductionRatio * 100)}% reduction)`,
+                        output: {
+                            stage: 'analyst_reports_deduplication',
+                            originalTokens: reportComp.originalTokens,
+                            compressedTokens: reportComp.compressedTokens,
+                            tokensSaved: reportComp.tokensSaved,
+                            reductionRatio: reportComp.reductionRatio,
+                            deduplicatedSegmentsCount: reportComp.deduplicatedSegmentsCount
+                        },
+                        durationMs: reportComp.processingTimeMs
+                    });
+                }
+            }
+
+            const rawSynthesisPrompt = `Task: ${task}\n\nHistorical Baselines:\n${historicalContext}\n\n${clusterDigestText}Analyst Reports:\n${effectiveCompiledReports}`;
+            const synthesisComp = globalPromptCompressor.compress(rawSynthesisPrompt, {
+                targetReductionRatio: settings.compressionSettings.targetReductionRatio,
+                similarityThreshold: settings.compressionSettings.similarityThreshold,
+                maxTokens: settings.compressionSettings.maxTokens,
+                preserveAnomalies: settings.compressionSettings.preserveAnomalies,
+                stripBoilerplate: settings.compressionSettings.stripBoilerplate
+            });
+
+            effectiveDynamicPrompt = synthesisComp.compressedText;
+            if (synthesisComp.tokensSaved > 0) {
+                workflowPromptTokensSaved += synthesisComp.tokensSaved;
+                workflowOriginalPromptTokens += synthesisComp.originalTokens;
+                workflowCompressedPromptTokens += synthesisComp.compressedTokens;
+                workflowDeduplicatedCount += synthesisComp.deduplicatedSegmentsCount;
+
+                context.addEvent({
+                    agentRole: 'Prompt Compression Engine',
+                    action: 'Prompt Compressed',
+                    modelName: 'Local/PromptCompressor',
+                    prompt: `Compressed Manager synthesis prompt: ${synthesisComp.originalTokens} -> ${synthesisComp.compressedTokens} tokens (${Math.round(synthesisComp.reductionRatio * 100)}% reduction)`,
+                    output: {
+                        stage: 'manager_synthesis',
+                        originalTokens: synthesisComp.originalTokens,
+                        compressedTokens: synthesisComp.compressedTokens,
+                        tokensSaved: synthesisComp.tokensSaved,
+                        reductionRatio: synthesisComp.reductionRatio,
+                        deduplicatedSegmentsCount: synthesisComp.deduplicatedSegmentsCount
+                    },
+                    durationMs: synthesisComp.processingTimeMs
+                });
+            }
+        }
+
         let parsedManagerOutput: any = null;
         let lifecycleResult: any = null;
 
@@ -1146,11 +1301,11 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 {
                     task,
                     dataSample: rawInput.substring(0, 3000),
-                    analystReports: compiledReports,
-                    historicalBaselines: historicalContext
+                    analystReports: effectiveCompiledReports,
+                    historicalBaselines: effectiveHistoricalContext
                 },
                 context,
-                dynamicPrompt,
+                effectiveDynamicPrompt,
                 "Verify whether this analysis faithfully represents the analyst reports and data, and strictly complies with all historical baselines and past lessons without hallucinations or omissions."
             );
 
@@ -1162,7 +1317,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 || MANAGER_SYSTEM_INSTRUCTION;
             managerAgent.setSystemInstruction(managerInstruction);
 
-            parsedManagerOutput = await managerAgent.run(dynamicPrompt, context, {
+            parsedManagerOutput = await managerAgent.run(effectiveDynamicPrompt, context, {
                 responseMimeType: "application/json",
                 zodSchema: ManagerResponseSchema,
                 ...activeVariant?.parameters
@@ -1326,6 +1481,13 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             variantId: activeVariant.variantId,
             variantName: activeVariant.name,
             decision: workflowExpDecision
+        } : undefined,
+        compression: workflowOriginalPromptTokens > 0 ? {
+            originalTokens: workflowOriginalPromptTokens,
+            compressedTokens: workflowCompressedPromptTokens,
+            tokensSaved: workflowPromptTokensSaved,
+            reductionRatio: Math.round((workflowPromptTokensSaved / workflowOriginalPromptTokens) * 1000) / 1000,
+            deduplicatedSegmentsCount: workflowDeduplicatedCount
         } : undefined
     };
 }

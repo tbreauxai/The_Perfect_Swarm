@@ -1,24 +1,26 @@
-# Ultragoal Brief: Continuous Learning Loops with Automated A/B Testing
+# Ultragoal Brief: Token-Aware Prompt Compression Using Semantic Deduplication
 
 ## Objective
-Deploy continuous learning loops with automated A/B testing of agent configurations against production metrics (RLAIF quality scores, wall-clock latency, token efficiency, and error rates) with statistical significance evaluation, automated promotion of superior configurations, and fail-safe circuit breaker rollbacks.
+Adopt token-aware prompt compression using semantic deduplication to cut context costs by 30-50% across multi-agent workflows, specialist task dispatches, and manager synthesis without sacrificing critical domain constraints or reasoning fidelity.
 
 ## Background & Problem Statement
-Currently, swarm agent configurations (roles, prompts, temperature, model provider assignments, and specialist parameters) are static or manually calibrated. While `SpecialistCapabilityProfiler` tracks specialist performance via UCB1, there is no end-to-end experiment engine that can test alternative configuration variants (e.g. Prompt V1 vs V2, differing specialist temperature/models, or topology strategies) against real production workloads, measure multi-dimensional performance metrics, and automatically promote winning configurations or roll back regressions.
+In multi-agent swarm workflows, large context windows rapidly accumulate redundant data:
+1. Multiple specialists inspect overlapping data chunks or raw inputs and generate reports containing duplicate findings, verbatim restatements of historical baselines, and boilerplate phrasing.
+2. Step 5 (Manager Synthesis & Critic Verification) bundles all raw analyst reports and memory baselines into a single monolithic prompt, consuming substantial context tokens and incurring latency and API costs.
+3. Repetitive context across parallel analyst calls inflates token budgets without adding net-new semantic information.
 
 ## Architecture Boundaries
-1. **A/B Testing & Statistical Evaluation Engine (`src/swarm/experiment.ts`)**:
-   - `AgentExperimentManager`: Experiment lifecycle (draft, active, concluded, rolled_back), variant definition (control/baseline vs treatment/candidate), deterministic hashing or bandit allocation.
-   - `StatisticalAnalyzer`: Metric comparison (mean, variance, Welch's t-test / p-value calculation, confidence intervals, effect size).
-   - Multi-metric scoring: Composite utility function balancing RLAIF quality score (critic rating), wall-clock latency, and token consumption.
-   - Automated Promotion & Circuit Breaker: Auto-promote treatment to active configuration when min sample size is reached and p < 0.05 with positive delta; instantly abort and roll back if error rate spikes or quality drops below safety threshold.
-2. **Swarm Engine & Learning Loop Integration (`src/swarm/engine.ts`)**:
-   - Support `settings.experimentSettings` in `SwarmEngineSettings`.
-   - Resolve active variant configuration before workflow execution.
-   - Attach variant metadata to context and telemetry events (`Agent A/B Variant Dispatched`, `Agent Experiment Evaluated`, `Agent Configuration Promoted`).
-   - Feed post-synthesis production metrics (critic verification score, duration, tokens, anomalies) directly back into the experiment manager and continuous learning loop.
+1. **Prompt Compression Engine (`src/swarm/compression.ts`)**:
+   - `TokenAwarePromptCompressor`: Heuristic token estimation, priority-weighted segment pruning, and target reduction enforcement (30-50%).
+   - `SemanticDeduplicator`: N-gram / Jaccard / Cosine term frequency semantic similarity scoring to identify and consolidate overlapping statements across reports and baselines.
+   - Information Preservation: Protect high-priority directives (task goals, schema constraints, quantitative anomalies, critical alerts) while collapsing redundant verbiage and duplicate exemplar text.
+2. **Swarm Engine Integration (`src/swarm/engine.ts` & `src/swarm/types.ts`)**:
+   - Add `SwarmCompressionSettings` to `SwarmEngineSettings`.
+   - Apply token-aware prompt compression to analyst prompts (Step 4), manager synthesis dynamic prompts (Step 5), and critic verification inputs.
+   - Emit `Prompt Compressed` context telemetry events with original tokens, compressed tokens, and reduction ratio.
+   - Aggregate saved tokens in metrics telemetry.
 3. **Distribution & Backward Compatibility**:
-   - Zero external runtime dependencies (pure TypeScript statistical analysis).
-   - Export from `@perfect-swarm/core` and subpath `@perfect-swarm/core/experiment`.
+   - Zero external runtime dependencies (pure TypeScript algorithmic compression).
+   - Subpath export `@perfect-swarm/core/compression`.
    - Dual ESM/CJS distribution bundles.
-   - 100% passing Vitest suites and all 5 E2E test suites.
+   - 100% passing Vitest suites and all 5 E2E test scripts.
