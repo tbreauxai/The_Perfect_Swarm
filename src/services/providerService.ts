@@ -44,7 +44,14 @@ export async function fetchAvailableModels(provider: string, apiKey?: string): P
                 }));
             }
             case 'groq': {
-                if (!apiKey) throw new Error('API key required for Groq models');
+                if (!apiKey) {
+                    return [
+                        { id: 'llama3-8b-8192', name: 'Llama 3 8B (8k)', free: true },
+                        { id: 'llama3-70b-8192', name: 'Llama 3 70B (8k)', free: true },
+                        { id: 'mixtral-8x7b-32768', name: 'Mixtral 8x7B (32k)', free: true },
+                        { id: 'gemma-7b-it', name: 'Gemma 7B IT', free: true }
+                    ];
+                }
                 const res = await fetch('https://api.groq.com/openai/v1/models', {
                     headers: { 'Authorization': `Bearer ${apiKey}` }
                 });
@@ -57,7 +64,13 @@ export async function fetchAvailableModels(provider: string, apiKey?: string): P
                 }));
             }
             case 'gemini': {
-                if (!apiKey) throw new Error('API key required for Gemini models');
+                if (!apiKey) {
+                    return [
+                        { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', free: true },
+                        { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', free: true },
+                        { id: 'gemini-2.0-flash-exp', name: 'Gemini 2.0 Flash (Exp)', free: true }
+                    ];
+                }
                 const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
                 if (!res.ok) throw new Error('Failed to fetch Gemini models');
                 const data = await res.json();
@@ -71,7 +84,14 @@ export async function fetchAvailableModels(provider: string, apiKey?: string): P
                     }));
             }
             case 'mistral': {
-                if (!apiKey) throw new Error('API key required for Mistral models');
+                if (!apiKey) {
+                    return [
+                        { id: 'mistral-tiny', name: 'Mistral Tiny', free: true },
+                        { id: 'mistral-small-latest', name: 'Mistral Small', free: true },
+                        { id: 'mistral-medium-latest', name: 'Mistral Medium', free: false },
+                        { id: 'mistral-large-latest', name: 'Mistral Large', free: false }
+                    ];
+                }
                 const res = await fetch('https://api.mistral.ai/v1/models', {
                     headers: { 'Authorization': `Bearer ${apiKey}` }
                 });
@@ -84,7 +104,12 @@ export async function fetchAvailableModels(provider: string, apiKey?: string): P
                 }));
             }
             case 'github': {
-                if (!apiKey) throw new Error('API key required for GitHub models');
+                if (!apiKey) {
+                    return [
+                        { id: 'gpt-4o', name: 'GPT-4o', free: true },
+                        { id: 'Llama-3-70B-Instruct', name: 'Llama-3-70B-Instruct', free: true }
+                    ];
+                }
                 const res = await fetch('https://models.inference.ai.azure.com/models', {
                     headers: { 'Authorization': `Bearer ${apiKey}` }
                 });
@@ -116,6 +141,23 @@ export async function checkProviderModelsHealth(
     options?: HealthCheckOptions
 ): Promise<Record<string, ModelHealthStatus>> {
     if (!models || models.length === 0) return {};
+    
+    // If no API key is present on the frontend, assume models are healthy so the UI allows selection
+    if (!apiKey && provider !== 'simulated' && provider !== 'openrouter') {
+        const mockHealth: Record<string, ModelHealthStatus> = {};
+        for (const m of models) {
+            mockHealth[`${provider.toLowerCase().trim()}:${m.id.trim()}`] = {
+                provider,
+                modelId: m.id,
+                latencyMs: 0,
+                lastChecked: Date.now(),
+                isHealthy: true,
+                circuitState: 'CLOSED'
+            };
+        }
+        return mockHealth;
+    }
+
     const targets: ModelTarget[] = models.map(m => ({
         provider,
         modelId: m.id,
