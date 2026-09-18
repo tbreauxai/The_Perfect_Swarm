@@ -125,6 +125,27 @@ async function testCli() {
     }
     console.log('✓ CLI bench command verified.');
 
+    // 7. Test CLI Feedback Commands
+    console.log('\n[CLI Test 7] Testing policy-inspect, drift-check, and feedback-stats...');
+    const policyOutput = execSync('node bin/cli.js policy-inspect', { encoding: 'utf8' });
+    console.log(policyOutput);
+    if (!policyOutput.includes('Evolutionary Policy Inspector') || !policyOutput.includes('cacheL1MaxEntries')) {
+        throw new Error('CLI policy-inspect command failed');
+    }
+
+    const driftOutput = execSync('node bin/cli.js drift-check', { encoding: 'utf8' });
+    console.log(driftOutput);
+    if (!driftOutput.includes('Concept Drift Detector') || !driftOutput.includes('Zero drift detected')) {
+        throw new Error('CLI drift-check command failed');
+    }
+
+    const feedbackStatsOutput = execSync('node bin/cli.js feedback-stats', { encoding: 'utf8' });
+    console.log(feedbackStatsOutput);
+    if (!feedbackStatsOutput.includes('Knowledge Repository & Feedback Insights') || !feedbackStatsOutput.includes('Average Reward Score')) {
+        throw new Error('CLI feedback-stats command failed');
+    }
+    console.log('✓ CLI feedback commands verified.');
+
     console.log('\n✓ ALL CLI TESTS PASSED SUCCESSFULLY!\n');
 }
 

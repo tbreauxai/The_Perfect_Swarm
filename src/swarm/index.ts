@@ -35,3 +35,4 @@ export * from './compression.ts';
 export * from './scheduler.ts';
 export * from './hierarchy.ts';
 export * from './tieredCache.ts';
+export * from './feedback.ts';

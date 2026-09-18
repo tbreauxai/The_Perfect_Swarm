@@ -68,6 +68,14 @@ import {
     type TieredCacheMetrics,
     type TieredLookupResult
 } from './tieredCache.ts';
+import {
+    globalFeedbackEngine,
+    ContinuousFeedbackEngine,
+    type TunableParameters,
+    type DriftAlert,
+    type RewardSignal,
+    type SwarmKnowledgeRepository
+} from './feedback.ts';
 
 export interface ProviderResolution {
     key: string;
@@ -262,6 +270,15 @@ export interface SwarmWorkflowResult {
         metrics: TieredCacheMetrics;
     };
     unifiedBaselines?: UnifiedSwarmBaselineReport;
+    feedback?: SwarmFeedbackReport;
+}
+
+export interface SwarmFeedbackReport {
+    reward: RewardSignal;
+    tunedParameters: TunableParameters;
+    driftAlerts: DriftAlert[];
+    outcomeId: string;
+    policyUpdated: boolean;
 }
 
 /**
@@ -410,6 +427,36 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 });
             }
 
+            const feedbackEnabled = settings?.feedbackSettings?.enabled !== false;
+            let cacheHitFeedbackReport: SwarmFeedbackReport | undefined;
+            if (feedbackEnabled) {
+                try {
+                    const fbResult = await globalFeedbackEngine.processFeedback({
+                        workflowId: (context as any).id || `wf-${Date.now()}`,
+                        task,
+                        appId: targetAppId,
+                        durationMs: workflowDurationMs,
+                        targetTier: 'instant',
+                        tokenSavings: 250,
+                        tokensConsumed: 0,
+                        qualityScore: 0.95,
+                        accuracyScore: 0.99,
+                        errorCount: 0,
+                        finalInsightSnippet: typeof lookup.value === 'string' ? lookup.value.slice(0, 150) : (lookup.value?.ui_title || 'Tiered Cache Hit'),
+                        inputData: data
+                    });
+                    cacheHitFeedbackReport = {
+                        reward: fbResult.reward,
+                        tunedParameters: fbResult.tunedParameters,
+                        driftAlerts: fbResult.driftAlerts,
+                        outcomeId: fbResult.outcomeId,
+                        policyUpdated: fbResult.policyUpdated
+                    };
+                } catch (fbErr: any) {
+                    console.warn('[TieredCache] Feedback processing failed:', fbErr);
+                }
+            }
+
             return {
                 events: context.events,
                 finalAnalysis: lookup.value,
@@ -421,7 +468,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     latencyMs: lookup.latencyMs,
                     metrics: globalTieredCache.getMetrics()
                 },
-                unifiedBaselines: profilingEnabled ? globalUnifiedProfiler.getUnifiedBaselineReport() : undefined
+                unifiedBaselines: profilingEnabled ? globalUnifiedProfiler.getUnifiedBaselineReport() : undefined,
+                feedback: cacheHitFeedbackReport
             };
         }
     }
@@ -449,10 +497,50 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         });
         const metrics = globalMetricsCollector.getBaselineReport();
 
+        const profilingEnabled = settings?.profilingSettings?.enabled !== false;
+        if (profilingEnabled) {
+            globalUnifiedProfiler.recordWorkflowRun({
+                durationMs: workflowDurationMs,
+                cache: { l1Hits: 1, savedTokens: 250 }
+            });
+        }
+
+        const feedbackEnabled = settings?.feedbackSettings?.enabled !== false;
+        let payloadCacheFeedbackReport: SwarmFeedbackReport | undefined;
+        if (feedbackEnabled) {
+            try {
+                const fbResult = await globalFeedbackEngine.processFeedback({
+                    workflowId: (context as any).id || `wf-${Date.now()}`,
+                    task,
+                    appId: targetAppId,
+                    durationMs: workflowDurationMs,
+                    targetTier: 'instant',
+                    tokenSavings: 250,
+                    tokensConsumed: 0,
+                    qualityScore: 0.95,
+                    accuracyScore: 0.99,
+                    errorCount: 0,
+                    finalInsightSnippet: typeof cachedAnalysis === 'string' ? cachedAnalysis.slice(0, 150) : (cachedAnalysis?.ui_title || 'Payload Cache Hit'),
+                    inputData: data
+                });
+                payloadCacheFeedbackReport = {
+                    reward: fbResult.reward,
+                    tunedParameters: fbResult.tunedParameters,
+                    driftAlerts: fbResult.driftAlerts,
+                    outcomeId: fbResult.outcomeId,
+                    policyUpdated: fbResult.policyUpdated
+                };
+            } catch (fbErr: any) {
+                console.warn('[PayloadCache] Feedback processing failed:', fbErr);
+            }
+        }
+
         return {
             events: context.events,
             finalAnalysis: cachedAnalysis,
-            metrics
+            metrics,
+            unifiedBaselines: profilingEnabled ? globalUnifiedProfiler.getUnifiedBaselineReport() : undefined,
+            feedback: payloadCacheFeedbackReport
         };
     }
 
@@ -484,10 +572,50 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         });
         const metrics = globalMetricsCollector.getBaselineReport();
 
+        const profilingEnabled = settings?.profilingSettings?.enabled !== false;
+        if (profilingEnabled) {
+            globalUnifiedProfiler.recordWorkflowRun({
+                durationMs: workflowDurationMs,
+                cache: { l2Hits: 1, savedTokens: 250 }
+            });
+        }
+
+        const feedbackEnabled = settings?.feedbackSettings?.enabled !== false;
+        let semanticCacheFeedbackReport: SwarmFeedbackReport | undefined;
+        if (feedbackEnabled) {
+            try {
+                const fbResult = await globalFeedbackEngine.processFeedback({
+                    workflowId: (context as any).id || `wf-${Date.now()}`,
+                    task,
+                    appId: targetAppId,
+                    durationMs: workflowDurationMs,
+                    targetTier: 'instant',
+                    tokenSavings: 250,
+                    tokensConsumed: 0,
+                    qualityScore: 0.95,
+                    accuracyScore: 0.98,
+                    errorCount: 0,
+                    finalInsightSnippet: typeof semanticMatch.entry.payload === 'string' ? semanticMatch.entry.payload.slice(0, 150) : (semanticMatch.entry.payload?.ui_title || 'Semantic Cache Hit'),
+                    inputData: data
+                });
+                semanticCacheFeedbackReport = {
+                    reward: fbResult.reward,
+                    tunedParameters: fbResult.tunedParameters,
+                    driftAlerts: fbResult.driftAlerts,
+                    outcomeId: fbResult.outcomeId,
+                    policyUpdated: fbResult.policyUpdated
+                };
+            } catch (fbErr: any) {
+                console.warn('[SemanticCache] Feedback processing failed:', fbErr);
+            }
+        }
+
         return {
             events: context.events,
             finalAnalysis: semanticMatch.entry.payload,
-            metrics
+            metrics,
+            unifiedBaselines: profilingEnabled ? globalUnifiedProfiler.getUnifiedBaselineReport() : undefined,
+            feedback: semanticCacheFeedbackReport
         };
     }
 
@@ -820,6 +948,36 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 });
             }
 
+            const feedbackEnabled = settings?.feedbackSettings?.enabled !== false;
+            let fastPathFeedbackReport: SwarmFeedbackReport | undefined;
+            if (feedbackEnabled) {
+                try {
+                    const fbResult = await globalFeedbackEngine.processFeedback({
+                        workflowId: (context as any).id || `wf-${Date.now()}`,
+                        task,
+                        appId: targetAppId,
+                        durationMs: workflowDurationMs,
+                        targetTier: 'instant',
+                        tokenSavings: workflowPromptTokensSaved,
+                        tokensConsumed: 100,
+                        qualityScore: 0.95,
+                        accuracyScore: 0.98,
+                        errorCount: 0,
+                        finalInsightSnippet: typeof finalAnalysis === 'string' ? finalAnalysis.slice(0, 150) : (finalAnalysis?.ui_title || JSON.stringify(finalAnalysis).slice(0, 150)),
+                        inputData: data
+                    });
+                    fastPathFeedbackReport = {
+                        reward: fbResult.reward,
+                        tunedParameters: fbResult.tunedParameters,
+                        driftAlerts: fbResult.driftAlerts,
+                        outcomeId: fbResult.outcomeId,
+                        policyUpdated: fbResult.policyUpdated
+                    };
+                } catch (fbErr: any) {
+                    console.warn('[Fast-Path] Feedback processing failed:', fbErr);
+                }
+            }
+
             return {
                 events: context.events,
                 finalAnalysis,
@@ -842,7 +1000,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     latencyMs: workflowDurationMs,
                     metrics: globalTieredCache.getMetrics()
                 } : undefined,
-                unifiedBaselines: profilingEnabled ? globalUnifiedProfiler.getUnifiedBaselineReport() : undefined
+                unifiedBaselines: profilingEnabled ? globalUnifiedProfiler.getUnifiedBaselineReport() : undefined,
+                feedback: fastPathFeedbackReport
             };
         } catch (err: any) {
             console.warn(`[Fast-Path] Short-circuit failed, falling back to full swarm pipeline:`, err);
@@ -1885,6 +2044,58 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         });
     }
 
+    const feedbackEnabled = settings?.feedbackSettings?.enabled !== false;
+    let workflowFeedbackReport: SwarmFeedbackReport | undefined;
+    if (feedbackEnabled) {
+        try {
+            const fbResult = await globalFeedbackEngine.processFeedback({
+                workflowId: (context as any).id || `wf-${Date.now()}`,
+                task,
+                appId: targetAppId,
+                durationMs: workflowDurationMs,
+                targetTier: complexity === 'instant' ? 'instant' : 'complex',
+                tokenSavings: workflowPromptTokensSaved,
+                tokensConsumed: workflowTotalTokens || (metrics?.totalTasks ? metrics.totalTasks * 400 : 800),
+                qualityScore: workflowLifecycleResult?.computedRating ? workflowLifecycleResult.computedRating / 100 : (isSuccess ? 0.90 : 0.40),
+                accuracyScore: isSuccess ? 0.95 : 0.30,
+                errorCount: isSuccess ? 0 : 1,
+                anomalyCount: (finalAnalysis?.components || []).reduce((acc: number, c: any) => {
+                    if (c.type === 'InsightList' && Array.isArray(c.props?.insights)) {
+                        return acc + c.props.insights.filter((ins: any) => ins.type === 'alert' || ins.type === 'warning').length;
+                    }
+                    return acc;
+                }, 0),
+                finalInsightSnippet: typeof finalAnalysis === 'string' ? finalAnalysis.slice(0, 150) : (finalAnalysis?.ui_title || JSON.stringify(finalAnalysis).slice(0, 150)),
+                inputData: data
+            });
+
+            workflowFeedbackReport = {
+                reward: fbResult.reward,
+                tunedParameters: fbResult.tunedParameters,
+                driftAlerts: fbResult.driftAlerts,
+                outcomeId: fbResult.outcomeId,
+                policyUpdated: fbResult.policyUpdated
+            };
+
+            context.addEvent({
+                agentRole: 'Feedback & Learning Engine',
+                action: 'Policy Tuned & Outcome Indexed',
+                modelName: 'Local/RL-Evolutionary-Optimizer',
+                prompt: `Feedback processed: composite reward=${fbResult.reward.compositeReward}, drift alerts=${fbResult.driftAlerts.length}`,
+                output: {
+                    reward: fbResult.reward.compositeReward,
+                    policyUpdated: fbResult.policyUpdated,
+                    outcomeId: fbResult.outcomeId,
+                    activePolicy: fbResult.tunedParameters,
+                    driftAlerts: fbResult.driftAlerts
+                },
+                durationMs: 0
+            });
+        } catch (fbErr: any) {
+            console.warn('[Swarm] Feedback processing failed:', fbErr);
+        }
+    }
+
     return {
         events: context.events,
         finalAnalysis,
@@ -1927,7 +2138,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             snapshotId: workflowSnapshotId,
             metrics: globalTieredCache.getMetrics()
         } : undefined,
-        unifiedBaselines: profilingEnabled ? globalUnifiedProfiler.getUnifiedBaselineReport() : undefined
+        unifiedBaselines: profilingEnabled ? globalUnifiedProfiler.getUnifiedBaselineReport() : undefined,
+        feedback: workflowFeedbackReport
     };
 }
 

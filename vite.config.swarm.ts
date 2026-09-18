@@ -26,7 +26,8 @@ export default defineConfig({
         compression: path.resolve(__dirname, 'src/swarm/compression.ts'),
         scheduler: path.resolve(__dirname, 'src/swarm/scheduler.ts'),
         hierarchy: path.resolve(__dirname, 'src/swarm/hierarchy.ts'),
-        tieredCache: path.resolve(__dirname, 'src/swarm/tieredCache.ts')
+        tieredCache: path.resolve(__dirname, 'src/swarm/tieredCache.ts'),
+        feedback: path.resolve(__dirname, 'src/swarm/feedback.ts')
       },
       formats: ['es', 'cjs'],
       fileName: (format, entryName) => `${entryName}.${format === 'es' ? 'js' : 'cjs'}`

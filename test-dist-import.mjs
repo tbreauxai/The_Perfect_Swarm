@@ -46,8 +46,20 @@ import {
     UnifiedSwarmProfiler,
     PerformanceAnomalyDetector,
     runSwarmBenchmark,
-    globalUnifiedProfiler
+    globalUnifiedProfiler,
+    ContinuousFeedbackEngine,
+    PolicyOptimizer,
+    ConceptDriftDetector,
+    SwarmKnowledgeRepository,
+    globalFeedbackEngine
 } from './dist/swarm/index.js';
+import {
+    ContinuousFeedbackEngine as FeedbackEngineFromSubpath,
+    PolicyOptimizer as OptimizerFromSubpath,
+    ConceptDriftDetector as DriftDetectorFromSubpath,
+    SwarmKnowledgeRepository as RepoFromSubpath,
+    globalFeedbackEngine as globalFeedbackFromSubpath
+} from './dist/swarm/feedback.js';
 import {
     UnifiedSwarmProfiler as ProfilerFromSubpath,
     PerformanceAnomalyDetector as AnomalyDetectorFromSubpath,
@@ -426,6 +438,83 @@ async function runDistVerification() {
         throw new Error('Compiled runSwarmBenchmark execution failed');
     }
     console.log('✓ Compiled Profiler module subpath, UnifiedSwarmProfiler, PerformanceAnomalyDetector, and runSwarmBenchmark verified');
+
+    // 15. Verify compiled ContinuousFeedbackEngine, PolicyOptimizer, ConceptDriftDetector, and SwarmKnowledgeRepository
+    if (!ContinuousFeedbackEngine || !PolicyOptimizer || !ConceptDriftDetector || !SwarmKnowledgeRepository || !globalFeedbackEngine || !FeedbackEngineFromSubpath || !OptimizerFromSubpath || !DriftDetectorFromSubpath || !RepoFromSubpath || !globalFeedbackFromSubpath) {
+        throw new Error('Compiled feedback module exports missing');
+    }
+
+    const testOptimizer = new OptimizerFromSubpath();
+    const testReward = testOptimizer.calculateReward({
+        workflowId: 'wf-dist-1',
+        task: 'compiled-test',
+        appId: 'dist-app',
+        durationMs: 60,
+        targetTier: 'instant',
+        tokenSavings: 300,
+        tokensConsumed: 100,
+        qualityScore: 0.96,
+        accuracyScore: 0.99,
+        errorCount: 0,
+        anomalyCount: 0,
+        timestamp: Date.now()
+    });
+    if (testReward.compositeReward <= 0.5) {
+        throw new Error('Compiled PolicyOptimizer calculateReward failed');
+    }
+    const mutated = testOptimizer.mutate(testOptimizer.getCurrentPolicy(), 0.1);
+    if (!mutated || typeof mutated.cacheL1MaxEntries !== 'number') {
+        throw new Error('Compiled PolicyOptimizer mutate failed');
+    }
+
+    const testDrift = new DriftDetectorFromSubpath();
+    const valRes = testDrift.validateDataPayload('Valid telemetry stream test');
+    if (!valRes.valid) {
+        throw new Error('Compiled ConceptDriftDetector validateDataPayload failed');
+    }
+
+    const testRepo = new RepoFromSubpath();
+    await testRepo.recordOutcome({
+        id: 'out-dist-1',
+        workflowId: 'wf-dist-1',
+        task: 'compiled-test',
+        appId: 'dist-app',
+        finalInsightSnippet: 'Compiled insight nominal',
+        metrics: {
+            workflowId: 'wf-dist-1',
+            task: 'compiled-test',
+            appId: 'dist-app',
+            durationMs: 60,
+            targetTier: 'instant',
+            tokenSavings: 300,
+            tokensConsumed: 100,
+            errorCount: 0,
+            anomalyCount: 0,
+            timestamp: Date.now()
+        },
+        reward: testReward,
+        parametersUsed: testOptimizer.getCurrentPolicy(),
+        driftAlerts: [],
+        timestamp: Date.now()
+    });
+    const distOutcomes = testRepo.queryOutcomes({ appId: 'dist-app' });
+    if (distOutcomes.length !== 1 || distOutcomes[0].id !== 'out-dist-1') {
+        throw new Error('Compiled SwarmKnowledgeRepository queryOutcomes failed');
+    }
+
+    const testFeedbackEngine = FeedbackEngineFromSubpath.getInstance();
+    const fbRes = await testFeedbackEngine.processFeedback({
+        workflowId: 'wf-dist-2',
+        task: 'compiled-engine-feedback',
+        appId: 'dist-app',
+        durationMs: 50,
+        targetTier: 'instant',
+        qualityScore: 0.95
+    });
+    if (!fbRes || !fbRes.outcomeId || !fbRes.tunedParameters) {
+        throw new Error('Compiled ContinuousFeedbackEngine processFeedback failed');
+    }
+    console.log('✓ Compiled Feedback module subpath, PolicyOptimizer, ConceptDriftDetector, and SwarmKnowledgeRepository verified');
 
     console.log('\n✓ ALL COMPILED SWARM DISTRIBUTION BUNDLE TESTS PASSED SUCCESSFULLY!\n');
 }

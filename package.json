@@ -140,6 +140,12 @@
       "import": "./dist/swarm/tieredCache.js",
       "require": "./dist/swarm/tieredCache.cjs",
       "default": "./src/swarm/tieredCache.ts"
+    },
+    "./feedback": {
+      "types": "./dist/swarm/feedback.d.ts",
+      "import": "./dist/swarm/feedback.js",
+      "require": "./dist/swarm/feedback.cjs",
+      "default": "./src/swarm/feedback.ts"
     }
   },
   "scripts": {

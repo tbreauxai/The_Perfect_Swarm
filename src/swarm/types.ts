@@ -75,7 +75,23 @@ export interface SwarmEngineSettings {
     hierarchySettings?: SwarmHierarchySettings;
     tieredCacheSettings?: SwarmTieredCacheSettings;
     profilingSettings?: SwarmProfilingSettings;
+    feedbackSettings?: SwarmFeedbackSettings;
     [key: string]: any;
+}
+
+export interface SwarmFeedbackSettings {
+    enabled?: boolean;
+    autoTune?: boolean;
+    detectDrift?: boolean;
+    validateData?: boolean;
+    rewardWeights?: {
+        quality?: number;
+        accuracy?: number;
+        latency?: number;
+        cost?: number;
+        tokenSavings?: number;
+    };
+    initialParameters?: Record<string, any>;
 }
 
 export interface SwarmProfilingSettings {

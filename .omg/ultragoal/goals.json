@@ -1,20 +1,20 @@
 [
   {
-    "id": "goal-1-unified-profiler-and-benchmark-harness",
-    "description": "Implement UnifiedSwarmProfiler, multi-subsystem baseline aggregation (cache, scheduler, compression, vector index, hierarchy, speculative), performance anomaly/drift detection, and synthetic SwarmBenchmarkHarness in src/swarm/profiler.ts with comprehensive unit tests in src/swarm/profiler.test.ts.",
+    "id": "goal-1-feedback-engine-and-policy-adapter",
+    "description": "Implement ContinuousFeedbackEngine, PolicyOptimizer (evolutionary strategy and reinforcement learning policy tuning), ConceptDriftDetector (Page-Hinkley and embedding divergence), and SwarmKnowledgeRepository in src/swarm/feedback.ts with comprehensive unit tests in src/swarm/feedback.test.ts.",
     "status": "completed",
-    "verification": "Unit tests in src/swarm/profiler.test.ts verify subsystem baseline aggregation, latency percentile distributions, anomaly drift scoring, and synthetic benchmark execution."
+    "verification": "Unit tests in src/swarm/feedback.test.ts verify reward attribution, evolutionary parameter mutation, drift detection, and knowledge repository indexing."
   },
   {
-    "id": "goal-2-engine-telemetry-and-cli-profiler",
-    "description": "Integrate UnifiedSwarmProfiler into src/swarm/engine.ts and src/swarm/types.ts with SwarmProfilingSettings, attach unified baselines to SwarmWorkflowResult, add CLI profiling commands to bin/cli.js, and add npm run bench to package.json with integration tests in src/swarm/profiler-engine.test.ts.",
+    "id": "goal-2-engine-feedback-integration-and-drift-remediation",
+    "description": "Integrate ContinuousFeedbackEngine and SwarmKnowledgeRepository into src/swarm/engine.ts and src/swarm/types.ts with SwarmFeedbackSettings, attach feedback reports to SwarmWorkflowResult, add CLI feedback commands to bin/cli.js, and write integration tests in src/swarm/feedback-engine.test.ts.",
     "status": "completed",
-    "verification": "Integration tests in src/swarm/profiler-engine.test.ts verify engine-level unified baseline generation, anomaly detection, and CLI profile command execution."
+    "verification": "Integration tests in src/swarm/feedback-engine.test.ts verify post-analysis feedback processing, dynamic parameter updates, and drift alert triggering."
   },
   {
-    "id": "goal-3-verification-build-and-live-baseline-collection",
-    "description": "Export unified profiler from library and subpaths, configure vite.config.swarm.ts, update test-dist-import.mjs and test-dist-import.cjs, rebuild client and swarm bundles, pass 100% of all Vitest and 5 E2E test suites, and execute live benchmark collecting real baseline numbers.",
+    "id": "goal-3-verification-build-and-live-feedback-collection",
+    "description": "Export feedback module from library and package.json subpaths, configure vite.config.swarm.ts, update test-dist-import.mjs, test-dist-import.cjs, and test-cli.mjs, rebuild client and swarm bundles, pass 100% of all Vitest and 5 E2E test suites, and execute live feedback simulation.",
     "status": "completed",
-    "verification": "build:client and build:swarm pass cleanly, all Vitest and E2E suites pass 100%, and npm run bench produces live verified baseline metrics."
+    "verification": "Dual ESM/CJS bundles build cleanly, 100% pass across all Vitest suites and 5 E2E suites, and npm run lint passes with zero errors."
   }
 ]

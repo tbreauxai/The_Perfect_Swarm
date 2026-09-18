@@ -219,6 +219,61 @@ async function testCjsImport() {
     }
     console.log('✓ CJS profiler subpath, UnifiedSwarmProfiler, PerformanceAnomalyDetector, and runSwarmBenchmark verified');
 
+    const feedbackCjs = require('./dist/swarm/feedback.cjs');
+    if (!feedbackCjs.ContinuousFeedbackEngine || !feedbackCjs.PolicyOptimizer || !feedbackCjs.ConceptDriftDetector || !feedbackCjs.SwarmKnowledgeRepository || !feedbackCjs.globalFeedbackEngine) {
+        throw new Error('CommonJS feedback exports missing');
+    }
+    const cjsOpt = new feedbackCjs.PolicyOptimizer();
+    const cjsRew = cjsOpt.calculateReward({
+        workflowId: 'wf-cjs',
+        task: 'test',
+        appId: 'cjs-app',
+        durationMs: 50,
+        targetTier: 'instant',
+        tokenSavings: 100,
+        tokensConsumed: 100,
+        qualityScore: 0.90,
+        errorCount: 0,
+        anomalyCount: 0,
+        timestamp: Date.now()
+    });
+    if (cjsRew.compositeReward <= 0.4) {
+        throw new Error('CommonJS PolicyOptimizer reward calculation failed');
+    }
+    const cjsDrift = new feedbackCjs.ConceptDriftDetector();
+    const cjsPayloadVal = cjsDrift.validateDataPayload('payload string');
+    if (!cjsPayloadVal.valid) {
+        throw new Error('CommonJS ConceptDriftDetector payload validation failed');
+    }
+    const cjsRepo = new feedbackCjs.SwarmKnowledgeRepository();
+    await cjsRepo.recordOutcome({
+        id: 'cjs-out-1',
+        workflowId: 'wf-cjs',
+        task: 'test',
+        appId: 'cjs-app',
+        finalInsightSnippet: 'snippet',
+        metrics: {
+            workflowId: 'wf-cjs',
+            task: 'test',
+            appId: 'cjs-app',
+            durationMs: 50,
+            targetTier: 'instant',
+            tokenSavings: 100,
+            tokensConsumed: 100,
+            errorCount: 0,
+            anomalyCount: 0,
+            timestamp: Date.now()
+        },
+        reward: cjsRew,
+        parametersUsed: cjsOpt.getCurrentPolicy(),
+        driftAlerts: [],
+        timestamp: Date.now()
+    });
+    if (cjsRepo.queryOutcomes({ appId: 'cjs-app' }).length !== 1) {
+        throw new Error('CommonJS SwarmKnowledgeRepository failed');
+    }
+    console.log('✓ CJS feedback subpath, PolicyOptimizer, ConceptDriftDetector, and SwarmKnowledgeRepository verified');
+
     console.log('✓ ALL COMMONJS SWARM DISTRIBUTION TESTS PASSED!\n');
 }
 

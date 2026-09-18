@@ -8,6 +8,7 @@ import { MemoryCortex } from '../dist/swarm/memory.js';
 import { ModelRouter } from '../dist/swarm/router.js';
 import { ProviderRegistry } from '../dist/swarm/index.js';
 import { runSwarmBenchmark, globalUnifiedProfiler } from '../dist/swarm/profiler.js';
+import { globalFeedbackEngine } from '../dist/swarm/feedback.js';
 
 const args = process.argv.slice(2);
 const command = args[0] || '--help';
@@ -24,6 +25,9 @@ Commands:
   import-memory <file> [options] Import and hydrate memories into MemoryCortex
   profile [options]              Run baseline performance profiling and benchmark metrics collection
   bench [options]                Alias for profile
+  feedback-stats [options]       Display aggregated feedback insights and reward statistics
+  drift-check                    Check active concept drift alerts across latency, quality, and embeddings
+  policy-inspect                 Inspect current evolutionary tuned swarm parameters and policy status
 
 Options:
   --data <data-payload>          Input data payload for analysis
@@ -415,6 +419,53 @@ async function runProfile(rawArgs) {
     console.log(`\n✓ Baseline Profiling & Metrics Collection completed successfully.\n`);
 }
 
+async function runFeedbackStats(rawArgs) {
+    let appId = 'perfect-swarm';
+    for (let i = 0; i < rawArgs.length; i++) {
+        if (rawArgs[i] === '--app' && rawArgs[i + 1]) {
+            appId = rawArgs[i + 1];
+            i++;
+        }
+    }
+    console.log(`\n=== Perfect Swarm Knowledge Repository & Feedback Insights ===\n`);
+    const insights = globalFeedbackEngine.getKnowledgeRepository().getAggregatedInsights(appId);
+    console.log(`Target Application:    ${appId}`);
+    console.log(`Total Logged Runs:     ${insights.totalRuns}`);
+    console.log(`Average Reward Score:  ${insights.avgReward}`);
+    console.log(`Average Latency:       ${insights.avgDurationMs}ms`);
+    console.log(`Total Tokens Saved:    ${insights.totalTokensSaved}`);
+    console.log(`Drift Alerts Logged:   ${insights.driftAlertsCount}`);
+    console.log(`\nBest Evolutionary Parameters:`);
+    console.log(JSON.stringify(insights.bestParameters, null, 2));
+    console.log(`\n✓ Feedback statistics retrieved successfully.\n`);
+}
+
+async function runDriftCheck() {
+    console.log(`\n=== Perfect Swarm Concept Drift Detector ===\n`);
+    const alerts = globalFeedbackEngine.getDriftDetector().getAlerts();
+    console.log(`Active Drift Alerts: ${alerts.length}`);
+    if (alerts.length === 0) {
+        console.log(`✓ Zero drift detected across latency, quality, and semantic embedding streams.\n`);
+    } else {
+        for (const alert of alerts) {
+            console.log(`  [${alert.severity.toUpperCase()}] ${alert.driftType} on '${alert.metric}': ${alert.message}`);
+            console.log(`    Recommended Action: ${alert.recommendedAction}`);
+        }
+        console.log('');
+    }
+}
+
+async function runPolicyInspect() {
+    console.log(`\n=== Perfect Swarm Evolutionary Policy Inspector ===\n`);
+    const current = globalFeedbackEngine.getPolicyOptimizer().getCurrentPolicy();
+    const best = globalFeedbackEngine.getPolicyOptimizer().getBestPolicy();
+    console.log(`Current Active Tuned Parameters:`);
+    console.log(JSON.stringify(current, null, 2));
+    console.log(`\nBest Historical Policy Parameters:`);
+    console.log(JSON.stringify(best, null, 2));
+    console.log(`\n✓ Policy parameters inspected successfully.\n`);
+}
+
 async function main() {
     switch (command) {
         case 'doctor':
@@ -435,6 +486,15 @@ async function main() {
         case 'profile':
         case 'bench':
             await runProfile(args.slice(1));
+            break;
+        case 'feedback-stats':
+            await runFeedbackStats(args.slice(1));
+            break;
+        case 'drift-check':
+            await runDriftCheck();
+            break;
+        case 'policy-inspect':
+            await runPolicyInspect();
             break;
         case '--help':
         case '-h':
