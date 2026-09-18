@@ -49,29 +49,27 @@ export const AgentConfigurator: React.FC<AgentConfiguratorProps> = ({
         uniqueProviders.forEach(provider => {
             if (!modelsByProvider[provider] && !loadingProviders[provider]) {
                 const apiKey = getApiKeyForProvider(settings, provider);
-                if (provider === 'openrouter' || provider === 'simulated' || apiKey) {
-                    setLoadingProviders(prev => ({ ...prev, [provider]: true }));
-                    fetchAvailableModels(provider, apiKey)
-                        .then(models => {
-                            setModelsByProvider(prev => ({ ...prev, [provider]: models }));
-                            setLoadingProviders(prev => ({ ...prev, [provider]: false }));
+                setLoadingProviders(prev => ({ ...prev, [provider]: true }));
+                fetchAvailableModels(provider, apiKey)
+                    .then(models => {
+                        setModelsByProvider(prev => ({ ...prev, [provider]: models }));
+                        setLoadingProviders(prev => ({ ...prev, [provider]: false }));
 
-                            // Trigger parallel async 2-tier health check (cached for 5-10 min)
-                            setCheckingHealth(prev => ({ ...prev, [provider]: true }));
-                            checkProviderModelsHealth(provider, models, apiKey)
-                                .then(healthMap => {
-                                    setHealthStatusByModel(prev => ({ ...prev, ...healthMap }));
-                                    setCheckingHealth(prev => ({ ...prev, [provider]: false }));
-                                })
-                                .catch(() => {
-                                    setCheckingHealth(prev => ({ ...prev, [provider]: false }));
-                                });
-                        })
-                        .catch(err => {
-                            console.error(`Failed to load models for ${provider}`, err);
-                            setLoadingProviders(prev => ({ ...prev, [provider]: false }));
-                        });
-                }
+                        // Trigger parallel async 2-tier health check (cached for 5-10 min)
+                        setCheckingHealth(prev => ({ ...prev, [provider]: true }));
+                        checkProviderModelsHealth(provider, models, apiKey)
+                            .then(healthMap => {
+                                setHealthStatusByModel(prev => ({ ...prev, ...healthMap }));
+                                setCheckingHealth(prev => ({ ...prev, [provider]: false }));
+                            })
+                            .catch(() => {
+                                setCheckingHealth(prev => ({ ...prev, [provider]: false }));
+                            });
+                    })
+                    .catch(err => {
+                        console.error(`Failed to load models for ${provider}`, err);
+                        setLoadingProviders(prev => ({ ...prev, [provider]: false }));
+                    });
             }
         });
     }, [agents, settings, modelsByProvider, loadingProviders]);
