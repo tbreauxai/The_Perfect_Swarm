@@ -45,12 +45,9 @@ export async function fetchAvailableModels(provider: string, apiKey?: string): P
             }
             case 'groq': {
                 if (!apiKey) {
-                    return [
-                        { id: 'llama3-8b-8192', name: 'Llama 3 8B (8k)', free: true },
-                        { id: 'llama3-70b-8192', name: 'Llama 3 70B (8k)', free: true },
-                        { id: 'mixtral-8x7b-32768', name: 'Mixtral 8x7B (32k)', free: true },
-                        { id: 'gemma-7b-it', name: 'Gemma 7B IT', free: true }
-                    ];
+                    const res = await fetch(`/api/swarm/models?provider=${provider}`);
+                    if (!res.ok) throw new Error('Failed to fetch Groq models via backend proxy');
+                    return res.json();
                 }
                 const res = await fetch('https://api.groq.com/openai/v1/models', {
                     headers: { 'Authorization': `Bearer ${apiKey}` }
@@ -65,11 +62,9 @@ export async function fetchAvailableModels(provider: string, apiKey?: string): P
             }
             case 'gemini': {
                 if (!apiKey) {
-                    return [
-                        { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', free: true },
-                        { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', free: true },
-                        { id: 'gemini-2.0-flash-exp', name: 'Gemini 2.0 Flash (Exp)', free: true }
-                    ];
+                    const res = await fetch(`/api/swarm/models?provider=${provider}`);
+                    if (!res.ok) throw new Error('Failed to fetch Gemini models via backend proxy');
+                    return res.json();
                 }
                 const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
                 if (!res.ok) throw new Error('Failed to fetch Gemini models');
@@ -85,12 +80,9 @@ export async function fetchAvailableModels(provider: string, apiKey?: string): P
             }
             case 'mistral': {
                 if (!apiKey) {
-                    return [
-                        { id: 'mistral-tiny', name: 'Mistral Tiny', free: true },
-                        { id: 'mistral-small-latest', name: 'Mistral Small', free: true },
-                        { id: 'mistral-medium-latest', name: 'Mistral Medium', free: false },
-                        { id: 'mistral-large-latest', name: 'Mistral Large', free: false }
-                    ];
+                    const res = await fetch(`/api/swarm/models?provider=${provider}`);
+                    if (!res.ok) throw new Error('Failed to fetch Mistral models via backend proxy');
+                    return res.json();
                 }
                 const res = await fetch('https://api.mistral.ai/v1/models', {
                     headers: { 'Authorization': `Bearer ${apiKey}` }
@@ -105,10 +97,9 @@ export async function fetchAvailableModels(provider: string, apiKey?: string): P
             }
             case 'github': {
                 if (!apiKey) {
-                    return [
-                        { id: 'gpt-4o', name: 'GPT-4o', free: true },
-                        { id: 'Llama-3-70B-Instruct', name: 'Llama-3-70B-Instruct', free: true }
-                    ];
+                    const res = await fetch(`/api/swarm/models?provider=${provider}`);
+                    if (!res.ok) throw new Error('Failed to fetch GitHub models via backend proxy');
+                    return res.json();
                 }
                 const res = await fetch('https://models.inference.ai.azure.com/models', {
                     headers: { 'Authorization': `Bearer ${apiKey}` }

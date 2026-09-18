@@ -180,5 +180,98 @@ export function createSwarmServer(options: SwarmServerOptions = {}): Hono {
         }
     });
 
+    app.get('/api/swarm/models', async (c) => {
+        try {
+            const provider = c.req.query('provider');
+            if (!provider) {
+                return c.json({ error: 'Missing required query parameter: provider' }, 400);
+            }
+
+            const env = (c.env || {}) as Record<string, any>;
+            
+            switch (provider.toLowerCase()) {
+                case 'simulated': {
+                    return c.json([
+                        { id: 'simulated-swarm-v1', name: 'Simulated Swarm Model', free: true }
+                    ]);
+                }
+                case 'openrouter': {
+                    const res = await fetch('https://openrouter.ai/api/v1/models');
+                    if (!res.ok) throw new Error('Failed to fetch OpenRouter models');
+                    const data = await res.json();
+                    return c.json((data.data || []).map((m: any) => ({
+                        id: m.id,
+                        name: m.name || m.id,
+                        context_length: m.context_length,
+                        free: m.pricing?.prompt === "0" && m.pricing?.completion === "0"
+                    })));
+                }
+                case 'groq': {
+                    const apiKey = env.GROQ_API_KEY;
+                    if (!apiKey) throw new Error('GROQ_API_KEY is not configured on the server');
+                    const res = await fetch('https://api.groq.com/openai/v1/models', {
+                        headers: { 'Authorization': `Bearer ${apiKey}` }
+                    });
+                    if (!res.ok) throw new Error('Failed to fetch Groq models');
+                    const data = await res.json();
+                    return c.json((data.data || []).map((m: any) => ({
+                        id: m.id,
+                        name: m.id,
+                        free: true
+                    })));
+                }
+                case 'gemini': {
+                    const apiKey = env.GEMINI_API_KEY;
+                    if (!apiKey) throw new Error('GEMINI_API_KEY is not configured on the server');
+                    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+                    if (!res.ok) throw new Error('Failed to fetch Gemini models');
+                    const data = await res.json();
+                    const models = (data.models || [])
+                        .filter((m: any) => Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes('generateContent'))
+                        .map((m: any) => ({
+                            id: (m.name || '').replace('models/', ''),
+                            name: m.displayName || m.name,
+                            free: true
+                        }));
+                    return c.json(models);
+                }
+                case 'mistral': {
+                    const apiKey = env.MISTRAL_API_KEY;
+                    if (!apiKey) throw new Error('MISTRAL_API_KEY is not configured on the server');
+                    const res = await fetch('https://api.mistral.ai/v1/models', {
+                        headers: { 'Authorization': `Bearer ${apiKey}` }
+                    });
+                    if (!res.ok) throw new Error('Failed to fetch Mistral models');
+                    const data = await res.json();
+                    return c.json((data.data || []).map((m: any) => ({
+                        id: m.id,
+                        name: m.id,
+                        free: typeof m.id === 'string' && (m.id.includes('free') || m.id.includes('open'))
+                    })));
+                }
+                case 'github': {
+                    const apiKey = env.GITHUB_TOKEN;
+                    if (!apiKey) throw new Error('GITHUB_TOKEN is not configured on the server');
+                    const res = await fetch('https://models.inference.ai.azure.com/models', {
+                        headers: { 'Authorization': `Bearer ${apiKey}` }
+                    });
+                    if (!res.ok) throw new Error('Failed to fetch GitHub models');
+                    const data = await res.json();
+                    const list = Array.isArray(data) ? data : (data.data || []);
+                    return c.json(list.map((m: any) => ({
+                        id: m.name,
+                        name: m.friendly_name || m.name,
+                        free: true
+                    })));
+                }
+                default:
+                    return c.json([]);
+            }
+        } catch (err: any) {
+            console.error(`[SwarmServer Models Error]:`, err);
+            return c.json({ error: err.message || 'Internal Server Error' }, 500);
+        }
+    });
+
     return app;
 }
