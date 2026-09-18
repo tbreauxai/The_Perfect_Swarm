@@ -194,6 +194,31 @@ async function testCjsImport() {
     }
     console.log('✓ CJS tieredCache subpath, VectorQuantizer, SelectiveSnapshotter, and TieredCache verified');
 
+    const profilerCjs = require('./dist/swarm/profiler.cjs');
+    if (!profilerCjs.UnifiedSwarmProfiler || !profilerCjs.PerformanceAnomalyDetector || !profilerCjs.runSwarmBenchmark || !profilerCjs.globalUnifiedProfiler) {
+        throw new Error('CommonJS profiler exports missing');
+    }
+    const cjsProfiler = profilerCjs.UnifiedSwarmProfiler.getInstance();
+    cjsProfiler.recordWorkflowRun({
+        durationMs: 30,
+        cache: { l1Hits: 1, savedTokens: 50 }
+    });
+    const cjsReport = cjsProfiler.getUnifiedBaselineReport();
+    if (cjsReport.totalWorkflows <= 0) {
+        throw new Error('CommonJS UnifiedSwarmProfiler failed');
+    }
+    const cjsDetector = new profilerCjs.PerformanceAnomalyDetector();
+    cjsDetector.calibrate([10, 20, 30]);
+    const cjsAnomaly = cjsDetector.checkLatency('test', 100);
+    if (!cjsAnomaly) {
+        throw new Error('CommonJS PerformanceAnomalyDetector failed');
+    }
+    const cjsBench = await profilerCjs.runSwarmBenchmark({ iterations: 2, batchSize: 2 });
+    if (!cjsBench || cjsBench.totalIterations !== 2) {
+        throw new Error('CommonJS runSwarmBenchmark failed');
+    }
+    console.log('✓ CJS profiler subpath, UnifiedSwarmProfiler, PerformanceAnomalyDetector, and runSwarmBenchmark verified');
+
     console.log('✓ ALL COMMONJS SWARM DISTRIBUTION TESTS PASSED!\n');
 }
 

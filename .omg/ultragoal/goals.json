@@ -1,20 +1,20 @@
 [
   {
-    "id": "goal-1-tiered-cache-and-vector-quantization",
-    "description": "Implement TieredCache (L1 hot LRU, L2 warm semantic, L3 cold snapshot), VectorQuantizer (SQ8 scalar quantization, 1-bit binary sign quantization, asymmetric distance scoring), and SelectiveSnapshotter (delta snapshotting, state compression, state hydration) in src/swarm/tieredCache.ts with comprehensive unit tests in src/swarm/tieredCache.test.ts.",
+    "id": "goal-1-unified-profiler-and-benchmark-harness",
+    "description": "Implement UnifiedSwarmProfiler, multi-subsystem baseline aggregation (cache, scheduler, compression, vector index, hierarchy, speculative), performance anomaly/drift detection, and synthetic SwarmBenchmarkHarness in src/swarm/profiler.ts with comprehensive unit tests in src/swarm/profiler.test.ts.",
     "status": "completed",
-    "verification": "Unit tests in src/swarm/tieredCache.test.ts verify multi-tier cache promotion/demotion, SQ8 4x compression, 1-bit 32x quantization, Hamming distance scoring, delta state snapshotting, and snapshot restoration."
+    "verification": "Unit tests in src/swarm/profiler.test.ts verify subsystem baseline aggregation, latency percentile distributions, anomaly drift scoring, and synthetic benchmark execution."
   },
   {
-    "id": "goal-2-engine-tiered-cache-integration",
-    "description": "Integrate TieredCache and SelectiveSnapshotter into src/swarm/engine.ts and src/swarm/types.ts with SwarmTieredCacheSettings, cache hit short-circuiting, snapshot delta captures, and integration tests in src/swarm/tieredCache-engine.test.ts.",
+    "id": "goal-2-engine-telemetry-and-cli-profiler",
+    "description": "Integrate UnifiedSwarmProfiler into src/swarm/engine.ts and src/swarm/types.ts with SwarmProfilingSettings, attach unified baselines to SwarmWorkflowResult, add CLI profiling commands to bin/cli.js, and add npm run bench to package.json with integration tests in src/swarm/profiler-engine.test.ts.",
     "status": "completed",
-    "verification": "Integration tests in src/swarm/tieredCache-engine.test.ts verify engine-level L1/L2 hits, state snapshotting, and telemetry event emissions."
+    "verification": "Integration tests in src/swarm/profiler-engine.test.ts verify engine-level unified baseline generation, anomaly detection, and CLI profile command execution."
   },
   {
-    "id": "goal-3-verification-and-bundle-build",
-    "description": "Export tieredCache module in src/swarm/index.ts and package.json, configure vite.config.swarm.ts, update test-dist-import.mjs and test-dist-import.cjs, rebuild client and swarm bundles, and pass 100% of all Vitest and 5 E2E test suites.",
+    "id": "goal-3-verification-build-and-live-baseline-collection",
+    "description": "Export unified profiler from library and subpaths, configure vite.config.swarm.ts, update test-dist-import.mjs and test-dist-import.cjs, rebuild client and swarm bundles, pass 100% of all Vitest and 5 E2E test suites, and execute live benchmark collecting real baseline numbers.",
     "status": "completed",
-    "verification": "build:client and build:swarm pass cleanly, test-dist-import verifies exports, all Vitest test suites pass, and all 5 E2E test suites pass 100%."
+    "verification": "build:client and build:swarm pass cleanly, all Vitest and E2E suites pass 100%, and npm run bench produces live verified baseline metrics."
   }
 ]

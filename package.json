@@ -156,6 +156,8 @@
     "test:cli": "node test-cli.mjs",
     "test:server": "node test-sse-server.mjs",
     "test": "npm run test:portable && npm run test:simulation && npm run test:dist && npm run test:cli && npm run test:server",
+    "bench": "node bin/cli.js bench",
+    "profile": "node bin/cli.js profile",
     "start": "node --experimental-strip-types server.ts"
   },
   "dependencies": {

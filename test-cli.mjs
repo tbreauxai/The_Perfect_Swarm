@@ -116,6 +116,15 @@ async function testCli() {
         console.log('✓ Cleaned up CLI snapshot test files');
     }
 
+    // 6. Test CLI Bench & Profile
+    console.log('\n[CLI Test 6] Testing bench & profile...');
+    const benchOutput = execSync('node bin/cli.js bench --iterations 3 --batch-size 2', { encoding: 'utf8' });
+    console.log(benchOutput);
+    if (!benchOutput.includes('Baseline Profiling Summary') || !benchOutput.includes('ops/sec') || !benchOutput.includes('Baseline Profiling & Metrics Collection completed successfully')) {
+        throw new Error('CLI bench command failed to execute baseline profiler');
+    }
+    console.log('✓ CLI bench command verified.');
+
     console.log('\n✓ ALL CLI TESTS PASSED SUCCESSFULLY!\n');
 }
 

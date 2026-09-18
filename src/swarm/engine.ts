@@ -3,7 +3,7 @@ import { Agent } from './agent.ts';
 import { MemoryCortex } from './memory.ts';
 import { SwarmContext } from './context.ts';
 import type { SwarmEvent, ProviderCredential, Provider, LearnedMemoryEvent, AgentRunConfig, SwarmEngineSettings, AgentConfig } from './types.ts';
-import { profileData, createTokenChunks, SwarmTracer, globalMetricsCollector, SwarmMetricsCollector, type SwarmBaselineReport } from './profiler.ts';
+import { profileData, createTokenChunks, SwarmTracer, globalMetricsCollector, SwarmMetricsCollector, globalUnifiedProfiler, type SwarmBaselineReport, type UnifiedSwarmBaselineReport } from './profiler.ts';
 import { ModelRouter, type TaskComplexity } from './router.ts';
 import { AnalysisLifecycle } from './lifecycle.ts';
 import { PayloadCache, globalPayloadCache, globalSemanticCache, type SemanticMatchResult } from './cache.ts';
@@ -261,6 +261,7 @@ export interface SwarmWorkflowResult {
         snapshotId?: string;
         metrics: TieredCacheMetrics;
     };
+    unifiedBaselines?: UnifiedSwarmBaselineReport;
 }
 
 /**
@@ -396,6 +397,19 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             });
             const metrics = globalMetricsCollector.getBaselineReport();
 
+            const profilingEnabled = settings?.profilingSettings?.enabled !== false;
+            if (profilingEnabled) {
+                globalUnifiedProfiler.recordWorkflowRun({
+                    durationMs: workflowDurationMs,
+                    cache: {
+                        l1Hits: lookup.tier === 'L1' ? 1 : 0,
+                        l2Hits: lookup.tier === 'L2' ? 1 : 0,
+                        l3Hits: lookup.tier === 'L3' ? 1 : 0,
+                        savedTokens: 250
+                    }
+                });
+            }
+
             return {
                 events: context.events,
                 finalAnalysis: lookup.value,
@@ -406,7 +420,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     similarity: lookup.similarity,
                     latencyMs: lookup.latencyMs,
                     metrics: globalTieredCache.getMetrics()
-                }
+                },
+                unifiedBaselines: profilingEnabled ? globalUnifiedProfiler.getUnifiedBaselineReport() : undefined
             };
         }
     }
@@ -790,6 +805,21 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 globalTieredCache.set(cacheQuery, finalAnalysis, cacheQuery);
             }
 
+            const profilingSettings = settings?.profilingSettings;
+            const profilingEnabled = profilingSettings?.enabled !== false;
+            if (profilingEnabled) {
+                globalUnifiedProfiler.recordWorkflowRun({
+                    durationMs: workflowDurationMs,
+                    cache: tieredCacheEnabled ? { misses: 1 } : undefined,
+                    compression: workflowOriginalPromptTokens > 0 ? {
+                        totalOriginalTokens: workflowOriginalPromptTokens,
+                        totalCompressedTokens: workflowCompressedPromptTokens,
+                        totalTokensSaved: workflowPromptTokensSaved,
+                        deduplicatedSegmentsCount: workflowDeduplicatedCount
+                    } : undefined
+                });
+            }
+
             return {
                 events: context.events,
                 finalAnalysis,
@@ -811,7 +841,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     hit: false,
                     latencyMs: workflowDurationMs,
                     metrics: globalTieredCache.getMetrics()
-                } : undefined
+                } : undefined,
+                unifiedBaselines: profilingEnabled ? globalUnifiedProfiler.getUnifiedBaselineReport() : undefined
             };
         } catch (err: any) {
             console.warn(`[Fast-Path] Short-circuit failed, falling back to full swarm pipeline:`, err);
@@ -1818,6 +1849,42 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         }
     }
 
+    const profilingEnabled = settings?.profilingSettings?.enabled !== false;
+    if (profilingEnabled) {
+        globalUnifiedProfiler.recordWorkflowRun({
+            durationMs: workflowDurationMs,
+            cache: tieredCacheEnabled ? {
+                l1Hits: workflowTieredCacheHit?.tier === 'L1' ? 1 : 0,
+                l2Hits: workflowTieredCacheHit?.tier === 'L2' ? 1 : 0,
+                l3Hits: workflowTieredCacheHit?.tier === 'L3' ? 1 : 0,
+                misses: !workflowTieredCacheHit?.found ? 1 : 0,
+                savedTokens: workflowTieredCacheHit?.found ? 250 : 0
+            } : undefined,
+            scheduler: workflowSchedulingResult ? {
+                totalTasks: workflowSchedulingResult.totalTasks,
+                successfulTasks: workflowSchedulingResult.successfulTasks,
+                failedTasks: workflowSchedulingResult.failedTasks,
+                totalQueueWaitMs: workflowSchedulingResult.totalQueueWaitMs,
+                totalExecutionMs: workflowSchedulingResult.totalExecutionMs,
+                totalBackpressureDelayMs: workflowSchedulingResult.totalBackpressureDelayMs,
+                stolenTaskCount: workflowSchedulingResult.stolenTaskCount
+            } : undefined,
+            compression: workflowOriginalPromptTokens > 0 ? {
+                totalOriginalTokens: workflowOriginalPromptTokens,
+                totalCompressedTokens: workflowCompressedPromptTokens,
+                totalTokensSaved: workflowPromptTokensSaved,
+                deduplicatedSegmentsCount: workflowDeduplicatedCount
+            } : undefined,
+            hierarchy: workflowHierarchyMetrics ? {
+                treeDepth: workflowHierarchyMetrics.treeDepth,
+                totalNodes: workflowHierarchyMetrics.totalNodes,
+                tierCounts: workflowHierarchyMetrics.tierCounts,
+                delegatedTasksCount: workflowHierarchyMetrics.delegationsCount,
+                escalatedTasksCount: workflowHierarchyMetrics.escalationsCount
+            } : undefined
+        });
+    }
+
     return {
         events: context.events,
         finalAnalysis,
@@ -1859,7 +1926,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             latencyMs: workflowTieredCacheHit?.latencyMs ?? 0,
             snapshotId: workflowSnapshotId,
             metrics: globalTieredCache.getMetrics()
-        } : undefined
+        } : undefined,
+        unifiedBaselines: profilingEnabled ? globalUnifiedProfiler.getUnifiedBaselineReport() : undefined
     };
 }
 

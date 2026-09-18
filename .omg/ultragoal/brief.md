@@ -1,23 +1,26 @@
-# Ultragoal: Tiered Caching and State-Compression (Vector Quantization, Selective Snapshotting)
+# Ultragoal Brief: Baseline Profiling & Metrics Collection
 
 ## Objective
-Implement a multi-tier cache hierarchy (L1 Hot Memory LRU, L2 Warm Semantic, L3 Cold Compressed Persistence), Vector Quantization (SQ8 scalar quantization, 1-bit sign binary quantization, sub-byte vector compression, asymmetric distance computation), and Selective State Snapshotting (delta-state serialization, dictionary state compression, hydration) for @perfect-swarm/core with zero external runtime dependencies.
+Implement comprehensive, unified baseline profiling and metrics collection across all `@perfect-swarm/core` subsystems (Tiered Caching, Adaptive Scheduler, Prompt Compression, Vector Indexing, Hierarchical Routing, Speculative Execution, and SwarmEngine). Provide automated performance benchmarking, latency percentile baselines (p50, p90, p95, p99, EMA), token economy accounting, and anomaly/drift detection with zero external runtime dependencies.
 
-## Key Architecture Boundaries & Requirements
-1. **Multi-Tier Cache Hierarchy (L1 / L2 / L3)**:
-   - **L1 Hot LRU**: Sub-millisecond exact key lookup with configurable capacity and LRU eviction.
-   - **L2 Warm Semantic Cache**: Vector similarity thresholding (e.g. cosine/dot-product >= 0.88) with quantized vector indexes.
-   - **L3 Cold Persistent Cache**: Selective serialized state storage with dictionary compression and snapshot hydration.
-   - Dynamic promotion (L2/L3 -> L1) and demotion (L1 -> L2 -> L3) on access.
-2. **Vector Quantization Engine**:
-   - **Scalar Quantization (SQ8)**: Maps 32-bit floats into 8-bit unsigned integers with scaling factor and offset (4x memory reduction).
-   - **Binary Sign Quantization (1-bit)**: Maps vector dimensions into binary bitmasks for ultra-fast Hamming distance evaluation (32x memory reduction).
-   - **Asymmetric Distance Computation (ADC)**: Compares unquantized query vectors against quantized stored codebooks with high accuracy.
-3. **Selective Snapshotting & State Compression**:
-   - Delta snapshots: Serializes only mutated agent memories, new anomalies, and delta telemetry rather than full history.
-   - Replay and hydration: Reconstructs active swarm state from base snapshot + ordered deltas.
-4. **Integration & Telemetry**:
-   - Wires tiered cache into `src/swarm/engine.ts` and `src/swarm/types.ts`.
-   - Emits `Tiered Cache Event` and `State Snapshot Compressed` telemetry.
-   - Exports `@perfect-swarm/core/tieredCache` subpath in ESM, CommonJS, and TypeScript definitions.
-   - 100% test passing across all Vitest suites and 5 E2E test suites.
+## Architecture Boundaries
+- **Module**: `src/swarm/profiler.ts`
+- **Zero Runtime Dependencies**: Pure TypeScript conforming to Node.js built-ins.
+- **Core Components**:
+  - `UnifiedSwarmProfiler`: Aggregates cross-subsystem telemetry into unified baseline performance reports.
+  - `SubsystemBaselines`:
+    - Cache Baselines (L1/L2/L3 hit rates, quantization compression ratios, memory saved).
+    - Scheduler Baselines (queue wait times, work-stealing frequencies, rate-limit backpressure delays).
+    - Compression Baselines (token reduction ratios, tokens saved, dedup rates).
+    - Vector Indexing Baselines (sub-linear search comparisons, triangle inequality pruning efficiency).
+    - Hierarchy Baselines (tree depth, delegation rate, escalation rate).
+    - Speculative Baselines (parallel speedup factors, conflict arbitration rates).
+  - `PerformanceAnomalyDetector`: Evaluates real-time execution against baseline distributions (p95/p99 + 2σ) to flag performance regressions.
+  - `SwarmBenchmarkHarness`: Built-in synthetic workload runner measuring ops/sec and throughput for local and CI benchmarking (`npm run bench`).
+  - `CLI Integration`: Expose `perfect-swarm profile` and `perfect-swarm bench` in `bin/cli.js`.
+
+## Verification Criteria
+- Unit tests in `src/swarm/profiler.test.ts` verifying subsystem aggregation, percentile calculation, and anomaly detection.
+- Integration tests in `src/swarm/profiler-engine.test.ts` verifying engine-level telemetry integration and workflow baseline reporting.
+- Dual ESM/CJS build verification and live execution of `npm run bench` capturing real baseline numbers.
+- 100% passing test battery across all Vitest suites and 5 E2E test suites.

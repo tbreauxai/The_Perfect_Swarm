@@ -74,7 +74,15 @@ export interface SwarmEngineSettings {
     schedulingSettings?: SwarmSchedulingSettings;
     hierarchySettings?: SwarmHierarchySettings;
     tieredCacheSettings?: SwarmTieredCacheSettings;
+    profilingSettings?: SwarmProfilingSettings;
     [key: string]: any;
+}
+
+export interface SwarmProfilingSettings {
+    enabled?: boolean;
+    sampleSubsystems?: boolean;
+    detectAnomalies?: boolean;
+    recordTrace?: boolean;
 }
 
 

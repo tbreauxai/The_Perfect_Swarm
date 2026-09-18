@@ -7,6 +7,7 @@ import { executeSwarmWorkflow, SwarmEngine } from '../dist/swarm/engine.js';
 import { MemoryCortex } from '../dist/swarm/memory.js';
 import { ModelRouter } from '../dist/swarm/router.js';
 import { ProviderRegistry } from '../dist/swarm/index.js';
+import { runSwarmBenchmark, globalUnifiedProfiler } from '../dist/swarm/profiler.js';
 
 const args = process.argv.slice(2);
 const command = args[0] || '--help';
@@ -21,6 +22,8 @@ Commands:
   run "<task>" [options]         Execute a headless swarm analysis workflow from the command line
   export-memory [options]        Export memories from MemoryCortex to JSON or JSONL file
   import-memory <file> [options] Import and hydrate memories into MemoryCortex
+  profile [options]              Run baseline performance profiling and benchmark metrics collection
+  bench [options]                Alias for profile
 
 Options:
   --data <data-payload>          Input data payload for analysis
@@ -379,6 +382,39 @@ async function runImportMemory(filePath, rawArgs) {
     console.log('');
 }
 
+async function runProfile(rawArgs) {
+    let iterations = 20;
+    let batchSize = 5;
+
+    for (let i = 0; i < rawArgs.length; i++) {
+        if (rawArgs[i] === '--iterations' && rawArgs[i + 1]) {
+            iterations = parseInt(rawArgs[i + 1], 10);
+            i++;
+        } else if (rawArgs[i] === '--batch-size' && rawArgs[i + 1]) {
+            batchSize = parseInt(rawArgs[i + 1], 10);
+            i++;
+        }
+    }
+
+    console.log(`\n=== Perfect Swarm Baseline Profiler & Synthetic Benchmark ===\n`);
+    console.log(`Executing baseline workload sweep (${iterations} iterations, ${batchSize} batch tasks per iteration)...`);
+
+    const bench = await runSwarmBenchmark({ iterations, batchSize });
+
+    console.log(`\n[Baseline Profiling Summary]:`);
+    console.log(`  Total Iterations:     ${bench.totalIterations}`);
+    console.log(`  Total Duration:       ${bench.durationMs}ms`);
+    console.log(`  Throughput:           ${bench.opsPerSecond} ops/sec`);
+    console.log(`  Latency (Avg):        ${bench.latency.avgMs}ms`);
+    console.log(`  Latency (p50):        ${bench.latency.p50Ms}ms`);
+    console.log(`  Latency (p95):        ${bench.latency.p95Ms}ms`);
+    console.log(`  Latency (p99):        ${bench.latency.p99Ms}ms`);
+    console.log(`  Tokens Saved:         ${bench.report.resourceUtilization.totalTokensSaved}`);
+    console.log(`  Memory Saved:         ${bench.report.resourceUtilization.totalMemorySavedBytes} bytes`);
+    console.log(`  Anomalies Detected:   ${bench.anomalies.length}`);
+    console.log(`\n✓ Baseline Profiling & Metrics Collection completed successfully.\n`);
+}
+
 async function main() {
     switch (command) {
         case 'doctor':
@@ -395,6 +431,10 @@ async function main() {
             break;
         case 'import-memory':
             await runImportMemory(args[1], args.slice(2));
+            break;
+        case 'profile':
+        case 'bench':
+            await runProfile(args.slice(1));
             break;
         case '--help':
         case '-h':

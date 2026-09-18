@@ -42,8 +42,18 @@ import {
     TieredCache,
     VectorQuantizer,
     SelectiveSnapshotter,
-    globalTieredCache
+    globalTieredCache,
+    UnifiedSwarmProfiler,
+    PerformanceAnomalyDetector,
+    runSwarmBenchmark,
+    globalUnifiedProfiler
 } from './dist/swarm/index.js';
+import {
+    UnifiedSwarmProfiler as ProfilerFromSubpath,
+    PerformanceAnomalyDetector as AnomalyDetectorFromSubpath,
+    runSwarmBenchmark as runBenchmarkFromSubpath,
+    globalUnifiedProfiler as globalProfilerFromSubpath
+} from './dist/swarm/profiler.js';
 import { createSwarmServer as serverFromSubpath } from './dist/swarm/server.js';
 import { createSwarmClient as clientFromSubpath } from './dist/swarm/client.js';
 import { HierarchicalMessageBus as CommBusFromSubpath, ClusterTopologyManager as CommTopologyFromSubpath } from './dist/swarm/communication.js';
@@ -386,6 +396,36 @@ async function runDistVerification() {
         throw new Error('Compiled TieredCache L1 retrieval failed');
     }
     console.log('✓ Compiled TieredCache module subpath, VectorQuantizer, SelectiveSnapshotter, and TieredCache verified');
+
+    // 14. Verify compiled UnifiedSwarmProfiler, PerformanceAnomalyDetector, and runSwarmBenchmark
+    if (!UnifiedSwarmProfiler || !PerformanceAnomalyDetector || !runSwarmBenchmark || !globalUnifiedProfiler || !ProfilerFromSubpath || !AnomalyDetectorFromSubpath || !runBenchmarkFromSubpath || !globalProfilerFromSubpath) {
+        throw new Error('Compiled profiler module exports missing');
+    }
+
+    const testProfiler = ProfilerFromSubpath.getInstance();
+    testProfiler.recordWorkflowRun({
+        durationMs: 45,
+        cache: { l1Hits: 1, l2Hits: 0, l3Hits: 0, misses: 0, savedTokens: 120, memorySavedBytes: 256 },
+        compression: { totalOriginalTokens: 300, totalCompressedTokens: 180, totalTokensSaved: 120 }
+    });
+
+    const profilerReport = testProfiler.getUnifiedBaselineReport();
+    if (profilerReport.totalWorkflows <= 0 || profilerReport.resourceUtilization.totalTokensSaved < 120) {
+        throw new Error('Compiled UnifiedSwarmProfiler baseline report verification failed');
+    }
+
+    const anomalyDetector = new AnomalyDetectorFromSubpath();
+    anomalyDetector.calibrate([10, 15, 20, 25, 30]);
+    const anomaly = anomalyDetector.checkLatency('engine', 150);
+    if (!anomaly || anomaly.severity !== 'critical') {
+        throw new Error('Compiled PerformanceAnomalyDetector checkLatency failed');
+    }
+
+    const benchResult = await runBenchmarkFromSubpath({ iterations: 2, batchSize: 2 });
+    if (!benchResult || benchResult.totalIterations !== 2 || benchResult.opsPerSecond <= 0) {
+        throw new Error('Compiled runSwarmBenchmark execution failed');
+    }
+    console.log('✓ Compiled Profiler module subpath, UnifiedSwarmProfiler, PerformanceAnomalyDetector, and runSwarmBenchmark verified');
 
     console.log('\n✓ ALL COMPILED SWARM DISTRIBUTION BUNDLE TESTS PASSED SUCCESSFULLY!\n');
 }
