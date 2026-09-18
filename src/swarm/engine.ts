@@ -125,6 +125,8 @@ export function validateProviderKey(provider: Provider, key: string, role: strin
     }
 }
 
+const safeEnv = typeof process !== 'undefined' ? process.env : {} as Record<string, string | undefined>;
+
 /**
  * Resolves credentials and SDK clients for supported LLM providers from settings or process.env.
  */
@@ -138,30 +140,30 @@ export function resolveProvider(
 
     switch (provider) {
         case 'gemini': {
-            key = sanitizeApiKey(settings?.geminiApiKey || process.env.GEMINI_API_KEY);
+            key = sanitizeApiKey(settings?.geminiApiKey || safeEnv.GEMINI_API_KEY);
             client = key
                 ? new GoogleGenAI({ apiKey: key })
                 : defaultAi;
             break;
         }
         case 'groq': {
-            key = sanitizeApiKey(settings?.groqApiKey || process.env.GROQ_API_KEY);
+            key = sanitizeApiKey(settings?.groqApiKey || safeEnv.GROQ_API_KEY);
             break;
         }
         case 'openrouter': {
-            key = sanitizeApiKey(settings?.openRouterApiKey || process.env.OPENROUTER_API_KEY);
+            key = sanitizeApiKey(settings?.openRouterApiKey || safeEnv.OPENROUTER_API_KEY);
             break;
         }
         case 'mistral': {
-            key = sanitizeApiKey(settings?.mistralApiKey || process.env.MISTRAL_API_KEY);
+            key = sanitizeApiKey(settings?.mistralApiKey || safeEnv.MISTRAL_API_KEY);
             break;
         }
         case 'github': {
-            key = sanitizeApiKey(settings?.githubToken || process.env.GITHUB_TOKEN);
+            key = sanitizeApiKey(settings?.githubToken || safeEnv.GITHUB_TOKEN);
             break;
         }
         default: {
-            const dynamicKey = settings?.[`${provider}ApiKey`] || settings?.[provider] || process.env[`${provider.toUpperCase()}_API_KEY`];
+            const dynamicKey = settings?.[`${provider}ApiKey`] || settings?.[provider] || safeEnv[`${provider.toUpperCase()}_API_KEY`];
             key = sanitizeApiKey(dynamicKey);
             break;
         }
@@ -343,8 +345,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     }
 
     const targetAppId = settings?.appId || 'perfect-swarm';
-    const qdrantUrl = settings?.qdrantUrl || process.env.QDRANT_URL;
-    const qdrantApiKey = settings?.qdrantApiKey || process.env.QDRANT_API_KEY;
+    const qdrantUrl = settings?.qdrantUrl || safeEnv.QDRANT_URL;
+    const qdrantApiKey = settings?.qdrantApiKey || safeEnv.QDRANT_API_KEY;
     const includeShared = settings?.includeShared ?? true;
 
     // Unconditionally bind MemoryCortex with fallback to process-level in-memory learning
@@ -356,7 +358,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         // Prefer user's settings key for embeddings; fall back to env key only if valid,
         // otherwise omit aiClient so MemoryCortex uses DeterministicLocalEmbeddingProvider.
         const cortexGeminiKey = settings?.geminiApiKey ||
-            (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MISSING_KEY' ? process.env.GEMINI_API_KEY : undefined);
+            (safeEnv.GEMINI_API_KEY && safeEnv.GEMINI_API_KEY !== 'MISSING_KEY' ? safeEnv.GEMINI_API_KEY : undefined);
         const cortexAiClient = cortexGeminiKey
             ? new GoogleGenAI({ apiKey: cortexGeminiKey })
             : undefined;
@@ -720,7 +722,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
 
     const hasUserGemini = !!settings?.geminiApiKey;
     if (!managerConfig) {
-        const defaultProvider = hasUserGemini || process.env.GEMINI_API_KEY ? 'gemini' : 'openrouter';
+        const defaultProvider = hasUserGemini || safeEnv.GEMINI_API_KEY ? 'gemini' : 'openrouter';
         managerConfig = {
             id: 'manager',
             role: 'Manager Node',
