@@ -102,10 +102,13 @@ export function createSwarmServer(options: SwarmServerOptions = {}): Hono {
 
             if (c.req.method === 'POST') {
                 const body = await c.req.json().catch(() => ({}));
+                const cleanBodySettings = Object.fromEntries(
+                    Object.entries(body.settings || {}).filter(([_, v]) => v !== "" && v !== null && v !== undefined)
+                );
                 params = {
                     task: body.task,
                     data: body.data,
-                    settings: { ...edgeSettings, ...defaultSettings, ...body.settings },
+                    settings: { ...edgeSettings, ...defaultSettings, ...cleanBodySettings },
                     defaultAi: body.defaultAi || defaultAi,
                     cortex: body.cortex || defaultCortex,
                     enableDeepAnalysis: body.enableDeepAnalysis,
@@ -156,10 +159,14 @@ export function createSwarmServer(options: SwarmServerOptions = {}): Hono {
                 qdrantApiKey: env.QDRANT_API_KEY
             };
 
+            const cleanBodySettings = Object.fromEntries(
+                Object.entries(body.settings || {}).filter(([_, v]) => v !== "" && v !== null && v !== undefined)
+            );
+
             const result = await executeSwarmWorkflow({
                 task: body.task,
                 data: body.data,
-                settings: { ...edgeSettings, ...defaultSettings, ...body.settings },
+                settings: { ...edgeSettings, ...defaultSettings, ...cleanBodySettings },
                 defaultAi: body.defaultAi || defaultAi,
                 cortex: body.cortex || defaultCortex,
                 enableDeepAnalysis: body.enableDeepAnalysis,
