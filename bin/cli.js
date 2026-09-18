@@ -9,6 +9,8 @@ import { ModelRouter } from '../dist/swarm/router.js';
 import { ProviderRegistry } from '../dist/swarm/index.js';
 import { runSwarmBenchmark, globalUnifiedProfiler } from '../dist/swarm/profiler.js';
 import { globalFeedbackEngine } from '../dist/swarm/feedback.js';
+import { globalKnowledgeGraph } from '../dist/swarm/knowledgeGraph.js';
+import { globalHypothesisLayer, globalLearningRateManager } from '../dist/swarm/coordination.js';
 
 const args = process.argv.slice(2);
 const command = args[0] || '--help';
@@ -28,6 +30,9 @@ Commands:
   feedback-stats [options]       Display aggregated feedback insights and reward statistics
   drift-check                    Check active concept drift alerts across latency, quality, and embeddings
   policy-inspect                 Inspect current evolutionary tuned swarm parameters and policy status
+  graph-inspect                  Inspect shared knowledge graph version, node counts, and relationships
+  hypotheses-inspect             Inspect proposed, validated, and pruned agent hypotheses
+  rates-inspect                  Inspect per-agent adaptive learning rates and convergence state
 
 Options:
   --data <data-payload>          Input data payload for analysis
@@ -466,6 +471,45 @@ async function runPolicyInspect() {
     console.log(`\n✓ Policy parameters inspected successfully.\n`);
 }
 
+async function runGraphInspect() {
+    console.log(`\n=== Perfect Swarm Shared Knowledge Graph Inspector ===\n`);
+    const stats = globalKnowledgeGraph.getStats();
+    console.log(`Knowledge Graph Status:`);
+    console.log(`  Version: ${stats.version}`);
+    console.log(`  Total Nodes: ${stats.totalNodes}`);
+    console.log(`  Total Edges: ${stats.totalEdges}`);
+    console.log(`  Node Types Distribution:`, JSON.stringify(stats.nodeTypes));
+    console.log(`\n✓ Knowledge graph inspected successfully.\n`);
+}
+
+async function runHypothesesInspect() {
+    console.log(`\n=== Perfect Swarm Hypothesis Inspector ===\n`);
+    const all = globalHypothesisLayer.getHypotheses();
+    console.log(`Active Hypotheses Tracked: ${all.length}`);
+    if (all.length === 0) {
+        console.log(`  (No hypotheses currently registered)`);
+    } else {
+        for (const h of all) {
+            console.log(`  [${h.status.toUpperCase()}] "${h.claim}" (Confidence: ${Math.round(h.confidence * 100)}%, Proposed by: ${h.proposedBy})`);
+        }
+    }
+    console.log(`\n✓ Hypotheses inspected successfully.\n`);
+}
+
+async function runRatesInspect() {
+    console.log(`\n=== Perfect Swarm Agent Adaptive Learning Rates ===\n`);
+    const states = globalLearningRateManager.getAllStates();
+    console.log(`Tracked Agents: ${states.length}`);
+    if (states.length === 0) {
+        console.log(`  (Default initial learning rate: 0.10)`);
+    } else {
+        for (const s of states) {
+            console.log(`  - ${s.agentId}: Rate=${s.learningRate}, EMA Reward=${s.emaReward}, Updates=${s.totalUpdates}`);
+        }
+    }
+    console.log(`\n✓ Learning rates inspected successfully.\n`);
+}
+
 async function main() {
     switch (command) {
         case 'doctor':
@@ -495,6 +539,15 @@ async function main() {
             break;
         case 'policy-inspect':
             await runPolicyInspect();
+            break;
+        case 'graph-inspect':
+            await runGraphInspect();
+            break;
+        case 'hypotheses-inspect':
+            await runHypothesesInspect();
+            break;
+        case 'rates-inspect':
+            await runRatesInspect();
             break;
         case '--help':
         case '-h':

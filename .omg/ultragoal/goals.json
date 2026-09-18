@@ -1,19 +1,19 @@
 [
   {
-    "id": "goal-1-feedback-engine-and-policy-adapter",
-    "description": "Implement ContinuousFeedbackEngine, PolicyOptimizer (evolutionary strategy and reinforcement learning policy tuning), ConceptDriftDetector (Page-Hinkley and embedding divergence), and SwarmKnowledgeRepository in src/swarm/feedback.ts with comprehensive unit tests in src/swarm/feedback.test.ts.",
+    "id": "goal-1-knowledge-graph-and-coordination-core",
+    "description": "Implement SharedKnowledgeGraph in src/swarm/knowledgeGraph.ts and AgentAdaptiveLearningRateManager, HighBandwidthMessageChannel, HierarchicalTaskDecomposer, HypothesisValidationLayer, and ShapedRewardPolicy in src/swarm/coordination.ts with unit tests in src/swarm/knowledgeGraph.test.ts and src/swarm/coordination.test.ts.",
     "status": "completed",
-    "verification": "Unit tests in src/swarm/feedback.test.ts verify reward attribution, evolutionary parameter mutation, drift detection, and knowledge repository indexing."
+    "verification": "Unit tests in src/swarm/knowledgeGraph.test.ts and src/swarm/coordination.test.ts verify graph versioning, hypothesis validation, adaptive learning rates, and shaped reward optimization."
   },
   {
-    "id": "goal-2-engine-feedback-integration-and-drift-remediation",
-    "description": "Integrate ContinuousFeedbackEngine and SwarmKnowledgeRepository into src/swarm/engine.ts and src/swarm/types.ts with SwarmFeedbackSettings, attach feedback reports to SwarmWorkflowResult, add CLI feedback commands to bin/cli.js, and write integration tests in src/swarm/feedback-engine.test.ts.",
+    "id": "goal-2-engine-hierarchical-coordination-integration",
+    "description": "Integrate hierarchical task decomposition, hypothesis validation, shared knowledge graph, and per-agent adaptive learning rates into src/swarm/engine.ts and src/swarm/types.ts with SwarmCoordinationSettings, attach coordination telemetry to SwarmWorkflowResult, add CLI commands to bin/cli.js, and write integration tests in src/swarm/coordination-engine.test.ts.",
     "status": "completed",
-    "verification": "Integration tests in src/swarm/feedback-engine.test.ts verify post-analysis feedback processing, dynamic parameter updates, and drift alert triggering."
+    "verification": "Integration tests in src/swarm/coordination-engine.test.ts verify macro-task decomposition, hypothesis arbitration, knowledge graph updates, and per-agent learning rate updates."
   },
   {
-    "id": "goal-3-verification-build-and-live-feedback-collection",
-    "description": "Export feedback module from library and package.json subpaths, configure vite.config.swarm.ts, update test-dist-import.mjs, test-dist-import.cjs, and test-cli.mjs, rebuild client and swarm bundles, pass 100% of all Vitest and 5 E2E test suites, and execute live feedback simulation.",
+    "id": "goal-3-verification-build-and-live-coordination-bench",
+    "description": "Export knowledgeGraph and coordination modules from library and package.json subpaths, configure vite.config.swarm.ts, update test-dist-import.mjs, test-dist-import.cjs, and test-cli.mjs, rebuild client and swarm bundles, pass 100% of all Vitest and 5 E2E test suites, and execute live CLI coordination verification.",
     "status": "completed",
     "verification": "Dual ESM/CJS bundles build cleanly, 100% pass across all Vitest suites and 5 E2E suites, and npm run lint passes with zero errors."
   }

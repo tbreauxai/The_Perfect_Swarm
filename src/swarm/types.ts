@@ -76,7 +76,18 @@ export interface SwarmEngineSettings {
     tieredCacheSettings?: SwarmTieredCacheSettings;
     profilingSettings?: SwarmProfilingSettings;
     feedbackSettings?: SwarmFeedbackSettings;
+    coordinationSettings?: SwarmCoordinationSettings;
     [key: string]: any;
+}
+
+export interface SwarmCoordinationSettings {
+    enabled?: boolean;
+    adaptiveLearningRates?: boolean;
+    hierarchicalDecomposition?: boolean;
+    hypothesisValidation?: boolean;
+    rewardShaping?: boolean;
+    channelCapacity?: number;
+    initialLearningRate?: number;
 }
 
 export interface SwarmFeedbackSettings {

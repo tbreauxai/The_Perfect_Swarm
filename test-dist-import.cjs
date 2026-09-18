@@ -274,6 +274,41 @@ async function testCjsImport() {
     }
     console.log('✓ CJS feedback subpath, PolicyOptimizer, ConceptDriftDetector, and SwarmKnowledgeRepository verified');
 
+    const kgCjs = require('./dist/swarm/knowledgeGraph.cjs');
+    if (!kgCjs.SharedKnowledgeGraph || !kgCjs.globalKnowledgeGraph) {
+        throw new Error('CommonJS knowledgeGraph exports missing');
+    }
+    const cjsGraph = new kgCjs.SharedKnowledgeGraph();
+    cjsGraph.addNode({ id: 'c-n1', type: 'entity', label: 'CJS Node' });
+    cjsGraph.addNode({ id: 'c-n2', type: 'finding', label: 'CJS Finding' });
+    cjsGraph.addEdge({ source: 'c-n1', target: 'c-n2', relation: 'supports' });
+    if (cjsGraph.getVersion() !== 3 || cjsGraph.getStats().totalNodes !== 2) {
+        throw new Error('CommonJS SharedKnowledgeGraph node operations failed');
+    }
+    console.log('✓ CJS knowledgeGraph subpath and SharedKnowledgeGraph verified');
+
+    const coordCjs = require('./dist/swarm/coordination.cjs');
+    if (!coordCjs.AgentAdaptiveLearningRateManager || !coordCjs.HierarchicalTaskDecomposer || !coordCjs.HypothesisValidationLayer || !coordCjs.ShapedRewardPolicy) {
+        throw new Error('CommonJS coordination exports missing');
+    }
+    const cjsDecomp = new coordCjs.HierarchicalTaskDecomposer();
+    const cjsPlan = cjsDecomp.decompose('CJS macro task', ['Security Analyst']);
+    if (cjsPlan.subtasks.length < 3) {
+        throw new Error('CommonJS HierarchicalTaskDecomposer failed');
+    }
+    const cjsHypoLayer = new coordCjs.HypothesisValidationLayer(cjsGraph);
+    const cjsHypo = cjsHypoLayer.proposeHypothesis({ claim: 'CJS claim test', proposedBy: 'Tester' });
+    const cjsVal = cjsHypoLayer.validateHypothesis(cjsHypo.id, { isValid: true, validatedBy: 'Manager' });
+    if (!cjsVal || cjsVal.status !== 'validated' || !cjsGraph.getNode(`node-${cjsHypo.id}`)) {
+        throw new Error('CommonJS HypothesisValidationLayer failed');
+    }
+    const cjsLR = new coordCjs.AgentAdaptiveLearningRateManager();
+    const cjsRate = cjsLR.recordAgentStep('agent-cjs', 0.9);
+    if (!cjsRate.newRate) {
+        throw new Error('CommonJS AgentAdaptiveLearningRateManager failed');
+    }
+    console.log('✓ CJS coordination subpath, HierarchicalTaskDecomposer, and HypothesisValidationLayer verified');
+
     console.log('✓ ALL COMMONJS SWARM DISTRIBUTION TESTS PASSED!\n');
 }
 

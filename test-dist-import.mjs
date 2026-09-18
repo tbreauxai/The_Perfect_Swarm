@@ -51,8 +51,36 @@ import {
     PolicyOptimizer,
     ConceptDriftDetector,
     SwarmKnowledgeRepository,
-    globalFeedbackEngine
+    globalFeedbackEngine,
+    SharedKnowledgeGraph,
+    globalKnowledgeGraph,
+    AgentAdaptiveLearningRateManager,
+    HighBandwidthMessageChannel,
+    HierarchicalTaskDecomposer,
+    HypothesisValidationLayer,
+    ShapedRewardPolicy,
+    globalLearningRateManager,
+    globalMessageChannel,
+    globalTaskDecomposer,
+    globalHypothesisLayer,
+    globalShapedRewardPolicy
 } from './dist/swarm/index.js';
+import {
+    SharedKnowledgeGraph as GraphFromSubpath,
+    globalKnowledgeGraph as globalGraphFromSubpath
+} from './dist/swarm/knowledgeGraph.js';
+import {
+    AgentAdaptiveLearningRateManager as LRManagerFromSubpath,
+    HighBandwidthMessageChannel as ChannelFromSubpath,
+    HierarchicalTaskDecomposer as DecomposerFromSubpath,
+    HypothesisValidationLayer as HypoLayerFromSubpath,
+    ShapedRewardPolicy as RewardPolicyFromSubpath,
+    globalLearningRateManager as globalLRFromSubpath,
+    globalMessageChannel as globalChannelFromSubpath,
+    globalTaskDecomposer as globalDecomposerFromSubpath,
+    globalHypothesisLayer as globalHypoFromSubpath,
+    globalShapedRewardPolicy as globalRewardPolicyFromSubpath
+} from './dist/swarm/coordination.js';
 import {
     ContinuousFeedbackEngine as FeedbackEngineFromSubpath,
     PolicyOptimizer as OptimizerFromSubpath,
@@ -515,6 +543,57 @@ async function runDistVerification() {
         throw new Error('Compiled ContinuousFeedbackEngine processFeedback failed');
     }
     console.log('✓ Compiled Feedback module subpath, PolicyOptimizer, ConceptDriftDetector, and SwarmKnowledgeRepository verified');
+
+    // 17. Verify SharedKnowledgeGraph and Coordination Modules
+    const distGraph = new GraphFromSubpath();
+    const nodeA = distGraph.addNode({ id: 'dist-n1', type: 'entity', label: 'Dist Node A', confidence: 0.9 });
+    const nodeB = distGraph.addNode({ id: 'dist-n2', type: 'finding', label: 'Dist Node B', confidence: 0.85 });
+    const distEdge = distGraph.addEdge({ source: 'dist-n1', target: 'dist-n2', relation: 'causes', weight: 0.95 });
+    if (distGraph.getVersion() !== 3 || distGraph.getNeighbors('dist-n1', 'out').length !== 1) {
+        throw new Error('Compiled SharedKnowledgeGraph graph operations failed');
+    }
+    const distDeltas = distGraph.getDeltasSince(1);
+    if (distDeltas.deltas.length !== 2) {
+        throw new Error('Compiled SharedKnowledgeGraph delta tracking failed');
+    }
+
+    const distDecomposer = new DecomposerFromSubpath();
+    const distPlan = distDecomposer.decompose('Audit compiled bundle performance', ['Security Analyst', 'Performance Analyst']);
+    if (!distPlan.macroTask || distPlan.subtasks.length < 3 || distPlan.executionWaves.length < 2) {
+        throw new Error('Compiled HierarchicalTaskDecomposer decomposition failed');
+    }
+
+    const distHypoLayer = new HypoLayerFromSubpath(distGraph);
+    const distHypo = distHypoLayer.proposeHypothesis({
+        claim: 'Compiled bundle reduces latency by 50%',
+        proposedBy: 'PerfAnalyst',
+        confidence: 0.75
+    });
+    const distVal = distHypoLayer.validateHypothesis(distHypo.id, {
+        isValid: true,
+        validatedBy: 'PrincipalManager'
+    });
+    if (!distVal || distVal.status !== 'validated' || !distGraph.getNode(`node-${distHypo.id}`)) {
+        throw new Error('Compiled HypothesisValidationLayer validation and graph propagation failed');
+    }
+
+    const distLR = new LRManagerFromSubpath();
+    const rate1 = distLR.getLearningRate('dist-agent');
+    const updateRes = distLR.recordAgentStep('dist-agent', 0.95);
+    if (rate1 !== 0.10 || !updateRes.newRate) {
+        throw new Error('Compiled AgentAdaptiveLearningRateManager step record failed');
+    }
+
+    const distRewardPolicy = new RewardPolicyFromSubpath(0.20, 0.15);
+    const shapedRes = distRewardPolicy.calculateShapedReward({
+        extrinsicReward: 0.85,
+        noveltyScore: 0.4,
+        redundancyCount: 1
+    });
+    if (shapedRes.shapedReward <= 0 || !shapedRes.components.noveltyBonus) {
+        throw new Error('Compiled ShapedRewardPolicy calculation failed');
+    }
+    console.log('✓ Compiled KnowledgeGraph & Coordination subpaths, SharedKnowledgeGraph, HypothesisValidationLayer, and AdaptiveLearningRateManager verified');
 
     console.log('\n✓ ALL COMPILED SWARM DISTRIBUTION BUNDLE TESTS PASSED SUCCESSFULLY!\n');
 }

@@ -146,6 +146,27 @@ async function testCli() {
     }
     console.log('✓ CLI feedback commands verified.');
 
+    // 8. Test CLI Coordination Commands
+    console.log('\n[CLI Test 8] Testing coordination inspect commands...');
+    const graphOutput = execSync('node bin/cli.js graph-inspect', { encoding: 'utf8' });
+    console.log(graphOutput);
+    if (!graphOutput.includes('Shared Knowledge Graph Inspector') || !graphOutput.includes('Knowledge Graph Status')) {
+        throw new Error('CLI graph-inspect command failed');
+    }
+
+    const hypothesesOutput = execSync('node bin/cli.js hypotheses-inspect', { encoding: 'utf8' });
+    console.log(hypothesesOutput);
+    if (!hypothesesOutput.includes('Hypothesis Inspector') || !hypothesesOutput.includes('Active Hypotheses Tracked')) {
+        throw new Error('CLI hypotheses-inspect command failed');
+    }
+
+    const ratesOutput = execSync('node bin/cli.js rates-inspect', { encoding: 'utf8' });
+    console.log(ratesOutput);
+    if (!ratesOutput.includes('Agent Adaptive Learning Rates') || !ratesOutput.includes('Tracked Agents')) {
+        throw new Error('CLI rates-inspect command failed');
+    }
+    console.log('✓ CLI coordination commands verified.');
+
     console.log('\n✓ ALL CLI TESTS PASSED SUCCESSFULLY!\n');
 }
 

@@ -27,7 +27,9 @@ export default defineConfig({
         scheduler: path.resolve(__dirname, 'src/swarm/scheduler.ts'),
         hierarchy: path.resolve(__dirname, 'src/swarm/hierarchy.ts'),
         tieredCache: path.resolve(__dirname, 'src/swarm/tieredCache.ts'),
-        feedback: path.resolve(__dirname, 'src/swarm/feedback.ts')
+        feedback: path.resolve(__dirname, 'src/swarm/feedback.ts'),
+        knowledgeGraph: path.resolve(__dirname, 'src/swarm/knowledgeGraph.ts'),
+        coordination: path.resolve(__dirname, 'src/swarm/coordination.ts')
       },
       formats: ['es', 'cjs'],
       fileName: (format, entryName) => `${entryName}.${format === 'es' ? 'js' : 'cjs'}`

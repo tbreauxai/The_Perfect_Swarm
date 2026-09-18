@@ -76,6 +76,21 @@ import {
     type RewardSignal,
     type SwarmKnowledgeRepository
 } from './feedback.ts';
+import {
+    globalKnowledgeGraph,
+    SharedKnowledgeGraph,
+    type KnowledgeGraphNode,
+    type KnowledgeGraphEdge
+} from './knowledgeGraph.ts';
+import {
+    globalLearningRateManager,
+    globalMessageChannel,
+    globalTaskDecomposer,
+    globalHypothesisLayer,
+    globalShapedRewardPolicy,
+    type TaskDecompositionPlan,
+    type Hypothesis
+} from './coordination.ts';
 
 export interface ProviderResolution {
     key: string;
@@ -271,6 +286,23 @@ export interface SwarmWorkflowResult {
     };
     unifiedBaselines?: UnifiedSwarmBaselineReport;
     feedback?: SwarmFeedbackReport;
+    coordination?: {
+        knowledgeGraphVersion: number;
+        totalNodes: number;
+        totalEdges: number;
+        hypothesesCount: number;
+        validatedHypothesesCount: number;
+        taskDecomposition?: TaskDecompositionPlan;
+        agentLearningRates: Record<string, number>;
+        shapedReward?: {
+            shapedReward: number;
+            components: {
+                extrinsic: number;
+                noveltyBonus: number;
+                redundancyPenalty: number;
+            };
+        };
+    };
 }
 
 export interface SwarmFeedbackReport {
@@ -469,7 +501,17 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     metrics: globalTieredCache.getMetrics()
                 },
                 unifiedBaselines: profilingEnabled ? globalUnifiedProfiler.getUnifiedBaselineReport() : undefined,
-                feedback: cacheHitFeedbackReport
+                feedback: cacheHitFeedbackReport,
+                coordination: {
+                    knowledgeGraphVersion: globalKnowledgeGraph.getVersion(),
+                    totalNodes: globalKnowledgeGraph.getStats().totalNodes,
+                    totalEdges: globalKnowledgeGraph.getStats().totalEdges,
+                    hypothesesCount: globalHypothesisLayer.getHypotheses().length,
+                    validatedHypothesesCount: globalHypothesisLayer.getHypotheses('validated').length,
+                    agentLearningRates: Object.fromEntries(
+                        globalLearningRateManager.getAllStates().map(s => [s.agentId, s.learningRate])
+                    )
+                }
             };
         }
     }
@@ -540,7 +582,17 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             finalAnalysis: cachedAnalysis,
             metrics,
             unifiedBaselines: profilingEnabled ? globalUnifiedProfiler.getUnifiedBaselineReport() : undefined,
-            feedback: payloadCacheFeedbackReport
+            feedback: payloadCacheFeedbackReport,
+            coordination: {
+                knowledgeGraphVersion: globalKnowledgeGraph.getVersion(),
+                totalNodes: globalKnowledgeGraph.getStats().totalNodes,
+                totalEdges: globalKnowledgeGraph.getStats().totalEdges,
+                hypothesesCount: globalHypothesisLayer.getHypotheses().length,
+                validatedHypothesesCount: globalHypothesisLayer.getHypotheses('validated').length,
+                agentLearningRates: Object.fromEntries(
+                    globalLearningRateManager.getAllStates().map(s => [s.agentId, s.learningRate])
+                )
+            }
         };
     }
 
@@ -615,7 +667,17 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             finalAnalysis: semanticMatch.entry.payload,
             metrics,
             unifiedBaselines: profilingEnabled ? globalUnifiedProfiler.getUnifiedBaselineReport() : undefined,
-            feedback: semanticCacheFeedbackReport
+            feedback: semanticCacheFeedbackReport,
+            coordination: {
+                knowledgeGraphVersion: globalKnowledgeGraph.getVersion(),
+                totalNodes: globalKnowledgeGraph.getStats().totalNodes,
+                totalEdges: globalKnowledgeGraph.getStats().totalEdges,
+                hypothesesCount: globalHypothesisLayer.getHypotheses().length,
+                validatedHypothesesCount: globalHypothesisLayer.getHypotheses('validated').length,
+                agentLearningRates: Object.fromEntries(
+                    globalLearningRateManager.getAllStates().map(s => [s.agentId, s.learningRate])
+                )
+            }
         };
     }
 
@@ -752,6 +814,17 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     let workflowHierarchyMetrics: HierarchyMetrics | undefined;
     let workflowTieredCacheHit: TieredLookupResult | undefined;
     let workflowSnapshotId: string | undefined;
+    let workflowDecompositionPlan: TaskDecompositionPlan | undefined;
+    let workflowShapedReward: {
+        shapedReward: number;
+        components: {
+            extrinsic: number;
+            noveltyBonus: number;
+            redundancyPenalty: number;
+        };
+    } | undefined;
+    const coordinationSettings = settings?.coordinationSettings;
+    const coordinationEnabled = coordinationSettings?.enabled !== false;
 
     if (fastPathDecision.eligible && analysts.length > 0) {
         const fastAnalyst = analysts[0];
@@ -1001,7 +1074,17 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     metrics: globalTieredCache.getMetrics()
                 } : undefined,
                 unifiedBaselines: profilingEnabled ? globalUnifiedProfiler.getUnifiedBaselineReport() : undefined,
-                feedback: fastPathFeedbackReport
+                feedback: fastPathFeedbackReport,
+                coordination: coordinationEnabled ? {
+                    knowledgeGraphVersion: globalKnowledgeGraph.getVersion(),
+                    totalNodes: globalKnowledgeGraph.getStats().totalNodes,
+                    totalEdges: globalKnowledgeGraph.getStats().totalEdges,
+                    hypothesesCount: globalHypothesisLayer.getHypotheses().length,
+                    validatedHypothesesCount: globalHypothesisLayer.getHypotheses('validated').length,
+                    agentLearningRates: Object.fromEntries(
+                        globalLearningRateManager.getAllStates().map(s => [s.agentId, s.learningRate])
+                    )
+                } : undefined
             };
         } catch (err: any) {
             console.warn(`[Fast-Path] Short-circuit failed, falling back to full swarm pipeline:`, err);
@@ -1023,6 +1106,26 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             output: profile,
             durationMs: 0
         });
+
+        // Step 1b: Hierarchical Task Decomposition
+        if (coordinationEnabled && coordinationSettings?.hierarchicalDecomposition !== false) {
+            const specialistRoles = analysts.map(a => a.role);
+            workflowDecompositionPlan = globalTaskDecomposer.decompose(task, specialistRoles);
+            context.addEvent({
+                agentRole: 'Strategy Coordinator',
+                action: 'Hierarchical Task Decomposition',
+                modelName: 'Local/HierarchicalTaskDecomposer',
+                prompt: `Decomposed macro-task into ${workflowDecompositionPlan.subtasks.length} strategic subtasks across ${workflowDecompositionPlan.executionWaves.length} waves`,
+                output: {
+                    macroTask: workflowDecompositionPlan.macroTask,
+                    strategySummary: workflowDecompositionPlan.strategySummary,
+                    subtasksCount: workflowDecompositionPlan.subtasks.length,
+                    executionWavesCount: workflowDecompositionPlan.executionWaves.length,
+                    subtasks: workflowDecompositionPlan.subtasks
+                },
+                durationMs: 0
+            });
+        }
 
         // Step 2: Token Budgeting & Batch Planning
         const { chunks, originalChunkCount, maxTokensPerChunk, totalTokens, warning } = createTokenChunks(rawInput);
@@ -1665,6 +1768,58 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             durationMs: 0
         });
 
+        // Step 4b: Interagent Message Publishing & Hypothesis Proposal
+        if (coordinationEnabled) {
+            let totalHypothesesProposed = 0;
+            for (let a = 0; a < analysts.length; a++) {
+                const analyst = analysts[a];
+                const reports = allAnalystReports[a];
+                for (const rep of reports) {
+                    if (!rep) continue;
+                    globalMessageChannel.publish({
+                        senderId: analyst.role,
+                        topic: 'specialist_finding',
+                        payload: {
+                            role: analyst.role,
+                            summary: rep.summary,
+                            insightsCount: (rep.insights || []).length,
+                            anomaliesCount: (rep.anomalies || []).length
+                        }
+                    });
+
+                    if (coordinationSettings?.hypothesisValidation !== false) {
+                        const candidateInsights = rep.insights || [];
+                        for (const ins of candidateInsights.slice(0, 3)) {
+                            const claim = typeof ins === 'string' ? ins : (ins.description || ins.title || JSON.stringify(ins));
+                            if (claim && claim.length > 5) {
+                                globalHypothesisLayer.proposeHypothesis({
+                                    claim,
+                                    proposedBy: analyst.role,
+                                    confidence: 0.70,
+                                    evidence: [rep.summary || 'Observed during specialist analysis']
+                                });
+                                totalHypothesesProposed++;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (totalHypothesesProposed > 0) {
+                context.addEvent({
+                    agentRole: 'Hypothesis Decision Layer',
+                    action: 'Hypotheses Proposed',
+                    modelName: 'Local/HypothesisValidationLayer',
+                    prompt: `Specialists proposed ${totalHypothesesProposed} hypotheses for hierarchical arbitration`,
+                    output: {
+                        proposedCount: totalHypothesesProposed,
+                        pendingHypotheses: globalHypothesisLayer.getHypotheses('proposed').length
+                    },
+                    durationMs: 0
+                });
+            }
+        }
+
         // Multi-Stage Progressive Stream: Cluster Digests Ready
         params.onStage?.({
             stage: 'cluster_aggregation',
@@ -1838,6 +1993,39 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 globalSpecialistProfiler.recordOutcome(analyst.role, {
                     success: isVerifiedSuccess,
                     qualityRating: lifecycleResult.computedRating
+                });
+            }
+        }
+
+        // Step 5b: Hierarchical Hypothesis Arbitration & Knowledge Graph Propagation
+        if (coordinationEnabled && coordinationSettings?.hypothesisValidation !== false) {
+            const proposed = globalHypothesisLayer.getHypotheses('proposed');
+            const validatedThisRun: Hypothesis[] = [];
+            const isVerifiedSuccess = !finalAnalysis?.ui_title?.includes("Error");
+            for (const h of proposed) {
+                const validated = globalHypothesisLayer.validateHypothesis(h.id, {
+                    isValid: isVerifiedSuccess,
+                    validatedBy: managerAgent.role || 'Manager Node',
+                    feedback: isVerifiedSuccess ? 'Corroborated by synthesized swarm findings' : 'Refuted by synthesis failure'
+                });
+                if (validated && validated.status === 'validated') {
+                    validatedThisRun.push(validated);
+                }
+            }
+
+            if (validatedThisRun.length > 0) {
+                context.addEvent({
+                    agentRole: 'Hypothesis Validation Layer',
+                    action: 'Hypotheses Validated & Propagated',
+                    modelName: 'Local/HypothesisValidationLayer',
+                    prompt: `Validated ${validatedThisRun.length} hypotheses and propagated findings into Shared Knowledge Graph`,
+                    output: {
+                        validatedCount: validatedThisRun.length,
+                        knowledgeGraphVersion: globalKnowledgeGraph.getVersion(),
+                        knowledgeGraphStats: globalKnowledgeGraph.getStats(),
+                        hypotheses: validatedThisRun.map(h => ({ id: h.id, claim: h.claim, confidence: h.confidence }))
+                    },
+                    durationMs: 0
                 });
             }
         }
@@ -2096,6 +2284,47 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         }
     }
 
+    // Step 7b: Adaptive Learning Rates & Shaped Reward Optimization
+    if (coordinationEnabled) {
+        const isSuccess = !finalAnalysis?.ui_title?.includes("Error");
+        const extrinsic = workflowLifecycleResult?.computedRating
+            ? workflowLifecycleResult.computedRating / 100
+            : (isSuccess ? 0.90 : 0.35);
+
+        if (coordinationSettings?.rewardShaping !== false) {
+            const noveltyScore = Math.min(1.0, (globalKnowledgeGraph.getStats().totalNodes % 10) / 10 + 0.3);
+            const redundancyCount = globalHypothesisLayer.getHypotheses('refuted').length;
+            workflowShapedReward = globalShapedRewardPolicy.calculateShapedReward({
+                extrinsicReward: extrinsic,
+                noveltyScore,
+                redundancyCount
+            });
+        }
+
+        if (coordinationSettings?.adaptiveLearningRates !== false) {
+            const targetReward = workflowShapedReward?.shapedReward ?? extrinsic;
+            const updatedRates: Record<string, number> = {};
+            for (const analyst of analysts) {
+                const res = globalLearningRateManager.recordAgentStep(analyst.role, targetReward);
+                updatedRates[analyst.role] = res.newRate;
+            }
+            const mgrRes = globalLearningRateManager.recordAgentStep(managerAgent.role || 'Manager Node', targetReward);
+            updatedRates[managerAgent.role || 'Manager Node'] = mgrRes.newRate;
+
+            context.addEvent({
+                agentRole: 'Adaptive Learning Coordinator',
+                action: 'Agent Learning Rates Updated',
+                modelName: 'Local/AgentAdaptiveLearningRateManager',
+                prompt: `Adjusted learning rates across ${Object.keys(updatedRates).length} agents based on reward ${targetReward}`,
+                output: {
+                    reward: targetReward,
+                    agentRates: updatedRates
+                },
+                durationMs: 0
+            });
+        }
+    }
+
     return {
         events: context.events,
         finalAnalysis,
@@ -2139,7 +2368,19 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             metrics: globalTieredCache.getMetrics()
         } : undefined,
         unifiedBaselines: profilingEnabled ? globalUnifiedProfiler.getUnifiedBaselineReport() : undefined,
-        feedback: workflowFeedbackReport
+        feedback: workflowFeedbackReport,
+        coordination: coordinationEnabled ? {
+            knowledgeGraphVersion: globalKnowledgeGraph.getVersion(),
+            totalNodes: globalKnowledgeGraph.getStats().totalNodes,
+            totalEdges: globalKnowledgeGraph.getStats().totalEdges,
+            hypothesesCount: globalHypothesisLayer.getHypotheses().length,
+            validatedHypothesesCount: globalHypothesisLayer.getHypotheses('validated').length,
+            taskDecomposition: workflowDecompositionPlan,
+            agentLearningRates: Object.fromEntries(
+                globalLearningRateManager.getAllStates().map(s => [s.agentId, s.learningRate])
+            ),
+            shapedReward: workflowShapedReward
+        } : undefined
     };
 }
 

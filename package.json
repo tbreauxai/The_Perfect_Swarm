@@ -146,6 +146,18 @@
       "import": "./dist/swarm/feedback.js",
       "require": "./dist/swarm/feedback.cjs",
       "default": "./src/swarm/feedback.ts"
+    },
+    "./knowledgeGraph": {
+      "types": "./dist/swarm/knowledgeGraph.d.ts",
+      "import": "./dist/swarm/knowledgeGraph.js",
+      "require": "./dist/swarm/knowledgeGraph.cjs",
+      "default": "./src/swarm/knowledgeGraph.ts"
+    },
+    "./coordination": {
+      "types": "./dist/swarm/coordination.d.ts",
+      "import": "./dist/swarm/coordination.js",
+      "require": "./dist/swarm/coordination.cjs",
+      "default": "./src/swarm/coordination.ts"
     }
   },
   "scripts": {

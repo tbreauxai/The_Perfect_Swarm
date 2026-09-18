@@ -1,23 +1,22 @@
-# Ultragoal Brief: Continuous Feedback Loop, Policy Evolution & Drift-Aware Knowledge Repository
+# Ultragoal Brief: Hierarchical Coordination, Hypothesis Validation, Versioned Knowledge Graph & Adaptive Learning Rates
 
 ## Objective
-Introduce an autonomous, continuous learning and adaptation system for `@perfect-swarm/core` comprising:
-1. **Continuous Feedback Loop**: Captures multidimensional performance metrics after each analysis cycle and feeds them back into the swarm for autonomous parameter tuning.
-2. **Reinforcement Learning & Evolutionary Policy Adaptation**: Employs reward signals tied to accuracy, quality, and resource economy to adapt swarm decision policies using evolutionary strategies and contextual multi-armed bandit optimization.
-3. **Automated Data Validation & Concept Drift Detection**: Validates incoming memory data and detects statistical/distributional drift (Page-Hinkley test, embedding centroid drift) over sliding observation windows to trigger proactive knowledge re-indexing and policy recalibration.
-4. **Shared Knowledge Repository**: Durable, structured repository logging analysis outcomes, validation scores, drift events, and parameter genealogies to inform future swarm optimization cycles.
+Introduce an advanced hierarchical coordination, hypothesis validation, and shared knowledge fabric for `@perfect-swarm/core`:
+1. **Adaptive Learning Rates per Agent**: Compute per-agent learning rates ($\alpha_i$) using reward variance and success consistency to accelerate policy convergence.
+2. **High-Bandwidth Interagent Communication**: Low-latency, delta-compressed message ring channels for instantaneous peer knowledge sharing.
+3. **Hierarchical Task Decomposition**: High-level strategic planners decompose macro-goals into staged dependency DAGs for lower-level execution.
+4. **Hierarchical Hypothesis Validation Layer**: Specialist agents formulate verifiable hypotheses; lead agents validate, refute, or prune them to eliminate redundant search.
+5. **Shared Versioned Knowledge Graph**: Graph-based entity-relationship store (nodes, relations, confidence, evidence) with Lamport vector versioning and delta propagation.
+6. **Reinforcement Learning Reward Shaping**: Curiosity-driven shaped reward balancing novel strategy exploration against proven tactic exploitation.
 
 ## Architecture Boundaries
-- **Module**: `src/swarm/feedback.ts`
-- **Zero Runtime Dependencies**: Pure TypeScript conforming strictly to Node.js built-ins.
-- **Core Components**:
-  - `ContinuousFeedbackEngine`: Coordinates post-analysis telemetry capture, reward attribution, and parameter auto-tuning.
-  - `PolicyOptimizer`: Adaptive policy engine implementing evolutionary mutation ((1+$\lambda$)-ES) and contextual RL reward functions ($R = w_q \cdot \text{quality} + w_a \cdot \text{accuracy} - w_l \cdot \text{cost}$).
-  - `ConceptDriftDetector`: Sliding-window drift monitor utilizing Page-Hinkley tests and embedding divergence to signal knowledge obsolescence.
-  - `SwarmKnowledgeRepository`: Append-only shared outcome store indexing analysis outputs, quality ratings, drift alerts, and policy version histories.
-  - `SwarmEngine Integration`: Hooks into Step 7 and Memory Cortex to log outcomes, validate memories, and dynamically adjust swarm runtime parameters.
+- **Modules**:
+  - `src/swarm/knowledgeGraph.ts`: Versioned knowledge graph with nodes, edges, delta changelogs, and subgraph search.
+  - `src/swarm/coordination.ts`: Adaptive learning rate manager, high-bandwidth message channel, hierarchical task decomposer, hypothesis validation layer, and shaped reward optimizer.
+- **Engine Integration**: Step 1-7 in `src/swarm/engine.ts` hooks into task decomposition, hypothesis validation, and knowledge graph graph updates.
+- **Zero Runtime Dependencies**: Strict TypeScript conforming to Node.js built-ins.
 
 ## Verification Criteria
-- Unit tests in `src/swarm/feedback.test.ts` verifying policy evolution, reward calculation, drift alerts, and knowledge repository CRUD.
-- Integration tests in `src/swarm/feedback-engine.test.ts` verifying engine feedback loop execution, parameter adaptation, and drift remediation.
-- Distribution builds (`build:client`, `build:swarm`) and 100% pass rate across all Vitest suites and 5 E2E suites (`npm test`, `npm run lint`).
+- Unit tests in `src/swarm/knowledgeGraph.test.ts` and `src/swarm/coordination.test.ts` validating graph queries, versioning, hypothesis validation, and learning rate adaptation.
+- Integration tests in `src/swarm/coordination-engine.test.ts` validating end-to-end engine execution with hypothesis pruning and knowledge graph updates.
+- Dual bundle builds (`build:client`, `build:swarm`), 100% pass across all Vitest and 5 E2E test suites, and clean linting.
