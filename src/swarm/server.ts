@@ -87,12 +87,25 @@ export function createSwarmServer(options: SwarmServerOptions = {}): Hono {
     app.all('/api/swarm/stream', async (c) => {
         let params: SwarmWorkflowParams;
         try {
+            // Cloudflare Pages/Workers injects env variables into `c.env`.
+            // We map them to the settings object so the Swarm engine can use them natively.
+            const env = (c.env || {}) as Record<string, any>;
+            const edgeSettings = {
+                geminiApiKey: env.GEMINI_API_KEY,
+                groqApiKey: env.GROQ_API_KEY,
+                openRouterApiKey: env.OPENROUTER_API_KEY,
+                mistralApiKey: env.MISTRAL_API_KEY,
+                githubToken: env.GITHUB_TOKEN,
+                qdrantUrl: env.QDRANT_URL,
+                qdrantApiKey: env.QDRANT_API_KEY
+            };
+
             if (c.req.method === 'POST') {
                 const body = await c.req.json().catch(() => ({}));
                 params = {
                     task: body.task,
                     data: body.data,
-                    settings: { ...defaultSettings, ...body.settings },
+                    settings: { ...edgeSettings, ...defaultSettings, ...body.settings },
                     defaultAi: body.defaultAi || defaultAi,
                     cortex: body.cortex || defaultCortex,
                     enableDeepAnalysis: body.enableDeepAnalysis,
@@ -106,7 +119,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): Hono {
                 params = {
                     task,
                     data,
-                    settings: { ...defaultSettings, appId },
+                    settings: { ...edgeSettings, ...defaultSettings, appId },
                     defaultAi,
                     cortex: defaultCortex
                 };
@@ -132,10 +145,21 @@ export function createSwarmServer(options: SwarmServerOptions = {}): Hono {
                 return c.json({ error: 'Missing required parameter: task' }, 400);
             }
 
+            const env = (c.env || {}) as Record<string, any>;
+            const edgeSettings = {
+                geminiApiKey: env.GEMINI_API_KEY,
+                groqApiKey: env.GROQ_API_KEY,
+                openRouterApiKey: env.OPENROUTER_API_KEY,
+                mistralApiKey: env.MISTRAL_API_KEY,
+                githubToken: env.GITHUB_TOKEN,
+                qdrantUrl: env.QDRANT_URL,
+                qdrantApiKey: env.QDRANT_API_KEY
+            };
+
             const result = await executeSwarmWorkflow({
                 task: body.task,
                 data: body.data,
-                settings: { ...defaultSettings, ...body.settings },
+                settings: { ...edgeSettings, ...defaultSettings, ...body.settings },
                 defaultAi: body.defaultAi || defaultAi,
                 cortex: body.cortex || defaultCortex,
                 enableDeepAnalysis: body.enableDeepAnalysis,
