@@ -6,7 +6,8 @@ import { sanitizeModelOutput } from './providers/adapter.ts';
 import { SwarmTracer } from './profiler.ts';
 import { globalLoadBalancer, type AdaptiveLoadBalancer } from './loadBalancer.ts';
 import { globalPayloadCache, PayloadCache } from './cache.ts';
-import { parseJsonSafe } from './parser.ts';
+import { parseJsonSafe, guardManagerResponse, guardAnalystResponse } from './parser.ts';
+import { ManagerResponseSchema, AnalystResponseSchema } from './schemas.ts';
 
 /**
  * Autonomous Swarm Agent decoupled from specific LLM provider implementations.
@@ -141,14 +142,39 @@ export class Agent {
                     let parsedOutput: any = textOutput;
                     let validationSuccess = true;
 
-                    if (config?.responseMimeType === 'application/json') {
+                    if (config?.responseMimeType === 'application/json' || config?.zodSchema) {
                         if (textOutput.includes('```tool_call') || textOutput.includes('[TOOL_CALL]')) {
                             parsedOutput = textOutput;
                         } else {
                             parsedOutput = parseJsonSafe(textOutput);
                             
                             if (config?.zodSchema) {
-                                const parsed = config.zodSchema.safeParse(parsedOutput);
+                                let parsed = config.zodSchema.safeParse(parsedOutput);
+                                if (!parsed.success) {
+                                    // Resilient schema repair before declaring validation failure
+                                    if (
+                                        config.zodSchema === ManagerResponseSchema ||
+                                        (parsedOutput && typeof parsedOutput === 'object' && ('components' in (parsedOutput as any) || 'ui_title' in (parsedOutput as any)))
+                                    ) {
+                                        try {
+                                            const repaired = guardManagerResponse(parsedOutput);
+                                            parsed = config.zodSchema.safeParse(repaired);
+                                        } catch {
+                                            // Fall through to error reporting
+                                        }
+                                    } else if (
+                                        config.zodSchema === AnalystResponseSchema ||
+                                        (parsedOutput && typeof parsedOutput === 'object' && ('insights' in (parsedOutput as any) || 'anomalies' in (parsedOutput as any) || 'findings' in (parsedOutput as any)))
+                                    ) {
+                                        try {
+                                            const repaired = guardAnalystResponse(parsedOutput, this.role);
+                                            parsed = config.zodSchema.safeParse(repaired);
+                                        } catch {
+                                            // Fall through to error reporting
+                                        }
+                                    }
+                                }
+
                                 if (!parsed.success) {
                                     const errors = parsed.error.issues.map((i: any) => `${i.path.join('.')}: ${i.message}`).join(', ');
                                     validationSuccess = false;

@@ -10,6 +10,43 @@ export const AnalystResponseSchema = z.object({
 });
 
 /**
+ * Normalizes arbitrary trend strings/values into 'up' | 'down' | 'neutral' | undefined.
+ */
+export function normalizeTrend(val: unknown): 'up' | 'down' | 'neutral' | undefined {
+  if (val === undefined || val === null) return undefined;
+  const s = String(val).trim().toLowerCase();
+  if (!s) return undefined;
+  if (['up', 'increasing', 'upward', 'positive', 'rise', 'rising', 'growth', 'bullish', 'high', 'higher'].includes(s) || s.startsWith('+')) {
+    return 'up';
+  }
+  if (['down', 'decreasing', 'downward', 'negative', 'fall', 'falling', 'drop', 'dropping', 'bearish', 'low', 'lower'].includes(s) || s.startsWith('-')) {
+    return 'down';
+  }
+  if (['neutral', 'flat', 'stable', 'same', 'none', 'constant', 'steady', 'even', 'no change', 'unchanged'].includes(s) || s.startsWith('=')) {
+    return 'neutral';
+  }
+  return undefined;
+}
+
+/**
+ * Normalizes arbitrary insight type strings/values into 'success' | 'warning' | 'info' | 'error'.
+ */
+export function normalizeInsightType(val: unknown): 'success' | 'warning' | 'info' | 'error' {
+  if (val === undefined || val === null) return 'info';
+  const s = String(val).trim().toLowerCase();
+  if (['success', 'positive', 'good', 'pass', 'passed', 'ok'].includes(s)) {
+    return 'success';
+  }
+  if (['warning', 'warn', 'alert', 'caution', 'medium', 'attention'].includes(s)) {
+    return 'warning';
+  }
+  if (['error', 'danger', 'critical', 'fail', 'failed', 'high', 'severe', 'bug'].includes(s)) {
+    return 'error';
+  }
+  return 'info';
+}
+
+/**
  * Generative UI synthesis schema for Manager Node dashboards.
  */
 export const ManagerResponseSchema = z.object({
@@ -21,9 +58,9 @@ export const ManagerResponseSchema = z.object({
         type: z.literal("MetricCard"),
         props: z.object({
           title: z.string(),
-          value: z.string(),
+          value: z.preprocess(v => (typeof v === 'number' ? String(v) : v), z.string()),
           subtitle: z.string().optional(),
-          trend: z.enum(["up", "down", "neutral"]).optional()
+          trend: z.preprocess(normalizeTrend, z.enum(["up", "down", "neutral"]).optional())
         })
       }),
       z.object({
@@ -33,7 +70,7 @@ export const ManagerResponseSchema = z.object({
           title: z.string(),
           insights: z.array(
             z.object({
-              type: z.enum(["success", "warning", "info", "error"]),
+              type: z.preprocess(normalizeInsightType, z.enum(["success", "warning", "info", "error"])),
               message: z.string()
             })
           )

@@ -7,6 +7,7 @@ import { GeminiEmbeddingProvider } from './memory.ts';
 import { SwarmClient } from './client.ts';
 import { createTokenChunks } from './profiler.ts';
 import { ModelRouter } from './router.ts';
+import { ManagerResponseSchema } from './schemas.ts';
 
 describe('Phase 1: Failover, Timeout Guards, and Stream Error Handling', () => {
     beforeEach(() => {
@@ -214,5 +215,59 @@ describe('Phase 1: Failover, Timeout Guards, and Stream Error Handling', () => {
         // Fast-path short-circuit event must NOT be present
         const shortCircuitEvent = result.events.find(e => e.action === 'Fast-Path Short-Circuit Activated');
         expect(shortCircuitEvent).toBeUndefined();
+    });
+
+    it('agent safely repairs malformed manager output with non-standard trend without throwing SCHEMA_VALIDATION_FAILED', async () => {
+        ProviderRegistry.register({
+            providerName: 'mock-test-malformed-schema' as any,
+            async call() {
+                return JSON.stringify({
+                    ui_title: 'Resilient Dashboard',
+                    components: [
+                        {
+                            id: 'c1',
+                            type: 'MetricCard',
+                            props: {
+                                title: 'System Throughput',
+                                value: 1500,
+                                trend: 'increasing' // non-standard trend that caused SCHEMA_VALIDATION_FAILED previously
+                            }
+                        },
+                        {
+                            id: 'c2',
+                            type: 'MetricCard',
+                            props: {
+                                title: 'Error Rate',
+                                value: 0.01,
+                                trend: 'DOWN' // uppercase variation
+                            }
+                        },
+                        {
+                            id: 'c3',
+                            type: 'InsightList',
+                            props: {
+                                title: 'Key Observations',
+                                insights: [
+                                    { type: 'alert', message: 'CPU temperature spike' }
+                                ]
+                            }
+                        }
+                    ]
+                });
+            }
+        });
+
+        const agent = new Agent('Manager Node', 'mock-model', 'mock-test-malformed-schema' as any, 'k1');
+        const context = new SwarmContext();
+        const result = await agent.run('Generate dashboard', context, {
+            zodSchema: ManagerResponseSchema
+        });
+
+        expect(result).toBeDefined();
+        expect(result.ui_title).toBe('Resilient Dashboard');
+        expect(result.components).toHaveLength(3);
+        expect(result.components[0].props.trend).toBe('up');
+        expect(result.components[1].props.trend).toBe('down');
+        expect(result.components[2].props.insights[0].type).toBe('warning');
     });
 });

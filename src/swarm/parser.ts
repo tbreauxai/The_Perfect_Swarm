@@ -2,6 +2,8 @@ import type { ZodType } from 'zod';
 import { 
     AnalystResponseSchema, 
     ManagerResponseSchema, 
+    normalizeTrend,
+    normalizeInsightType,
     type AnalystResponse, 
     type ManagerResponse 
 } from './schemas.ts';
@@ -446,7 +448,7 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
                             title: String(comp.props.title),
                             value: String(comp.props.value),
                             subtitle: comp.props.subtitle ? String(comp.props.subtitle) : undefined,
-                            trend: ['up', 'down', 'neutral'].includes(comp.props.trend) ? comp.props.trend : undefined
+                            trend: normalizeTrend(comp.props.trend)
                         }
                     });
                 } else if (comp.type === 'InsightList' && comp.props.title && Array.isArray(comp.props.insights)) {
@@ -456,7 +458,7 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
                         props: {
                             title: String(comp.props.title),
                             insights: comp.props.insights.map((ins: any) => ({
-                                type: ['success', 'warning', 'info', 'error'].includes(ins.type) ? ins.type : 'info',
+                                type: normalizeInsightType(ins.type),
                                 message: String(ins.message || ins)
                             }))
                         }

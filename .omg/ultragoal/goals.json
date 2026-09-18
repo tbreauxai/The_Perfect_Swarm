@@ -1,20 +1,20 @@
 [
   {
-    "id": "goal-1-knowledge-graph-and-coordination-core",
-    "description": "Implement SharedKnowledgeGraph in src/swarm/knowledgeGraph.ts and AgentAdaptiveLearningRateManager, HighBandwidthMessageChannel, HierarchicalTaskDecomposer, HypothesisValidationLayer, and ShapedRewardPolicy in src/swarm/coordination.ts with unit tests in src/swarm/knowledgeGraph.test.ts and src/swarm/coordination.test.ts.",
+    "id": "goal-1-resilient-trend-and-schema-normalization",
+    "description": "Implement resilient trend normalization and synonym mapping in src/swarm/schemas.ts and src/swarm/parser.ts using z.preprocess to gracefully accept case variations, synonyms, and map unrecognized strings to undefined without throwing fatal validation errors.",
     "status": "completed",
-    "verification": "Unit tests in src/swarm/knowledgeGraph.test.ts and src/swarm/coordination.test.ts verify graph versioning, hypothesis validation, adaptive learning rates, and shaped reward optimization."
+    "verification": "Unit tests in src/schemas.test.ts verify that MetricCard props with trend values like 'increasing', 'DOWN', 'flat', 'unknown', or null parse cleanly into 'up', 'down', 'neutral', or undefined."
   },
   {
-    "id": "goal-2-engine-hierarchical-coordination-integration",
-    "description": "Integrate hierarchical task decomposition, hypothesis validation, shared knowledge graph, and per-agent adaptive learning rates into src/swarm/engine.ts and src/swarm/types.ts with SwarmCoordinationSettings, attach coordination telemetry to SwarmWorkflowResult, add CLI commands to bin/cli.js, and write integration tests in src/swarm/coordination-engine.test.ts.",
+    "id": "goal-2-agent-schema-repair-and-validation-guard",
+    "description": "Enhance schema validation in src/swarm/agent.ts to apply guardManagerResponse and component sanitization before throwing SCHEMA_VALIDATION_FAILED on generative UI outputs.",
     "status": "completed",
-    "verification": "Integration tests in src/swarm/coordination-engine.test.ts verify macro-task decomposition, hypothesis arbitration, knowledge graph updates, and per-agent learning rate updates."
+    "verification": "Agent run tests verify that slightly malformed manager payloads with non-standard trend and insight properties are salvaged cleanly without throwing SCHEMA_VALIDATION_FAILED."
   },
   {
-    "id": "goal-3-verification-build-and-live-coordination-bench",
-    "description": "Export knowledgeGraph and coordination modules from library and package.json subpaths, configure vite.config.swarm.ts, update test-dist-import.mjs, test-dist-import.cjs, and test-cli.mjs, rebuild client and swarm bundles, pass 100% of all Vitest and 5 E2E test suites, and execute live CLI coordination verification.",
+    "id": "goal-3-verification-and-bundle-build",
+    "description": "Rebuild distribution bundles, verify 100% pass across all Vitest suites and 5 E2E test suites, and confirm zero schema validation failures.",
     "status": "completed",
-    "verification": "Dual ESM/CJS bundles build cleanly, 100% pass across all Vitest suites and 5 E2E suites, and npm run lint passes with zero errors."
+    "verification": "All Vitest suites pass, test:dist and test:server pass, and npm run lint passes with zero errors."
   }
 ]

@@ -1,22 +1,28 @@
-# Ultragoal Brief: Hierarchical Coordination, Hypothesis Validation, Versioned Knowledge Graph & Adaptive Learning Rates
+# Ultragoal Brief: Resilient Generative UI Trend Normalization & Schema Validation Safeguard
 
 ## Objective
-Introduce an advanced hierarchical coordination, hypothesis validation, and shared knowledge fabric for `@perfect-swarm/core`:
-1. **Adaptive Learning Rates per Agent**: Compute per-agent learning rates ($\alpha_i$) using reward variance and success consistency to accelerate policy convergence.
-2. **High-Bandwidth Interagent Communication**: Low-latency, delta-compressed message ring channels for instantaneous peer knowledge sharing.
-3. **Hierarchical Task Decomposition**: High-level strategic planners decompose macro-goals into staged dependency DAGs for lower-level execution.
-4. **Hierarchical Hypothesis Validation Layer**: Specialist agents formulate verifiable hypotheses; lead agents validate, refute, or prune them to eliminate redundant search.
-5. **Shared Versioned Knowledge Graph**: Graph-based entity-relationship store (nodes, relations, confidence, evidence) with Lamport vector versioning and delta propagation.
-6. **Reinforcement Learning Reward Shaping**: Curiosity-driven shaped reward balancing novel strategy exploration against proven tactic exploitation.
+Eliminate runtime `SCHEMA_VALIDATION_FAILED` errors caused by non-strict LLM trend strings in Generative UI `MetricCard` components (e.g. `components.3.props.trend: Invalid option: expected one of "up"|"down"|"neutral"`).
 
-## Architecture Boundaries
-- **Modules**:
-  - `src/swarm/knowledgeGraph.ts`: Versioned knowledge graph with nodes, edges, delta changelogs, and subgraph search.
-  - `src/swarm/coordination.ts`: Adaptive learning rate manager, high-bandwidth message channel, hierarchical task decomposer, hypothesis validation layer, and shaped reward optimizer.
-- **Engine Integration**: Step 1-7 in `src/swarm/engine.ts` hooks into task decomposition, hypothesis validation, and knowledge graph graph updates.
-- **Zero Runtime Dependencies**: Strict TypeScript conforming to Node.js built-ins.
+## Problem Analysis
+When Manager/Orchestrator LLMs synthesize dashboard cards, models frequently emit natural language variations or synonyms for trend:
+- `"increasing"`, `"upward"`, `"positive"`, `"rising"`, `"UP"`, `"+"`
+- `"decreasing"`, `"downward"`, `"negative"`, `"falling"`, `"DOWN"`, `"-"`
+- `"flat"`, `"stable"`, `"none"`, `"no change"`, `"even"`, `"neutral"`
+- Or unexpected text/numbers/null.
 
-## Verification Criteria
-- Unit tests in `src/swarm/knowledgeGraph.test.ts` and `src/swarm/coordination.test.ts` validating graph queries, versioning, hypothesis validation, and learning rate adaptation.
-- Integration tests in `src/swarm/coordination-engine.test.ts` validating end-to-end engine execution with hypothesis pruning and knowledge graph updates.
-- Dual bundle builds (`build:client`, `build:swarm`), 100% pass across all Vitest and 5 E2E test suites, and clean linting.
+Under the previous strict `z.enum(["up", "down", "neutral"])` definition:
+1. `config.zodSchema.safeParse(parsedOutput)` in `src/swarm/agent.ts` throws a fatal `SCHEMA_VALIDATION_FAILED` error.
+2. The entire analysis fails, even though the dashboard title, other cards, insight lists, and data tables are completely valid.
+
+## Architecture Boundaries & Solution
+1. **Schema-Level Normalization (`src/swarm/schemas.ts`)**:
+   - In `ManagerResponseSchema` -> `MetricCard` -> `props.trend`:
+     Use `z.preprocess` to normalize casing, map common synonyms (`increasing`/`upward` -> `'up'`, `decreasing`/`downward` -> `'down'`, `flat`/`stable` -> `'neutral'`), and map unrecognized strings or invalid values to `undefined` rather than throwing fatal validation errors.
+   - In `InsightList` -> `props.insights` -> `type`:
+     Preprocess to map synonyms (`alert`, `danger` -> `warning`, `notice` -> `info`) to prevent similar enum failures.
+2. **Parser Guarding (`src/swarm/parser.ts`)**:
+   - Standardize `normalizeTrend` helper across both `parser.ts` and `schemas.ts`.
+3. **Agent Self-Healing (`src/swarm/agent.ts`)**:
+   - In `agent.run()`, if `config.zodSchema` validation fails and the output has generative UI structure (`components`), invoke `guardManagerResponse` to salvage the payload before throwing `SCHEMA_VALIDATION_FAILED`.
+4. **Verification**:
+   - Unit tests covering case-insensitivity, synonyms, arbitrary string fallback, null/undefined safety, and agent recovery without error.
