@@ -1,35 +1,23 @@
-# Ultragoal Brief: Hierarchical Agent Specialization with Dynamic Routing
+# Ultragoal: Tiered Caching and State-Compression (Vector Quantization, Selective Snapshotting)
 
 ## Objective
-Implement hierarchical agent specialization with dynamic routing based on task complexity and domain expertise across multi-tier specialist trees to optimize resource allocation, prevent cognitive overload, and enable autonomous delegation and escalation.
+Implement a multi-tier cache hierarchy (L1 Hot Memory LRU, L2 Warm Semantic, L3 Cold Compressed Persistence), Vector Quantization (SQ8 scalar quantization, 1-bit sign binary quantization, sub-byte vector compression, asymmetric distance computation), and Selective State Snapshotting (delta-state serialization, dictionary state compression, hydration) for @perfect-swarm/core with zero external runtime dependencies.
 
-## Background & Problem Statement
-In multi-agent systems, flat coordination architectures become inefficient as team size and task complexity scale:
-1. Manager nodes suffer from cognitive bottlenecks when directly coordinating dozens of heterogeneous specialist agents.
-2. Flat task routing maps chunks without considering hierarchical capability tiers (e.g. generalist leads vs deep sub-specialists vs deterministic leaf operators).
-3. Complex multi-domain tasks (e.g. security breach analysis requiring memory forensics, network analysis, and legal compliance) require structured hierarchical delegation where domain leads direct sub-specialists and synthesize localized findings before reporting upwards.
-4. Trivial tasks waste high-tier reasoning capacity if not routed directly to low-complexity leaf specialists or tools.
-
-## Architecture Boundaries
-1. **Hierarchical Specialization Engine (`src/swarm/hierarchy.ts`)**:
-   - `HierarchicalSpecialistTree`: Directed multi-tier agent tree:
-     - Tier 0: Root Coordinator / Manager Node.
-     - Tier 1: Domain Cluster Leads / Lead Architects.
-     - Tier 2: Specialized Deep Analysts.
-     - Tier 3: Leaf Micro-Agents / Deterministic Tool Operators.
-   - `HierarchicalRouter`:
-     - Multi-factor dynamic routing score:
-       `Score = (DomainExpertise * 0.40) + (ComplexityFitness * 0.30) + (HistoricalSuccessRL * 0.20) + (CapacityHeadroom * 0.10)`
-     - Dynamic task decomposition by complexity (`trivial`, `moderate`, `complex`, `critical`) and domain taxonomy.
-     - Delegation and escalation protocol (downward subtask delegation, upward anomaly escalation, lateral cross-cluster consultation).
-2. **Swarm Engine Integration (`src/swarm/engine.ts` & `src/swarm/types.ts`)**:
-   - Add `SwarmHierarchySettings` to `SwarmEngineSettings`.
-   - Dynamically build and evaluate hierarchical agent tree based on configured agents and discovered topology.
-   - Dispatch tasks hierarchically through cluster leads to deep specialists.
-   - Emit telemetry events: `Hierarchical Routing Plan`, `Specialist Delegation`, `Specialist Escalation`.
-   - Record hierarchical execution metrics (treeDepth, tiersEngaged, delegatedCount, escalationCount) in `SwarmWorkflowResult`.
-3. **Distribution & Backward Compatibility**:
-   - Zero external runtime dependencies (pure TypeScript algorithmic hierarchy).
-   - Subpath export `@perfect-swarm/core/hierarchy`.
-   - Dual ESM/CJS distribution bundles with TypeScript declarations.
-   - 100% passing Vitest suites and all 5 E2E test scripts.
+## Key Architecture Boundaries & Requirements
+1. **Multi-Tier Cache Hierarchy (L1 / L2 / L3)**:
+   - **L1 Hot LRU**: Sub-millisecond exact key lookup with configurable capacity and LRU eviction.
+   - **L2 Warm Semantic Cache**: Vector similarity thresholding (e.g. cosine/dot-product >= 0.88) with quantized vector indexes.
+   - **L3 Cold Persistent Cache**: Selective serialized state storage with dictionary compression and snapshot hydration.
+   - Dynamic promotion (L2/L3 -> L1) and demotion (L1 -> L2 -> L3) on access.
+2. **Vector Quantization Engine**:
+   - **Scalar Quantization (SQ8)**: Maps 32-bit floats into 8-bit unsigned integers with scaling factor and offset (4x memory reduction).
+   - **Binary Sign Quantization (1-bit)**: Maps vector dimensions into binary bitmasks for ultra-fast Hamming distance evaluation (32x memory reduction).
+   - **Asymmetric Distance Computation (ADC)**: Compares unquantized query vectors against quantized stored codebooks with high accuracy.
+3. **Selective Snapshotting & State Compression**:
+   - Delta snapshots: Serializes only mutated agent memories, new anomalies, and delta telemetry rather than full history.
+   - Replay and hydration: Reconstructs active swarm state from base snapshot + ordered deltas.
+4. **Integration & Telemetry**:
+   - Wires tiered cache into `src/swarm/engine.ts` and `src/swarm/types.ts`.
+   - Emits `Tiered Cache Event` and `State Snapshot Compressed` telemetry.
+   - Exports `@perfect-swarm/core/tieredCache` subpath in ESM, CommonJS, and TypeScript definitions.
+   - 100% test passing across all Vitest suites and 5 E2E test suites.

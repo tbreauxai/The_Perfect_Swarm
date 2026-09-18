@@ -134,6 +134,12 @@
       "import": "./dist/swarm/hierarchy.js",
       "require": "./dist/swarm/hierarchy.cjs",
       "default": "./src/swarm/hierarchy.ts"
+    },
+    "./tieredCache": {
+      "types": "./dist/swarm/tieredCache.d.ts",
+      "import": "./dist/swarm/tieredCache.js",
+      "require": "./dist/swarm/tieredCache.cjs",
+      "default": "./src/swarm/tieredCache.ts"
     }
   },
   "scripts": {

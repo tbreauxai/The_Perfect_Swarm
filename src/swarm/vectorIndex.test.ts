@@ -50,8 +50,13 @@ describe('MetricMath Primitives', () => {
 describe('VpTreeIndex: Sub-linear O(log n) Metric Tree', () => {
     function generateSyntheticVectors(count: number, dim: number = 64): VectorIndexItem<{ tag: string }>[] {
         const items: VectorIndexItem<{ tag: string }>[] = [];
+        let seed = 42;
+        const pseudoRand = () => {
+            seed = (seed * 9301 + 49297) % 233280;
+            return (seed / 233280) * 2 - 1;
+        };
         for (let i = 0; i < count; i++) {
-            const raw = Array.from({ length: dim }, () => Math.random() * 2 - 1);
+            const raw = Array.from({ length: dim }, () => pseudoRand());
             const vector = MetricMath.normalize(raw);
             items.push({
                 id: `pt-${i}`,

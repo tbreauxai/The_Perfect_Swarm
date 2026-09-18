@@ -1,19 +1,19 @@
 [
   {
-    "id": "goal-1-hierarchical-specialist-tree-and-router",
-    "description": "Implement HierarchicalSpecialistTree, HierarchicalRouter, multi-tier agent classification, domain expertise ontology matching, and delegation/escalation protocols in src/swarm/hierarchy.ts with unit tests.",
+    "id": "goal-1-tiered-cache-and-vector-quantization",
+    "description": "Implement TieredCache (L1 hot LRU, L2 warm semantic, L3 cold snapshot), VectorQuantizer (SQ8 scalar quantization, 1-bit binary sign quantization, asymmetric distance scoring), and SelectiveSnapshotter (delta snapshotting, state compression, state hydration) in src/swarm/tieredCache.ts with comprehensive unit tests in src/swarm/tieredCache.test.ts.",
     "status": "completed",
-    "verification": "Unit tests in src/swarm/hierarchy.test.ts verify tree construction, multi-tier routing score calculation, task decomposition by complexity, downward delegation, and upward escalation."
+    "verification": "Unit tests in src/swarm/tieredCache.test.ts verify multi-tier cache promotion/demotion, SQ8 4x compression, 1-bit 32x quantization, Hamming distance scoring, delta state snapshotting, and snapshot restoration."
   },
   {
-    "id": "goal-2-engine-hierarchical-routing-integration",
-    "description": "Integrate HierarchicalRouter into src/swarm/engine.ts and src/swarm/types.ts with telemetry event emission and integration tests.",
+    "id": "goal-2-engine-tiered-cache-integration",
+    "description": "Integrate TieredCache and SelectiveSnapshotter into src/swarm/engine.ts and src/swarm/types.ts with SwarmTieredCacheSettings, cache hit short-circuiting, snapshot delta captures, and integration tests in src/swarm/tieredCache-engine.test.ts.",
     "status": "completed",
-    "verification": "Integration tests in src/swarm/hierarchy-engine.test.ts verify hierarchical task dispatching through cluster leads to deep specialists, telemetry events, and hierarchical execution metrics."
+    "verification": "Integration tests in src/swarm/tieredCache-engine.test.ts verify engine-level L1/L2 hits, state snapshotting, and telemetry event emissions."
   },
   {
     "id": "goal-3-verification-and-bundle-build",
-    "description": "Export hierarchy module, rebuild client and swarm bundles, update test-dist-import, and verify 100% passing across all Vitest suites and 5 E2E test scripts.",
+    "description": "Export tieredCache module in src/swarm/index.ts and package.json, configure vite.config.swarm.ts, update test-dist-import.mjs and test-dist-import.cjs, rebuild client and swarm bundles, and pass 100% of all Vitest and 5 E2E test suites.",
     "status": "completed",
     "verification": "build:client and build:swarm pass cleanly, test-dist-import verifies exports, all Vitest test suites pass, and all 5 E2E test suites pass 100%."
   }

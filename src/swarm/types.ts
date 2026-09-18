@@ -45,6 +45,16 @@ export interface SwarmHierarchySettings {
     escalationEnabled?: boolean;
 }
 
+export interface SwarmTieredCacheSettings {
+    enabled?: boolean;
+    l1MaxEntries?: number;
+    l2MaxEntries?: number;
+    l2SimilarityThreshold?: number;
+    l3MaxEntries?: number;
+    quantizationMode?: 'sq8' | 'binary';
+    enableStateSnapshots?: boolean;
+}
+
 export interface SwarmEngineSettings {
     geminiApiKey?: string;
     openRouterApiKey?: string;
@@ -63,6 +73,7 @@ export interface SwarmEngineSettings {
     compressionSettings?: SwarmCompressionSettings;
     schedulingSettings?: SwarmSchedulingSettings;
     hierarchySettings?: SwarmHierarchySettings;
+    tieredCacheSettings?: SwarmTieredCacheSettings;
     [key: string]: any;
 }
 

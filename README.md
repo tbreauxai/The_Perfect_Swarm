@@ -349,6 +349,7 @@ npm run test:server       # HTTP & SSE streaming tests
 | `@perfect-swarm/core/compression` | Token-aware prompt compression, semantic deduplication, and priority budgeting |
 | `@perfect-swarm/core/scheduler` | Adaptive priority queueing, work-stealing, rate-limit backpressure, and predictive latency scheduling |
 | `@perfect-swarm/core/hierarchy` | Hierarchical agent specialization, multi-tier capability trees, and dynamic routing |
+| `@perfect-swarm/core/tieredCache` | Multi-level L1/L2/L3 cache, vector quantization (SQ8 & 1-bit), and selective state snapshotting |
 
 ---
 

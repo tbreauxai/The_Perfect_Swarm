@@ -25,7 +25,8 @@ export default defineConfig({
         experiment: path.resolve(__dirname, 'src/swarm/experiment.ts'),
         compression: path.resolve(__dirname, 'src/swarm/compression.ts'),
         scheduler: path.resolve(__dirname, 'src/swarm/scheduler.ts'),
-        hierarchy: path.resolve(__dirname, 'src/swarm/hierarchy.ts')
+        hierarchy: path.resolve(__dirname, 'src/swarm/hierarchy.ts'),
+        tieredCache: path.resolve(__dirname, 'src/swarm/tieredCache.ts')
       },
       formats: ['es', 'cjs'],
       fileName: (format, entryName) => `${entryName}.${format === 'es' ? 'js' : 'cjs'}`

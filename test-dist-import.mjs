@@ -38,7 +38,11 @@ import {
     globalHierarchicalRouter,
     classifyAgentTier,
     identifyPrimaryDomain,
-    DOMAIN_TAXONOMY
+    DOMAIN_TAXONOMY,
+    TieredCache,
+    VectorQuantizer,
+    SelectiveSnapshotter,
+    globalTieredCache
 } from './dist/swarm/index.js';
 import { createSwarmServer as serverFromSubpath } from './dist/swarm/server.js';
 import { createSwarmClient as clientFromSubpath } from './dist/swarm/client.js';
@@ -54,6 +58,12 @@ import {
     classifyAgentTier as classifyFromSubpath,
     identifyPrimaryDomain as identifyFromSubpath
 } from './dist/swarm/hierarchy.js';
+import {
+    TieredCache as TieredCacheFromSubpath,
+    VectorQuantizer as QuantizerFromSubpath,
+    SelectiveSnapshotter as SnapshotterFromSubpath,
+    globalTieredCache as globalTieredCacheFromSubpath
+} from './dist/swarm/tieredCache.js';
 import { ToolRegistry, calculatorTool } from './dist/swarm/tools.js';
 import { repairJson, parseJsonSafe } from './dist/swarm/parser.js';
 
@@ -333,6 +343,49 @@ async function runDistVerification() {
         throw new Error('Compiled HierarchicalRouter escalate failed');
     }
     console.log('✓ Compiled Hierarchy module subpath, HierarchicalSpecialistTree, and HierarchicalRouter verified');
+
+    // 13. Verify compiled Tiered Cache, Vector Quantization, and Selective Snapshotting
+    if (!TieredCache || !VectorQuantizer || !SelectiveSnapshotter || !globalTieredCache || !TieredCacheFromSubpath || !QuantizerFromSubpath || !SnapshotterFromSubpath || !globalTieredCacheFromSubpath) {
+        throw new Error('Compiled TieredCache module exports missing');
+    }
+
+    // Vector Quantization verification
+    const testVec1 = QuantizerFromSubpath.generateEmbedding('latency optimization and cache hit');
+    const testVec2 = QuantizerFromSubpath.generateEmbedding('latency optimization and cache hit query');
+    const sq8_1 = QuantizerFromSubpath.quantizeSQ8(testVec1);
+    const bq_1 = QuantizerFromSubpath.quantizeBinary(testVec1);
+    const adcSim = QuantizerFromSubpath.asymmetricCosineSimilarity(testVec2, sq8_1);
+    if (adcSim < 0.70) {
+        throw new Error('Compiled VectorQuantizer asymmetricCosineSimilarity failed');
+    }
+
+    // Selective Snapshotting verification
+    const baseState = { a: 1, b: 2, c: 'hello' };
+    const step1State = { a: 1, b: 99, d: 'world' };
+    const baseSnap = SnapshotterFromSubpath.createBaseSnapshot('snap-1', baseState);
+    const deltaSnap = SnapshotterFromSubpath.createDeltaSnapshot(baseSnap, baseState, step1State, 0);
+    const hydrated = SnapshotterFromSubpath.hydrateState(baseSnap, [deltaSnap]);
+    if (hydrated.b !== 99 || hydrated.d !== 'world' || hydrated.c !== undefined) {
+        throw new Error('Compiled SelectiveSnapshotter delta hydration failed');
+    }
+    const compressedPayload = SnapshotterFromSubpath.compressPayload('repeat token repeat token repeat token');
+    const decompressed = SnapshotterFromSubpath.decompressPayload(compressedPayload);
+    if (decompressed !== 'repeat token repeat token repeat token') {
+        throw new Error('Compiled SelectiveSnapshotter payload compression failed');
+    }
+
+    // TieredCache verification
+    const cacheInst = new TieredCacheFromSubpath({
+        l1MaxEntries: 10,
+        l2SemanticThreshold: 0.75,
+        l3MaxSnapshots: 5
+    });
+    cacheInst.set('test-task', 'test-data', { output: 'result-val' }, { raw: 'state' });
+    const l1Hit = cacheInst.get('test-task', 'test-data');
+    if (!l1Hit || l1Hit.tier !== 'L1') {
+        throw new Error('Compiled TieredCache L1 retrieval failed');
+    }
+    console.log('✓ Compiled TieredCache module subpath, VectorQuantizer, SelectiveSnapshotter, and TieredCache verified');
 
     console.log('\n✓ ALL COMPILED SWARM DISTRIBUTION BUNDLE TESTS PASSED SUCCESSFULLY!\n');
 }

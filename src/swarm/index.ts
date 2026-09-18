@@ -34,3 +34,4 @@ export * from './experiment.ts';
 export * from './compression.ts';
 export * from './scheduler.ts';
 export * from './hierarchy.ts';
+export * from './tieredCache.ts';

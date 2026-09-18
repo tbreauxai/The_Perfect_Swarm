@@ -174,6 +174,26 @@ async function testCjsImport() {
     }
     console.log('✓ CJS hierarchy subpath, HierarchicalSpecialistTree, and HierarchicalRouter verified');
 
+    const tieredCjs = require('./dist/swarm/tieredCache.cjs');
+    if (!tieredCjs.TieredCache || !tieredCjs.VectorQuantizer || !tieredCjs.SelectiveSnapshotter || !tieredCjs.globalTieredCache) {
+        throw new Error('CommonJS tieredCache exports missing');
+    }
+    const cjsVec = tieredCjs.VectorQuantizer.generateEmbedding('latency optimization');
+    const cjsSq8 = tieredCjs.VectorQuantizer.quantizeSQ8(cjsVec);
+    const cjsBq = tieredCjs.VectorQuantizer.quantizeBinary(cjsVec);
+    if (!cjsSq8.codes || !cjsBq.bits) {
+        throw new Error('CommonJS VectorQuantizer quantization failed');
+    }
+    const cjsBaseState = { status: 'ok', count: 1 };
+    const cjsStep1State = { status: 'ok', count: 2 };
+    const cjsBaseSnap = tieredCjs.SelectiveSnapshotter.createBaseSnapshot('cjs-snap-1', cjsBaseState);
+    const cjsDeltaSnap = tieredCjs.SelectiveSnapshotter.createDeltaSnapshot(cjsBaseSnap, cjsBaseState, cjsStep1State, 0);
+    const cjsHydrated = tieredCjs.SelectiveSnapshotter.hydrateState(cjsBaseSnap, [cjsDeltaSnap]);
+    if (cjsHydrated.count !== 2) {
+        throw new Error('CommonJS SelectiveSnapshotter hydration failed');
+    }
+    console.log('✓ CJS tieredCache subpath, VectorQuantizer, SelectiveSnapshotter, and TieredCache verified');
+
     console.log('✓ ALL COMMONJS SWARM DISTRIBUTION TESTS PASSED!\n');
 }
 

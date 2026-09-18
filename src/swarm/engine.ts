@@ -60,6 +60,14 @@ import {
     type SpecialistNode,
     type HierarchyMetrics
 } from './hierarchy.ts';
+import {
+    TieredCache,
+    globalTieredCache,
+    SelectiveSnapshotter,
+    VectorQuantizer,
+    type TieredCacheMetrics,
+    type TieredLookupResult
+} from './tieredCache.ts';
 
 export interface ProviderResolution {
     key: string;
@@ -245,6 +253,14 @@ export interface SwarmWorkflowResult {
         delegatedTasksCount: number;
         escalatedTasksCount: number;
     };
+    tieredCache?: {
+        hit: boolean;
+        tier?: 'L1' | 'L2' | 'L3';
+        similarity?: number;
+        latencyMs: number;
+        snapshotId?: string;
+        metrics: TieredCacheMetrics;
+    };
 }
 
 /**
@@ -343,7 +359,59 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         forceFullSwarm
     });
 
-    const cachedAnalysis = forceFullSwarm ? null : globalPayloadCache.get(cacheKey);
+    // 0b. Check Tiered Cache (L1 Hot LRU / L2 Warm Semantic / L3 Cold Snapshot)
+    const tieredCacheEnabled = settings?.tieredCacheSettings?.enabled === true;
+    const cacheQuery = `${task}\n${data || ''}`.trim();
+
+    if (tieredCacheEnabled && !forceFullSwarm) {
+        const lookup = globalTieredCache.lookup(cacheQuery, {
+            similarityThreshold: settings?.tieredCacheSettings?.l2SimilarityThreshold
+        });
+        if (lookup.found && lookup.value) {
+            context.addEvent({
+                agentRole: 'Tiered Cache Engine',
+                action: `Tiered Cache Hit (${lookup.tier})`,
+                modelName: 'Local/TieredCache',
+                prompt: `Cache hit on tier '${lookup.tier}' for query: "${task.slice(0, 80)}" (Similarity: ${Math.round((lookup.similarity ?? 1.0) * 100)}%, Latency: ${lookup.latencyMs}ms)`,
+                output: {
+                    tier: lookup.tier,
+                    similarity: lookup.similarity,
+                    key: lookup.key,
+                    latencyMs: lookup.latencyMs,
+                    cacheMetrics: globalTieredCache.getMetrics()
+                },
+                durationMs: lookup.latencyMs
+            });
+
+            params.onStage?.({
+                stage: 'completed',
+                task
+            });
+
+            const workflowDurationMs = Date.now() - workflowStartTime;
+            globalMetricsCollector.recordTaskExecution({
+                success: true,
+                durationMs: workflowDurationMs,
+                agentRole: 'Tiered Cache Engine'
+            });
+            const metrics = globalMetricsCollector.getBaselineReport();
+
+            return {
+                events: context.events,
+                finalAnalysis: lookup.value,
+                metrics,
+                tieredCache: {
+                    hit: true,
+                    tier: lookup.tier,
+                    similarity: lookup.similarity,
+                    latencyMs: lookup.latencyMs,
+                    metrics: globalTieredCache.getMetrics()
+                }
+            };
+        }
+    }
+
+    const cachedAnalysis = (forceFullSwarm || tieredCacheEnabled) ? null : globalPayloadCache.get(cacheKey);
     if (cachedAnalysis) {
         context.addEvent({
             agentRole: 'Payload Cache',
@@ -374,7 +442,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     }
 
     // 0c. Check Lightweight Semantic Baseline Cache for Near-Identical Query Matching
-    const semanticMatch: SemanticMatchResult = forceFullSwarm
+    const semanticMatch: SemanticMatchResult = (forceFullSwarm || tieredCacheEnabled)
         ? { hit: false, similarity: 0 }
         : globalSemanticCache.findMatch(task, { data, threshold: 0.80 });
 
@@ -539,6 +607,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     let workflowDeduplicatedCount: number = 0;
     let workflowSchedulingResult: SchedulerExecutionResult | undefined;
     let workflowHierarchyMetrics: HierarchyMetrics | undefined;
+    let workflowTieredCacheHit: TieredLookupResult | undefined;
+    let workflowSnapshotId: string | undefined;
 
     if (fastPathDecision.eligible && analysts.length > 0) {
         const fastAnalyst = analysts[0];
@@ -716,6 +786,10 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 });
             }
 
+            if (tieredCacheEnabled && finalAnalysis) {
+                globalTieredCache.set(cacheQuery, finalAnalysis, cacheQuery);
+            }
+
             return {
                 events: context.events,
                 finalAnalysis,
@@ -732,6 +806,11 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     tokensSaved: workflowPromptTokensSaved,
                     reductionRatio: Math.round((workflowPromptTokensSaved / workflowOriginalPromptTokens) * 1000) / 1000,
                     deduplicatedSegmentsCount: workflowDeduplicatedCount
+                } : undefined,
+                tieredCache: tieredCacheEnabled ? {
+                    hit: false,
+                    latencyMs: workflowDurationMs,
+                    metrics: globalTieredCache.getMetrics()
                 } : undefined
             };
         } catch (err: any) {
@@ -1708,6 +1787,37 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         finalAnalysis
     });
 
+    if (tieredCacheEnabled && finalAnalysis) {
+        globalTieredCache.set(cacheQuery, finalAnalysis, cacheQuery);
+        if (settings?.tieredCacheSettings?.enableStateSnapshots !== false) {
+            const snapId = `snap-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+            workflowSnapshotId = snapId;
+            const stateToSnap = {
+                task,
+                complexity,
+                finalAnalysisTitle: finalAnalysis?.ui_title,
+                eventsCount: context.events.length,
+                analystsCount: analysts.length
+            };
+            const baseSnap = globalTieredCache.saveSnapshot(snapId, stateToSnap);
+            const comp = SelectiveSnapshotter.compressPayload(JSON.stringify(stateToSnap));
+            context.addEvent({
+                agentRole: 'State Compression Engine',
+                action: 'State Snapshot Compressed',
+                modelName: 'Local/SelectiveSnapshotter',
+                prompt: `Saved compressed state snapshot '${snapId}' (${comp.originalByteSize} -> ${comp.compressedByteSize} bytes, ${comp.reductionPercent}% reduction)`,
+                output: {
+                    snapshotId: snapId,
+                    hash: baseSnap.hash,
+                    originalBytes: comp.originalByteSize,
+                    compressedBytes: comp.compressedByteSize,
+                    reductionPercent: comp.reductionPercent
+                },
+                durationMs: 0
+            });
+        }
+    }
+
     return {
         events: context.events,
         finalAnalysis,
@@ -1741,6 +1851,14 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             tierCounts: workflowHierarchyMetrics.tierCounts,
             delegatedTasksCount: workflowHierarchyMetrics.delegationsCount,
             escalatedTasksCount: workflowHierarchyMetrics.escalationsCount
+        } : undefined,
+        tieredCache: tieredCacheEnabled ? {
+            hit: !!workflowTieredCacheHit?.found,
+            tier: workflowTieredCacheHit?.tier,
+            similarity: workflowTieredCacheHit?.similarity,
+            latencyMs: workflowTieredCacheHit?.latencyMs ?? 0,
+            snapshotId: workflowSnapshotId,
+            metrics: globalTieredCache.getMetrics()
         } : undefined
     };
 }
