@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import type { Context } from 'hono';
+import { createAdaptorServer, type ServerType } from '@hono/node-server';
 import { executeSwarmWorkflow, type SwarmWorkflowParams, type SwarmWorkflowResult } from './engine.ts';
 import type { SwarmEvent } from './types.ts';
 import type { GoogleGenAI } from '@google/genai';
@@ -49,6 +50,12 @@ export async function handleSwarmSse(
                     if (params.onStage) {
                         params.onStage(stagePayload);
                     }
+                },
+                onPartialResult: async (partialResult) => {
+                    await sendEvent('swarm_partial', partialResult);
+                    if (params.onPartialResult) {
+                        params.onPartialResult(partialResult);
+                    }
                 }
             });
 
@@ -59,14 +66,72 @@ export async function handleSwarmSse(
     });
 }
 
+export interface SwarmServerApp extends Hono {
+    listen(port?: number | ((...args: any[]) => void), hostnameOrCb?: string | ((...args: any[]) => void), cb?: (...args: any[]) => void): ServerType;
+    address(): any;
+    close(cb?: (err?: Error) => void): any;
+}
+
+/**
+ * Parses JSON body from an incoming request stream or Hono context.
+ */
+export async function parseJsonBody<T = any>(req: any): Promise<T> {
+    if (req?.json && typeof req.json === 'function') {
+        return req.json().catch(() => ({}));
+    }
+    if (req?.req?.json && typeof req.req.json === 'function') {
+        return req.req.json().catch(() => ({}));
+    }
+    if (typeof req?.on === 'function') {
+        return new Promise((resolve, reject) => {
+            let body = '';
+            req.on('data', (chunk: any) => { body += chunk; });
+            req.on('end', () => {
+                try { resolve(body ? JSON.parse(body) : ({} as T)); } catch (e) { reject(e); }
+            });
+            req.on('error', reject);
+        });
+    }
+    return {} as T;
+}
+
 /**
  * Creates a standalone, zero-external-dependency Hono app for headless swarm deployments.
+ * Supports both Edge runtimes (Cloudflare Pages/Workers) and Node.js (`server.listen()`).
  */
-export function createSwarmServer(options: SwarmServerOptions = {}): Hono {
-    const app = new Hono();
+export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServerApp {
+    const app = new Hono() as SwarmServerApp;
     const defaultSettings = options.defaultSettings || {};
     const defaultAi = options.defaultAi;
     const defaultCortex = options.defaultCortex;
+    let nodeServer: ServerType | null = null;
+
+    app.listen = function (portOrOpts?: any, hostnameOrCb?: any, cb?: any): any {
+        let port = typeof portOrOpts === 'number' ? portOrOpts : (options.port ?? 3000);
+        let hostname = typeof hostnameOrCb === 'string' ? hostnameOrCb : (options.host ?? '0.0.0.0');
+        let callback = typeof hostnameOrCb === 'function' ? hostnameOrCb : (typeof cb === 'function' ? cb : undefined);
+
+        if (typeof portOrOpts === 'function') {
+            callback = portOrOpts;
+            port = options.port ?? 3000;
+        }
+
+        if (!nodeServer) {
+            nodeServer = createAdaptorServer({ fetch: app.fetch });
+        }
+        return nodeServer.listen(port, hostname, callback);
+    };
+
+    app.address = function (): any {
+        return nodeServer?.address() || { port: options.port ?? 3000 };
+    };
+
+    app.close = function (cb?: (err?: Error) => void): any {
+        if (nodeServer) {
+            return nodeServer.close(cb);
+        }
+        if (cb) cb();
+    };
 
     if (options.cors !== false) {
         app.use('*', async (c, next) => {

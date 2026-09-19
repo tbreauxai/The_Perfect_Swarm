@@ -30,7 +30,8 @@ export default defineConfig({
         feedback: path.resolve(__dirname, 'src/swarm/feedback.ts'),
         knowledgeGraph: path.resolve(__dirname, 'src/swarm/knowledgeGraph.ts'),
         coordination: path.resolve(__dirname, 'src/swarm/coordination.ts'),
-        health: path.resolve(__dirname, 'src/swarm/health.ts')
+        health: path.resolve(__dirname, 'src/swarm/health.ts'),
+        optimization: path.resolve(__dirname, 'src/swarm/optimization.ts')
       },
       formats: ['es', 'cjs'],
       fileName: (format, entryName) => `${entryName}.${format === 'es' ? 'js' : 'cjs'}`
@@ -39,6 +40,7 @@ export default defineConfig({
       external: [
         '@google/genai',
         '@qdrant/js-client-rest',
+        '@hono/node-server',
         'zod',
         'zod-to-json-schema',
         'node:crypto',

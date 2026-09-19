@@ -39,4 +39,5 @@ export * from './feedback.ts';
 export * from './knowledgeGraph.ts';
 export * from './coordination.ts';
 export * from './health.ts';
+export * from './optimization.ts';
 

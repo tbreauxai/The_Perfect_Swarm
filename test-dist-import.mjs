@@ -67,8 +67,24 @@ import {
     TwoTierModelHealthChecker,
     ModelCircuitBreaker,
     ModelHealthCache,
-    globalModelHealthChecker
+    globalModelHealthChecker,
+    DomainSubComputationCache,
+    TokenWeightProfiler,
+    DomainPreFilter,
+    ConfidenceEarlyExitEvaluator,
+    PredictionWorkerPool,
+    TieredPredictionEngine,
+    globalDomainSubComputationCache
 } from './dist/swarm/index.js';
+import {
+    DomainSubComputationCache as DomainCacheFromSubpath,
+    TokenWeightProfiler as ProfilerOptFromSubpath,
+    DomainPreFilter as PreFilterFromSubpath,
+    ConfidenceEarlyExitEvaluator as EarlyExitFromSubpath,
+    PredictionWorkerPool as WorkerPoolFromSubpath,
+    TieredPredictionEngine as TieredEngineFromSubpath,
+    globalDomainSubComputationCache as globalDomainCacheFromSubpath
+} from './dist/swarm/optimization.js';
 import {
     TwoTierModelHealthChecker as CheckerFromSubpath,
     ModelCircuitBreaker as BreakerFromSubpath,
@@ -620,6 +636,79 @@ async function runDistVerification() {
         throw new Error('Compiled ModelCircuitBreaker tripping failed');
     }
     console.log('✓ Compiled Health subpath, TwoTierModelHealthChecker, ModelCircuitBreaker, and ModelHealthCache verified');
+
+    // 18. Verify compiled Optimization Module (DomainSubComputationCache, TokenWeightProfiler, DomainPreFilter, PredictionWorkerPool, TieredPredictionEngine)
+    if (!DomainSubComputationCache || !TokenWeightProfiler || !DomainPreFilter || !ConfidenceEarlyExitEvaluator || !PredictionWorkerPool || !TieredPredictionEngine || !globalDomainSubComputationCache || !DomainCacheFromSubpath || !WorkerPoolFromSubpath || !TieredEngineFromSubpath) {
+        throw new Error('Compiled optimization module exports missing');
+    }
+
+    const distDomainCache = new DomainCacheFromSubpath({ maxEntries: 10, defaultTtlMs: 10000 });
+    distDomainCache.set('team_form', 'team-arsenal', { form: 'WWWDW' });
+    const cachedForm = distDomainCache.get('team_form', 'team-arsenal');
+    if (!cachedForm || cachedForm.form !== 'WWWDW') {
+        throw new Error('Compiled DomainSubComputationCache get/set failed');
+    }
+
+    const distProfiler = new ProfilerOptFromSubpath();
+    const payloadProfile = distProfiler.profile('{"game":"Arsenal vs Chelsea","odds":{"h":1.9,"d":3.4,"a":4.2}}');
+    if (payloadProfile.totalTokens <= 0) {
+        throw new Error('Compiled TokenWeightProfiler profile failed');
+    }
+
+    const distPreFilter = new PreFilterFromSubpath();
+    const pruned = distPreFilter.filter({
+        fixture: { home: 'Team A', away: 'Team B', status: 'scheduled' },
+        debug_trace: 'trace string',
+        internal_telemetry: { log: 'xyz' }
+    });
+    if (!pruned.filteredData.fixture) {
+        throw new Error('Compiled DomainPreFilter filter failed');
+    }
+
+    const earlyExitEval = new EarlyExitFromSubpath({ defaultConfidenceThreshold: 0.85, defaultMarginThreshold: 0.20 });
+    const evalRes = earlyExitEval.evaluate({
+        confidence: 0.88,
+        market: 'match_winner',
+        predictedOutcome: 'home'
+    });
+    if (!evalRes.canEarlyExit || evalRes.tier !== 'tier1_approx') {
+        throw new Error('Compiled ConfidenceEarlyExitEvaluator failed');
+    }
+
+    const distWorkerPool = new WorkerPoolFromSubpath({ maxConcurrency: 2 });
+    const workerTask = await distWorkerPool.submit(
+        async () => 42,
+        { id: 'dist-opt-task', priority: 'high' }
+    );
+    if (workerTask !== 42) {
+        throw new Error('Compiled PredictionWorkerPool submit failed');
+    }
+
+    const distTieredEngine = new TieredEngineFromSubpath({
+        earlyExitEvaluator: earlyExitEval,
+        workerPool: distWorkerPool
+    });
+    const tieredRes = await distTieredEngine.execute({
+        task: 'Predict match',
+        data: { game: 'test' },
+        tier1Fn: async () => ({
+            predictedOutcome: 'Home Win',
+            confidence: 0.92,
+            tier: 'tier1_approx'
+        }),
+        tier2Fn: async () => ({
+            predictedOutcome: 'Home Win Refined',
+            confidence: 0.95
+        }),
+        options: {
+            enableEarlyExit: true,
+            confidenceThreshold: 0.80
+        }
+    });
+    if (!tieredRes.earlyExit || tieredRes.tier !== 'tier1_approx') {
+        throw new Error('Compiled TieredPredictionEngine failed');
+    }
+    console.log('✓ Compiled Optimization module subpath, DomainCache, WorkerPool, and TieredEngine verified');
 
     console.log('\n✓ ALL COMPILED SWARM DISTRIBUTION BUNDLE TESTS PASSED SUCCESSFULLY!\n');
 }

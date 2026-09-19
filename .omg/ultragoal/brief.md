@@ -1,20 +1,32 @@
-# Ultragoal Brief: Parallel Async Model Health Checks, TTL Caching, Two-Tier Verification & Circuit Breaker
+# Ultragoal Brief: High-Throughput Swarm Optimization for Betting & Prediction Workloads
 
 ## Objective
-Implement high-throughput, low-latency health verification and fault isolation for LLM models across all providers (Gemini, Groq, OpenRouter, Mistral, GitHub, Simulated):
-1. **Parallel Async Health Checks**: Execute model probes concurrently with a short 2-3 second timeout per model via `AbortController`.
-2. **5-10 Minute TTL Caching**: Cache health results (latency, tier outcomes, circuit status) for 5-10 minutes to prevent provider rate limits and supply instant, near real-time model dropdown filtering.
-3. **Two-Tier Check**:
-   - Tier 1: Lightweight HEAD/metadata request to verify endpoint reachability with zero token spend.
-   - Tier 2: Minimal inference ping (prompt "ping" / max_tokens=1) to verify active inference serving. Skip Tier 2 if Tier 1 fails.
-4. **Circuit Breaker Pattern**:
-   - States: `CLOSED` (healthy), `OPEN` (tripped after consecutive failures, e.g. 3), `HALF_OPEN` (trial probe after cooldown, e.g. 30-60s).
-   - Temporarily disable repeatedly failing models to protect user workflows and prevent execution hangs.
-5. **UI Dropdown Filtering**:
-   - Integrate health and circuit status into `src/services/providerService.ts` and `src/components/AgentConfigurator.tsx` for real-time visual health badges and filtering options.
+Optimize swarm processing speed and eliminate the 180-second timeout in betting and prediction analysis without sacrificing accuracy or functionality. Achieve sub-30s initial responses (streaming early partial predictions) and sub-60s refined analyses through five primary optimization vectors:
+
+1. **Parallel Worker Pool for Independent Tasks**:
+   - Parallelize independent prediction tasks (team form analysis, H2H history, market odds evaluation, prop models) across concurrent execution lanes using worker pools.
+   - Batch inputs and dynamically balance workloads across available compute.
+
+2. **Streaming / Chunked Responses with Early Partial Results**:
+   - Progressive streaming of intermediate findings via Server-Sent Events (`swarm_partial` / `swarm_stage`).
+   - Deliver actionable initial predictions to the client in <30 seconds before complete manager synthesis and critic verification conclude.
+
+3. **Tiered Model Inference & Early-Exit Logic**:
+   - Tier 1: Fast approximation model/heuristic generating preliminary odds, spreads, and probabilities.
+   - Confidence Gate: Early exit if Tier 1 confidence score exceeds threshold (e.g. >0.85), bypassing heavy multi-pass inference when consensus is definitive.
+   - Tier 2: Accurate refinement pass triggered only when uncertainty or high volatility is detected, completing within <60 seconds total.
+
+4. **Domain Sub-Computation Caching**:
+   - High-performance TTL caching for frequent sub-computations: team form indices, head-to-head records, baseline team stats, and market odds snapshots.
+   - Avoid redundant LLM prompt expansion and external calculations across swarm runs and analyst nodes.
+
+5. **Token Weight Profiling & Pre-Filtering**:
+   - Profile input metadata token weight and calculate divergence against historical baselines.
+   - Pre-filter irrelevant data, stale markets, and noise before heavy LLM/ML passes.
+   - Integrate prompt compression to drastically lower token processing latency.
 
 ## Architecture Boundaries
-- Zero external runtime dependencies; pure TypeScript.
-- Core logic in `src/swarm/health.ts` for reuse across SwarmEngine, ModelRouter, CLI, and Web UI.
-- Client integration in `src/services/providerService.ts` and `src/components/AgentConfigurator.tsx`.
-- 100% backward compatibility with existing tests and provider configurations.
+- Zero external runtime dependencies; pure TypeScript compatible with Node.js, Bun, and Edge runtimes (Cloudflare Workers/Pages).
+- Strict adherence to `MEMORY.md`: NEVER ban/blacklist models, NEVER override user-configured models, maintain zero-crash worker guarding (`guardAnalystResponse`).
+- Core optimization components isolated in `src/swarm/optimization.ts` and integrated cleanly into `src/swarm/engine.ts`, `src/swarm/server.ts`, and `src/swarm/index.ts`.
+- 100% backward compatibility with all existing test suites, SSE streaming clients, and provider adapters.

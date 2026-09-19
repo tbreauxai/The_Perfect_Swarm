@@ -320,6 +320,23 @@ async function testCjsImport() {
     }
     console.log('✓ CJS health subpath, TwoTierModelHealthChecker, and ModelCircuitBreaker verified');
 
+    const optCjs = require('./dist/swarm/optimization.cjs');
+    if (!optCjs.DomainSubComputationCache || !optCjs.TokenWeightProfiler || !optCjs.DomainPreFilter || !optCjs.ConfidenceEarlyExitEvaluator || !optCjs.PredictionWorkerPool || !optCjs.TieredPredictionEngine) {
+        throw new Error('CommonJS optimization exports missing');
+    }
+    const cjsCache = new optCjs.DomainSubComputationCache({ maxEntries: 5, defaultTtlMs: 5000 });
+    cjsCache.set('market_odds', 'game-1', { home: 1.5, away: 2.8 });
+    const cjsOdds = cjsCache.get('market_odds', 'game-1');
+    if (!cjsOdds || cjsOdds.home !== 1.5) {
+        throw new Error('CommonJS DomainSubComputationCache failed');
+    }
+    const cjsPool = new optCjs.PredictionWorkerPool({ maxConcurrency: 1 });
+    const cjsTaskRes = await cjsPool.submit(async () => 'ok', { id: 'c-opt', priority: 'normal' });
+    if (cjsTaskRes !== 'ok') {
+        throw new Error('CommonJS PredictionWorkerPool failed');
+    }
+    console.log('✓ CJS optimization subpath, DomainSubComputationCache, and PredictionWorkerPool verified');
+
     console.log('✓ ALL COMMONJS SWARM DISTRIBUTION TESTS PASSED!\n');
 }
 

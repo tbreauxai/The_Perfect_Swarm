@@ -1,20 +1,20 @@
 [
   {
-    "id": "goal-1-model-health-checker-and-circuit-breaker-core",
-    "description": "Implement ModelCircuitBreaker (CLOSED/OPEN/HALF_OPEN states, failure thresholds, cooldown recovery), ModelHealthCache (5-10m TTL), and TwoTierModelHealthChecker (parallel async health checks with 2-3s timeout, Tier 1 HEAD check, Tier 2 minimal inference ping) in src/swarm/health.ts. Add unit tests in src/swarm/health.test.ts.",
+    "id": "goal-1-caching-profiling-prefiltering-core",
+    "description": "Implement DomainSubComputationCache (team form, H2H, market odds with configurable TTL), TokenWeightProfiler (metadata token profiling, baseline diffing, noise reduction), DomainPreFilter (heuristic pre-filtering of irrelevant betting markets), and ConfidenceEarlyExitEvaluator in src/swarm/optimization.ts. Add comprehensive unit tests in src/swarm/optimization.test.ts.",
     "status": "completed",
-    "verification": "Unit tests in src/swarm/health.test.ts pass 100%, covering circuit breaker state machine, 5-10m TTL caching, 2-tier check sequencing, 2-3s timeout aborts, and parallel execution."
+    "verification": "100% of unit tests in src/swarm/optimization.test.ts pass, verifying sub-computation cache hits/TTL, metadata token weight analysis, baseline diff detection, pre-filtering of irrelevant fields, and confidence early-exit logic."
   },
   {
-    "id": "goal-2-provider-service-and-ui-dropdown-filtering",
-    "description": "Integrate model health checking and circuit breaker into src/services/providerService.ts and src/components/AgentConfigurator.tsx. Provide near real-time status badges, circuit-breaker tripped indicator, and healthy model dropdown filtering. Add unit tests in src/components/AgentConfigurator.test.tsx.",
+    "id": "goal-2-worker-pool-tiered-inference-streaming",
+    "description": "Implement PredictionWorkerPool (parallelizing independent prediction tasks across concurrent workers) and TieredPredictionEngine (Tier 1 fast approx <30s + Tier 2 accurate refine <60s with early-exit gating). Integrate early partial result streaming ('swarm_partial' event) into src/swarm/server.ts and src/swarm/engine.ts. Add integration tests in src/swarm/optimization-engine.test.ts.",
     "status": "completed",
-    "verification": "AgentConfigurator tests pass, verifying health status badges, circuit breaker indicators, and dropdown filtering."
+    "verification": "Integration tests pass, validating sub-30s early partial streaming, Tier 1 early-exit bypass on high confidence, worker pool concurrent fanout, and execution within well below the 180s timeout."
   },
   {
-    "id": "goal-3-swarm-bundle-export-and-system-verification",
-    "description": "Export health module from src/swarm/index.ts, configure package.json subpath exports, rebuild client and swarm distribution bundles, and pass 100% of all Vitest suites, test:dist, test:cli, test:server, and npm run lint.",
+    "id": "goal-3-verification-build-and-benchmarks",
+    "description": "Export optimization modules from src/swarm/index.ts, configure package.json subpath exports, rebuild client and swarm distribution bundles, and ensure 100% pass across all Vitest suites, test:dist, test:cli, test:server, and npm run lint with zero regressions.",
     "status": "completed",
-    "verification": "All Vitest suites pass, test:dist, test:cli, test:server pass, and npm run lint passes with zero errors."
+    "verification": "All Vitest suites pass, build succeeds, distribution imports and CLI run without errors, and lint reports zero errors."
   }
 ]

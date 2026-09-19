@@ -164,6 +164,12 @@
       "import": "./dist/swarm/health.js",
       "require": "./dist/swarm/health.cjs",
       "default": "./src/swarm/health.ts"
+    },
+    "./optimization": {
+      "types": "./dist/swarm/optimization.d.ts",
+      "import": "./dist/swarm/optimization.js",
+      "require": "./dist/swarm/optimization.cjs",
+      "default": "./src/swarm/optimization.ts"
     }
   },
   "scripts": {

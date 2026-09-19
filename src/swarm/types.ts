@@ -77,7 +77,19 @@ export interface SwarmEngineSettings {
     profilingSettings?: SwarmProfilingSettings;
     feedbackSettings?: SwarmFeedbackSettings;
     coordinationSettings?: SwarmCoordinationSettings;
+    optimizationSettings?: SwarmOptimizationSettings;
     [key: string]: any;
+}
+
+export interface SwarmOptimizationSettings {
+    enabled?: boolean;
+    workerPoolConcurrency?: number;
+    enableEarlyExit?: boolean;
+    confidenceThreshold?: number;
+    marginThreshold?: number;
+    enableSubComputationCache?: boolean;
+    enablePreFiltering?: boolean;
+    emitEarlyPartialResults?: boolean;
 }
 
 export interface SwarmCoordinationSettings {
