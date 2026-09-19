@@ -803,12 +803,14 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             if (key) {
                 const userConfiguredAgent = rawAgents.find((a: AgentConfig) => a.provider === p && a.model);
                 const fallbackModel = userConfiguredAgent?.model || '';
-                availableFallbacks.push({
-                    provider: p,
-                    apiKey: key,
-                    modelName: fallbackModel,
-                    aiClient: client
-                });
+                if (fallbackModel && fallbackModel.trim().length > 0) {
+                    availableFallbacks.push({
+                        provider: p,
+                        apiKey: key,
+                        modelName: fallbackModel,
+                        aiClient: client
+                    });
+                }
             }
         }
     }

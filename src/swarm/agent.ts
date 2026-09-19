@@ -9,6 +9,14 @@ import { globalPayloadCache, PayloadCache } from './cache.ts';
 import { parseJsonSafe, guardManagerResponse, guardAnalystResponse } from './parser.ts';
 import { ManagerResponseSchema, AnalystResponseSchema } from './schemas.ts';
 
+const DEFAULT_PROVIDER_MODELS: Record<string, string> = {
+    gemini: 'gemini-2.5-flash',
+    groq: 'openai/gpt-oss-120b',
+    openrouter: 'deepseek/deepseek-r1',
+    mistral: 'mistral-small-latest',
+    github: 'gpt-4o-mini'
+};
+
 /**
  * Autonomous Swarm Agent decoupled from specific LLM provider implementations.
  * Features:
@@ -123,10 +131,11 @@ export class Agent {
                         context.addEvent(cacheHitEvent);
                         SwarmTracer.getInstance().logEvent(cacheHitEvent);
                     } else {
+                        const targetModel = currentTarget.modelName || (currentTarget.provider === this.provider ? this.modelName : (DEFAULT_PROVIDER_MODELS[currentTarget.provider] || this.modelName));
                         textOutput = await lb.executeWithTelemetry(
                             currentTarget.provider,
                             () => adapter.call({
-                                modelName: currentTarget.modelName || this.modelName,
+                                modelName: targetModel,
                                 prompt,
                                 systemInstruction: this.systemInstruction,
                                 apiKey: currentTarget.apiKey,
