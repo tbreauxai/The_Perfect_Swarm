@@ -89,7 +89,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): Hono {
         try {
             // Cloudflare Pages/Workers injects env variables into `c.env`.
             // We map them to the settings object so the Swarm engine can use them natively.
-            const env = (c.env || {}) as Record<string, any>;
+            const env = (c.env && Object.keys(c.env).length > 0 ? c.env : process.env) as Record<string, any>;
             const edgeSettings = {
                 geminiApiKey: env.GEMINI_API_KEY,
                 groqApiKey: env.GROQ_API_KEY,
@@ -148,7 +148,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): Hono {
                 return c.json({ error: 'Missing required parameter: task' }, 400);
             }
 
-            const env = (c.env || {}) as Record<string, any>;
+            const env = (c.env && Object.keys(c.env).length > 0 ? c.env : process.env) as Record<string, any>;
             const edgeSettings = {
                 geminiApiKey: env.GEMINI_API_KEY,
                 groqApiKey: env.GROQ_API_KEY,
@@ -187,7 +187,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): Hono {
                 return c.json({ error: 'Missing required query parameter: provider' }, 400);
             }
 
-            const env = (c.env || {}) as Record<string, any>;
+            const env = (c.env && Object.keys(c.env).length > 0 ? c.env : process.env) as Record<string, any>;
             
             switch (provider.toLowerCase()) {
                 case 'simulated': {
