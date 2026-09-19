@@ -88,8 +88,8 @@ export function createSwarmServer(options: SwarmServerOptions = {}): Hono {
         let params: SwarmWorkflowParams;
         try {
             // Cloudflare Pages/Workers injects env variables into `c.env`.
-            // We map them to the settings object so the Swarm engine can use them natively.
-            const env = (c.env && Object.keys(c.env).length > 0 ? c.env : process.env) as Record<string, any>;
+            // We merge them with process.env so it works correctly on Node.js (Render) too.
+            const env = { ...(typeof process !== 'undefined' ? process.env : {}), ...(c.env || {}) } as Record<string, any>;
             const edgeSettings = {
                 geminiApiKey: env.GEMINI_API_KEY,
                 groqApiKey: env.GROQ_API_KEY,
@@ -148,7 +148,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): Hono {
                 return c.json({ error: 'Missing required parameter: task' }, 400);
             }
 
-            const env = (c.env && Object.keys(c.env).length > 0 ? c.env : process.env) as Record<string, any>;
+            const env = { ...(typeof process !== 'undefined' ? process.env : {}), ...(c.env || {}) } as Record<string, any>;
             const edgeSettings = {
                 geminiApiKey: env.GEMINI_API_KEY,
                 groqApiKey: env.GROQ_API_KEY,
@@ -187,7 +187,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): Hono {
                 return c.json({ error: 'Missing required query parameter: provider' }, 400);
             }
 
-            const env = (c.env && Object.keys(c.env).length > 0 ? c.env : process.env) as Record<string, any>;
+            const env = { ...(typeof process !== 'undefined' ? process.env : {}), ...(c.env || {}) } as Record<string, any>;
             const clientKey = c.req.header('x-provider-key');
             
             switch (provider.toLowerCase()) {
