@@ -68,6 +68,7 @@ export const AgentConfigurator: React.FC<AgentConfiguratorProps> = ({
                     })
                     .catch(err => {
                         console.error(`Failed to load models for ${provider}`, err);
+                        setModelsByProvider(prev => ({ ...prev, [provider]: [] }));
                         setLoadingProviders(prev => ({ ...prev, [provider]: false }));
                     });
             }
