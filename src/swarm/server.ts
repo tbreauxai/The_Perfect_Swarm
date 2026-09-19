@@ -188,6 +188,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): Hono {
             }
 
             const env = (c.env && Object.keys(c.env).length > 0 ? c.env : process.env) as Record<string, any>;
+            const clientKey = c.req.header('x-provider-key');
             
             switch (provider.toLowerCase()) {
                 case 'simulated': {
@@ -207,8 +208,8 @@ export function createSwarmServer(options: SwarmServerOptions = {}): Hono {
                     })));
                 }
                 case 'groq': {
-                    const apiKey = env.GROQ_API_KEY;
-                    if (!apiKey) throw new Error('GROQ_API_KEY is not configured on the server');
+                    const apiKey = clientKey || env.GROQ_API_KEY;
+                    if (!apiKey) throw new Error('GROQ_API_KEY is not configured');
                     const res = await fetch('https://api.groq.com/openai/v1/models', {
                         headers: { 'Authorization': `Bearer ${apiKey}` }
                     });
@@ -221,8 +222,8 @@ export function createSwarmServer(options: SwarmServerOptions = {}): Hono {
                     })));
                 }
                 case 'gemini': {
-                    const apiKey = env.GEMINI_API_KEY;
-                    if (!apiKey) throw new Error('GEMINI_API_KEY is not configured on the server');
+                    const apiKey = clientKey || env.GEMINI_API_KEY;
+                    if (!apiKey) throw new Error('GEMINI_API_KEY is not configured');
                     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
                     if (!res.ok) throw new Error('Failed to fetch Gemini models');
                     const data = await res.json();
@@ -236,8 +237,8 @@ export function createSwarmServer(options: SwarmServerOptions = {}): Hono {
                     return c.json(models);
                 }
                 case 'mistral': {
-                    const apiKey = env.MISTRAL_API_KEY;
-                    if (!apiKey) throw new Error('MISTRAL_API_KEY is not configured on the server');
+                    const apiKey = clientKey || env.MISTRAL_API_KEY;
+                    if (!apiKey) throw new Error('MISTRAL_API_KEY is not configured');
                     const res = await fetch('https://api.mistral.ai/v1/models', {
                         headers: { 'Authorization': `Bearer ${apiKey}` }
                     });
@@ -250,8 +251,8 @@ export function createSwarmServer(options: SwarmServerOptions = {}): Hono {
                     })));
                 }
                 case 'github': {
-                    const apiKey = env.GITHUB_TOKEN;
-                    if (!apiKey) throw new Error('GITHUB_TOKEN is not configured on the server');
+                    const apiKey = clientKey || env.GITHUB_TOKEN;
+                    if (!apiKey) throw new Error('GITHUB_TOKEN is not configured');
                     const res = await fetch('https://models.inference.ai.azure.com/models', {
                         headers: { 'Authorization': `Bearer ${apiKey}` }
                     });
