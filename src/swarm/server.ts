@@ -209,7 +209,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): Hono {
                 }
                 case 'groq': {
                     const apiKey = clientKey || env.GROQ_API_KEY;
-                    if (!apiKey) throw new Error('GROQ_API_KEY is not configured');
+                    if (!apiKey) return c.json([]);
                     const res = await fetch('https://api.groq.com/openai/v1/models', {
                         headers: { 'Authorization': `Bearer ${apiKey}` }
                     });
@@ -223,7 +223,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): Hono {
                 }
                 case 'gemini': {
                     const apiKey = clientKey || env.GEMINI_API_KEY;
-                    if (!apiKey) throw new Error('GEMINI_API_KEY is not configured');
+                    if (!apiKey) return c.json([]);
                     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
                     if (!res.ok) throw new Error('Failed to fetch Gemini models');
                     const data = await res.json();
@@ -238,7 +238,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): Hono {
                 }
                 case 'mistral': {
                     const apiKey = clientKey || env.MISTRAL_API_KEY;
-                    if (!apiKey) throw new Error('MISTRAL_API_KEY is not configured');
+                    if (!apiKey) return c.json([]);
                     const res = await fetch('https://api.mistral.ai/v1/models', {
                         headers: { 'Authorization': `Bearer ${apiKey}` }
                     });
@@ -252,7 +252,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): Hono {
                 }
                 case 'github': {
                     const apiKey = clientKey || env.GITHUB_TOKEN;
-                    if (!apiKey) throw new Error('GITHUB_TOKEN is not configured');
+                    if (!apiKey) return c.json([]);
                     const res = await fetch('https://models.inference.ai.azure.com/models', {
                         headers: { 'Authorization': `Bearer ${apiKey}` }
                     });
