@@ -699,7 +699,7 @@ export class PredictionWorkerPool {
 
     constructor(config: PredictionWorkerPoolConfig = {}) {
         this.maxConcurrency = config.maxConcurrency ?? 4;
-        this.defaultTaskTimeoutMs = config.defaultTaskTimeoutMs ?? 30000;
+        this.defaultTaskTimeoutMs = config.defaultTaskTimeoutMs ?? 180000;
     }
 
     public submit<T = any>(
