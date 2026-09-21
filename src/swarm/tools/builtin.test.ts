@@ -16,9 +16,9 @@ import {
     trendSlopeTool
 } from './builtin.ts';
 
-describe('Builtin Tools', async () => {
-    describe('safeEvaluateMath', async () => {
-        it('evaluates basic arithmetic', async () => {
+describe('Builtin Tools', () => {
+    describe('safeEvaluateMath', () => {
+        it('evaluates basic arithmetic', () => {
             expect(safeEvaluateMath('2 + 3')).toBe(5);
             expect(safeEvaluateMath('10 - 4')).toBe(6);
             expect(safeEvaluateMath('4 * 5')).toBe(20);
@@ -26,37 +26,37 @@ describe('Builtin Tools', async () => {
             expect(safeEvaluateMath('10 % 3')).toBe(1);
         });
 
-        it('handles precedence and parentheses', async () => {
+        it('handles precedence and parentheses', () => {
             expect(safeEvaluateMath('2 + 3 * 4')).toBe(14);
             expect(safeEvaluateMath('(2 + 3) * 4')).toBe(20);
             expect(safeEvaluateMath('10 - 2 * (3 + 1)')).toBe(2);
             expect(safeEvaluateMath('((15 * 4) + 120) / 1.5')).toBe(120);
         });
 
-        it('handles negative numbers', async () => {
+        it('handles negative numbers', () => {
             expect(safeEvaluateMath('-5 + 10')).toBe(5);
             expect(safeEvaluateMath('10 * -2')).toBe(-20);
             expect(safeEvaluateMath('-10 / -2')).toBe(5);
         });
 
-        it('handles floats', async () => {
+        it('handles floats', () => {
             expect(safeEvaluateMath('2.5 * 4')).toBe(10);
             expect(safeEvaluateMath('10.5 - 2.5')).toBe(8);
         });
 
-        it('throws on division by zero', async () => {
+        it('throws on division by zero', () => {
             expect(() => safeEvaluateMath('10 / 0')).toThrow('Division by zero');
             expect(() => safeEvaluateMath('10 % 0')).toThrow('Modulo by zero');
         });
 
-        it('throws on invalid syntax', async () => {
+        it('throws on invalid syntax', () => {
             expect(() => safeEvaluateMath('(2 + 3')).toThrow("Missing closing parenthesis ')'");
             expect(() => safeEvaluateMath('2 + a')).toThrow("Unexpected character 'a'");
             expect(() => safeEvaluateMath('2 + ')).toThrow('Unexpected end of expression');
         });
     });
 
-    describe('extractJsonPath', async () => {
+    describe('extractJsonPath', () => {
         const testData = {
             user: {
                 id: 1,
@@ -72,38 +72,38 @@ describe('Builtin Tools', async () => {
             }
         };
 
-        it('extracts root properties', async () => {
+        it('extracts root properties', () => {
             expect(extractJsonPath(testData, 'user')).toEqual({ found: true, value: testData.user });
         });
 
-        it('extracts nested properties with dot notation', async () => {
+        it('extracts nested properties with dot notation', () => {
             expect(extractJsonPath(testData, 'user.profile.name')).toEqual({ found: true, value: 'Alice' });
         });
 
-        it('extracts array elements with bracket notation', async () => {
+        it('extracts array elements with bracket notation', () => {
             expect(extractJsonPath(testData, 'user.tags[0]')).toEqual({ found: true, value: 'admin' });
             expect(extractJsonPath(testData, 'user.metrics[1].type')).toEqual({ found: true, value: 'logout' });
         });
 
-        it('handles missing paths', async () => {
+        it('handles missing paths', () => {
             expect(extractJsonPath(testData, 'user.missing')).toEqual({ found: false, value: undefined });
             expect(extractJsonPath(testData, 'user.tags[5]')).toEqual({ found: false, value: undefined });
             expect(extractJsonPath(testData, 'invalid.path')).toEqual({ found: false, value: undefined });
         });
 
-        it('handles root or empty paths', async () => {
+        it('handles root or empty paths', () => {
             expect(extractJsonPath(testData, '')).toEqual({ found: true, value: testData });
             expect(extractJsonPath(testData, '.')).toEqual({ found: true, value: testData });
         });
 
-        it('handles null or undefined data', async () => {
+        it('handles null or undefined data', () => {
             expect(extractJsonPath(null, 'path')).toEqual({ found: false, value: undefined });
             expect(extractJsonPath(undefined, 'path')).toEqual({ found: false, value: undefined });
         });
     });
 
-    describe('computeLevenshteinDistance', async () => {
-        it('calculates distance correctly', async () => {
+    describe('computeLevenshteinDistance', () => {
+        it('calculates distance correctly', () => {
             expect(computeLevenshteinDistance('kitten', 'sitting')).toBe(3);
             expect(computeLevenshteinDistance('flaw', 'lawn')).toBe(2);
             expect(computeLevenshteinDistance('hello', 'hello')).toBe(0);
@@ -113,7 +113,7 @@ describe('Builtin Tools', async () => {
         });
     });
 
-    describe('calculatorTool', async () => {
+    describe('calculatorTool', () => {
         it('executes valid expressions', async () => {
             const res = await calculatorTool.execute({ expression: '2 * (3 + 4)' });
             expect(res).toEqual({ expression: '2 * (3 + 4)', result: 14 });
@@ -125,7 +125,7 @@ describe('Builtin Tools', async () => {
         });
     });
 
-    describe('statsSummaryTool', async () => {
+    describe('statsSummaryTool', () => {
         it('computes summary statistics correctly', async () => {
             const res = await statsSummaryTool.execute({ numbers: [1, 2, 3, 4, 5] });
             expect(res).toEqual({
@@ -158,7 +158,7 @@ describe('Builtin Tools', async () => {
         });
     });
 
-    describe('regexMatchTool', async () => {
+    describe('regexMatchTool', () => {
         it('matches patterns globally by default', async () => {
             const res = await regexMatchTool.execute({ pattern: '\\d+', text: 'a12b34c56' });
             expect(res.matched).toBe(true);
@@ -186,7 +186,7 @@ describe('Builtin Tools', async () => {
         });
     });
 
-    describe('jsonExtractTool', async () => {
+    describe('jsonExtractTool', () => {
         it('extracts from objects', async () => {
             const data = { a: { b: { c: 1 } } };
             const res = await jsonExtractTool.execute({ data, path: 'a.b.c' });
@@ -204,7 +204,7 @@ describe('Builtin Tools', async () => {
         });
     });
 
-    describe('dataFilterTool', async () => {
+    describe('dataFilterTool', () => {
         const data = [
             { id: 1, name: 'Alice', age: 30, active: true },
             { id: 2, name: 'Bob', age: 25, active: false },
@@ -214,7 +214,7 @@ describe('Builtin Tools', async () => {
         it('filters by equality', async () => {
             const res = await dataFilterTool.execute({ items: data, field: 'active', operator: '==', value: true });
             expect(res.matchedCount).toBe(2);
-            expect(res.results.map(r => r.name)).toEqual(['Alice', 'Charlie']);
+            expect(res.results.map((r: any) => r.name)).toEqual(['Alice', 'Charlie']);
         });
 
         it('filters by greater than', async () => {
@@ -417,5 +417,42 @@ describe('Builtin Tools', async () => {
             expect(() => trendSlopeTool.execute({ data: [1] })).toThrow('trend_slope requires an array with at least 2 data points.');
             expect(() => trendSlopeTool.execute({ data: ['a', 'b'] as any })).toThrow('Invalid data format. Must be array of numbers or {x,y} objects.');
         });
+    });
+});
+
+describe('computeLevenshteinDistance', () => {
+    it('should return 0 for identical strings', () => {
+        expect(computeLevenshteinDistance('', '')).toBe(0);
+        expect(computeLevenshteinDistance('hello', 'hello')).toBe(0);
+    });
+
+    it('should return the length of the other string if one is empty', () => {
+        expect(computeLevenshteinDistance('', 'hello')).toBe(5);
+        expect(computeLevenshteinDistance('world', '')).toBe(5);
+    });
+
+    it('should correctly calculate distance for substitutions', () => {
+        expect(computeLevenshteinDistance('kitten', 'sitten')).toBe(1); // k -> s
+        expect(computeLevenshteinDistance('cat', 'bat')).toBe(1); // c -> b
+        expect(computeLevenshteinDistance('dog', 'dot')).toBe(1); // g -> t
+    });
+
+    it('should correctly calculate distance for insertions and deletions', () => {
+        expect(computeLevenshteinDistance('flaw', 'lawn')).toBe(2); // delete f, insert n
+        expect(computeLevenshteinDistance('gumbo', 'gambol')).toBe(2); // u -> a, insert l
+        expect(computeLevenshteinDistance('book', 'back')).toBe(2); // o -> a, o -> c
+    });
+
+    it('should correctly calculate distance for the classic kitten -> sitting example', () => {
+        expect(computeLevenshteinDistance('kitten', 'sitting')).toBe(3); // k -> s, e -> i, insert g
+    });
+
+    it('should correctly handle different lengths and completely different strings', () => {
+        expect(computeLevenshteinDistance('abc', 'defg')).toBe(4);
+        expect(computeLevenshteinDistance('javascript', 'typescript')).toBe(4); // java -> type
+    });
+
+    it('should correctly handle case sensitivity', () => {
+        expect(computeLevenshteinDistance('Hello', 'hello')).toBe(1); // H -> h
     });
 });
