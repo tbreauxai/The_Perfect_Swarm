@@ -425,7 +425,7 @@ export class MemoryCortex {
      * Initializes the collection in Qdrant with compliant dense/sparse schemas and compound indexes.
      */
     async initialize(appId?: string): Promise<boolean> {
-        const targetCollection = this.collectionName;
+        const targetCollection = this.getCollectionName(appId);
 
         if (this.initialized && this.initializedCollections.has(targetCollection)) return true;
 
