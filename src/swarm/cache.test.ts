@@ -6,7 +6,7 @@ import {
     globalSemanticCache,
     globalPayloadCache
 } from './cache.ts';
-import { executeSwarmWorkflow } from './engine.ts';
+import { executeSwarmWorkflow } from './engine/index.ts';
 import { ProviderRegistry } from './providers/registry.ts';
 
 describe('SemanticSimilarityEngine', () => {

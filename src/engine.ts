@@ -1,4 +1,4 @@
 /**
  * Root shim for portable SwarmEngine workflow.
  */
-export * from './swarm/engine.ts';
+export * from './swarm/engine/index.ts';

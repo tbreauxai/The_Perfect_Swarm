@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import type { Context } from 'hono';
 import { createAdaptorServer, type ServerType } from '@hono/node-server';
-import { executeSwarmWorkflow, type SwarmWorkflowParams, type SwarmWorkflowResult } from './engine.ts';
+import { executeSwarmWorkflow, type SwarmWorkflowParams, type SwarmWorkflowResult } from './engine/index.ts';
 import type { SwarmEvent } from './types.ts';
 import type { GoogleGenAI } from '@google/genai';
 import type { MemoryCortex } from './memory.ts';

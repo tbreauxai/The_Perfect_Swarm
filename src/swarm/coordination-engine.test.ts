@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { executeSwarmWorkflow } from './engine.ts';
+import { executeSwarmWorkflow } from './engine/index.ts';
 import { ProviderRegistry } from './providers/registry.ts';
 import { globalKnowledgeGraph } from './knowledgeGraph.ts';
 import {
