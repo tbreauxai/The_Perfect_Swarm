@@ -30,6 +30,7 @@ export const RRF_PRESETS: Record<RrfProfile, RrfWeights> = {
 
 export interface RetrievalOptions {
     appId?: string;
+    targetApps?: string | string[];
     domain?: string;
     limit?: number;
     minRating?: number;
@@ -454,6 +455,7 @@ export class MemoryCortex {
             // Create compound payload indexes for multi-tenant and learning queries
             await this.ensurePayloadIndex("domain", "keyword");
             await this.ensurePayloadIndex("appId", "keyword");
+            await this.ensurePayloadIndex("targetApps", "keyword");
             await this.ensurePayloadIndex("agentRole", "keyword");
             await this.ensurePayloadIndex("qualityRating", "float");
             await this.ensurePayloadIndex("verified", "bool");
@@ -797,6 +799,12 @@ export class MemoryCortex {
                     return false;
                 }
             }
+            if (options.targetApps) {
+                const targets = Array.isArray(options.targetApps) ? options.targetApps : [options.targetApps];
+                const ptTargetApps = Array.isArray(pt.payload.targetApps) ? pt.payload.targetApps : (pt.payload.targetApps ? [pt.payload.targetApps] : []);
+                const matchFound = targets.some(t => ptTargetApps.includes(t) || pt.payload.appId === t);
+                if (!matchFound) return false;
+            }
             if (options.domain && pt.payload.domain !== options.domain) return false;
             if (options.agentRole && pt.payload.agentRole !== options.agentRole) return false;
             if (options.minRating !== undefined && (pt.payload.qualityRating ?? 0) < options.minRating) return false;
@@ -892,6 +900,16 @@ export class MemoryCortex {
                         });
                     } else {
                         filterMust.push({ key: "appId", match: { value: options.appId } });
+                    }
+                }
+                if (options.targetApps) {
+                    const targets = Array.isArray(options.targetApps) ? options.targetApps : [options.targetApps];
+                    if (targets.length === 1) {
+                        filterMust.push({ key: "targetApps", match: { value: targets[0] } });
+                    } else {
+                        filterMust.push({
+                            should: targets.map(t => ({ key: "targetApps", match: { value: t } }))
+                        });
                     }
                 }
                 if (options.domain) {
