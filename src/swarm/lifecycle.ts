@@ -1,6 +1,7 @@
 import { Agent } from './agent.ts';
 import { SwarmContext } from './context.ts';
 import { parseJsonSafe, guardVerificationResult } from './parser.ts';
+import { globalPromptCompressor } from './compression.ts';
 
 import type { VerificationResult } from './types.ts';
 export type { VerificationResult };
@@ -95,8 +96,19 @@ export class AnalysisLifecycle {
                 cleanedRawData = rest;
             }
 
-            const verifyPrompt = `${criticPrompt}${baselineSection}\n\n[Raw Data]:\n${JSON.stringify(cleanedRawData)}\n\n[Proposed Analysis]:\n${JSON.stringify(currentProposal, null, 2)}\n\nEvaluate this proposal. Ensure it strictly respects the Historical Baselines and accurate data facts. You MUST output strict JSON in this format: { "pass": boolean, "feedback": "Detailed string explaining flaws, or confirming success" }.`;
+            let verifyPrompt = `${criticPrompt}${baselineSection}\n\n[Raw Data]:\n${JSON.stringify(cleanedRawData)}\n\n[Proposed Analysis]:\n${JSON.stringify(currentProposal, null, 2)}\n\nEvaluate this proposal. Ensure it strictly respects the Historical Baselines and accurate data facts. You MUST output strict JSON in this format: { "pass": boolean, "feedback": "Detailed string explaining flaws, or confirming success" }.`;
             
+            const compressedCritique = globalPromptCompressor.compress(verifyPrompt, {
+                targetReductionRatio: 0.42,
+                similarityThreshold: 0.72,
+                preserveAnomalies: true,
+                stripBoilerplate: true
+            });
+            verifyPrompt = compressedCritique.compressedText;
+            if (!verifyPrompt.includes('Evaluate this proposal')) {
+                verifyPrompt = `${criticPrompt}${baselineSection}\n\n[Raw Data]:\n${JSON.stringify(cleanedRawData)}\n\n[Proposed Analysis]:\n${JSON.stringify(currentProposal, null, 2)}\n\nEvaluate this proposal. Ensure it strictly respects the Historical Baselines and accurate data facts. You MUST output strict JSON in this format: { "pass": boolean, "feedback": "Detailed string explaining flaws, or confirming success" }.`;
+            }
+
             const verificationRaw = await this.critic.run(verifyPrompt, context, { responseMimeType: 'application/json' });
             
             const verification: VerificationResult = guardVerificationResult(verificationRaw);
