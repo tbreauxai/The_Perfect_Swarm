@@ -182,15 +182,15 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test:portable": "node --experimental-strip-types test-portable-swarm.ts",
-    "test:simulation": "node --experimental-strip-types test-multi-app-simulation.ts",
+    "test:portable": "npx tsx test-portable-swarm.ts",
+    "test:simulation": "npx tsx test-multi-app-simulation.ts",
     "test:dist": "node test-dist-import.mjs && node test-dist-import.cjs",
     "test:cli": "node test-cli.mjs",
     "test:server": "node test-sse-server.mjs",
     "test": "npm run test:portable && npm run test:simulation && npm run test:dist && npm run test:cli && npm run test:server",
     "bench": "node bin/cli.js bench",
     "profile": "node bin/cli.js profile",
-    "start": "node --experimental-strip-types server.ts"
+    "start": "npx tsx server.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

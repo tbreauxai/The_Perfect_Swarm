@@ -19,14 +19,15 @@ export interface MemoryMetadata {
     [key: string]: any;
 }
 
-export type RrfProfile = 'semantic' | 'lexical' | 'balanced' | 'hybrid';
+export type RrfProfile = 'semantic' | 'lexical' | 'balanced' | 'hybrid' | 'quantitative';
 export type RrfWeights = { denseWeight: number; sparseWeight: number };
 
 export const RRF_PRESETS: Record<RrfProfile, RrfWeights> = {
     semantic: { denseWeight: 4.0, sparseWeight: 0.5 },
     lexical: { denseWeight: 0.5, sparseWeight: 4.0 },
     balanced: { denseWeight: 1.0, sparseWeight: 1.0 },
-    hybrid: { denseWeight: 2.0, sparseWeight: 1.5 }
+    hybrid: { denseWeight: 2.0, sparseWeight: 1.5 },
+    quantitative: { denseWeight: 0.2, sparseWeight: 4.0 }
 };
 
 export interface RetrievalOptions {
@@ -248,6 +249,7 @@ export interface MemoryCortexConfig {
     url?: string;
     apiKey?: string;
     collectionName?: string;
+    collectionNameTemplate?: string;
     defaultAppId?: string;
     embeddingProvider?: EmbeddingProvider;
     aiClient?: GoogleGenAI;
@@ -263,6 +265,7 @@ export interface MemoryCortexConfig {
  * High-performance, hybrid continuous learning vector cortex powered by Qdrant.
  * Features:
  * - Multi-tenant application namespacing (`appId`)
+ * - Dynamic collection namespacing (`collectionNameTemplate`)
  * - Continuous learning feedback loop (`rateMemory`, `reinforceMemory`)
  * - Semantic deduplication with cosine clustering threshold (>0.92)
  * - Few-shot exemplary retrieval for prompt distillation
@@ -275,6 +278,8 @@ export class MemoryCortex {
     private qdrant: QdrantClient | null = null;
     private embeddingProvider: EmbeddingProvider;
     private collectionName: string;
+    private collectionNameTemplate?: string;
+    private initializedCollections: Set<string> = new Set();
     private defaultAppId: string;
     private initialized: boolean = false;
     private isAvailable: boolean = false;
@@ -341,6 +346,7 @@ export class MemoryCortex {
         const safeEnv = typeof process !== 'undefined' ? process.env : {} as Record<string, string | undefined>;
         const url = config.url || safeEnv.QDRANT_URL;
         const apiKey = config.apiKey || safeEnv.QDRANT_API_KEY;
+        this.collectionNameTemplate = config.collectionNameTemplate;
         this.collectionName = config.collectionName || "pwa_swarm_dev_cortex_v2";
         this.defaultAppId = config.defaultAppId || "default";
         this.autoConsolidateThreshold = config.autoConsolidateThreshold !== undefined ? config.autoConsolidateThreshold : 50;
@@ -396,10 +402,17 @@ export class MemoryCortex {
         });
     }
 
-    private async ensurePayloadIndex(fieldName: string, fieldSchema: 'keyword' | 'float' | 'integer' | 'bool'): Promise<void> {
+    private getCollectionName(appId?: string): string {
+        if (this.collectionNameTemplate && appId) {
+            return this.collectionNameTemplate.replace('{appId}', appId);
+        }
+        return this.collectionName;
+    }
+
+    private async ensurePayloadIndex(collectionName: string, fieldName: string, fieldSchema: 'keyword' | 'float' | 'integer' | 'bool'): Promise<void> {
         if (!this.qdrant) return;
         try {
-            await this.qdrant.createPayloadIndex(this.collectionName, {
+            await this.qdrant.createPayloadIndex(collectionName, {
                 field_name: fieldName,
                 field_schema: fieldSchema
             });
@@ -411,20 +424,26 @@ export class MemoryCortex {
     /**
      * Initializes the collection in Qdrant with compliant dense/sparse schemas and compound indexes.
      */
-    async initialize(): Promise<boolean> {
-        if (this.initialized) return true;
+    async initialize(appId?: string): Promise<boolean> {
+        const targetCollection = this.getCollectionName(appId);
+
+        if (this.initialized && this.initializedCollections.has(targetCollection)) return true;
+
         if (!this.qdrant || !this.isAvailable) {
             this.initialized = true;
-            await this.loadPersistFileIfConfigured();
+            this.initializedCollections.add(targetCollection);
+            if (!this.isAutoLoading) {
+                 await this.loadPersistFileIfConfigured();
+            }
             return true;
         }
 
         try {
             const collections = await this.withTimeout(this.qdrant.getCollections(), 5000);
-            const exists = collections.collections.some(c => c.name === this.collectionName);
+            const exists = collections.collections.some(c => c.name === targetCollection);
 
             if (!exists) {
-                await this.withTimeout(this.qdrant.createCollection(this.collectionName, {
+                await this.withTimeout(this.qdrant.createCollection(targetCollection, {
                     vectors: {
                         dense: {
                             size: this.embeddingProvider.dimension,
@@ -458,25 +477,31 @@ export class MemoryCortex {
                     on_disk_payload: true
                 }), 10000);
 
-                console.log(`[MemoryCortex] Initialized compliant Qdrant collection: ${this.collectionName}`);
+                console.log(`[MemoryCortex] Initialized compliant Qdrant collection: ${targetCollection}`);
             }
 
             // Create compound payload indexes for multi-tenant and learning queries
-            await this.ensurePayloadIndex("domain", "keyword");
-            await this.ensurePayloadIndex("appId", "keyword");
-            await this.ensurePayloadIndex("targetApps", "keyword");
-            await this.ensurePayloadIndex("agentRole", "keyword");
-            await this.ensurePayloadIndex("qualityRating", "float");
-            await this.ensurePayloadIndex("verified", "bool");
+            await this.ensurePayloadIndex(targetCollection, "domain", "keyword");
+            await this.ensurePayloadIndex(targetCollection, "appId", "keyword");
+            await this.ensurePayloadIndex(targetCollection, "targetApps", "keyword");
+            await this.ensurePayloadIndex(targetCollection, "agentRole", "keyword");
+            await this.ensurePayloadIndex(targetCollection, "qualityRating", "float");
+            await this.ensurePayloadIndex(targetCollection, "verified", "bool");
 
             this.initialized = true;
-            await this.loadPersistFileIfConfigured();
+            this.initializedCollections.add(targetCollection);
+            if (!this.isAutoLoading) {
+                 await this.loadPersistFileIfConfigured();
+            }
             return true;
         } catch (error: any) {
-            console.warn(`[MemoryCortex] Initialization failed: ${error.message || error}. Falling back to ephemeral in-memory vector store.`);
+            console.warn(`[MemoryCortex] Initialization failed for ${targetCollection}: ${error.message || error}. Falling back to ephemeral in-memory vector store.`);
             this.isAvailable = false;
             this.initialized = true;
-            await this.loadPersistFileIfConfigured();
+            this.initializedCollections.add(targetCollection);
+            if (!this.isAutoLoading) {
+                 await this.loadPersistFileIfConfigured();
+            }
             return true;
         }
     }

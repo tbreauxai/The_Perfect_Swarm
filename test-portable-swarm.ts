@@ -776,9 +776,9 @@ async function runPortableValidation() {
         qualityRating: 0.95
     });
 
-    console.log('Pending stores before threshold:', autoConsolidateCortex.getPendingConsolidationCount());
+    console.log('Pending stores before threshold:', autoConsolidateCortex.pendingConsolidationCount);
     console.log('Fallback count before threshold:', autoConsolidateCortex.fallbackCount);
-    if (autoConsolidateCortex.getPendingConsolidationCount() !== 2 || autoConsolidateCortex.fallbackCount !== 2) {
+    if (autoConsolidateCortex.pendingConsolidationCount !== 2 || autoConsolidateCortex.fallbackCount !== 2) {
         throw new Error('Step 20a: Pending count or fallback count mismatch before threshold trigger');
     }
 
@@ -789,9 +789,9 @@ async function runPortableValidation() {
         qualityRating: 0.88
     });
 
-    console.log('Pending stores after threshold:', autoConsolidateCortex.getPendingConsolidationCount());
+    console.log('Pending stores after threshold:', autoConsolidateCortex.pendingConsolidationCount);
     console.log('Fallback count after auto-prune:', autoConsolidateCortex.fallbackCount);
-    if (autoConsolidateCortex.getPendingConsolidationCount() !== 0) {
+    if (autoConsolidateCortex.pendingConsolidationCount !== (0 as number)) {
         throw new Error('Step 20a: pendingConsolidationCount was not reset after auto-consolidation');
     }
     if (autoConsolidateCortex.fallbackCount !== 2) {
