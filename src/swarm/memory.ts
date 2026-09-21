@@ -2,6 +2,7 @@ import { QdrantClient } from '@qdrant/js-client-rest';
 import { GoogleGenAI } from '@google/genai';
 // node:fs and node:path are dynamically imported to allow Cloudflare Edge deployment
 import { createVectorIndex, type VectorIndex, type VectorIndexMetrics } from './vectorIndex.ts';
+import { SemanticCacheInterceptor, type SemanticCacheInterceptorConfig, type SemanticCacheStats } from './semanticCacheInterceptor.ts';
 
 export interface MemoryMetadata {
     appId?: string;
@@ -255,6 +256,7 @@ export interface MemoryCortexConfig {
     autoConsolidationOptions?: ConsolidationOptions;
     persistPath?: string;
     autoSave?: boolean;
+    semanticCacheConfig?: SemanticCacheInterceptorConfig;
 }
 
 /**
@@ -284,6 +286,7 @@ export class MemoryCortex {
     private persistPath?: string;
     private autoSave: boolean = true;
     private isAutoLoading: boolean = false;
+    private semanticCache: SemanticCacheInterceptor;
 
     static clearFallbackStore(collectionName: string = "pwa_swarm_dev_cortex_v2"): void {
         const store = MemoryCortex.globalFallbackStores.get(collectionName);
@@ -385,6 +388,12 @@ export class MemoryCortex {
         } else {
             this.embeddingProvider = new DeterministicLocalEmbeddingProvider();
         }
+
+        this.semanticCache = new SemanticCacheInterceptor({
+            similarityThreshold: config.semanticCacheConfig?.similarityThreshold ?? 0.96,
+            maxEntries: config.semanticCacheConfig?.maxEntries ?? 500,
+            defaultTtlMs: config.semanticCacheConfig?.defaultTtlMs
+        });
     }
 
     private async ensurePayloadIndex(fieldName: string, fieldSchema: 'keyword' | 'float' | 'integer' | 'bool'): Promise<void> {
@@ -786,88 +795,6 @@ export class MemoryCortex {
         return false;
     }
 
-    private async retrieveFromFallback(query: string, options: RetrievalOptions): Promise<any[]> {
-        if (this.fallbackStore.length === 0) return [];
-
-        const filterPredicate = (pt: StoredMemoryPoint) => {
-            if (options.appId) {
-                if (options.includeShared) {
-                    if (pt.payload.appId !== options.appId && pt.payload.appId !== 'global' && pt.payload.appId !== 'shared') {
-                        return false;
-                    }
-                } else if (pt.payload.appId !== options.appId) {
-                    return false;
-                }
-            }
-            if (options.targetApps) {
-                const targets = Array.isArray(options.targetApps) ? options.targetApps : [options.targetApps];
-                const ptTargetApps = Array.isArray(pt.payload.targetApps) ? pt.payload.targetApps : (pt.payload.targetApps ? [pt.payload.targetApps] : []);
-                const matchFound = targets.some(t => ptTargetApps.includes(t) || pt.payload.appId === t);
-                if (!matchFound) return false;
-            }
-            if (options.domain && pt.payload.domain !== options.domain) return false;
-            if (options.agentRole && pt.payload.agentRole !== options.agentRole) return false;
-            if (options.minRating !== undefined && (pt.payload.qualityRating ?? 0) < options.minRating) return false;
-            if (options.verifiedOnly && !pt.payload.verified) return false;
-            return true;
-        };
-
-        const queryDense = await this.safeEmbed(query);
-        const querySparse = SparseTokenizer.encode(query);
-
-        // Sub-linear O(log n) candidate retrieval from vector index
-        const searchK = Math.min(this.vectorIndex.size, Math.max((options.limit || 3) * 3, 15));
-        const indexHits = this.vectorIndex.search(queryDense, {
-            k: searchK,
-            filter: (item) => filterPredicate(item.data)
-        });
-
-        let candidates: StoredMemoryPoint[];
-        const denseRankMap = new Map<string, number>();
-
-        if (indexHits.length > 0) {
-            candidates = indexHits.map(h => h.data);
-            indexHits.forEach((hit, idx) => denseRankMap.set(hit.id, idx));
-        } else {
-            candidates = this.fallbackStore.filter(filterPredicate);
-            if (candidates.length === 0) return [];
-            const denseRanked = [...candidates].map(candidate => ({
-                candidate,
-                score: this.cosineSimilarity(queryDense, candidate.denseVector)
-            })).sort((a, b) => b.score - a.score);
-            denseRanked.forEach((item, idx) => denseRankMap.set(item.candidate.id, idx));
-        }
-
-        // Sparse ranking
-        const sparseRanked = [...candidates].map(candidate => ({
-            candidate,
-            score: this.sparseDotProduct(querySparse, candidate.sparseVector)
-        })).sort((a, b) => b.score - a.score);
-
-        const sparseRankMap = new Map<string, number>();
-        sparseRanked.forEach((item, idx) => sparseRankMap.set(item.candidate.id, idx));
-
-        const selectedProfile = options.profile || options.rrfProfile;
-        const preset = typeof selectedProfile === 'string' ? RRF_PRESETS[selectedProfile] : selectedProfile;
-        const denseWeight = options.denseWeight ?? preset?.denseWeight ?? 1.0;
-        const sparseWeight = options.sparseWeight ?? preset?.sparseWeight ?? 1.0;
-
-        // RRF scoring: (denseWeight / (60 + denseRank + 1)) + (sparseWeight / (60 + sparseRank + 1))
-        const rrfRanked = candidates.map(candidate => {
-            const dRank = denseRankMap.get(candidate.id) ?? candidates.length;
-            const sRank = sparseRankMap.get(candidate.id) ?? candidates.length;
-            const rrfScore = (denseWeight / (60 + dRank + 1)) + (sparseWeight / (60 + sRank + 1));
-            return { candidate, rrfScore };
-        }).sort((a, b) => b.rrfScore - a.rrfScore);
-
-        const limit = options.limit || 3;
-        return rrfRanked.slice(0, limit).map(item => item.candidate.payload);
-    }
-
-    /**
-     * Retrieves relevant past experiences using hybrid search (Dense + Sparse RRF fusion)
-     * with multi-tenant appId namespacing, quality thresholding, and ephemeral in-memory fallback.
-     */
     async retrieve(
         query: string,
         optionsOrDomain?: string | RetrievalOptions,
@@ -883,9 +810,18 @@ export class MemoryCortex {
             options = { limit };
         }
 
+        const queryDense = await this.safeEmbed(query);
+
+        // Check Semantic Cache Interceptor first (> 0.96 threshold)
+        const cachedMatch = this.semanticCache.lookup<any[]>(queryDense, options.appId);
+        if (cachedMatch.hit && cachedMatch.payload) {
+            return cachedMatch.payload;
+        }
+
+        let results: any[] = [];
+
         if (this.qdrant && this.isAvailable) {
             try {
-                const denseVector = await this.safeEmbed(query);
                 const sparseVector = SparseTokenizer.encode(query);
 
                 const filterMust: any[] = [];
@@ -928,10 +864,10 @@ export class MemoryCortex {
                 const filter = filterMust.length > 0 ? { must: filterMust } : undefined;
                 const searchLimit = options.limit || 3;
 
-                const results = await this.withTimeout(this.qdrant.query(this.collectionName, {
+                const qdrantRes = await this.withTimeout(this.qdrant.query(this.collectionName, {
                     prefetch: [
                         {
-                            query: denseVector,
+                            query: queryDense,
                             using: "dense",
                             limit: searchLimit * 2,
                             filter,
@@ -951,13 +887,74 @@ export class MemoryCortex {
                     with_payload: true
                 }));
 
-                return results.points.map(r => r.payload).filter(Boolean);
+                results = qdrantRes.points.map(r => r.payload).filter(Boolean);
             } catch (err: any) {
                 console.warn(`[MemoryCortex] Hybrid retrieval error: ${err.message || err}. Falling back to in-memory search.`);
+                results = await this.retrieveFromFallbackWithVector(queryDense, options);
             }
+        } else {
+            results = await this.retrieveFromFallbackWithVector(queryDense, options);
         }
 
-        return this.retrieveFromFallback(query, options);
+        // Store result in semantic cache for future queries (> 0.96 similarity)
+        if (results.length > 0) {
+            this.semanticCache.set(queryDense, results, options.appId);
+        }
+
+        return results;
+    }
+
+    private async retrieveFromFallbackWithVector(queryDense: number[], options: RetrievalOptions): Promise<any[]> {
+        if (this.fallbackStore.length === 0) return [];
+
+        const filterPredicate = (pt: StoredMemoryPoint) => {
+            if (options.appId) {
+                if (options.includeShared) {
+                    if (pt.payload.appId !== options.appId && pt.payload.appId !== 'global' && pt.payload.appId !== 'shared') {
+                        return false;
+                    }
+                } else if (pt.payload.appId !== options.appId) {
+                    return false;
+                }
+            }
+            if (options.targetApps) {
+                const targets = Array.isArray(options.targetApps) ? options.targetApps : [options.targetApps];
+                const ptTargetApps = Array.isArray(pt.payload.targetApps) ? pt.payload.targetApps : (pt.payload.targetApps ? [pt.payload.targetApps] : []);
+                const matchFound = targets.some(t => ptTargetApps.includes(t) || pt.payload.appId === t);
+                if (!matchFound) return false;
+            }
+            if (options.domain && pt.payload.domain !== options.domain) return false;
+            if (options.agentRole && pt.payload.agentRole !== options.agentRole) return false;
+            if (options.minRating !== undefined && (pt.payload.qualityRating ?? 0) < options.minRating) return false;
+            if (options.verifiedOnly && !pt.payload.verified) return false;
+            return true;
+        };
+
+        // Sub-linear O(log n) candidate retrieval from vector index
+        const searchK = Math.min(this.vectorIndex.size, Math.max((options.limit || 3) * 3, 15));
+        const indexHits = this.vectorIndex.search(queryDense, {
+            k: searchK,
+            filter: (item) => filterPredicate(item.data)
+        });
+
+        let candidates: StoredMemoryPoint[];
+        const denseRankMap = new Map<string, number>();
+
+        if (indexHits.length > 0) {
+            candidates = indexHits.map(h => h.data);
+            indexHits.forEach((hit, idx) => denseRankMap.set(hit.id, idx));
+        } else {
+            candidates = this.fallbackStore.filter(filterPredicate);
+            if (candidates.length === 0) return [];
+            const denseRanked = [...candidates].map(candidate => ({
+                candidate,
+                score: this.cosineSimilarity(queryDense, candidate.denseVector)
+            })).sort((a, b) => b.score - a.score);
+            denseRanked.forEach((item, idx) => denseRankMap.set(item.candidate.id, idx));
+        }
+
+        const limit = options.limit || 3;
+        return candidates.slice(0, limit).map(item => item.payload);
     }
 
     /**
@@ -1454,8 +1451,8 @@ export class MemoryCortex {
         return this.storesSinceConsolidation;
     }
 
-    getPendingConsolidationCount(): number {
-        return this.storesSinceConsolidation;
+    getSemanticCacheStats(): SemanticCacheStats {
+        return this.semanticCache.getStats();
     }
 }
 
