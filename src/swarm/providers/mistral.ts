@@ -49,7 +49,7 @@ export class MistralAdapter implements ProviderAdapter {
                     body: JSON.stringify({
                         model: options.modelName,
                         messages,
-                        max_tokens: options.config?.maxTokens || 3000,
+                        max_tokens: options.config?.maxTokens || 8192,
                         response_format: isJson ? { type: 'json_object' } : undefined
                     }),
                     signal: AbortSignal.timeout(timeoutMs)

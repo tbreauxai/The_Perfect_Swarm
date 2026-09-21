@@ -64,7 +64,7 @@ export class OpenRouterAdapter implements ProviderAdapter {
                 body: JSON.stringify({
                     model: effectiveModel,
                     messages,
-                    max_tokens: options.config?.maxTokens || 3500,
+                    max_tokens: options.config?.maxTokens || 8192,
                     response_format: isJson ? { type: 'json_object' } : undefined
                 }),
                 signal: AbortSignal.timeout(timeoutMs)
