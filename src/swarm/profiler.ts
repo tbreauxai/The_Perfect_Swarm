@@ -359,6 +359,10 @@ export class SwarmMetricsCollector {
         this.providerRecords.clear();
         this.agentRecords.clear();
     }
+
+    public getSnapshot(): SwarmBaselineReport {
+        return this.getBaselineReport();
+    }
 }
 
 export const globalMetricsCollector = SwarmMetricsCollector.getInstance();

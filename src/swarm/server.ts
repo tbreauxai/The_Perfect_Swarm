@@ -6,6 +6,7 @@ import { executeSwarmWorkflow, type SwarmWorkflowParams, type SwarmWorkflowResul
 import type { SwarmEvent } from './types.ts';
 import type { GoogleGenAI } from '@google/genai';
 import type { MemoryCortex } from './memory.ts';
+import { globalMetricsCollector } from './profiler.ts';
 
 export interface SwarmServerOptions {
     port?: number;
@@ -147,6 +148,10 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
 
     app.get('/api/health', (c) => {
         return c.json({ status: 'ok', edge: true });
+    });
+
+    app.get('/api/swarm/metrics', (c) => {
+      return c.json(globalMetricsCollector.getSnapshot());
     });
 
     app.all('/api/swarm/stream', async (c) => {
