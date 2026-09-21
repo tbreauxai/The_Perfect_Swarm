@@ -20,6 +20,7 @@ export class GeminiAdapter implements ProviderAdapter {
         }
 
         const reqConfig: any = { ...options.config };
+        reqConfig.maxOutputTokens = options.config?.maxTokens || 8192;
         if (options.systemInstruction) {
             reqConfig.systemInstruction = options.systemInstruction;
         }
