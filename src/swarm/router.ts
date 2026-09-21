@@ -24,7 +24,7 @@ export interface FastPathDecision {
 export class ModelRouter {
     /**
      * Evaluates whether an incoming task and payload should be short-circuited via the fast-path.
-     * Prevents low-complexity intents (< 35 tokens, e.g. quick summaries, greetings, direct questions)
+     * Prevents low-complexity intents (< 60 tokens, e.g. quick summaries, greetings, direct questions)
      * from triggering heavy multi-agent profiling, chunk partitioning, Qdrant vector retrieval, and critic loops.
      */
     static evaluateFastPath(
@@ -70,8 +70,11 @@ export class ModelRouter {
             };
         }
 
-        // Fast-path condition: task + data under 35 tokens AND data payload under 256 characters
-        if (estimatedTokens < 35 && dataClean.length < 256) {
+        // Fast-path condition: task + data under 60 tokens AND data payload under 512 characters.
+        // Simple factual Q&A ("which planet is hottest?", "name the third tallest mountain")
+        // typically lands at 30-50 tokens — route it to a single fast analyst instead of the
+        // full multi-agent swarm.
+        if (estimatedTokens < 60 && dataClean.length < 512) {
             return {
                 eligible: true,
                 reason: `Low-complexity intent (${estimatedTokens} est. tokens) qualifies for fast-path short-circuiting.`,
@@ -107,10 +110,10 @@ export class ModelRouter {
         deepAnalysisRequested: boolean = false,
         forceFullSwarm: boolean = false
     ): boolean {
-        if (forceFullSwarm || deepAnalysisRequested || dataLength >= 256) return false;
+        if (forceFullSwarm || deepAnalysisRequested || dataLength >= 512) return false;
         const taskClean = (task || '').trim();
         const estTokens = Math.ceil((taskClean.length + dataLength) / 4);
-        if (estTokens >= 35) return false;
+        if (estTokens >= 60) return false;
 
         const lower = taskClean.toLowerCase();
         const deepKeywords = ['audit', 'deep', 'verify', 'critique', 'root cause', 'red team', 'investigate', 'security', 'benchmark', 'synthesize'];

@@ -77,7 +77,7 @@ export class Agent {
 
     async run(prompt: string, context: SwarmContext, config?: AgentRunConfig): Promise<any> {
         const startTime = Date.now();
-        const timeoutMs = config?.timeoutMs || 120000;
+        const timeoutMs = config?.timeoutMs || 30000; // 30s default: fail fast on free-tier stalls instead of hanging for 2 minutes
 
         const lb = (config?.loadBalancer as AdaptiveLoadBalancer) || this.loadBalancer || globalLoadBalancer;
         const candidateFallbacks = config?.fallbackProviders || this.fallbacks;
@@ -104,7 +104,10 @@ export class Agent {
         for (let targetIdx = 0; targetIdx < targetChain.length; targetIdx++) {
             const currentTarget = targetChain[targetIdx];
             const isFallback = targetIdx > 0;
-            const maxRetries = 4;
+            // Two attempts max: fail fast on free-tier stalls. Fatal (4xx) errors
+            // never recover by retrying; transient (429/5xx/timeout) errors either
+            // fail over immediately (when a backup exists) or get one quick retry.
+            const maxRetries = 2;
 
             for (let attempt = 1; attempt <= maxRetries; attempt++) {
                 try {
@@ -262,6 +265,7 @@ export class Agent {
                         errLower.includes('rate limit') ||
                         errLower.includes('quota') ||
                         errLower.includes('timeout') ||
+                        errLower.includes('timed out') || // provider adapters emit "[TIMEOUT] ... timed out after Nms"
                         errLower.includes('high traffic') ||
                         errLower.includes('overloaded') ||
                         errLower.includes('unavailable') ||

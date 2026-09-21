@@ -245,6 +245,11 @@ export interface SwarmWorkflowParams {
     defaultAi?: GoogleGenAI;
     enableDeepAnalysis?: boolean;
     forceFullSwarm?: boolean;
+    /**
+     * Skip all caches (payload, semantic, tiered) and force a fresh LLM run.
+     * Useful for debugging and for verifying behavior after config changes.
+     */
+    bypassCache?: boolean;
     speculativeParallel?: boolean;
     maxSpeculativeConcurrency?: number;
     complexityOverride?: TaskComplexity;
@@ -465,22 +470,31 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
 
     // 0. Infer Task Complexity via ModelRouter
     const forceFullSwarm = params.forceFullSwarm ?? settings?.forceFullSwarm ?? settings?.disableFastPath ?? false;
+    const bypassCache = params.bypassCache ?? false;
     const complexity: TaskComplexity = complexityOverride || ModelRouter.inferComplexity(task, (data || '').length, 1, forceFullSwarm);
     const deepAnalysisRequested = enableDeepAnalysis ?? settings?.enableDeepAnalysis ?? (complexity === 'complex');
+
+    // Config version fingerprint for cache validity: any change to agent provider/model
+    // assignments invalidates cached analyses, so a model swap in Settings can never
+    // serve a stale result computed under the old configuration.
+    const agentConfigVersion = PayloadCache.hashString(
+        (settings?.agents || []).map((a: any) => `${a.id || a.role}:${a.provider}/${a.model || ''}`).join('|')
+    ).substring(0, 16);
 
     // 0b. Check Deterministic Payload Cache for Zero-Drift Short-Circuit
     const cacheKey = PayloadCache.computeFingerprint(task, data || "", {
         appId: targetAppId,
         deepAnalysis: deepAnalysisRequested,
         complexity,
-        forceFullSwarm
+        forceFullSwarm,
+        agentConfigVersion
     });
 
     // 0b. Check Tiered Cache (L1 Hot LRU / L2 Warm Semantic / L3 Cold Snapshot)
     const tieredCacheEnabled = settings?.tieredCacheSettings?.enabled === true;
     const cacheQuery = `${task}\n${data || ''}`.trim();
 
-    if (tieredCacheEnabled && !forceFullSwarm) {
+    if (tieredCacheEnabled && !forceFullSwarm && !bypassCache) {
         const lookup = globalTieredCache.lookup(cacheQuery, {
             similarityThreshold: settings?.tieredCacheSettings?.l2SimilarityThreshold
         });
@@ -583,7 +597,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         }
     }
 
-    const cachedAnalysis = (forceFullSwarm || tieredCacheEnabled) ? null : globalPayloadCache.get(cacheKey);
+    const cachedAnalysis = (forceFullSwarm || tieredCacheEnabled || bypassCache) ? null : globalPayloadCache.get(cacheKey);
     if (cachedAnalysis) {
         context.addEvent({
             agentRole: 'Payload Cache',
@@ -664,9 +678,11 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     }
 
     // 0c. Check Lightweight Semantic Baseline Cache for Near-Identical Query Matching
-    const semanticMatch: SemanticMatchResult = (forceFullSwarm || tieredCacheEnabled)
+    // The configVersion gate ensures entries are only served to runs using the same
+    // agent provider/model configuration that produced them.
+    const semanticMatch: SemanticMatchResult = (forceFullSwarm || tieredCacheEnabled || bypassCache)
         ? { hit: false, similarity: 0 }
-        : globalSemanticCache.findMatch(task, { data, threshold: 0.80 });
+        : globalSemanticCache.findMatch(task, { data, threshold: 0.80, configVersion: agentConfigVersion });
 
     if (semanticMatch.hit && semanticMatch.entry) {
         context.addEvent({
@@ -985,7 +1001,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
 
             if (finalAnalysis && !finalAnalysis.ui_title?.includes("Error")) {
                 globalPayloadCache.set(cacheKey, finalAnalysis);
-                globalSemanticCache.set(task, finalAnalysis, { data });
+                globalSemanticCache.set(task, finalAnalysis, { data, configVersion: agentConfigVersion });
                 if (memoryCortex) {
                     const content = `Task: ${task}\nResult: ${finalAnalysis.ui_title || 'Fast analysis complete'}`;
                     const meta = {
@@ -2281,7 +2297,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
 
     if (finalAnalysis && !finalAnalysis.ui_title?.includes("Error")) {
         globalPayloadCache.set(cacheKey, finalAnalysis);
-        globalSemanticCache.set(task, finalAnalysis, { data });
+        globalSemanticCache.set(task, finalAnalysis, { data, configVersion: agentConfigVersion });
     }
 
     const workflowDurationMs = Date.now() - workflowStartTime;

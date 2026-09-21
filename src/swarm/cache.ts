@@ -35,6 +35,7 @@ export interface FingerprintOptions {
     forceFullSwarm?: boolean;
     complexity?: string;
     model?: string;
+    agentConfigVersion?: string;
 }
 
 export class PayloadCache {
@@ -62,7 +63,8 @@ export class PayloadCache {
             `complexity:${options?.complexity || 'auto'}`,
             `deep:${Boolean(options?.deepAnalysis)}`,
             `forceFullSwarm:${Boolean(options?.forceFullSwarm)}`,
-            `model:${options?.model || 'default'}`
+            `model:${options?.model || 'default'}`,
+            `agentConfig:${options?.agentConfigVersion || 'default'}`
         ].join('||');
 
         return PayloadCache.hashString(canonical);
@@ -255,6 +257,12 @@ export interface SemanticCacheEntry<T = any> {
     expiresAt: number;
     hits: number;
     lastAccessedAt: number;
+    /**
+     * Fingerprint of the agent provider/model configuration that produced this entry.
+     * Entries are only served to runs with a matching config version, so changing
+     * models in Settings invalidates stale cached analyses instead of serving them.
+     */
+    configVersion?: string;
     metadata?: Record<string, any>;
 }
 
@@ -448,7 +456,7 @@ export class SemanticBaselineCache {
     set<T = any>(
         task: string,
         payload: T,
-        options?: { data?: string; ttlMs?: number; metadata?: Record<string, any>; estimatedTokens?: number }
+        options?: { data?: string; ttlMs?: number; metadata?: Record<string, any>; estimatedTokens?: number; configVersion?: string }
     ): void {
         const now = Date.now();
         const duration = options?.ttlMs ?? this.defaultTtlMs;
@@ -481,6 +489,7 @@ export class SemanticBaselineCache {
             expiresAt: now + duration,
             hits: 0,
             lastAccessedAt: now,
+            configVersion: options?.configVersion,
             metadata: options?.metadata
         };
 
@@ -491,7 +500,7 @@ export class SemanticBaselineCache {
 
     findMatch<T = any>(
         task: string,
-        options?: { data?: string; threshold?: number }
+        options?: { data?: string; threshold?: number; configVersion?: string }
     ): SemanticMatchResult<T> {
         const threshold = options?.threshold ?? this.similarityThreshold;
         const now = Date.now();
@@ -523,6 +532,13 @@ export class SemanticBaselineCache {
             if (now > entry.expiresAt) {
                 this.entries.delete(entry.id);
                 this.vectorIndex.delete(entry.id);
+                continue;
+            }
+
+            // Config-version gate: a cached analysis is only valid for runs using the
+            // same agent provider/model configuration. Stale entries from a previous
+            // config are treated as misses instead of served.
+            if (options?.configVersion && entry.configVersion && entry.configVersion !== options.configVersion) {
                 continue;
             }
 

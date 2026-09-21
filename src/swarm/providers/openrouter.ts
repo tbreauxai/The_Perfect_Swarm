@@ -47,7 +47,7 @@ export class OpenRouterAdapter implements ProviderAdapter {
         messages.push({ role: 'user', content: options.prompt });
 
         const isJson = options.config?.responseMimeType === 'application/json';
-        const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 120000;
+        const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 30000; // 30s default: fail fast on free-tier stalls instead of hanging for 2 minutes
         const effectiveModel = options.modelName;
 
         let response: Response;

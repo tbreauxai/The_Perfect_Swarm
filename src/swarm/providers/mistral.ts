@@ -19,7 +19,7 @@ export class MistralAdapter implements ProviderAdapter {
             throw new Error('Missing Mistral API Key.');
         }
 
-        const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 120000;
+        const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 30000; // 30s default: fail fast on free-tier stalls instead of hanging for 2 minutes
 
         // Mistral Free Tier pacing mutex (31s pacing to respect 2 RPM limit)
         await mistralMutex;
