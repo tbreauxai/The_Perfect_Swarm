@@ -1,4 +1,4 @@
-import { executeSwarmWorkflow, type SwarmWorkflowResult, type SwarmStagePayload, getOrCreateDefaultCortex } from './engine.ts';
+import { executeSwarmWorkflow, type SwarmWorkflowResult, type SwarmStagePayload, getOrCreateDefaultCortex } from './engine/index.ts';
 import { MemoryCortex, type RetrievalOptions, type MemorySnapshot, type ExportMemoriesOptions, type ImportMemoriesOptions, type ImportMemoriesResult, type MemoryMetadata } from './memory.ts';
 import type { SwarmEvent } from './types.ts';
 
