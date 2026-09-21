@@ -8,7 +8,7 @@ import {
     ConfidenceEarlyExitEvaluator,
     type PartialPrediction
 } from './optimization.ts';
-import { executeSwarmWorkflow } from './engine.ts';
+import { executeSwarmWorkflow } from './engine/index.ts';
 import { ProviderRegistry } from './providers/registry.ts';
 
 describe('Goal 2: Worker Pool Parallelization, Tiered Inference & Streaming Integration', () => {

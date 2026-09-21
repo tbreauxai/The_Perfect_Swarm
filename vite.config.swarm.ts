@@ -8,7 +8,7 @@ export default defineConfig({
     lib: {
       entry: {
         index: path.resolve(__dirname, 'src/swarm/index.ts'),
-        engine: path.resolve(__dirname, 'src/swarm/engine.ts'),
+        engine: path.resolve(__dirname, 'src/swarm/engine/index.ts'),
         memory: path.resolve(__dirname, 'src/swarm/memory.ts'),
         router: path.resolve(__dirname, 'src/swarm/router.ts'),
         lifecycle: path.resolve(__dirname, 'src/swarm/lifecycle.ts'),

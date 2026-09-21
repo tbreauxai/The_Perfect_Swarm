@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { executeSwarmWorkflow } from './engine.js';
+import { executeSwarmWorkflow } from './engine/index.ts';
 import { ProviderRegistry } from './providers/registry.js';
 import { globalFeedbackEngine } from './feedback.js';
 import { globalMetricsCollector } from './profiler.js';
