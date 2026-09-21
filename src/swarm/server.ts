@@ -7,6 +7,9 @@ import type { SwarmEvent } from './types.ts';
 import type { GoogleGenAI } from '@google/genai';
 import type { MemoryCortex } from './memory.ts';
 import { globalMetricsCollector } from './profiler.ts';
+import { globalTelemetryCollector, createTelemetryMiddleware } from './telemetry.ts';
+import { globalPayloadCache, globalSemanticCache } from './cache.ts';
+import { globalTieredCache } from './tieredCache.ts';
 
 export interface SwarmServerOptions {
     port?: number;
@@ -146,12 +149,24 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
         });
     }
 
+    // Apply telemetry middleware to track request latency across all endpoints
+    app.use('*', createTelemetryMiddleware());
+
     app.get('/api/health', (c) => {
         return c.json({ status: 'ok', edge: true });
     });
 
     app.get('/api/swarm/metrics', (c) => {
-      return c.json(globalMetricsCollector.getSnapshot());
+        // Sync cache metrics from cache layers
+        const payloadStats = globalPayloadCache.getStats();
+        const semanticStats = globalSemanticCache.getStats();
+        const tieredMetrics = globalTieredCache.getMetrics();
+        
+        const totalHits = payloadStats.hits + semanticStats.hits + tieredMetrics.l1Hits + tieredMetrics.l2Hits + tieredMetrics.l3Hits;
+        const totalMisses = payloadStats.misses + semanticStats.misses + tieredMetrics.misses;
+        globalTelemetryCollector.syncCacheMetrics(totalHits, totalMisses);
+
+        return c.json(globalTelemetryCollector.getSnapshot());
     });
 
     app.all('/api/swarm/stream', async (c) => {

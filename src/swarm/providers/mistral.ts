@@ -1,4 +1,5 @@
 import { cleanToken, sanitizeModelOutput, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
+import { globalTelemetryCollector, extractTokenUsage, estimateTokens } from '../telemetry.ts';
 
 let mistralMutex: Promise<void> = Promise.resolve();
 
@@ -86,6 +87,27 @@ export class MistralAdapter implements ProviderAdapter {
 
             const data = await response.json();
             const rawContent = data?.choices?.[0]?.message?.content || '';
+
+            // Record token usage
+            const tokens = extractTokenUsage(data, this.providerName);
+            if (tokens) {
+                globalTelemetryCollector.recordTokenUsage({
+                    promptTokens: tokens.promptTokens,
+                    completionTokens: tokens.completionTokens,
+                    provider: this.providerName,
+                    model: options.modelName
+                });
+            } else {
+                const promptTokens = estimateTokens(options.prompt + (options.systemInstruction || ''));
+                const completionTokens = estimateTokens(rawContent);
+                globalTelemetryCollector.recordTokenUsage({
+                    promptTokens,
+                    completionTokens,
+                    provider: this.providerName,
+                    model: options.modelName
+                });
+            }
+
             isSuccess = true;
             return sanitizeModelOutput(rawContent, isJson);
         } finally {

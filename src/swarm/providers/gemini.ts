@@ -1,5 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
 import { cleanToken, sanitizeModelOutput, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
+import { globalTelemetryCollector, estimateTokens } from '../telemetry.ts';
 
 export class GeminiAdapter implements ProviderAdapter {
     readonly providerName = 'gemini';
@@ -51,6 +52,26 @@ export class GeminiAdapter implements ProviderAdapter {
         }
 
         const rawText = response.text || '';
+
+        // Record token usage
+        if (response.usageMetadata) {
+            globalTelemetryCollector.recordTokenUsage({
+                promptTokens: response.usageMetadata.promptTokenCount || 0,
+                completionTokens: response.usageMetadata.candidatesTokenCount || 0,
+                provider: this.providerName,
+                model: options.modelName
+            });
+        } else {
+            const promptTokens = estimateTokens(options.prompt + (options.systemInstruction || ''));
+            const completionTokens = estimateTokens(rawText);
+            globalTelemetryCollector.recordTokenUsage({
+                promptTokens,
+                completionTokens,
+                provider: this.providerName,
+                model: options.modelName
+            });
+        }
+
         return sanitizeModelOutput(rawText, isJson);
     }
 }

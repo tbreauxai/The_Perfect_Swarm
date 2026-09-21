@@ -1,4 +1,5 @@
 import { cleanToken, sanitizeModelOutput, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
+import { globalTelemetryCollector, extractTokenUsage, estimateTokens } from '../telemetry.ts';
 
 export class OpenRouterAdapter implements ProviderAdapter {
     readonly providerName = 'openrouter';
@@ -90,6 +91,27 @@ export class OpenRouterAdapter implements ProviderAdapter {
 
         const data = await response.json();
         const rawContent = data?.choices?.[0]?.message?.content || '';
+
+        // Record token usage
+        const tokens = extractTokenUsage(data, this.providerName);
+        if (tokens) {
+            globalTelemetryCollector.recordTokenUsage({
+                promptTokens: tokens.promptTokens,
+                completionTokens: tokens.completionTokens,
+                provider: this.providerName,
+                model: effectiveModel
+            });
+        } else {
+            const promptTokens = estimateTokens(options.prompt + (options.systemInstruction || ''));
+            const completionTokens = estimateTokens(rawContent);
+            globalTelemetryCollector.recordTokenUsage({
+                promptTokens,
+                completionTokens,
+                provider: this.providerName,
+                model: effectiveModel
+            });
+        }
+
         return sanitizeModelOutput(rawContent, isJson);
     }
 }
