@@ -170,7 +170,7 @@ export class ModelRouter {
     }
 
     static isValidModel(model: string): boolean {
-        return typeof model === 'string' && model.trim().length > 0;
+        return typeof model === 'string' && model.length > 0;
     }
 
     /**
