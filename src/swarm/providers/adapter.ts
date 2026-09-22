@@ -2,6 +2,15 @@ import type { ProviderAdapter, ProviderCallOptions } from '../types.ts';
 
 export type { ProviderAdapter, ProviderCallOptions };
 
+export function buildStandardMessages(options: ProviderCallOptions): any[] {
+    const messages: any[] = [];
+    if (options.systemInstruction) {
+        messages.push({ role: 'system', content: options.systemInstruction });
+    }
+    messages.push({ role: 'user', content: options.prompt });
+    return messages;
+}
+
 /**
  * Strips redundant prefixes ('Bearer ', 'Token '), backticks, quotes, and whitespace from API keys.
  */
