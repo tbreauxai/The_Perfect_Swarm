@@ -245,6 +245,17 @@ export class DeterministicLocalEmbeddingProvider implements EmbeddingProvider {
     }
 }
 
+
+export interface MemoryCortexDiagnostics {
+    qdrantAvailable: boolean;
+    collectionName: string;
+    pointCount: number;
+    appCount: number;
+    fallbackStoreSize: number;
+    storageByDomain: Record<string, number>;
+    storageByRole: Record<string, number>;
+}
+
 export interface MemoryCortexConfig {
     url?: string;
     apiKey?: string;
@@ -1488,6 +1499,56 @@ export class MemoryCortex {
             console.warn(`[MemoryCortex] WipeCollection failed: ${error.message || error}`);
             return false;
         }
+    }
+
+
+    async getDiagnostics(): Promise<MemoryCortexDiagnostics> {
+        let pointCount = 0;
+        let apps = new Set<string>();
+        const storageByDomain: Record<string, number> = {};
+        const storageByRole: Record<string, number> = {};
+
+        if (this.qdrant && this.isAvailable) {
+            try {
+                // Qdrant counts
+                const collectionInfo = await this.withTimeout(this.qdrant.getCollection(this.collectionName));
+                pointCount = collectionInfo.points_count || 0;
+
+                // Simple fallback to fallbackStore for domains/roles if qdrant is used
+                // as full aggregation query requires scroll which can be heavy
+                for (const pt of this.fallbackStore) {
+                    apps.add(pt.payload.appId || this.defaultAppId);
+                    const domain = pt.payload.domain || 'general';
+                    const role = pt.payload.agentRole || 'unknown';
+                    storageByDomain[domain] = (storageByDomain[domain] || 0) + 1;
+                    storageByRole[role] = (storageByRole[role] || 0) + 1;
+                }
+            } catch (err) {
+                console.warn("[MemoryCortex] getDiagnostics qdrant error, falling back to in-memory stats.");
+            }
+        }
+
+        // If qdrant failed or we are using fallback only
+        if (pointCount === 0 && this.fallbackStore.length > 0) {
+            pointCount = this.fallbackStore.length;
+            for (const pt of this.fallbackStore) {
+                apps.add(pt.payload.appId || this.defaultAppId);
+                const domain = pt.payload.domain || 'general';
+                const role = pt.payload.agentRole || 'unknown';
+                storageByDomain[domain] = (storageByDomain[domain] || 0) + 1;
+                storageByRole[role] = (storageByRole[role] || 0) + 1;
+            }
+        }
+
+        return {
+            qdrantAvailable: this.isAvailable,
+            collectionName: this.collectionName,
+            pointCount,
+            appCount: apps.size,
+            fallbackStoreSize: this.fallbackStore.length,
+            storageByDomain,
+            storageByRole
+        };
     }
 
     get ready(): boolean {

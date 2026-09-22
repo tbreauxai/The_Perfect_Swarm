@@ -8,6 +8,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createSwarmServer } from './src/swarm/server.ts';
+import { getOrCreateDefaultCortex } from './src/swarm/engine/cortex.ts';
 
 dotenv.config();
 
@@ -22,8 +23,10 @@ async function startServer() {
   });
 
   // 1. Create the Edge-compatible Swarm API
+  const defaultCortex = getOrCreateDefaultCortex('perfect-swarm', defaultAi);
   const swarmApi = createSwarmServer({
       defaultAi,
+      defaultCortex,
       cors: true
   });
 
