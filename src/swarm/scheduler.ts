@@ -99,6 +99,7 @@ const PRIORITY_SCORES: Record<TaskPriority, number> = {
  */
 export class PriorityTaskQueue<T = any, R = any> {
     private queue: Array<ScheduledTask<T, R>> = [];
+    private queueOffset: number = 0;
     private agingThresholdMs: number;
 
     constructor(agingThresholdMs: number = 5000) {
@@ -123,40 +124,50 @@ export class PriorityTaskQueue<T = any, R = any> {
     }
 
     dequeue(): ScheduledTask<T, R> | undefined {
-        if (this.queue.length === 0) return undefined;
+        if (this.isEmpty()) return undefined;
         this.sortQueue();
-        return this.queue.shift();
+        const task = this.queue[this.queueOffset++];
+
+        // Slice to prevent memory leak when offset gets too large
+        if (this.queueOffset > 64 && this.queueOffset * 2 > this.queue.length) {
+            this.queue = this.queue.slice(this.queueOffset);
+            this.queueOffset = 0;
+        }
+
+        return task;
     }
 
     peek(): ScheduledTask<T, R> | undefined {
-        if (this.queue.length === 0) return undefined;
+        if (this.isEmpty()) return undefined;
         this.sortQueue();
-        return this.queue[0];
+        return this.queue[this.queueOffset];
     }
 
     size(): number {
-        return this.queue.length;
+        return this.queue.length - this.queueOffset;
     }
 
     isEmpty(): boolean {
-        return this.queue.length === 0;
+        return this.queue.length - this.queueOffset === 0;
     }
 
     remove(taskId: string): boolean {
-        const idx = this.queue.findIndex(t => t.id === taskId);
-        if (idx !== -1) {
-            this.queue.splice(idx, 1);
-            return true;
+        for (let i = this.queueOffset; i < this.queue.length; i++) {
+            if (this.queue[i].id === taskId) {
+                this.queue.splice(i, 1);
+                return true;
+            }
         }
         return false;
     }
 
     clear(): void {
         this.queue = [];
+        this.queueOffset = 0;
     }
 
     getAll(): Array<ScheduledTask<T, R>> {
-        return [...this.queue];
+        return this.queue.slice(this.queueOffset);
     }
 
     private computeEffectiveScore(task: ScheduledTask<T, R>, now: number): number {
@@ -169,6 +180,14 @@ export class PriorityTaskQueue<T = any, R = any> {
 
     private sortQueue(): void {
         const now = Date.now();
+
+        // If there's an offset, we must clear dead elements before sorting
+        // otherwise they mix back into the active priority pool
+        if (this.queueOffset > 0) {
+            this.queue = this.queue.slice(this.queueOffset);
+            this.queueOffset = 0;
+        }
+
         this.queue.sort((a, b) => {
             const scoreA = this.computeEffectiveScore(a, now);
             const scoreB = this.computeEffectiveScore(b, now);

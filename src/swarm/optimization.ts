@@ -449,10 +449,64 @@ export class DomainPreFilter {
         let prunedFieldsCount = 0;
         let prunedRecordsCount = 0;
 
+        const maxMatches = options.maxMatches ?? 50;
+
+        // Fast-path for large quantitative betting datasets (like duelodds array of match/market objects)
+        // Bypasses heavy recursive AST traversal.
+        if (Array.isArray(dataObj) && dataObj.length > 0) {
+            const firstItem = dataObj[0];
+            if (typeof firstItem === 'object' && firstItem !== null && ('odds' in firstItem || 'markets' in firstItem || 'fixture' in firstItem)) {
+                let fastFiltered: any[] = [];
+                for (let i = 0; i < dataObj.length; i++) {
+                    if (fastFiltered.length >= maxMatches) {
+                        prunedRecordsCount += (dataObj.length - i);
+                        break;
+                    }
+                    const item = dataObj[i];
+                    if (typeof item === 'object' && item !== null) {
+                        if (options.dropClosedMatches) {
+                            const st = (item.status || item.matchStatus || '').toLowerCase();
+                            if (st === 'finished' || st === 'completed' || st === 'canceled' || st === 'abandoned') {
+                                prunedRecordsCount++;
+                                continue;
+                            }
+                        }
+                        if (options.minLiquidityVolume !== undefined && options.minLiquidityVolume > 0) {
+                            const vol = Number(item.volume ?? item.liquidity ?? item.poolSize ?? Infinity);
+                            if (vol < options.minLiquidityVolume) {
+                                prunedRecordsCount++;
+                                continue;
+                            }
+                        }
+                        fastFiltered.push(item);
+                    } else {
+                        fastFiltered.push(item);
+                    }
+                }
+
+                const filteredJson = JSON.stringify(fastFiltered);
+                const filteredByteSize = filteredJson.length;
+                const filteredEstimatedTokens = profiler.estimateTokens(fastFiltered);
+                const tokensSaved = Math.max(0, originalEstimatedTokens - filteredEstimatedTokens);
+                const reductionRatio = originalEstimatedTokens > 0 ? Math.round((tokensSaved / originalEstimatedTokens) * 1000) / 1000 : 0;
+
+                return {
+                    filteredData: fastFiltered,
+                    originalByteSize,
+                    filteredByteSize,
+                    originalEstimatedTokens,
+                    filteredEstimatedTokens,
+                    tokensSaved,
+                    prunedFieldsCount: 0,
+                    prunedRecordsCount,
+                    reductionRatio
+                };
+            }
+        }
+
         const salientSet = new Set(options.salientKeys || DomainPreFilter.DEFAULT_SALIENT_KEYS);
         const stripVerbose = options.stripVerboseFields !== false;
         const stripStale = options.stripStaleOdds !== false;
-        const maxMatches = options.maxMatches ?? 50;
 
         // Recursive field cleaner
         const cleanNode = (node: any): any => {
@@ -691,6 +745,7 @@ export class PredictionWorkerPool {
     private maxConcurrency: number;
     private defaultTaskTimeoutMs: number;
     private queue: PoolTask[] = [];
+    private queueOffset: number = 0;
     private activeWorkers: number = 0;
     private completedTasks: number = 0;
     private failedTasks: number = 0;
@@ -722,7 +777,13 @@ export class PredictionWorkerPool {
             };
 
             if (task.priority === 'high') {
-                const firstNonHighIdx = this.queue.findIndex(t => t.priority !== 'high');
+                let firstNonHighIdx = -1;
+                for (let i = this.queueOffset; i < this.queue.length; i++) {
+                    if (this.queue[i].priority !== 'high') {
+                        firstNonHighIdx = i;
+                        break;
+                    }
+                }
                 if (firstNonHighIdx === -1) {
                     this.queue.push(task);
                 } else {
@@ -731,7 +792,13 @@ export class PredictionWorkerPool {
             } else if (task.priority === 'low') {
                 this.queue.push(task);
             } else {
-                const firstLowIdx = this.queue.findIndex(t => t.priority === 'low');
+                let firstLowIdx = -1;
+                for (let i = this.queueOffset; i < this.queue.length; i++) {
+                    if (this.queue[i].priority === 'low') {
+                        firstLowIdx = i;
+                        break;
+                    }
+                }
                 if (firstLowIdx === -1) {
                     this.queue.push(task);
                 } else {
@@ -751,9 +818,14 @@ export class PredictionWorkerPool {
     }
 
     private drainQueue(): void {
-        while (this.activeWorkers < this.maxConcurrency && this.queue.length > 0) {
-            const task = this.queue.shift();
+        while (this.activeWorkers < this.maxConcurrency && this.queueOffset < this.queue.length) {
+            const task = this.queue[this.queueOffset++];
             if (!task) break;
+
+            if (this.queueOffset > 64 && this.queueOffset * 2 > this.queue.length) {
+                this.queue = this.queue.slice(this.queueOffset);
+                this.queueOffset = 0;
+            }
 
             this.activeWorkers++;
             this.runTask(task);

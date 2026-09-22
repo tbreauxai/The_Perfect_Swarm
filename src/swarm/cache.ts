@@ -72,20 +72,37 @@ export class PayloadCache {
 
     /**
      * Pure TypeScript 64-character deterministic dual-state hash.
-     * High entropy, collision-resistant, and completely portable.
+     * High entropy, collision-resistant, completely portable, optimized for large payloads.
      */
     static hashString(str: string): string {
-        let h1 = 0x811c9dc5 ^ str.length;
-        let h2 = 0xdeadbeef ^ str.length;
-        let h3 = 0x41c6ce57 ^ str.length;
-        let h4 = 0x9e3779b9 ^ str.length;
+        const len = str.length;
+        let h1 = 0x811c9dc5 ^ len;
+        let h2 = 0xdeadbeef ^ len;
+        let h3 = 0x41c6ce57 ^ len;
+        let h4 = 0x9e3779b9 ^ len;
 
-        for (let i = 0; i < str.length; i++) {
-            const ch = str.charCodeAt(i);
-            h1 = Math.imul(h1 ^ ch, 16777619);
-            h2 = Math.imul(h2 ^ ch, 2654435761);
-            h3 = Math.imul(h3 ^ ch, 1597334677);
-            h4 = Math.imul(h4 ^ ch, 2246822507);
+        // Process 4 characters at a time for loop unrolling performance
+        let i = 0;
+        const remainder = len % 4;
+        const limit = len - remainder;
+
+        while (i < limit) {
+            h1 = Math.imul(h1 ^ str.charCodeAt(i), 16777619);
+            h2 = Math.imul(h2 ^ str.charCodeAt(i + 1), 2654435761);
+            h3 = Math.imul(h3 ^ str.charCodeAt(i + 2), 1597334677);
+            h4 = Math.imul(h4 ^ str.charCodeAt(i + 3), 2246822507);
+            i += 4;
+        }
+
+        // Handle remainder
+        if (remainder > 0) {
+            h1 = Math.imul(h1 ^ str.charCodeAt(i), 16777619);
+            if (remainder > 1) {
+                h2 = Math.imul(h2 ^ str.charCodeAt(i + 1), 2654435761);
+                if (remainder > 2) {
+                    h3 = Math.imul(h3 ^ str.charCodeAt(i + 2), 1597334677);
+                }
+            }
         }
 
         h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
