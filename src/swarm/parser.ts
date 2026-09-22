@@ -482,7 +482,7 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
     if (components.length === 0) {
         const insightsList = Array.isArray(raw.insights)
             ? raw.insights.map((i: any) => ({ type: 'info' as const, message: String(i) }))
-            : [{ type: 'info' as const, message: raw.summary || typeof input === 'string' ? String(input).slice(0, 200) : 'Swarm analysis completed successfully.' }];
+            : [{ type: 'info' as const, message: raw.summary ? raw.summary : (typeof input === 'string' ? String(input).slice(0, 200) : 'Swarm analysis completed successfully.') }];
 
         components.push({
             id: 'default-insight-list',

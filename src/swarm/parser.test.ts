@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseJsonSafe } from './parser.ts';
+import { parseJsonSafe, guardManagerResponse } from './parser.ts';
 
 describe('parseJsonSafe', () => {
     it('returns the object directly if the input is an object', () => {
@@ -99,5 +99,97 @@ anomalies: none
         const input = `This is just a random string with no recognizable json or key value pairs`;
         expect(parseJsonSafe(input)).toEqual({ anomalies: [] }); // extractFuzzyFields returns { anomalies: [] } when nothing matches
         expect(parseJsonSafe(input, { failed: true })).toEqual({ anomalies: [] });
+    });
+});
+
+describe('guardManagerResponse', () => {
+    it('passes a fully valid ManagerResponse directly through', () => {
+        const validResponse = {
+            ui_title: 'Valid Response',
+            components: [
+                {
+                    id: 'metric-1',
+                    type: 'MetricCard',
+                    props: {
+                        title: 'Total Users',
+                        value: '10,000',
+                        trend: 'up'
+                    }
+                }
+            ]
+        };
+        const result = guardManagerResponse(validResponse);
+        expect(result).toEqual(validResponse);
+    });
+
+    it('salvages valid components from an invalid ManagerResponse', () => {
+        const invalidResponse = {
+            ui_title: 'Partially Invalid Response',
+            components: [
+                {
+                    type: 'MetricCard', // Missing ID
+                    props: {
+                        title: 'Total Revenue',
+                        value: '$50,000',
+                        trend: 'invalid_trend' // Will be normalized
+                    }
+                },
+                {
+                    type: 'InvalidComponent',
+                    props: {}
+                }
+            ]
+        };
+        const result = guardManagerResponse(invalidResponse);
+        expect(result.ui_title).toBe('Partially Invalid Response');
+        expect(result.components).toHaveLength(1);
+        expect(result.components[0].type).toBe('MetricCard');
+        expect(result.components[0].id).toBe('metric-0'); // Auto-generated ID
+
+        // Assert props correctly, especially trend normalization
+        const props = result.components[0].props as any;
+        expect(props.title).toBe('Total Revenue');
+        expect(props.value).toBe('$50,000');
+        expect(props.trend).toBe(undefined); // 'invalid_trend' normalizes to undefined
+    });
+
+    it('falls back to generating InsightList using insights array from raw input', () => {
+        const inputWithInsights = {
+            insights: ['Insight 1', 'Insight 2']
+        };
+        const result = guardManagerResponse(inputWithInsights);
+        expect(result.ui_title).toBe('Executive Swarm Synthesis');
+        expect(result.components).toHaveLength(1);
+        expect(result.components[0].type).toBe('InsightList');
+
+        const props = result.components[0].props as any;
+        expect(props.title).toBe('Synthesis Findings');
+        expect(props.insights).toHaveLength(2);
+        expect(props.insights[0].message).toBe('Insight 1');
+        expect(props.insights[1].message).toBe('Insight 2');
+    });
+
+    it('falls back to generating InsightList using summary from raw input', () => {
+        const inputWithSummary = {
+            summary: 'This is a summary.'
+        };
+        const result = guardManagerResponse(inputWithSummary);
+        expect(result.components).toHaveLength(1);
+        expect(result.components[0].type).toBe('InsightList');
+
+        const props = result.components[0].props as any;
+        expect(props.insights).toHaveLength(1);
+        expect(props.insights[0].message).toBe('This is a summary.');
+    });
+
+    it('gracefully generates a fallback for completely random strings', () => {
+        const randomString = "This is a random string with no structure.";
+        const result = guardManagerResponse(randomString);
+        expect(result.components).toHaveLength(1);
+        expect(result.components[0].type).toBe('InsightList');
+
+        const props = result.components[0].props as any;
+        expect(props.insights).toHaveLength(1);
+        expect(props.insights[0].message).toBe(randomString); // The string itself is used as the message up to 200 chars
     });
 });
