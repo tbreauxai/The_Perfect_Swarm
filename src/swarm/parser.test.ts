@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
-import { parseJsonSafe, repairAndValidate } from './parser.ts';
+import {
+    parseJsonSafe,
+    repairJson,
+    repairAndValidate,
+    guardAnalystResponse,
+    guardManagerResponse,
+    guardVerificationResult
+} from './parser.ts';
+
 
 describe('parseJsonSafe', () => {
     it('returns the object directly if the input is an object', () => {
@@ -103,11 +111,63 @@ anomalies: none
     });
 });
 
+describe('repairJson', () => {
+    it('returns empty object for empty or non-string input', () => {
+        expect(repairJson('')).toBe('{}');
+        expect(repairJson(null as any)).toBe('{}');
+        expect(repairJson(undefined as any)).toBe('{}');
+    });
+
+    it('strips reasoning tags and markdown fences', () => {
+        const input = `<think>
+This is some thinking...
+</think>
+\`\`\`json
+{"a": 1}
+\`\`\`
+`;
+        expect(repairJson(input)).toBe('{"a": 1}');
+    });
+
+    it('handles unclosed think tags', () => {
+        const input = `<think>
+I should return a JSON
+{"b": 2}`;
+        expect(repairJson(input)).toBe('{"b": 2}');
+    });
+
+    it('repairs unquoted keys, python literals, and single quotes', () => {
+        const input = `{ name: 'John', active: True, val: None }`;
+        expect(repairJson(input)).toBe('{ "name": "John", "active": true, "val": null }');
+    });
+
+    it('strips comments', () => {
+        const input = `{
+            // single line comment
+            "a": 1,
+            /* multi
+               line
+               comment */
+            "b": 2
+        }`;
+        expect(repairJson(input).replace(/\s+/g, '')).toBe('{"a":1,"b":2}');
+    });
+
+    it('repairs truncated JSON', () => {
+        expect(repairJson('{"a": {"b": 1')).toBe('{"a": {"b": 1}}');
+        expect(repairJson('{"a": 1, ')).toBe('{"a": 1}');
+        expect(repairJson('{"a": "string without en')).toBe('{"a": "string without en"}');
+        expect(repairJson('[{"a": 1}, {"b": 2')).toBe('[{"a": 1}, {"b": 2}]');
+        expect(repairJson('{"key":')).toBe('{"key": null}');
+    });
+});
+
+
 describe('repairAndValidate', () => {
     const TestSchema = z.object({
         name: z.string(),
         age: z.number(),
-        insights: z.array(z.string()),
+        insights: z.array(z.string()).optional(),
         anomalies: z.array(z.string()).optional()
     });
 
@@ -149,9 +209,6 @@ describe('repairAndValidate', () => {
         const result = repairAndValidate(input, TestSchema, fallbackFactory);
         expect(result.success).toBe(true);
         expect(result.repaired).toBe(true);
-
-        // Zod validation error messages can vary slightly between versions,
-        // so we check that the fallback factory was called and used the errors array.
         expect(result.data.name).toBe('Charlie');
         expect(result.data.age).toBe(0);
         expect(result.data.insights[0]).toContain('Fallback generated due to errors');
@@ -164,7 +221,7 @@ describe('repairAndValidate', () => {
         const result = repairAndValidate(input, TestSchema);
         expect(result.success).toBe(false);
         expect(result.repaired).toBe(true);
-        expect(result.data).toEqual({ name: 'Dave', age: 'thirty' }); // contains the coerced (but still invalid) data
+        expect(result.data).toEqual({ name: 'Dave', age: 'thirty' });
         expect(result.errors).toBeDefined();
         expect(result.errors?.length).toBeGreaterThan(0);
     });
@@ -180,8 +237,8 @@ describe('repairAndValidate', () => {
         const invalidInput = [1, 2];
         const resultFail = repairAndValidate(invalidInput, { safeParse: ArraySchema.safeParse });
         expect(resultFail.success).toBe(false);
-        expect(resultFail.repaired).toBe(true); // it attempts coercion and fails
-        expect(resultFail.data).toEqual([1, 2]); // coerced copies the array
+        expect(resultFail.repaired).toBe(true);
+        expect(resultFail.data).toEqual([1, 2]);
     });
 
     it('handles coercion for keys ending in "s"', () => {
@@ -191,5 +248,101 @@ describe('repairAndValidate', () => {
         expect(result.success).toBe(true);
         expect(result.repaired).toBe(true);
         expect(result.data).toEqual({ items: ['item1', 'item2', 'item3'] });
+    });
+});
+
+describe('guardAnalystResponse', () => {
+    it('parses a standard valid response', () => {
+        const input = {
+            insights: ['A', 'B'],
+            anomalies: ['C'],
+            summary: 'Good'
+        };
+        const result = guardAnalystResponse(input);
+        expect(result).toEqual(input);
+    });
+
+    it('coerces strings into arrays', () => {
+        const input = {
+            insights: 'Just one insight',
+            anomalies: 'Just one anomaly'
+        };
+        const result = guardAnalystResponse(input);
+        expect(result.insights).toEqual(['Just one insight']);
+        expect(result.anomalies).toEqual(['Just one anomaly']);
+    });
+
+    it('handles empty or missing fields and provides fallbacks', () => {
+        const result = guardAnalystResponse({});
+        expect(result.insights.length).toBe(1);
+        expect(result.insights[0]).toContain('[Analyst]');
+        expect(result.anomalies).toEqual([]);
+        expect(result.summary).toContain('assessment completed');
+    });
+});
+
+describe('guardManagerResponse', () => {
+    it('returns valid components natively', () => {
+        const input = {
+            ui_title: 'Title',
+            components: [
+                {
+                    id: '1',
+                    type: 'MetricCard',
+                    props: { title: 'T', value: 'V', trend: 'up' }
+                }
+            ]
+        };
+        const result = guardManagerResponse(input);
+        expect(result.ui_title).toBe('Title');
+        expect(result.components[0].type).toBe('MetricCard');
+    });
+
+    it('salvages poorly formatted components', () => {
+        const input = {
+            components: [
+                {
+                    type: 'MetricCard',
+                    props: { title: 'T', value: 'V' } // missing id and trend
+                }
+            ]
+        };
+        const result = guardManagerResponse(input);
+        expect(result.components.length).toBe(1);
+        expect(result.components[0].type).toBe('MetricCard');
+        expect(result.components[0].id).toBe('metric-0');
+    });
+
+    it('falls back to InsightList if no valid components exist', () => {
+        const input = { insights: ['Something cool'] };
+        const result = guardManagerResponse(input);
+        expect(result.components.length).toBe(1);
+        expect(result.components[0].type).toBe('InsightList');
+        // @ts-ignore
+        expect(result.components[0].props.insights[0].message).toBe('Something cool');
+    });
+});
+
+describe('guardVerificationResult', () => {
+    it('extracts from valid objects directly', () => {
+        expect(guardVerificationResult({ pass: true, feedback: 'ok' })).toEqual({ pass: true, feedback: 'ok' });
+        expect(guardVerificationResult({ passed: false, feedback: 'bad' })).toEqual({ pass: false, feedback: 'bad' });
+        expect(guardVerificationResult({ approved: true })).toEqual({ pass: true, feedback: 'Approval status evaluated.' });
+    });
+
+    it('parses JSON strings', () => {
+        expect(guardVerificationResult('{"pass": true, "feedback": "good"}')).toEqual({ pass: true, feedback: 'good' });
+    });
+
+    it('uses text heuristics', () => {
+        expect(guardVerificationResult('The test VERIFICATION PASSED easily.')).toEqual({ pass: true, feedback: 'The test VERIFICATION PASSED easily.' });
+        expect(guardVerificationResult('This CRITIQUE FAILED miserably.')).toEqual({ pass: false, feedback: 'This CRITIQUE FAILED miserably.' });
+    });
+
+    it('falls back to false for ambiguous strings', () => {
+        const result = guardVerificationResult('I am not sure what to say about this.');
+        expect(result.pass).toBe(false);
+        expect(result.feedback).toContain('Ambiguous critic output could not be verified');
+
     });
 });
