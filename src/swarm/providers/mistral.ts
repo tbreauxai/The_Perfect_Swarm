@@ -1,4 +1,4 @@
-import { cleanToken, sanitizeModelOutput, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
+import { cleanToken, sanitizeModelOutput, buildStandardMessages, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
 import { globalTelemetryCollector, extractTokenUsage, estimateTokens } from '../telemetry.ts';
 
 let mistralMutex: Promise<void> = Promise.resolve();
@@ -29,11 +29,7 @@ export class MistralAdapter implements ProviderAdapter {
         let isSuccess = false;
 
         try {
-            const messages: any[] = [];
-            if (options.systemInstruction) {
-                messages.push({ role: 'system', content: options.systemInstruction });
-            }
-            messages.push({ role: 'user', content: options.prompt });
+            const messages = buildStandardMessages(options);
 
             const isJson = options.config?.responseMimeType === 'application/json';
 

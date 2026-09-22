@@ -768,12 +768,10 @@ export class MemoryCortex {
 
         // Ephemeral in-memory fallback
         try {
-            const ids: string[] = [];
-            for (const mem of memories) {
-                const id = await this.store(mem.content, mem.metadata, false);
-                if (id) ids.push(id);
-            }
-            return ids;
+            const results = await Promise.all(
+                memories.map(mem => this.store(mem.content, mem.metadata, false))
+            );
+            return results.filter((id): id is string => id !== null);
         } catch (err: any) {
             console.warn(`[MemoryCortex] StoreBatch error: ${err.message || err}`);
             return [];

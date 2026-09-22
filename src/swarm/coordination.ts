@@ -166,7 +166,7 @@ export class HighBandwidthMessageChannel {
         payload: any;
     }): InteragentMessage {
         const msg: InteragentMessage = {
-            id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+            id: `msg-${Date.now()}-${crypto.randomUUID().substring(0, 8)}`,
             senderId: messageInput.senderId,
             targetId: messageInput.targetId || 'broadcast',
             topic: messageInput.topic,
@@ -380,7 +380,7 @@ export class HypothesisValidationLayer {
             }
         }
 
-        const id = `hypo-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+        const id = `hypo-${Date.now()}-${crypto.randomUUID().substring(0, 8)}`;
         const hypothesis: Hypothesis = {
             id,
             claim: claimNormalized,
