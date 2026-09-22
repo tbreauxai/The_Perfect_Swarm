@@ -1,5 +1,4 @@
-import { cleanToken, sanitizeModelOutput, buildStandardMessages, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
-import { globalTelemetryCollector, extractTokenUsage, estimateTokens } from '../telemetry.ts';
+import { cleanToken, buildStandardMessages, parseStandardResponse, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
 
 export class GroqAdapter implements ProviderAdapter {
     readonly providerName = 'groq';
@@ -51,28 +50,6 @@ export class GroqAdapter implements ProviderAdapter {
         }
 
         const data = await response.json();
-        const rawContent = data?.choices?.[0]?.message?.content || '';
-
-        // Record token usage
-        const tokens = extractTokenUsage(data, this.providerName);
-        if (tokens) {
-            globalTelemetryCollector.recordTokenUsage({
-                promptTokens: tokens.promptTokens,
-                completionTokens: tokens.completionTokens,
-                provider: this.providerName,
-                model: options.modelName
-            });
-        } else {
-            const promptTokens = estimateTokens(options.prompt + (options.systemInstruction || ''));
-            const completionTokens = estimateTokens(rawContent);
-            globalTelemetryCollector.recordTokenUsage({
-                promptTokens,
-                completionTokens,
-                provider: this.providerName,
-                model: options.modelName
-            });
-        }
-
-        return sanitizeModelOutput(rawContent, isJson);
+        return parseStandardResponse(data, this.providerName, options, isJson);
     }
 }
