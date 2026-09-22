@@ -8,6 +8,7 @@ import { Loader2, BrainCircuit, FileText, Activity, AlertCircle, Settings, Squar
 import { SettingsModal, AppSettings } from './components/SettingsModal';
 import { SwarmEventTimeline, SwarmTimelineEvent } from './components/SwarmEventTimeline';
 import { AnalysisViewer } from './components/AnalysisViewer';
+import { CortexDiagnosticsViewer } from './components/CortexDiagnosticsViewer';
 
 export default function App() {
   const [task, setTask] = useState('');
@@ -320,6 +321,8 @@ export default function App() {
                 )}
               </div>
             </div>
+            {/* Real-time Diagnostics Widget */}
+            <CortexDiagnosticsViewer />
           </div>
 
           {/* Right Column: Execution Trace and Analysis Output */}

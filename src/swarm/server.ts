@@ -185,6 +185,21 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
         return c.json(globalTelemetryCollector.getSnapshot());
     });
 
+
+    app.get('/api/swarm/cortex/diagnostics', async (c) => {
+        try {
+            const cortex = defaultCortex;
+            if (!cortex) {
+                return c.json({ error: 'Cortex not initialized' }, 503);
+            }
+            const diagnostics = await cortex.getDiagnostics();
+            return c.json(diagnostics);
+        } catch (err: any) {
+            console.error('[SwarmServer Cortex Diagnostics Error]:', err);
+            return c.json({ error: err.message || 'Internal Server Error' }, 500);
+        }
+    });
+
     app.all('/api/swarm/stream', async (c) => {
         let params: SwarmWorkflowParams;
         try {
