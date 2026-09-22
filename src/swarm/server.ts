@@ -139,7 +139,23 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
 
     if (options.cors !== false) {
         app.use('*', async (c, next) => {
-            c.header('Access-Control-Allow-Origin', '*');
+            const env = Object.assign({}, typeof process !== 'undefined' ? process.env : {}, (c.env as Record<string, any>) || {}) as Record<string, any>;
+            const allowedOriginsStr = env.CORS_ALLOWED_ORIGINS;
+            const reqOrigin = c.req.header('origin');
+
+            if (allowedOriginsStr) {
+                const allowedOrigins = allowedOriginsStr.split(',').map((o: string) => o.trim());
+                if (reqOrigin && allowedOrigins.includes(reqOrigin)) {
+                    c.header('Access-Control-Allow-Origin', reqOrigin);
+                } else if (allowedOrigins.length > 0) {
+                    c.header('Access-Control-Allow-Origin', allowedOrigins[0]);
+                } else {
+                    c.header('Access-Control-Allow-Origin', '*');
+                }
+            } else {
+                c.header('Access-Control-Allow-Origin', '*');
+            }
+
             c.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
             c.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
             if (c.req.method === 'OPTIONS') {
