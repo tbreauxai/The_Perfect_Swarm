@@ -1,4 +1,4 @@
-import { cleanToken, sanitizeModelOutput, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
+import { cleanToken, sanitizeModelOutput, buildStandardMessages, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
 import { globalTelemetryCollector, extractTokenUsage, estimateTokens } from '../telemetry.ts';
 
 export class GitHubAdapter implements ProviderAdapter {
@@ -10,11 +10,7 @@ export class GitHubAdapter implements ProviderAdapter {
             throw new Error('Missing GitHub Models Personal Access Token.');
         }
 
-        const messages: any[] = [];
-        if (options.systemInstruction) {
-            messages.push({ role: 'system', content: options.systemInstruction });
-        }
-        messages.push({ role: 'user', content: options.prompt });
+        const messages = buildStandardMessages(options);
 
         const isJson = options.config?.responseMimeType === 'application/json';
         const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 30000; // 30s default: fail fast on free-tier stalls instead of hanging for 2 minutes
