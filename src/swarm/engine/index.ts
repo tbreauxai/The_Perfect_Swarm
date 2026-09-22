@@ -1,17 +1,29 @@
+import { sanitizeApiKey, validateProviderKey, resolveProvider, type ProviderResolution } from "./utils.ts";
+export { sanitizeApiKey, validateProviderKey, resolveProvider, type ProviderResolution };
+import { ANALYST_SYSTEM_INSTRUCTION, MANAGER_SYSTEM_INSTRUCTION } from "./constants.ts";
+export { ANALYST_SYSTEM_INSTRUCTION, MANAGER_SYSTEM_INSTRUCTION };
+import { defaultCortexRegistry, getOrCreateDefaultCortex } from "./cortex.ts";
+export { defaultCortexRegistry, getOrCreateDefaultCortex };
+import type { SwarmStagePayload, SwarmWorkflowParams, SwarmWorkflowResult, SwarmFeedbackReport } from "./types.ts";
+export type { SwarmStagePayload, SwarmWorkflowParams, SwarmWorkflowResult, SwarmFeedbackReport };
+import { SwarmEngine } from "./SwarmEngine.ts";
+export { SwarmEngine };
+const safeEnv = typeof process !== "undefined" ? process.env : {} as Record<string, string | undefined>;
+import { executeFastPath } from "./fastPath.ts";
 import { GoogleGenAI } from '@google/genai';
-import { Agent } from './agent.ts';
-import { MemoryCortex } from './memory.ts';
-import { SwarmContext } from './context.ts';
-import type { SwarmEvent, ProviderCredential, Provider, LearnedMemoryEvent, AgentRunConfig, SwarmEngineSettings, AgentConfig } from './types.ts';
-import { profileData, createTokenChunks, SwarmTracer, globalMetricsCollector, SwarmMetricsCollector, globalUnifiedProfiler, type SwarmBaselineReport, type UnifiedSwarmBaselineReport } from './profiler.ts';
-import { ModelRouter, type TaskComplexity } from './router.ts';
-import { AnalysisLifecycle } from './lifecycle.ts';
-import { PayloadCache, globalPayloadCache, globalSemanticCache, type SemanticMatchResult } from './cache.ts';
-import { AnalystResponseSchema, ManagerResponseSchema } from './schemas.ts';
+import { Agent } from '../agent.ts';
+import { MemoryCortex } from '../memory.ts';
+import { SwarmContext } from '../context.ts';
+import type { SwarmEvent, ProviderCredential, Provider, LearnedMemoryEvent, AgentRunConfig, SwarmEngineSettings, AgentConfig } from '../types.ts';
+import { profileData, createTokenChunks, SwarmTracer, globalMetricsCollector, SwarmMetricsCollector, globalUnifiedProfiler, type SwarmBaselineReport, type UnifiedSwarmBaselineReport } from '../profiler.ts';
+import { ModelRouter, type TaskComplexity } from '../router.ts';
+import { AnalysisLifecycle } from '../lifecycle.ts';
+import { PayloadCache, globalPayloadCache, globalSemanticCache, type SemanticMatchResult } from '../cache.ts';
+import { AnalystResponseSchema, ManagerResponseSchema } from '../schemas.ts';
 import { zodToJsonSchema } from 'zod-to-json-schema';
-import { ToolRegistry, globalToolRegistry, type SwarmTool } from './tools/index.ts';
-import { guardAnalystResponse, guardManagerResponse, parseJsonSafe } from './parser.ts';
-import { globalSpecialistRouter, globalTokenBudgetManager, globalSpecialistProfiler, globalNodeCapacityManager, type SpecialistRoutingPlan } from './loadBalancer.ts';
+import { ToolRegistry, globalToolRegistry, type SwarmTool } from '../tools/index.ts';
+import { guardAnalystResponse, guardManagerResponse, parseJsonSafe } from '../parser.ts';
+import { globalSpecialistRouter, globalTokenBudgetManager, globalSpecialistProfiler, globalNodeCapacityManager, type SpecialistRoutingPlan } from '../loadBalancer.ts';
 import {
     globalHierarchicalMessageBus,
     globalClusterTopologyManager,
@@ -20,7 +32,7 @@ import {
     type SpecialistReportInput,
     type SpecialistNodeInput,
     type SwarmTopology
-} from './communication.ts';
+} from '../communication.ts';
 import {
     DependencyGraph,
     ConflictResolver,
@@ -28,21 +40,21 @@ import {
     type SpeculativeTask,
     type SpeculativeExecutionResult,
     type ConflictResolutionStrategy
-} from './speculative.ts';
+} from '../speculative.ts';
 import {
     AgentExperiment,
     type AgentVariantConfig,
     type ExecutionMetrics,
     type ExperimentDecision,
     globalAgentExperimentManager
-} from './experiment.ts';
+} from '../experiment.ts';
 import {
     globalPromptCompressor,
     TokenAwarePromptCompressor,
     TokenEstimator,
     type CompressionOptions,
     type CompressedPromptResult
-} from './compression.ts';
+} from '../compression.ts';
 import {
     AdaptiveTaskScheduler,
     globalTaskScheduler,
@@ -51,7 +63,7 @@ import {
     type SchedulerConfig,
     type TaskPriority,
     type SchedulingStrategy
-} from './scheduler.ts';
+} from '../scheduler.ts';
 import {
     HierarchicalSpecialistTree,
     HierarchicalRouter,
@@ -59,7 +71,7 @@ import {
     type HierarchicalRouteDecision,
     type SpecialistNode,
     type HierarchyMetrics
-} from './hierarchy.ts';
+} from '../hierarchy.ts';
 import {
     TieredCache,
     globalTieredCache,
@@ -67,7 +79,7 @@ import {
     VectorQuantizer,
     type TieredCacheMetrics,
     type TieredLookupResult
-} from './tieredCache.ts';
+} from '../tieredCache.ts';
 import {
     globalFeedbackEngine,
     ContinuousFeedbackEngine,
@@ -75,13 +87,13 @@ import {
     type DriftAlert,
     type RewardSignal,
     type SwarmKnowledgeRepository
-} from './feedback.ts';
+} from '../feedback.ts';
 import {
     globalKnowledgeGraph,
     SharedKnowledgeGraph,
     type KnowledgeGraphNode,
     type KnowledgeGraphEdge
-} from './knowledgeGraph.ts';
+} from '../knowledgeGraph.ts';
 import {
     globalLearningRateManager,
     globalMessageChannel,
@@ -90,7 +102,7 @@ import {
     globalShapedRewardPolicy,
     type TaskDecompositionPlan,
     type Hypothesis
-} from './coordination.ts';
+} from '../coordination.ts';
 import {
     globalDomainSubComputationCache,
     globalTokenWeightProfiler,
@@ -101,268 +113,8 @@ import {
     type EarlyExitDecision,
     type TokenWeightReport,
     type PreFilterResult
-} from './optimization.ts';
+} from '../optimization.ts';
 
-export interface ProviderResolution {
-    key: string;
-    client?: GoogleGenAI;
-}
-
-/**
- * Sanitizes raw API keys by stripping 'Bearer ', 'Token ', redundant whitespace, quotes, and backticks.
- */
-export function sanitizeApiKey(k: string | undefined | null): string {
-    if (!k || typeof k !== 'string') return '';
-    return k
-        .replace(/^(?:Bearer\s*:?|Token\s*:?)+/i, '')
-        .replace(/["'`<>]/g, '')
-        .trim();
-}
-
-/**
- * Validates provider-specific key conventions and throws descriptive errors.
- */
-export function validateProviderKey(provider: Provider, key: string, role: string = 'Agent'): void {
-    if (provider === 'simulated' || provider === 'mock' || provider === 'custom-mock') {
-        return;
-    }
-
-    if (!key) {
-        throw new Error(`Missing API Key for ${role} provider (${provider}). Please configure it in settings.`);
-    }
-
-    if (provider === 'openrouter' && !key.startsWith('sk-or-v1-')) {
-        throw new Error(`Invalid OpenRouter key format for ${role}. OpenRouter keys must begin with 'sk-or-v1-'. If you entered an OpenAI key (sk-...), please obtain a valid OpenRouter key from openrouter.ai/keys.`);
-    }
-}
-
-const safeEnv = typeof process !== 'undefined' ? process.env : {} as Record<string, string | undefined>;
-
-/**
- * Resolves credentials and SDK clients for supported LLM providers from settings or process.env.
- */
-export function resolveProvider(
-    provider: string,
-    settings: SwarmEngineSettings,
-    defaultAi?: GoogleGenAI
-): ProviderResolution {
-    let key = '';
-    let client: GoogleGenAI | undefined = undefined;
-
-    switch (provider) {
-        case 'gemini': {
-            key = sanitizeApiKey(settings?.geminiApiKey || safeEnv.GEMINI_API_KEY);
-            client = key
-                ? new GoogleGenAI({ apiKey: key })
-                : defaultAi;
-            break;
-        }
-        case 'groq': {
-            key = sanitizeApiKey(settings?.groqApiKey || safeEnv.GROQ_API_KEY);
-            break;
-        }
-        case 'openrouter': {
-            key = sanitizeApiKey(settings?.openRouterApiKey || safeEnv.OPENROUTER_API_KEY);
-            break;
-        }
-        case 'mistral': {
-            key = sanitizeApiKey(settings?.mistralApiKey || safeEnv.MISTRAL_API_KEY);
-            break;
-        }
-        case 'github': {
-            key = sanitizeApiKey(settings?.githubToken || safeEnv.GITHUB_TOKEN);
-            break;
-        }
-        default: {
-            const dynamicKey = settings?.[`${provider}ApiKey`] || settings?.[provider] || safeEnv[`${provider.toUpperCase()}_API_KEY`];
-            key = sanitizeApiKey(dynamicKey);
-            break;
-        }
-    }
-
-    return { key, client };
-}
-
-export const ANALYST_SYSTEM_INSTRUCTION = `You are a Data Analysis Specialist in a modular swarm.
-
-When given data:
-1. PLAN: Check the token weight of the input metadata. Identify 2-3 specific dimensions to investigate.
-2. REASON: Analyze differences between current inputs and baselines. Keep internal deductions concise and strictly focused on statistical significance.
-3. SANITIZE: Discard raw values and processing traces.
-4. EMIT: Return output exclusively as a valid JSON object matching the requested schema. Never output conversational pleasantries or repeated inputs.
-
-Output strictly JSON matching this JSON Schema:
-${JSON.stringify(zodToJsonSchema(AnalystResponseSchema as any), null, 2)}
-
-Example of expected output structure:
-{
-  "insights": ["insight 1", "insight 2"],
-  "anomalies": ["anomaly 1"],
-  "summary": "..."
-}`;
-
-export const MANAGER_SYSTEM_INSTRUCTION = `You are the Swarm Orchestrator. Synthesize the reports from your specialized Analyst agents into a single unified Generative UI payload.
-
-Instead of outputting raw text, you MUST output a Generative UI payload.
-Output strict JSON matching this JSON Schema:
-${JSON.stringify(zodToJsonSchema(ManagerResponseSchema as any), null, 2)}
-
-Example of expected output structure:
-{
-  "ui_title": "Dashboard Title",
-  "components": [
-    {
-      "id": "c1",
-      "type": "MetricCard",
-      "props": { "title": "...", "value": "...", "subtitle": "...", "trend": "up" }
-    },
-    {
-      "id": "c2",
-      "type": "InsightList",
-      "props": { "title": "...", "insights": [{ "type": "info", "message": "..." }] }
-    },
-    {
-      "id": "c3",
-      "type": "DataTable",
-      "props": { "title": "...", "columns": [{ "key": "c1", "header": "H1" }], "rows": [{ "c1": "v1" }] }
-    }
-  ]
-}`;
-
-export interface SwarmStagePayload {
-    stage: 'routing' | 'cluster_aggregation' | 'partial_prediction' | 'manager_synthesis' | 'critic_verification' | 'completed';
-    task?: string;
-    digests?: Record<string, ClusterDigest>;
-    partialPrediction?: any;
-    metrics?: any;
-    [key: string]: any;
-}
-
-export interface SwarmWorkflowParams {
-    task: string;
-    data?: string;
-    settings?: SwarmEngineSettings;
-    defaultAi?: GoogleGenAI;
-    enableDeepAnalysis?: boolean;
-    forceFullSwarm?: boolean;
-    /**
-     * Skip all caches (payload, semantic, tiered) and force a fresh LLM run.
-     * Useful for debugging and for verifying behavior after config changes.
-     */
-    bypassCache?: boolean;
-    speculativeParallel?: boolean;
-    maxSpeculativeConcurrency?: number;
-    complexityOverride?: TaskComplexity;
-    onEvent?: (event: SwarmEvent) => void;
-    onMemoryLearned?: (event: LearnedMemoryEvent) => void;
-    onStage?: (stagePayload: SwarmStagePayload) => void;
-    onPartialResult?: (partialResult: any) => void;
-    context?: SwarmContext;
-    cortex?: MemoryCortex;
-    tools?: SwarmTool[] | ToolRegistry;
-}
-
-export interface SwarmWorkflowResult {
-    events: SwarmEvent[];
-    finalAnalysis: any;
-    metrics?: SwarmBaselineReport;
-    experiment?: {
-        experimentId: string;
-        variantId: string;
-        variantName?: string;
-        decision?: ExperimentDecision;
-    };
-    compression?: {
-        originalTokens: number;
-        compressedTokens: number;
-        tokensSaved: number;
-        reductionRatio: number;
-        deduplicatedSegmentsCount: number;
-    };
-    scheduling?: {
-        totalTasks: number;
-        successfulTasks: number;
-        failedTasks: number;
-        totalQueueWaitMs: number;
-        averageQueueWaitMs: number;
-        totalExecutionMs: number;
-        totalBackpressureDelayMs: number;
-        stolenTaskCount: number;
-    };
-    hierarchy?: {
-        treeDepth: number;
-        totalNodes: number;
-        tierCounts: Record<number, number>;
-        delegatedTasksCount: number;
-        escalatedTasksCount: number;
-    };
-    tieredCache?: {
-        hit: boolean;
-        tier?: 'L1' | 'L2' | 'L3';
-        similarity?: number;
-        latencyMs: number;
-        snapshotId?: string;
-        metrics: TieredCacheMetrics;
-    };
-    unifiedBaselines?: UnifiedSwarmBaselineReport;
-    feedback?: SwarmFeedbackReport;
-    coordination?: {
-        knowledgeGraphVersion: number;
-        totalNodes: number;
-        totalEdges: number;
-        hypothesesCount: number;
-        validatedHypothesesCount: number;
-        taskDecomposition?: TaskDecompositionPlan;
-        agentLearningRates: Record<string, number>;
-        shapedReward?: {
-            shapedReward: number;
-            components: {
-                extrinsic: number;
-                noveltyBonus: number;
-                redundancyPenalty: number;
-            };
-        };
-    };
-    optimization?: {
-        earlyExit: boolean;
-        tier: 'tier1_approx' | 'tier2_refined';
-        latencySavedMs: number;
-        partialResultEmitted: boolean;
-        subcomputationsCached?: number;
-        tokenWeightRatio?: number;
-        tokensSaved?: number;
-    };
-}
-
-export interface SwarmFeedbackReport {
-    reward: RewardSignal;
-    tunedParameters: TunableParameters;
-    driftAlerts: DriftAlert[];
-    outcomeId: string;
-    policyUpdated: boolean;
-}
-
-/**
- * Process-level singleton registry for in-memory cortex instances per appId.
- * Preserves continuous vector learning across sequential workflow runs in the same runtime.
- */
-export const defaultCortexRegistry = new Map<string, MemoryCortex>();
-
-export function getOrCreateDefaultCortex(appId: string, aiClient?: GoogleGenAI): MemoryCortex {
-    if (!defaultCortexRegistry.has(appId)) {
-        defaultCortexRegistry.set(appId, new MemoryCortex({
-            defaultAppId: appId,
-            aiClient
-        }));
-    }
-    return defaultCortexRegistry.get(appId)!;
-}
-
-/**
- * Executes the complete autonomous swarm analysis lifecycle:
- * Fast-path pre-filtering -> Zero-drift caching -> Token budgeting -> Qdrant continuous learning retrieval
- * -> Multi-analyst parallel execution -> Manager synthesis & Critic verification -> Memory reinforcement.
- */
 export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise<SwarmWorkflowResult> {
     const workflowStartTime = Date.now();
     const { task, data, settings, defaultAi, enableDeepAnalysis, complexityOverride, onEvent } = params;
@@ -912,270 +664,9 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     const coordinationEnabled = coordinationSettings?.enabled !== false;
 
     if (fastPathDecision.eligible && analysts.length > 0) {
-        const fastAnalyst = analysts[0];
-        context.addEvent({
-            agentRole: 'Model Router',
-            action: 'Fast-Path Short-Circuit Activated',
-            modelName: 'Local/TypeScript',
-            prompt: `Short-circuiting execution: ${fastPathDecision.reason}`,
-            output: {
-                bypassed: ['Data Profiler', 'Token Budgeter / Chunker', 'Qdrant Vector Cortex', 'Multi-Analyst Fanout', 'Critic Verification Loop'],
-                dispatchedTo: fastAnalyst.role,
-                estimatedTokens: fastPathDecision.estimatedTokens
-            },
-            durationMs: 0
-        });
-
-        params.onStage?.({
-            stage: 'manager_synthesis',
-            task
-        });
-
-        const fastInstruction = activeVariant?.systemPrompts?.[fastAnalyst.id || fastAnalyst.role]
-            || activeVariant?.systemPrompts?.[fastAnalyst.role]
-            || ANALYST_SYSTEM_INSTRUCTION;
-        fastAnalyst.setSystemInstruction(fastInstruction);
-        const fastPrompt = `Task: ${task}\nData:\n${data || "(No additional data payload)"}`;
-
-        let effectiveFastPrompt = fastPrompt;
-        if (settings?.compressionSettings?.enabled) {
-            const comp = globalPromptCompressor.compress(fastPrompt, {
-                targetReductionRatio: settings.compressionSettings.targetReductionRatio,
-                similarityThreshold: settings.compressionSettings.similarityThreshold,
-                maxTokens: settings.compressionSettings.maxTokens,
-                preserveAnomalies: settings.compressionSettings.preserveAnomalies,
-                stripBoilerplate: settings.compressionSettings.stripBoilerplate
-            });
-            if (comp.tokensSaved > 0) {
-                effectiveFastPrompt = comp.compressedText;
-                workflowOriginalPromptTokens += comp.originalTokens;
-                workflowCompressedPromptTokens += comp.compressedTokens;
-                workflowPromptTokensSaved += comp.tokensSaved;
-                workflowDeduplicatedCount += comp.deduplicatedSegmentsCount;
-                context.addEvent({
-                    agentRole: 'Prompt Compression Engine',
-                    action: 'Prompt Compressed',
-                    modelName: 'Local/PromptCompressor',
-                    prompt: `Compressed fast-path prompt: ${comp.originalTokens} -> ${comp.compressedTokens} tokens (${Math.round(comp.reductionRatio * 100)}% reduction)`,
-                    output: comp,
-                    durationMs: comp.processingTimeMs
-                });
-            }
-        }
-
-        try {
-            const rawOutput = await fastAnalyst.run(effectiveFastPrompt, context, {
-                responseMimeType: "application/json",
-                ...activeVariant?.parameters
-            });
-            const parsed = AnalystResponseSchema.safeParse(rawOutput);
-            if (parsed.success) {
-                finalAnalysis = {
-                    ui_title: `Fast Analysis: ${task.substring(0, 40)}`,
-                    components: [
-                        {
-                            id: 'fast-summary',
-                            type: 'InsightList',
-                            props: {
-                                title: 'Key Insights',
-                                insights: parsed.data.insights.map((i: string) => ({ type: 'info', message: i }))
-                            }
-                        }
-                    ]
-                };
-            } else {
-                finalAnalysis = {
-                    ui_title: `Fast Analysis: ${task.substring(0, 40)}`,
-                    components: [
-                        {
-                            id: 'fast-summary',
-                            type: 'InsightList',
-                            props: {
-                                title: 'Summary',
-                                insights: [{ type: 'info', message: typeof rawOutput === 'string' ? rawOutput : JSON.stringify(rawOutput) }]
-                            }
-                        }
-                    ]
-                };
-            }
-
-            if (finalAnalysis && !finalAnalysis.ui_title?.includes("Error")) {
-                globalPayloadCache.set(cacheKey, finalAnalysis);
-                globalSemanticCache.set(task, finalAnalysis, { data, configVersion: agentConfigVersion });
-                if (memoryCortex) {
-                    const content = `Task: ${task}\nResult: ${finalAnalysis.ui_title || 'Fast analysis complete'}`;
-                    const meta = {
-                        domain: 'analysis',
-                        agentRole: fastAnalyst.role,
-                        complexity: 'instant' as const,
-                        verified: true,
-                        appId: targetAppId,
-                        qualityRating: 0.90,
-                        feedback: 'Fast-path short-circuit: validated instant-tier heuristic',
-                        attempts: 1,
-                        task,
-                        fastPath: true
-                    };
-                    try {
-                        const storedId = await memoryCortex.store(content, meta);
-                        if (params.onMemoryLearned) {
-                            params.onMemoryLearned({
-                                appId: targetAppId,
-                                content,
-                                id: storedId,
-                                metadata: meta
-                            });
-                        }
-                    } catch (err: any) {
-                        console.warn(`[Fast-Path] Memory storage failed:`, err);
-                    }
-                }
-            }
-
-            const workflowDurationMs = Date.now() - workflowStartTime;
-            globalMetricsCollector.recordTaskExecution({
-                success: true,
-                durationMs: workflowDurationMs,
-                agentRole: fastAnalyst.role,
-                provider: fastAnalyst.provider
-            });
-            const metrics = globalMetricsCollector.getBaselineReport();
-            context.addEvent({
-                agentRole: 'System Profiler',
-                action: 'Workflow Metrics Baseline',
-                modelName: 'Local/MetricsCollector',
-                prompt: `Fast-path baseline recorded: completionRate=${metrics.overallCompletionRatePercent}%, latency=${workflowDurationMs}ms, totalTasks=${metrics.totalTasks}`,
-                output: metrics,
-                durationMs: workflowDurationMs
-            });
-
-            params.onStage?.({
-                stage: 'completed',
-                task,
-                finalAnalysis
-            });
-
-            let fastPathExpDecision: ExperimentDecision | undefined;
-            if (activeExperiment && activeVariant && settings?.experimentSettings?.autoRecordMetrics !== false) {
-                const execMetrics: ExecutionMetrics = {
-                    durationMs: workflowDurationMs,
-                    rlaifScore: 0.90,
-                    tokensTotal: fastPathDecision.estimatedTokens || 500,
-                    error: false,
-                    insightsCount: Array.isArray(finalAnalysis?.components?.[0]?.props?.insights)
-                        ? finalAnalysis.components[0].props.insights.length
-                        : 1
-                };
-                fastPathExpDecision = activeExperiment.recordOutcome(activeVariant.variantId, execMetrics);
-                context.addEvent({
-                    agentRole: 'A/B Testing Engine',
-                    action: fastPathExpDecision.action === 'promoted'
-                        ? 'Agent Configuration Promoted'
-                        : (fastPathExpDecision.action === 'circuit_breaker_rollback'
-                            ? 'Circuit Breaker Rollback'
-                            : 'Agent Experiment Evaluated'),
-                    modelName: 'Local/ExperimentManager',
-                    prompt: `Fast-path evaluation: variant='${activeVariant.variantId}', action='${fastPathExpDecision.action}', reason=${fastPathExpDecision.reason}`,
-                    output: {
-                        experimentId: activeExperiment.id,
-                        variantId: activeVariant.variantId,
-                        metrics: execMetrics,
-                        decision: fastPathExpDecision,
-                        performance: activeExperiment.getPerformance(activeVariant.variantId)
-                    },
-                    durationMs: 0
-                });
-            }
-
-            if (tieredCacheEnabled && finalAnalysis) {
-                globalTieredCache.set(cacheQuery, finalAnalysis, cacheQuery);
-            }
-
-            const profilingSettings = settings?.profilingSettings;
-            const profilingEnabled = profilingSettings?.enabled !== false;
-            if (profilingEnabled) {
-                globalUnifiedProfiler.recordWorkflowRun({
-                    durationMs: workflowDurationMs,
-                    cache: tieredCacheEnabled ? { misses: 1 } : undefined,
-                    compression: workflowOriginalPromptTokens > 0 ? {
-                        totalOriginalTokens: workflowOriginalPromptTokens,
-                        totalCompressedTokens: workflowCompressedPromptTokens,
-                        totalTokensSaved: workflowPromptTokensSaved,
-                        deduplicatedSegmentsCount: workflowDeduplicatedCount
-                    } : undefined
-                });
-            }
-
-            const feedbackEnabled = settings?.feedbackSettings?.enabled !== false;
-            let fastPathFeedbackReport: SwarmFeedbackReport | undefined;
-            if (feedbackEnabled) {
-                try {
-                    const fbResult = await globalFeedbackEngine.processFeedback({
-                        workflowId: (context as any).id || `wf-${Date.now()}`,
-                        task,
-                        appId: targetAppId,
-                        durationMs: workflowDurationMs,
-                        targetTier: 'instant',
-                        tokenSavings: workflowPromptTokensSaved,
-                        tokensConsumed: 100,
-                        qualityScore: 0.95,
-                        accuracyScore: 0.98,
-                        errorCount: 0,
-                        finalInsightSnippet: typeof finalAnalysis === 'string' ? finalAnalysis.slice(0, 150) : (finalAnalysis?.ui_title || JSON.stringify(finalAnalysis).slice(0, 150)),
-                        inputData: data
-                    });
-                    fastPathFeedbackReport = {
-                        reward: fbResult.reward,
-                        tunedParameters: fbResult.tunedParameters,
-                        driftAlerts: fbResult.driftAlerts,
-                        outcomeId: fbResult.outcomeId,
-                        policyUpdated: fbResult.policyUpdated
-                    };
-                } catch (fbErr: any) {
-                    console.warn('[Fast-Path] Feedback processing failed:', fbErr);
-                }
-            }
-
-            return {
-                events: context.events,
-                finalAnalysis,
-                metrics,
-                experiment: activeExperiment && activeVariant ? {
-                    experimentId: activeExperiment.id,
-                    variantId: activeVariant.variantId,
-                    variantName: activeVariant.name,
-                    decision: fastPathExpDecision
-                } : undefined,
-                compression: workflowOriginalPromptTokens > 0 ? {
-                    originalTokens: workflowOriginalPromptTokens,
-                    compressedTokens: workflowCompressedPromptTokens,
-                    tokensSaved: workflowPromptTokensSaved,
-                    reductionRatio: Math.round((workflowPromptTokensSaved / workflowOriginalPromptTokens) * 1000) / 1000,
-                    deduplicatedSegmentsCount: workflowDeduplicatedCount
-                } : undefined,
-                tieredCache: tieredCacheEnabled ? {
-                    hit: false,
-                    latencyMs: workflowDurationMs,
-                    metrics: globalTieredCache.getMetrics()
-                } : undefined,
-                unifiedBaselines: profilingEnabled ? globalUnifiedProfiler.getUnifiedBaselineReport() : undefined,
-                feedback: fastPathFeedbackReport,
-                coordination: coordinationEnabled ? {
-                    knowledgeGraphVersion: globalKnowledgeGraph.getVersion(),
-                    totalNodes: globalKnowledgeGraph.getStats().totalNodes,
-                    totalEdges: globalKnowledgeGraph.getStats().totalEdges,
-                    hypothesesCount: globalHypothesisLayer.getHypotheses().length,
-                    validatedHypothesesCount: globalHypothesisLayer.getHypotheses('validated').length,
-                    agentLearningRates: Object.fromEntries(
-                        globalLearningRateManager.getAllStates().map(s => [s.agentId, s.learningRate])
-                    )
-                } : undefined
-            };
-        } catch (err: any) {
-            console.warn(`[Fast-Path] Short-circuit failed, falling back to full swarm pipeline:`, err);
-        }
+        const fastResult = await executeFastPath(fastPathDecision, analysts, context, params, settings, activeVariant, activeExperiment, cacheKey, cacheQuery, agentConfigVersion, targetAppId, memoryCortex, workflowStartTime, tieredCacheEnabled, coordinationEnabled);
+        if (fastResult) return fastResult;
     }
-
     let latestClusterDigests: Record<string, ClusterDigest> | undefined;
     let workflowLifecycleResult: any = null;
     let workflowTotalTokens: number = 0;
@@ -2606,44 +2097,3 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
 /**
  * Headless Swarm Engine object encapsulating configuration and execution.
  */
-export class SwarmEngine {
-    private defaultSettings: SwarmEngineSettings;
-    private defaultAi?: GoogleGenAI;
-    private defaultCortex?: MemoryCortex;
-    private defaultOnMemoryLearned?: (event: LearnedMemoryEvent) => void;
-
-    constructor(
-        configOrSettings: SwarmEngineSettings = {},
-        defaultAi?: GoogleGenAI,
-        defaultCortex?: MemoryCortex
-    ) {
-        if (configOrSettings && typeof configOrSettings === 'object' && ('cortex' in configOrSettings || 'onMemoryLearned' in configOrSettings || 'defaultCortex' in configOrSettings)) {
-            this.defaultSettings = configOrSettings.settings || {};
-            this.defaultAi = configOrSettings.defaultAi || defaultAi;
-            this.defaultCortex = configOrSettings.cortex || configOrSettings.defaultCortex || defaultCortex;
-            this.defaultOnMemoryLearned = configOrSettings.onMemoryLearned;
-        } else {
-            this.defaultSettings = configOrSettings;
-            this.defaultAi = defaultAi;
-            this.defaultCortex = defaultCortex;
-        }
-    }
-
-    async execute(params: Omit<SwarmWorkflowParams, 'settings' | 'defaultAi'> & { settings?: SwarmEngineSettings; defaultAi?: GoogleGenAI; cortex?: MemoryCortex; onMemoryLearned?: (event: LearnedMemoryEvent) => void }): Promise<SwarmWorkflowResult> {
-        return executeSwarmWorkflow({
-            ...params,
-            settings: { ...this.defaultSettings, ...params.settings },
-            defaultAi: params.defaultAi || this.defaultAi,
-            cortex: params.cortex || this.defaultCortex,
-            onMemoryLearned: params.onMemoryLearned || this.defaultOnMemoryLearned
-        });
-    }
-
-    async executeWorkflow(params: Omit<SwarmWorkflowParams, 'settings' | 'defaultAi'> & { settings?: SwarmEngineSettings; defaultAi?: GoogleGenAI; cortex?: MemoryCortex; onMemoryLearned?: (event: LearnedMemoryEvent) => void }): Promise<SwarmWorkflowResult> {
-        return this.execute(params);
-    }
-
-    static execute(params: SwarmWorkflowParams): Promise<SwarmWorkflowResult> {
-        return executeSwarmWorkflow(params);
-    }
-}

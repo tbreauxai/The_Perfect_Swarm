@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { executeSwarmWorkflow, SwarmEngine } from './engine.ts';
+import { executeSwarmWorkflow, SwarmEngine } from './engine/index.ts';
 import { ProviderRegistry } from './providers/registry.ts';
 import { globalTieredCache } from './tieredCache.ts';
 

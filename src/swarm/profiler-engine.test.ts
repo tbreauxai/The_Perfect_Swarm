@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { executeSwarmWorkflow } from './engine';
+import { executeSwarmWorkflow } from './engine/index.ts';
 import { ProviderRegistry } from './providers/registry';
 import { globalUnifiedProfiler, globalMetricsCollector, PerformanceAnomalyDetector } from './profiler';
 import { globalTieredCache } from './tieredCache';
