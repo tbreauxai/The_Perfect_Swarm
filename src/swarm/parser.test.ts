@@ -9,6 +9,7 @@ import {
 } from './parser.ts';
 import { z } from 'zod';
 
+
 describe('parseJsonSafe', () => {
     it('returns the object directly if the input is an object', () => {
         const input = { a: 1, b: 'two' };
@@ -161,22 +162,24 @@ I should return a JSON
     });
 });
 
+
 describe('repairAndValidate', () => {
     const TestSchema = z.object({
         name: z.string(),
         age: z.number(),
-        insights: z.array(z.string()).optional()
+insights: z.array(z.string()).optional()
     });
 
     it('returns success on valid input', () => {
         const input = { name: 'John', age: 30 };
+
         const result = repairAndValidate(input, TestSchema);
         expect(result.success).toBe(true);
         expect(result.data).toEqual(input);
         expect(result.repaired).toBe(false);
     });
 
-    it('auto-coerces string with newlines to array for specific fields', () => {
+it('auto-coerces string with newlines to array for specific fields', () => {
         const input = { name: 'John', age: 30, insights: '- Insight 1\n* Insight 2' };
         const result = repairAndValidate(input, TestSchema);
         expect(result.success).toBe(true);
@@ -302,5 +305,6 @@ describe('guardVerificationResult', () => {
         const result = guardVerificationResult('I am not sure what to say about this.');
         expect(result.pass).toBe(false);
         expect(result.feedback).toContain('Ambiguous critic output could not be verified');
+
     });
 });

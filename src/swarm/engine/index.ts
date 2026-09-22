@@ -115,6 +115,8 @@ import {
     type PreFilterResult
 } from '../optimization.ts';
 
+const ALL_PROVIDERS: Provider[] = ['gemini', 'openrouter', 'groq', 'github', 'mistral'];
+
 export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise<SwarmWorkflowResult> {
     const workflowStartTime = Date.now();
     const { task, data, settings, defaultAi, enableDeepAnalysis, complexityOverride, onEvent } = params;
@@ -565,8 +567,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     }
     const availableFallbacks: ProviderCredential[] = [];
     if (!settings?.disableFallback) {
-        const allProviders: Provider[] = ['gemini', 'openrouter', 'groq', 'github', 'mistral'];
-        for (const p of allProviders) {
+        for (const p of ALL_PROVIDERS) {
             const { key, client } = resolveProvider(p, settings, defaultAi);
             if (key) {
                 const userConfiguredAgent = rawAgents.find((a: AgentConfig) => a.provider === p && a.model);
@@ -1291,28 +1292,29 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                         });
                     }
                 } else {
-                    // Execute routed chunk assignments sequentially
-                    for (let i = 0; i < chunks.length; i++) {
-                        const chunk = chunks[i];
+                    // Execute routed chunk assignments in parallel
+                    const usePool = optimizationEnabled && (optSettings?.workerPoolConcurrency ?? 4) > 1;
+
+                    const chunkTasks = chunks.map((chunk, i) => {
                         const assignment = routingPlan.assignments.find(asn => asn.chunkIndex === i);
                         const assignedAnalyst = analysts.find(a => a.role === assignment?.agentRole) || analysts[i % analysts.length];
                         const analystIdx = analysts.indexOf(assignedAnalyst);
+                        return { chunk, i, assignedAnalyst, analystIdx };
+                    });
 
-                        const resData = await executeAnalyst(assignedAnalyst, chunk, i);
-                        if (analystIdx >= 0) {
-                            allAnalystReports[analystIdx].push(resData);
-                        }
+                    const chunkReports = usePool
+                        ? await globalPredictionWorkerPool.submitBatch(
+                            chunkTasks.map(task => () => executeAnalyst(task.assignedAnalyst, task.chunk, task.i))
+                        )
+                        : await Promise.all(
+                            chunkTasks.map(task => executeAnalyst(task.assignedAnalyst, task.chunk, task.i))
+                        );
 
-                        if (i < chunks.length - 1) {
-                            context.addEvent({
-                                agentRole: 'System Orchestrator',
-                                action: 'Batch Delay',
-                                modelName: 'Local/TypeScript',
-                                prompt: `Rate limit prevention: Waiting 2s before processing chunk ${i + 2}/${chunks.length}...`
-                            });
-                            await new Promise(resolve => setTimeout(resolve, 2000));
+                    chunkTasks.forEach((task, index) => {
+                        if (task.analystIdx >= 0) {
+                            allAnalystReports[task.analystIdx].push(chunkReports[index]);
                         }
-                    }
+                    });
                 }
             } else {
                 // Single chunk: execute all analysts in parallel (full domain perspective via worker pool)
