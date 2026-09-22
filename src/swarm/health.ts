@@ -426,11 +426,12 @@ export class TwoTierModelHealthChecker {
         if (!targets || targets.length === 0) return results;
 
         const maxConcurrency = Math.max(1, options?.maxConcurrency ?? 8);
-        const queue = [...targets];
+        let currentIndex = 0;
 
         const worker = async () => {
-            while (queue.length > 0) {
-                const target = queue.shift();
+            while (currentIndex < targets.length) {
+                const index = currentIndex++;
+                const target = targets[index];
                 if (!target) break;
                 const status = await this.checkModel(target, options);
                 const key = this.circuitBreaker.getKey(target.provider, target.modelId);
