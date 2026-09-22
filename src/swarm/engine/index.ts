@@ -115,6 +115,8 @@ import {
     type PreFilterResult
 } from '../optimization.ts';
 
+const ALL_PROVIDERS: Provider[] = ['gemini', 'openrouter', 'groq', 'github', 'mistral'];
+
 export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise<SwarmWorkflowResult> {
     const workflowStartTime = Date.now();
     const { task, data, settings, defaultAi, enableDeepAnalysis, complexityOverride, onEvent } = params;
@@ -565,8 +567,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     }
     const availableFallbacks: ProviderCredential[] = [];
     if (!settings?.disableFallback) {
-        const allProviders: Provider[] = ['gemini', 'openrouter', 'groq', 'github', 'mistral'];
-        for (const p of allProviders) {
+        for (const p of ALL_PROVIDERS) {
             const { key, client } = resolveProvider(p, settings, defaultAi);
             if (key) {
                 const userConfiguredAgent = rawAgents.find((a: AgentConfig) => a.provider === p && a.model);
