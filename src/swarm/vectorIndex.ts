@@ -454,18 +454,18 @@ export class VpTreeIndex<T = any> implements VectorIndex<T> {
             }
             if (dist > maxDistance) return;
 
-            // Insertion sort into results array
-            let inserted = false;
-            for (let i = 0; i < results.length; i++) {
-                if (dist < results[i].distance) {
-                    results.splice(i, 0, { item, distance: dist });
-                    inserted = true;
-                    break;
+            // Binary search to find insertion index
+            let low = 0;
+            let high = results.length;
+            while (low < high) {
+                const mid = (low + high) >>> 1;
+                if (results[mid].distance > dist) {
+                    high = mid;
+                } else {
+                    low = mid + 1;
                 }
             }
-            if (!inserted && results.length < k) {
-                results.push({ item, distance: dist });
-            }
+            results.splice(low, 0, { item, distance: dist });
 
             if (results.length > k) {
                 results.pop();

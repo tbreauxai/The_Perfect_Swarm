@@ -135,7 +135,14 @@ export const statsSummaryTool: SwarmTool<
 
         const sorted = [...valid].sort((a, b) => a - b);
         const count = sorted.length;
-        const sum = sorted.reduce((acc, val) => acc + val, 0);
+        let sum = 0;
+        let sumSq = 0;
+        for (let i = 0; i < count; i++) {
+            const val = sorted[i];
+            sum += val;
+            sumSq += val * val;
+        }
+
         const mean = sum / count;
         const min = sorted[0];
         const max = sorted[sorted.length - 1];
@@ -148,7 +155,7 @@ export const statsSummaryTool: SwarmTool<
             median = sorted[mid];
         }
 
-        const variance = sorted.reduce((acc, val) => acc + Math.pow(val - mean, 2), 0) / count;
+        const variance = Math.max(0, (sumSq / count) - (mean * mean));
         const stdDev = Math.sqrt(variance);
 
         return {
@@ -390,24 +397,35 @@ export const dataFilterTool: SwarmTool<
  * Computes Levenshtein edit distance between two strings.
  */
 export function computeLevenshteinDistance(a: string, b: string): number {
-    const matrix: number[][] = [];
-    for (let i = 0; i <= b.length; i++) matrix[i] = [i];
-    for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
+    if (a === b) return 0;
+    if (a.length === 0) return b.length;
+    if (b.length === 0) return a.length;
 
-    for (let i = 1; i <= b.length; i++) {
-        for (let j = 1; j <= a.length; j++) {
-            if (b.charAt(i - 1) === a.charAt(j - 1)) {
-                matrix[i][j] = matrix[i - 1][j - 1];
-            } else {
-                matrix[i][j] = Math.min(
-                    matrix[i - 1][j - 1] + 1,
-                    matrix[i][j - 1] + 1,
-                    matrix[i - 1][j] + 1
-                );
-            }
-        }
+    let v0 = new Int32Array(b.length + 1);
+    let v1 = new Int32Array(b.length + 1);
+
+    for (let i = 0; i <= b.length; i++) {
+        v0[i] = i;
     }
-    return matrix[b.length][a.length];
+
+    for (let i = 0; i < a.length; i++) {
+        v1[0] = i + 1;
+
+        for (let j = 0; j < b.length; j++) {
+            const cost = a[i] === b[j] ? 0 : 1;
+            v1[j + 1] = Math.min(
+                v1[j] + 1,
+                v0[j + 1] + 1,
+                v0[j] + cost
+            );
+        }
+
+        const temp = v0;
+        v0 = v1;
+        v1 = temp;
+    }
+
+    return v0[b.length];
 }
 
 /**
@@ -631,11 +649,19 @@ export const varianceTool: SwarmTool<
             return { variance: 0 }; // Cannot calculate sample variance for size 1
         }
 
-        const mean = valid.reduce((acc, val) => acc + val, 0) / count;
-        const sumSq = valid.reduce((acc, val) => acc + Math.pow(val - mean, 2), 0);
+        let sum = 0;
+        let sumSqRaw = 0;
+        for (let i = 0; i < count; i++) {
+            const val = valid[i];
+            sum += val;
+            sumSqRaw += val * val;
+        }
+
+        const mean = sum / count;
+        const sumSq = sumSqRaw - (sum * sum / count);
 
         const divisor = sample ? count - 1 : count;
-        const variance = sumSq / divisor;
+        const variance = Math.max(0, sumSq / divisor);
 
         return { variance: Number(variance.toFixed(4)) };
     }
