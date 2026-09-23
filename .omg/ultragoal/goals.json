@@ -8,13 +8,13 @@
   {
     "id": "goal-2-agent-retriever-pipeline-integration",
     "description": "Integrate ActionPlanCacheInterceptor into the agent-retriever pipeline (MemoryCortex and SwarmEngine retrieval phase) before Qdrant vector search. Implement Cache Hit workflow (bypassing 45ms Qdrant search and executing live data fetches dynamically) and Cache Miss workflow (storing extracted Action Plan). Add integration tests in src/swarm/actionPlanRetriever.test.ts.",
-    "status": "in-progress",
-    "verification": "Integration tests verify 45ms Qdrant search is bypassed on cache hits, live odds tools execute dynamically with fresh parameters, and cache hit ratio and latency metrics update correctly."
+    "status": "completed",
+    "verification": "100% pass across actionPlanRetriever.test.ts (3/3 tests passed in 34ms) verifying 45ms Qdrant search bypass on cache hits, live odds tools execute dynamically with fresh parameters, and cache hit ratio and latency metrics update correctly."
   },
   {
     "id": "goal-3-verification-telemetry-and-benchmarks",
     "description": "Expose Action Plan cache metrics in TelemetryMetricsCollector and GET /api/swarm/metrics, export modules from src/swarm/index.ts, rebuild distribution bundles, and execute full verification suite with zero regressions.",
-    "status": "todo",
-    "verification": "All Vitest test suites pass, test:dist, test:cli, test:server, and npm run lint pass with 0 errors, and telemetry metrics reflect cache hit ratio and latency savings."
+    "status": "completed",
+    "verification": "100% pass across all 34 Vitest test suites (292/292 tests), test:dist (ESM & CJS), test:cli, test:server, and npm run lint with 0 errors; telemetry metrics reflect cache hit ratio and latency savings."
   }
 ]

@@ -10,6 +10,7 @@ import { globalMetricsCollector } from './profiler.ts';
 import { globalTelemetryCollector, createTelemetryMiddleware } from './telemetry.ts';
 import { globalPayloadCache, globalSemanticCache } from './cache.ts';
 import { globalTieredCache } from './tieredCache.ts';
+import { globalActionPlanCache } from './actionPlanCache.ts';
 
 export interface SwarmServerOptions {
     port?: number;
@@ -177,9 +178,10 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
         const payloadStats = globalPayloadCache.getStats();
         const semanticStats = globalSemanticCache.getStats();
         const tieredMetrics = globalTieredCache.getMetrics();
+        const actionPlanStats = globalActionPlanCache.getStats();
         
-        const totalHits = payloadStats.hits + semanticStats.hits + tieredMetrics.l1Hits + tieredMetrics.l2Hits + tieredMetrics.l3Hits;
-        const totalMisses = payloadStats.misses + semanticStats.misses + tieredMetrics.misses;
+        const totalHits = payloadStats.hits + semanticStats.hits + tieredMetrics.l1Hits + tieredMetrics.l2Hits + tieredMetrics.l3Hits + actionPlanStats.hits;
+        const totalMisses = payloadStats.misses + semanticStats.misses + tieredMetrics.misses + actionPlanStats.misses;
         globalTelemetryCollector.syncCacheMetrics(totalHits, totalMisses);
 
         return c.json(globalTelemetryCollector.getSnapshot());

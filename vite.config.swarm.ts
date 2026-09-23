@@ -31,7 +31,8 @@ export default defineConfig({
         knowledgeGraph: path.resolve(__dirname, 'src/swarm/knowledgeGraph.ts'),
         coordination: path.resolve(__dirname, 'src/swarm/coordination.ts'),
         health: path.resolve(__dirname, 'src/swarm/health.ts'),
-        optimization: path.resolve(__dirname, 'src/swarm/optimization.ts')
+        optimization: path.resolve(__dirname, 'src/swarm/optimization.ts'),
+        actionPlanCache: path.resolve(__dirname, 'src/swarm/actionPlanCache.ts')
       },
       formats: ['es', 'cjs'],
       fileName: (format, entryName) => `${entryName}.${format === 'es' ? 'js' : 'cjs'}`

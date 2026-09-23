@@ -170,6 +170,12 @@
       "import": "./dist/swarm/optimization.js",
       "require": "./dist/swarm/optimization.cjs",
       "default": "./src/swarm/optimization.ts"
+    },
+    "./actionPlanCache": {
+      "types": "./dist/swarm/actionPlanCache.d.ts",
+      "import": "./dist/swarm/actionPlanCache.js",
+      "require": "./dist/swarm/actionPlanCache.cjs",
+      "default": "./src/swarm/actionPlanCache.ts"
     }
   },
   "scripts": {

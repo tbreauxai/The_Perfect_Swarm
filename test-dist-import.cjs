@@ -337,6 +337,22 @@ async function testCjsImport() {
     }
     console.log('✓ CJS optimization subpath, DomainSubComputationCache, and PredictionWorkerPool verified');
 
+    const actionPlanCjs = require('./dist/swarm/actionPlanCache.cjs');
+    if (!actionPlanCjs.ActionPlanCacheInterceptor || !actionPlanCjs.globalActionPlanCache) {
+        throw new Error('CommonJS actionPlanCache exports missing');
+    }
+    const cjsPlanCache = new actionPlanCjs.ActionPlanCacheInterceptor({ similarityThreshold: 0.96 });
+    cjsPlanCache.set([1, 0, 0, 0], {
+        intent: 'cjs_odds_test',
+        entities: { odds: 1.85 },
+        toolExecutionSteps: [{ tool: 'probability_odds_converter', parameters: { odds: 1.85 } }]
+    });
+    const cjsPlanRes = cjsPlanCache.lookup([1, 0, 0, 0]);
+    if (!cjsPlanRes.hit || cjsPlanRes.actionPlan.intent !== 'cjs_odds_test') {
+        throw new Error('CommonJS ActionPlanCache lookup failed');
+    }
+    console.log('✓ CJS actionPlanCache subpath, ActionPlanCacheInterceptor, and globalActionPlanCache verified');
+
     console.log('✓ ALL COMMONJS SWARM DISTRIBUTION TESTS PASSED!\n');
 }
 

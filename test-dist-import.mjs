@@ -86,6 +86,10 @@ import {
     globalDomainSubComputationCache as globalDomainCacheFromSubpath
 } from './dist/swarm/optimization.js';
 import {
+    ActionPlanCacheInterceptor as ActionPlanCacheFromSubpath,
+    globalActionPlanCache as globalActionPlanCacheFromSubpath
+} from './dist/swarm/actionPlanCache.js';
+import {
     TwoTierModelHealthChecker as CheckerFromSubpath,
     ModelCircuitBreaker as BreakerFromSubpath,
     ModelHealthCache as CacheFromSubpath,
@@ -715,6 +719,22 @@ async function runDistVerification() {
         throw new Error('Compiled TieredPredictionEngine failed');
     }
     console.log('✓ Compiled Optimization module subpath, DomainCache, WorkerPool, and TieredEngine verified');
+
+    // 19. Verify compiled ActionPlanCache Module
+    if (!ActionPlanCacheFromSubpath || !globalActionPlanCacheFromSubpath) {
+        throw new Error('Compiled ActionPlanCache module exports missing');
+    }
+    const distPlanCache = new ActionPlanCacheFromSubpath({ similarityThreshold: 0.96 });
+    distPlanCache.set([1, 0, 0, 0], {
+        intent: 'test_dist_odds',
+        entities: { odds: 2.10 },
+        toolExecutionSteps: [{ tool: 'probability_odds_converter', parameters: { odds: 2.10 } }]
+    });
+    const distLookup = distPlanCache.lookup([1, 0, 0, 0]);
+    if (!distLookup.hit || distLookup.actionPlan.intent !== 'test_dist_odds') {
+        throw new Error('Compiled ActionPlanCache lookup failed');
+    }
+    console.log('✓ Compiled ActionPlanCache module subpath, ActionPlanCacheInterceptor, and globalActionPlanCache verified');
 
     console.log('\n✓ ALL COMPILED SWARM DISTRIBUTION BUNDLE TESTS PASSED SUCCESSFULLY!\n');
 }

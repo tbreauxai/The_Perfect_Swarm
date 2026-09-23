@@ -40,4 +40,5 @@ export * from './knowledgeGraph.ts';
 export * from './coordination.ts';
 export * from './health.ts';
 export * from './optimization.ts';
+export * from './actionPlanCache.ts';
 
