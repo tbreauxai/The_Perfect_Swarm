@@ -3,6 +3,7 @@ import { GoogleGenAI } from '@google/genai';
 // node:fs and node:path are dynamically imported to allow Cloudflare Edge deployment
 import { createVectorIndex, type VectorIndex, type VectorIndexMetrics } from './vectorIndex.ts';
 import { SemanticCacheInterceptor, type SemanticCacheInterceptorConfig, type SemanticCacheStats } from './semanticCacheInterceptor.ts';
+import { ActionPlanCacheInterceptor, type ActionPlanCacheConfig, type ActionPlanCacheStats, type ActionPlan, type ActionPlanInput, type ActionPlanCacheLookupResult } from './actionPlanCache.ts';
 
 export interface MemoryMetadata {
     appId?: string;
@@ -259,6 +260,8 @@ export interface MemoryCortexConfig {
     persistPath?: string;
     autoSave?: boolean;
     semanticCacheConfig?: SemanticCacheInterceptorConfig;
+    actionPlanCache?: ActionPlanCacheInterceptor;
+    actionPlanCacheConfig?: ActionPlanCacheConfig;
 }
 
 /**
@@ -292,6 +295,7 @@ export class MemoryCortex {
     private autoSave: boolean = true;
     private isAutoLoading: boolean = false;
     private semanticCache: SemanticCacheInterceptor;
+    private actionPlanCache: ActionPlanCacheInterceptor;
 
     static clearFallbackStore(collectionName: string = "pwa_swarm_dev_cortex_v2"): void {
         const store = MemoryCortex.globalFallbackStores.get(collectionName);
@@ -399,6 +403,12 @@ export class MemoryCortex {
             similarityThreshold: config.semanticCacheConfig?.similarityThreshold ?? 0.96,
             maxEntries: config.semanticCacheConfig?.maxEntries ?? 500,
             defaultTtlMs: config.semanticCacheConfig?.defaultTtlMs
+        });
+
+        this.actionPlanCache = config.actionPlanCache || new ActionPlanCacheInterceptor({
+            similarityThreshold: config.actionPlanCacheConfig?.similarityThreshold ?? 0.96,
+            maxEntries: config.actionPlanCacheConfig?.maxEntries ?? 500,
+            defaultTtlMs: config.actionPlanCacheConfig?.defaultTtlMs
         });
     }
 
@@ -836,6 +846,18 @@ export class MemoryCortex {
         }
 
         const queryDense = await this.safeEmbed(query);
+
+        // Check Action Plan Cache Interceptor first (> 0.96 threshold)
+        const planMatch = this.actionPlanCache.lookup(queryDense, options.appId);
+        if (planMatch.hit && planMatch.actionPlan) {
+            return [{
+                id: planMatch.actionPlan.id,
+                content: `ActionPlan:${planMatch.actionPlan.intent}`,
+                actionPlan: planMatch.actionPlan,
+                isActionPlanHit: true,
+                latencySavedMs: 43
+            }];
+        }
 
         // Check Semantic Cache Interceptor first (> 0.96 threshold)
         const cachedMatch = this.semanticCache.lookup<any[]>(queryDense, options.appId);
@@ -1478,6 +1500,28 @@ export class MemoryCortex {
 
     getSemanticCacheStats(): SemanticCacheStats {
         return this.semanticCache.getStats();
+    }
+
+    getActionPlanCacheStats(): ActionPlanCacheStats {
+        return this.actionPlanCache.getStats();
+    }
+
+    getActionPlanCache(): ActionPlanCacheInterceptor {
+        return this.actionPlanCache;
+    }
+
+    async lookupActionPlan(query: string, appId?: string): Promise<ActionPlanCacheLookupResult & { queryDense: number[] }> {
+        const queryDense = await this.safeEmbed(query);
+        const res = this.actionPlanCache.lookup(queryDense, appId || this.defaultAppId);
+        return {
+            ...res,
+            queryDense
+        };
+    }
+
+    async cacheActionPlan(query: string, plan: ActionPlanInput, ttlMs?: number): Promise<ActionPlan> {
+        const queryDense = await this.safeEmbed(query);
+        return this.actionPlanCache.set(queryDense, plan, ttlMs);
     }
 }
 

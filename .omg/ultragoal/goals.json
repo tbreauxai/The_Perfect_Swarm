@@ -1,20 +1,20 @@
 [
   {
-    "id": "goal-1-caching-profiling-prefiltering-core",
-    "description": "Implement DomainSubComputationCache (team form, H2H, market odds with configurable TTL), TokenWeightProfiler (metadata token profiling, baseline diffing, noise reduction), DomainPreFilter (heuristic pre-filtering of irrelevant betting markets), and ConfidenceEarlyExitEvaluator in src/swarm/optimization.ts. Add comprehensive unit tests in src/swarm/optimization.test.ts.",
+    "id": "goal-1-semantic-action-cache-interceptor-core",
+    "description": "Implement ActionPlanCacheInterceptor and ActionPlan data structures in src/swarm/actionPlanCache.ts. Support high-threshold cosine similarity (> 0.96), sub-linear VP-tree vector indexing, LRU eviction, and plan-only caching (intent, entities, tool steps). Add unit tests in src/swarm/actionPlanCache.test.ts.",
     "status": "completed",
-    "verification": "100% of unit tests in src/swarm/optimization.test.ts pass, verifying sub-computation cache hits/TTL, metadata token weight analysis, baseline diff detection, pre-filtering of irrelevant fields, and confidence early-exit logic."
+    "verification": "100% pass across actionPlanCache.test.ts (7/7 tests passed in 8ms) verifying sub-2ms lookup, > 0.96 similarity threshold gating, LRU capacity eviction, and plan extraction without storing volatile data."
   },
   {
-    "id": "goal-2-worker-pool-tiered-inference-streaming",
-    "description": "Implement PredictionWorkerPool (parallelizing independent prediction tasks across concurrent workers) and TieredPredictionEngine (Tier 1 fast approx <30s + Tier 2 accurate refine <60s with early-exit gating). Integrate early partial result streaming ('swarm_partial' event) into src/swarm/server.ts and src/swarm/engine.ts. Add integration tests in src/swarm/optimization-engine.test.ts.",
-    "status": "completed",
-    "verification": "Integration tests pass, validating sub-30s early partial streaming, Tier 1 early-exit bypass on high confidence, worker pool concurrent fanout, and execution within well below the 180s timeout."
+    "id": "goal-2-agent-retriever-pipeline-integration",
+    "description": "Integrate ActionPlanCacheInterceptor into the agent-retriever pipeline (MemoryCortex and SwarmEngine retrieval phase) before Qdrant vector search. Implement Cache Hit workflow (bypassing 45ms Qdrant search and executing live data fetches dynamically) and Cache Miss workflow (storing extracted Action Plan). Add integration tests in src/swarm/actionPlanRetriever.test.ts.",
+    "status": "in-progress",
+    "verification": "Integration tests verify 45ms Qdrant search is bypassed on cache hits, live odds tools execute dynamically with fresh parameters, and cache hit ratio and latency metrics update correctly."
   },
   {
-    "id": "goal-3-verification-build-and-benchmarks",
-    "description": "Export optimization modules from src/swarm/index.ts, configure package.json subpath exports, rebuild client and swarm distribution bundles, and ensure 100% pass across all Vitest suites, test:dist, test:cli, test:server, and npm run lint with zero regressions.",
-    "status": "completed",
-    "verification": "All Vitest suites pass, build succeeds, distribution imports and CLI run without errors, and lint reports zero errors."
+    "id": "goal-3-verification-telemetry-and-benchmarks",
+    "description": "Expose Action Plan cache metrics in TelemetryMetricsCollector and GET /api/swarm/metrics, export modules from src/swarm/index.ts, rebuild distribution bundles, and execute full verification suite with zero regressions.",
+    "status": "todo",
+    "verification": "All Vitest test suites pass, test:dist, test:cli, test:server, and npm run lint pass with 0 errors, and telemetry metrics reflect cache hit ratio and latency savings."
   }
 ]

@@ -315,7 +315,9 @@ export class SwarmClient {
             importSnapshot: (snapshot: MemorySnapshot | string, options?: ImportMemoriesOptions) => this.cortex.importMemories(snapshot, { targetAppId: this.appId, ...options }),
             saveToFile: (filePath?: string) => this.cortex.saveToFile(filePath),
             loadFromFile: (filePath?: string, options?: ImportMemoriesOptions) => this.cortex.loadFromFile(filePath, { targetAppId: this.appId, ...options }),
-            consolidate: () => this.cortex.consolidateMemories({ appId: this.appId })
+            consolidate: () => this.cortex.consolidateMemories({ appId: this.appId }),
+            lookupActionPlan: (query: string) => this.cortex.lookupActionPlan(query, this.appId),
+            getActionPlanCacheStats: () => this.cortex.getActionPlanCacheStats()
         };
     }
 

@@ -1,32 +1,27 @@
-# Ultragoal Brief: High-Throughput Swarm Optimization for Betting & Prediction Workloads
+# Ultragoal Brief: Semantic Action/Plan Cache Layer for agent-retriever
 
 ## Objective
-Optimize swarm processing speed and eliminate the 180-second timeout in betting and prediction analysis without sacrificing accuracy or functionality. Achieve sub-30s initial responses (streaming early partial predictions) and sub-60s refined analyses through five primary optimization vectors:
+Implement a Semantic "Action/Plan Cache" Layer for the `agent-retriever` / `MemoryCortex` pipeline to reduce Qdrant vector search latency from 45ms to ~2ms without serving stale live odds, elevating repetitive query cache hit ratio from 0% to 35-45%.
 
-1. **Parallel Worker Pool for Independent Tasks**:
-   - Parallelize independent prediction tasks (team form analysis, H2H history, market odds evaluation, prop models) across concurrent execution lanes using worker pools.
-   - Batch inputs and dynamically balance workloads across available compute.
+## Current State vs. Target State
+- **Current State**: Cache hit ratio is 0%. Every incoming query executes an expensive 45ms Qdrant dense/sparse hybrid vector search and LLM action planning pass.
+- **Target State**: 35-45% cache hit ratio for repetitive queries, achieving ~2ms retrieval latency on cache hits while guaranteeing 100% fresh, live odds data.
 
-2. **Streaming / Chunked Responses with Early Partial Results**:
-   - Progressive streaming of intermediate findings via Server-Sent Events (`swarm_partial` / `swarm_stage`).
-   - Deliver actionable initial predictions to the client in <30 seconds before complete manager synthesis and critic verification conclude.
-
-3. **Tiered Model Inference & Early-Exit Logic**:
-   - Tier 1: Fast approximation model/heuristic generating preliminary odds, spreads, and probabilities.
-   - Confidence Gate: Early exit if Tier 1 confidence score exceeds threshold (e.g. >0.85), bypassing heavy multi-pass inference when consensus is definitive.
-   - Tier 2: Accurate refinement pass triggered only when uncertainty or high volatility is detected, completing within <60 seconds total.
-
-4. **Domain Sub-Computation Caching**:
-   - High-performance TTL caching for frequent sub-computations: team form indices, head-to-head records, baseline team stats, and market odds snapshots.
-   - Avoid redundant LLM prompt expansion and external calculations across swarm runs and analyst nodes.
-
-5. **Token Weight Profiling & Pre-Filtering**:
-   - Profile input metadata token weight and calculate divergence against historical baselines.
-   - Pre-filter irrelevant data, stale markets, and noise before heavy LLM/ML passes.
-   - Integrate prompt compression to drastically lower token processing latency.
-
-## Architecture Boundaries
-- Zero external runtime dependencies; pure TypeScript compatible with Node.js, Bun, and Edge runtimes (Cloudflare Workers/Pages).
-- Strict adherence to `MEMORY.md`: NEVER ban/blacklist models, NEVER override user-configured models, maintain zero-crash worker guarding (`guardAnalystResponse`).
-- Core optimization components isolated in `src/swarm/optimization.ts` and integrated cleanly into `src/swarm/engine.ts`, `src/swarm/server.ts`, and `src/swarm/index.ts`.
-- 100% backward compatibility with all existing test suites, SSE streaming clients, and provider adapters.
+## Core Requirements & Architecture Boundaries
+1. **Interceptor Placement**:
+   - Deployed directly before the Qdrant dense/sparse search execution (`MemoryCortex.retrieve` / `SwarmEngine` Step 3).
+2. **LRU + Semantic Index**:
+   - High-performance in-memory LRU cache with sub-linear vector index (e.g. VP-Tree / Cosine metric).
+   - High similarity threshold (> 0.96) matching user query embeddings.
+3. **No Stale Live Odds (Critical Invariant)**:
+   - NEVER cache final text responses, rendered UI dashboards, or volatile live odds values.
+   - Cache ONLY the structured "Action Plan":
+     - `intent`: Classified query goal (e.g. `market_odds_lookup`, `implied_probability_calc`, `arbitrage_scan`)
+     - `entities`: Extracted parameters (e.g. `homeTeam`, `awayTeam`, `sport`, `marketType`, `format`)
+     - `toolExecutionSteps`: Deterministic tool calls / API fetch actions (e.g. `probability_odds_converter`, `live_odds_api`)
+4. **Hit & Miss Workflows**:
+   - **Cache Hit (> 0.96)**: Bypass the 45ms Qdrant search and LLM planning; retrieve the cached Action Plan; dynamically execute live data fetches with extracted entities.
+   - **Cache Miss**: Execute Qdrant vector retrieval and LLM planning; extract Intent, Entities, and Action Plan; cache Action Plan against query embedding for future identical intents.
+5. **Runtime Constraints**:
+   - Zero external runtime dependencies; pure TypeScript compatible with Node.js, Bun, and Edge runtimes.
+   - 100% test coverage and telemetry metrics integration (`GET /api/swarm/metrics`).
