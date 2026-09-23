@@ -246,6 +246,17 @@ export class DeterministicLocalEmbeddingProvider implements EmbeddingProvider {
     }
 }
 
+
+export interface MemoryCortexDiagnostics {
+    qdrantAvailable: boolean;
+    collectionName: string;
+    pointCount: number;
+    appCount: number;
+    fallbackStoreSize: number;
+    storageByDomain: Record<string, number>;
+    storageByRole: Record<string, number>;
+}
+
 export interface MemoryCortexConfig {
     url?: string;
     apiKey?: string;
@@ -778,12 +789,10 @@ export class MemoryCortex {
 
         // Ephemeral in-memory fallback
         try {
-            const ids: string[] = [];
-            for (const mem of memories) {
-                const id = await this.store(mem.content, mem.metadata, false);
-                if (id) ids.push(id);
-            }
-            return ids;
+            const results = await Promise.all(
+                memories.map(mem => this.store(mem.content, mem.metadata, false))
+            );
+            return results.filter((id): id is string => id !== null);
         } catch (err: any) {
             console.warn(`[MemoryCortex] StoreBatch error: ${err.message || err}`);
             return [];
@@ -1322,6 +1331,8 @@ export class MemoryCortex {
         let deduplicated = 0;
         const importedIds: string[] = [];
 
+        // Pre-filter items
+        const validItems = [];
         for (const item of rawItems) {
             const content = item.content || item.payload?.content;
             if (!content) {
@@ -1346,97 +1357,127 @@ export class MemoryCortex {
                 verified: rawMeta.verified ?? (qualityRating >= 0.8)
             };
 
-            const hasVectors = Array.isArray(item.denseVector) && item.denseVector.length > 0;
-            const denseVector = (hasVectors && !recomputeVectors)
-                ? item.denseVector
-                : await this.safeEmbed(content);
-            const sparseVector = item.sparseVector || SparseTokenizer.encode(content);
             const pointId = item.id || crypto.randomUUID();
+            validItems.push({ item, content, metadata, pointId });
+        }
+
+        const BATCH_SIZE = 50;
+        for (let i = 0; i < validItems.length; i += BATCH_SIZE) {
+            const batch = validItems.slice(i, i + BATCH_SIZE);
             const now = new Date().toISOString();
 
+            // 1. Process Embeddings in Parallel
+            const embeddedBatch = await Promise.all(batch.map(async (entry) => {
+                const hasVectors = Array.isArray(entry.item.denseVector) && entry.item.denseVector.length > 0;
+                const denseVector = (hasVectors && !recomputeVectors)
+                    ? entry.item.denseVector
+                    : await this.safeEmbed(entry.content);
+                const sparseVector = entry.item.sparseVector || SparseTokenizer.encode(entry.content);
+                return { ...entry, denseVector, sparseVector };
+            }));
+
+            // 2. Qdrant path
+            let qdrantFailedForBatch = false;
             if (this.qdrant && this.isAvailable) {
                 try {
+                    const pointsToUpsert = [];
+
+                    // Parallel deduplication queries
+                    if (deduplicate) {
+                        const dedupResults = await Promise.all(embeddedBatch.map(async (entry) => {
+                            const existing = await this.withTimeout(this.qdrant!.query(this.collectionName, {
+                                query: entry.denseVector,
+                                using: "dense",
+                                limit: 1,
+                                score_threshold: 0.92,
+                                filter: {
+                                    must: [{ key: "appId", match: { value: entry.metadata.appId } }]
+                                },
+                                with_payload: true
+                            }));
+                            const isDup = existing.points.length > 0 && (existing.points[0].score ?? 0) >= 0.92;
+                            return { entry, isDup, dupId: isDup ? String(existing.points[0].id) : null };
+                        }));
+
+                        for (const result of dedupResults) {
+                            if (result.isDup) {
+                                deduplicated++;
+                                importedIds.push(result.dupId!);
+                            } else {
+                                pointsToUpsert.push(result.entry);
+                            }
+                        }
+                    } else {
+                        pointsToUpsert.push(...embeddedBatch);
+                    }
+
+                    if (pointsToUpsert.length > 0) {
+                        await this.withTimeout(this.qdrant.upsert(this.collectionName, {
+                            wait: false,
+                            points: pointsToUpsert.map(entry => ({
+                                id: entry.pointId,
+                                vector: { dense: entry.denseVector, sparse: entry.sparseVector },
+                                payload: {
+                                    content: entry.content,
+                                    frequency: 1,
+                                    timestamp: now,
+                                    lastSeen: now,
+                                    ...entry.metadata
+                                }
+                            }))
+                        }));
+
+                        imported += pointsToUpsert.length;
+                        pointsToUpsert.forEach(entry => importedIds.push(entry.pointId));
+                    }
+                } catch (err: any) {
+                    console.warn(`[MemoryCortex] Import Qdrant error: ${err.message || err}. Falling back to in-memory store for batch.`);
+                    qdrantFailedForBatch = true;
+                }
+            }
+
+            // 3. Ephemeral fallback path
+            if (!this.qdrant || !this.isAvailable || qdrantFailedForBatch) {
+                for (const entry of embeddedBatch) {
                     let isDup = false;
                     if (deduplicate) {
-                        const existing = await this.withTimeout(this.qdrant.query(this.collectionName, {
-                            query: denseVector,
-                            using: "dense",
-                            limit: 1,
-                            score_threshold: 0.92,
-                            filter: {
-                                must: [{ key: "appId", match: { value: metadata.appId } }]
-                            },
-                            with_payload: true
-                        }));
-                        if (existing.points.length > 0 && (existing.points[0].score ?? 0) >= 0.92) {
+                        const match = this.vectorIndex.findMostSimilar(
+                            entry.denseVector,
+                            0.92,
+                            (item) => item.data.payload.appId === entry.metadata.appId
+                        );
+                        if (match) {
                             isDup = true;
+                            const existing = match.data;
+                            existing.payload.frequency = (existing.payload.frequency || 1) + 1;
+                            existing.payload.qualityRating = Math.max(entry.metadata.qualityRating ?? 0, existing.payload.qualityRating || 0);
                             deduplicated++;
-                            importedIds.push(String(existing.points[0].id));
+                            importedIds.push(existing.id);
                         }
                     }
 
                     if (!isDup) {
-                        await this.withTimeout(this.qdrant.upsert(this.collectionName, {
-                            wait: false,
-                            points: [{
-                                id: pointId,
-                                vector: { dense: denseVector, sparse: sparseVector },
-                                payload: {
-                                    content,
-                                    frequency: 1,
-                                    timestamp: now,
-                                    lastSeen: now,
-                                    ...metadata
-                                }
-                            }]
-                        }));
+                        const newPoint: StoredMemoryPoint = {
+                            id: entry.pointId,
+                            denseVector: entry.denseVector,
+                            sparseVector: entry.sparseVector,
+                            payload: {
+                                content: entry.content,
+                                appId: entry.metadata.appId!,
+                                frequency: 1,
+                                qualityRating: entry.metadata.qualityRating,
+                                verified: entry.metadata.verified ?? false,
+                                timestamp: now,
+                                lastSeen: now,
+                                ...entry.metadata
+                            }
+                        };
+                        this.fallbackStore.push(newPoint);
+                        this.vectorIndex.insert(entry.pointId, entry.denseVector, newPoint);
                         imported++;
-                        importedIds.push(pointId);
+                        importedIds.push(entry.pointId);
                     }
-                    continue;
-                } catch (err: any) {
-                    console.warn(`[MemoryCortex] Import Qdrant error: ${err.message || err}. Falling back to in-memory store.`);
                 }
-            }
-
-            // Ephemeral fallback
-            let isDup = false;
-            if (deduplicate) {
-                const match = this.vectorIndex.findMostSimilar(
-                    denseVector,
-                    0.92,
-                    (item) => item.data.payload.appId === metadata.appId
-                );
-                if (match) {
-                    isDup = true;
-                    const existing = match.data;
-                    existing.payload.frequency = (existing.payload.frequency || 1) + 1;
-                    existing.payload.qualityRating = Math.max(metadata.qualityRating ?? 0, existing.payload.qualityRating || 0);
-                    deduplicated++;
-                    importedIds.push(existing.id);
-                }
-            }
-
-            if (!isDup) {
-                const newPoint: StoredMemoryPoint = {
-                    id: pointId,
-                    denseVector,
-                    sparseVector,
-                    payload: {
-                        content,
-                        appId: metadata.appId!,
-                        frequency: 1,
-                        qualityRating,
-                        verified: metadata.verified ?? false,
-                        timestamp: now,
-                        lastSeen: now,
-                        ...metadata
-                    }
-                };
-                this.fallbackStore.push(newPoint);
-                this.vectorIndex.insert(pointId, denseVector, newPoint);
-                imported++;
-                importedIds.push(pointId);
             }
         }
 
@@ -1480,6 +1521,56 @@ export class MemoryCortex {
             console.warn(`[MemoryCortex] WipeCollection failed: ${error.message || error}`);
             return false;
         }
+    }
+
+
+    async getDiagnostics(): Promise<MemoryCortexDiagnostics> {
+        let pointCount = 0;
+        let apps = new Set<string>();
+        const storageByDomain: Record<string, number> = {};
+        const storageByRole: Record<string, number> = {};
+
+        if (this.qdrant && this.isAvailable) {
+            try {
+                // Qdrant counts
+                const collectionInfo = await this.withTimeout(this.qdrant.getCollection(this.collectionName));
+                pointCount = collectionInfo.points_count || 0;
+
+                // Simple fallback to fallbackStore for domains/roles if qdrant is used
+                // as full aggregation query requires scroll which can be heavy
+                for (const pt of this.fallbackStore) {
+                    apps.add(pt.payload.appId || this.defaultAppId);
+                    const domain = pt.payload.domain || 'general';
+                    const role = pt.payload.agentRole || 'unknown';
+                    storageByDomain[domain] = (storageByDomain[domain] || 0) + 1;
+                    storageByRole[role] = (storageByRole[role] || 0) + 1;
+                }
+            } catch (err) {
+                console.warn("[MemoryCortex] getDiagnostics qdrant error, falling back to in-memory stats.");
+            }
+        }
+
+        // If qdrant failed or we are using fallback only
+        if (pointCount === 0 && this.fallbackStore.length > 0) {
+            pointCount = this.fallbackStore.length;
+            for (const pt of this.fallbackStore) {
+                apps.add(pt.payload.appId || this.defaultAppId);
+                const domain = pt.payload.domain || 'general';
+                const role = pt.payload.agentRole || 'unknown';
+                storageByDomain[domain] = (storageByDomain[domain] || 0) + 1;
+                storageByRole[role] = (storageByRole[role] || 0) + 1;
+            }
+        }
+
+        return {
+            qdrantAvailable: this.isAvailable,
+            collectionName: this.collectionName,
+            pointCount,
+            appCount: apps.size,
+            fallbackStoreSize: this.fallbackStore.length,
+            storageByDomain,
+            storageByRole
+        };
     }
 
     get ready(): boolean {

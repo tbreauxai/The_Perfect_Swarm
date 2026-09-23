@@ -1,5 +1,4 @@
-import { cleanToken, sanitizeModelOutput, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
-import { globalTelemetryCollector, extractTokenUsage, estimateTokens } from '../telemetry.ts';
+import { cleanToken, buildStandardMessages, parseStandardResponse, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
 
 export class OpenRouterAdapter implements ProviderAdapter {
     readonly providerName = 'openrouter';
@@ -40,11 +39,7 @@ export class OpenRouterAdapter implements ProviderAdapter {
             throw new Error(`Invalid OpenRouter key format. OpenRouter keys must begin with 'sk-or-v1-'. If you entered an OpenAI key (sk-...), please obtain a key from openrouter.ai/keys.`);
         }
 
-        const messages: any[] = [];
-        if (options.systemInstruction) {
-            messages.push({ role: 'system', content: options.systemInstruction });
-        }
-        messages.push({ role: 'user', content: options.prompt });
+        const messages = buildStandardMessages(options);
 
         const isJson = options.config?.responseMimeType === 'application/json';
         const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 30000; // 30s default: fail fast on free-tier stalls instead of hanging for 2 minutes
@@ -88,28 +83,6 @@ export class OpenRouterAdapter implements ProviderAdapter {
         }
 
         const data = await response.json();
-        const rawContent = data?.choices?.[0]?.message?.content || '';
-
-        // Record token usage
-        const tokens = extractTokenUsage(data, this.providerName);
-        if (tokens) {
-            globalTelemetryCollector.recordTokenUsage({
-                promptTokens: tokens.promptTokens,
-                completionTokens: tokens.completionTokens,
-                provider: this.providerName,
-                model: effectiveModel
-            });
-        } else {
-            const promptTokens = estimateTokens(options.prompt + (options.systemInstruction || ''));
-            const completionTokens = estimateTokens(rawContent);
-            globalTelemetryCollector.recordTokenUsage({
-                promptTokens,
-                completionTokens,
-                provider: this.providerName,
-                model: effectiveModel
-            });
-        }
-
-        return sanitizeModelOutput(rawContent, isJson);
+        return parseStandardResponse(data, this.providerName, options, isJson, effectiveModel);
     }
 }

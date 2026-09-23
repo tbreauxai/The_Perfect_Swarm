@@ -1,6 +1,16 @@
 import type { ProviderAdapter, ProviderCallOptions } from '../types.ts';
+import { globalTelemetryCollector, extractTokenUsage, estimateTokens } from '../telemetry.ts';
 
 export type { ProviderAdapter, ProviderCallOptions };
+
+export function buildStandardMessages(options: ProviderCallOptions): any[] {
+    const messages: any[] = [];
+    if (options.systemInstruction) {
+        messages.push({ role: 'system', content: options.systemInstruction });
+    }
+    messages.push({ role: 'user', content: options.prompt });
+    return messages;
+}
 
 /**
  * Strips redundant prefixes ('Bearer ', 'Token '), backticks, quotes, and whitespace from API keys.
@@ -42,4 +52,41 @@ export function sanitizeModelOutput(raw: string, isJson: boolean = false): strin
     }
 
     return text;
+}
+
+/**
+ * Parses a standard chat completion response, extracts token usage, records telemetry,
+ * and returns the sanitized model output.
+ */
+export function parseStandardResponse(
+    data: any,
+    providerName: string,
+    options: ProviderCallOptions,
+    isJson: boolean,
+    effectiveModel?: string
+): string {
+    const rawContent = data?.choices?.[0]?.message?.content || '';
+    const modelToRecord = effectiveModel || options.modelName;
+
+    // Record token usage
+    const tokens = extractTokenUsage(data, providerName);
+    if (tokens) {
+        globalTelemetryCollector.recordTokenUsage({
+            promptTokens: tokens.promptTokens,
+            completionTokens: tokens.completionTokens,
+            provider: providerName,
+            model: modelToRecord
+        });
+    } else {
+        const promptTokens = estimateTokens(options.prompt + (options.systemInstruction || ''));
+        const completionTokens = estimateTokens(rawContent);
+        globalTelemetryCollector.recordTokenUsage({
+            promptTokens,
+            completionTokens,
+            provider: providerName,
+            model: modelToRecord
+        });
+    }
+
+    return sanitizeModelOutput(rawContent, isJson);
 }

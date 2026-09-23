@@ -148,7 +148,13 @@ async function runDistVerification() {
 
     // 1. Verify exports presence
     console.log('Verifying compiled library exports:');
-    if (!executeSwarmWorkflow || !SwarmEngine || !MemoryCortex || !ModelRouter || !PayloadCache || !AdaptiveLoadBalancer || !ProviderRegistry || !createSwarmServer || !handleSwarmSse || !serverFromSubpath || !createSwarmClient || !clientFromSubpath) {
+    const requiredExports = [
+        executeSwarmWorkflow, SwarmEngine, MemoryCortex, ModelRouter,
+        PayloadCache, AdaptiveLoadBalancer, ProviderRegistry,
+        createSwarmServer, handleSwarmSse, serverFromSubpath,
+        createSwarmClient, clientFromSubpath
+    ];
+    if (requiredExports.some(exp => !exp)) {
         throw new Error('Missing core exports in compiled dist bundle');
     }
     const distClient = clientFromSubpath({ mode: 'embedded', appId: 'dist-client-app' });

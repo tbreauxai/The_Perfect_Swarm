@@ -596,24 +596,30 @@ export class TieredCache<T = any> {
 
             let bestMatch: L2Item<T> | null = null;
             let bestSim = -1.0;
+            const items = this.l2Items;
+            const len = items.length;
 
             if (this.quantMode === 'sq8') {
-                for (const item of this.l2Items) {
+                for (let i = 0; i < len; i++) {
+                    const item = items[i];
                     if (!item.sq8Vector) continue;
                     const sim = VectorQuantizer.asymmetricCosineSimilarity(queryVec, item.sq8Vector);
                     if (sim > bestSim) {
                         bestSim = sim;
                         bestMatch = item;
+                        if (sim === 1.0) break; // Early exit on exact semantic match
                     }
                 }
             } else {
                 const queryBin = VectorQuantizer.quantizeBinary(queryVec);
-                for (const item of this.l2Items) {
+                for (let i = 0; i < len; i++) {
+                    const item = items[i];
                     if (!item.binaryVector) continue;
                     const sim = VectorQuantizer.binaryCosineSimilarity(queryBin, item.binaryVector);
                     if (sim > bestSim) {
                         bestSim = sim;
                         bestMatch = item;
+                        if (sim === 1.0) break; // Early exit on exact semantic match
                     }
                 }
             }
