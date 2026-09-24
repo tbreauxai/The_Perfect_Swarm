@@ -1542,7 +1542,7 @@ export class MemoryCortex {
                     let batchCount = 0;
                     
                     while (hasMore && batchCount < 20) { // Safe limit
-                        const scrollRes = await this.withTimeout((this.qdrant as any).scroll(this.collectionName, {
+                        const scrollRes: any = await this.withTimeout((this.qdrant as any).scroll(this.collectionName, {
                             limit: 1000,
                             offset: nextOffset,
                             with_payload: true,
