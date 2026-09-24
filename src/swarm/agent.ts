@@ -9,7 +9,7 @@ import { globalPayloadCache, PayloadCache } from './cache.ts';
 import { parseJsonSafe, guardManagerResponse, guardAnalystResponse } from './parser.ts';
 import { ManagerResponseSchema, AnalystResponseSchema } from './schemas.ts';
 
-const DEFAULT_PROVIDER_MODELS: Record<string, string> = {
+export const DEFAULT_PROVIDER_MODELS: Record<string, string> = {
     gemini: 'gemini-2.5-flash',
     groq: 'openai/gpt-oss-120b',
     openrouter: 'deepseek/deepseek-r1',

@@ -11,6 +11,7 @@ import { globalTelemetryCollector, createTelemetryMiddleware } from './telemetry
 import { globalPayloadCache, globalSemanticCache } from './cache.ts';
 import { globalTieredCache } from './tieredCache.ts';
 import { globalActionPlanCache } from './actionPlanCache.ts';
+import { DEFAULT_PROVIDER_MODELS } from './agent.ts';
 
 export interface SwarmServerOptions {
     port?: number;
@@ -187,6 +188,9 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
         return c.json(globalTelemetryCollector.getSnapshot());
     });
 
+    app.get('/api/swarm/config', (c) => {
+        return c.json({ defaultModels: DEFAULT_PROVIDER_MODELS });
+    });
 
     app.get('/api/swarm/cortex/diagnostics', async (c) => {
         try {
