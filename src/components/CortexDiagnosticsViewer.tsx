@@ -180,8 +180,8 @@ export function CortexDiagnosticsViewer() {
             <Activity className="w-4 h-4" /> Optimization Insights
         </h3>
         <ul className="space-y-1.5 list-disc list-inside">
-          <li><strong>Speed & Cost:</strong> Groq (Llama-3) is recommended for high-speed routing and fast token processing.</li>
-          <li><strong>Deep Reasoning:</strong> Anthropic Claude 3.5 Sonnet / OpenAI o1 are best suited for deep synthesis and manager verification steps without losing functionality.</li>
+          <li><strong>Speed & Cost:</strong> Groq (Llama-3.3) is recommended for high-speed routing and fast token processing.</li>
+          <li><strong>Deep Reasoning:</strong> Google Gemini 3.1 Pro / Anthropic Claude 3.7 Sonnet / OpenAI o3 are best suited for deep synthesis and manager verification steps without losing functionality.</li>
           <li><strong>Current Cache Hit Ratio:</strong> {diagnostics.cacheHitRatio !== undefined ? `${(diagnostics.cacheHitRatio * 100).toFixed(1)}%` : 'N/A'}. A higher ratio speeds up analysis and lowers cost.</li>
           <li><strong>Throughput:</strong> p95 latency is {diagnostics.latencyStats?.p95 ? `${diagnostics.latencyStats.p95}ms` : 'N/A'}, p99 is {diagnostics.latencyStats?.p99 ? `${diagnostics.latencyStats.p99}ms` : 'N/A'}.</li>
         </ul>

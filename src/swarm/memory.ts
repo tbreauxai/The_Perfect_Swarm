@@ -1536,14 +1536,40 @@ export class MemoryCortex {
                 const collectionInfo = await this.withTimeout(this.qdrant.getCollection(this.collectionName));
                 pointCount = collectionInfo.points_count || 0;
 
-                // Simple fallback to fallbackStore for domains/roles if qdrant is used
-                // as full aggregation query requires scroll which can be heavy
-                for (const pt of this.fallbackStore) {
-                    apps.add(pt.payload.appId || this.defaultAppId);
-                    const domain = pt.payload.domain || 'general';
-                    const role = pt.payload.agentRole || 'unknown';
-                    storageByDomain[domain] = (storageByDomain[domain] || 0) + 1;
-                    storageByRole[role] = (storageByRole[role] || 0) + 1;
+                if (typeof (this.qdrant as any).scroll === 'function' && pointCount > 0) {
+                    let nextOffset: string | number | undefined = undefined;
+                    let hasMore = true;
+                    let batchCount = 0;
+                    
+                    while (hasMore && batchCount < 20) { // Safe limit
+                        const scrollRes = await this.withTimeout((this.qdrant as any).scroll(this.collectionName, {
+                            limit: 1000,
+                            offset: nextOffset,
+                            with_payload: true,
+                            with_vector: false
+                        }));
+                        
+                        for (const pt of (scrollRes.points || [])) {
+                            const payload = (pt.payload || {}) as Record<string, any>;
+                            apps.add(payload.appId || this.defaultAppId);
+                            const domain = payload.domain || 'general';
+                            const role = payload.agentRole || 'unknown';
+                            storageByDomain[domain] = (storageByDomain[domain] || 0) + 1;
+                            storageByRole[role] = (storageByRole[role] || 0) + 1;
+                        }
+                        
+                        nextOffset = scrollRes.next_page_offset;
+                        hasMore = nextOffset !== null && nextOffset !== undefined;
+                        batchCount++;
+                    }
+                } else {
+                    for (const pt of this.fallbackStore) {
+                        apps.add(pt.payload.appId || this.defaultAppId);
+                        const domain = pt.payload.domain || 'general';
+                        const role = pt.payload.agentRole || 'unknown';
+                        storageByDomain[domain] = (storageByDomain[domain] || 0) + 1;
+                        storageByRole[role] = (storageByRole[role] || 0) + 1;
+                    }
                 }
             } catch (err) {
                 console.warn("[MemoryCortex] getDiagnostics qdrant error, falling back to in-memory stats.");
