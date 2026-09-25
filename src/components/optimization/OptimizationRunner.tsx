@@ -116,6 +116,12 @@ Respond ONLY with the text of the prompt you want to give them.`;
 
             if (!res.ok) return baseTask;
             const data = await res.json();
+            
+            if (data.finalAnalysis && typeof data.finalAnalysis === 'object' && (data.finalAnalysis.ui_title?.includes('Error') || data.finalAnalysis.ui_title?.includes('Fallback'))) {
+                const fallbackText = data.finalAnalysis.components?.[0]?.props?.insights?.[0]?.message;
+                if (fallbackText) return fallbackText;
+            }
+
             return typeof data.finalAnalysis === 'string' ? data.finalAnalysis : JSON.stringify(data.finalAnalysis);
         } catch (e) {
             console.error("Prompt generation failed", e);
@@ -158,16 +164,33 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
 
             // Try to parse the JSON output from the manager
             let parsed = null;
-            try {
-                if (typeof data.finalAnalysis === 'object') {
+            let rawString = '';
+            
+            if (data.finalAnalysis && typeof data.finalAnalysis === 'object' && (data.finalAnalysis.ui_title?.includes('Error') || data.finalAnalysis.ui_title?.includes('Fallback'))) {
+                rawString = data.finalAnalysis.components?.[0]?.props?.insights?.[0]?.message || '';
+            } else if (typeof data.finalAnalysis === 'object') {
+                if (data.finalAnalysis.intelligence !== undefined) {
                     parsed = data.finalAnalysis;
                 } else {
-                     // strip markdown if they ignored instructions
-                     const cleaned = String(data.finalAnalysis).replace(/```json\n?/g, '').replace(/```/g, '').trim();
-                     parsed = JSON.parse(cleaned);
+                    rawString = JSON.stringify(data.finalAnalysis);
                 }
-            } catch (e) {
-                console.warn("Failed to parse grading JSON", e, data.finalAnalysis);
+            } else {
+                rawString = String(data.finalAnalysis);
+            }
+
+            if (!parsed && rawString) {
+                try {
+                    const cleaned = rawString.replace(/```json\n?/gi, '').replace(/```/g, '').trim();
+                    // Sometimes models include extra text before or after the JSON, try to extract just the { } block
+                    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+                    if (jsonMatch) {
+                        parsed = JSON.parse(jsonMatch[0]);
+                    } else {
+                        parsed = JSON.parse(cleaned);
+                    }
+                } catch(e) {
+                    console.warn("Failed to parse grading string:", rawString);
+                }
             }
 
             if (parsed && typeof parsed === 'object') {
