@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { fetchAvailableModels, ModelOption } from '../../services/providerService';
+import { fetchAvailableModels, checkProviderModelsHealth, ModelOption } from '../../services/providerService';
 import { getApiKeyForProvider } from '../AgentConfigurator';
 import { Loader2, Play, Trophy, Clock, CheckCircle, AlertCircle } from 'lucide-react';
 
@@ -99,19 +99,29 @@ Respond ONLY with a single integer from 1 to 10.`;
         for (const analyst of analysts) {
             setProgress(`Fetching models for ${analyst.provider}...`);
             let models: ModelOption[] = [];
+            let apiKey = '';
+            let healthMap: Record<string, any> = {};
             try {
-                const apiKey = getApiKeyForProvider(settings, analyst.provider);
+                apiKey = getApiKeyForProvider(settings, analyst.provider);
                 models = await fetchAvailableModels(analyst.provider, apiKey);
+
+                setProgress(`Checking health for ${analyst.provider} models...`);
+                healthMap = await checkProviderModelsHealth(analyst.provider, models, apiKey);
             } catch (e) {
-                console.error(`Failed to fetch models for ${analyst.provider}`, e);
+                console.error(`Failed to fetch models or health for ${analyst.provider}`, e);
                 continue;
             }
 
             const modelsToTest = models.filter(m => {
-                // If it's github/simulated, they don't have 'free' property guaranteed, just test first 5
+                const key = `${analyst.provider.toLowerCase().trim()}:${m.id.trim()}`;
+                const health = healthMap[key];
+                if (health && (health.circuitState === 'OPEN' || !health.healthy)) {
+                    return false;
+                }
+                // If it's github/simulated, they don't have 'free' property guaranteed
                 if (analyst.provider === 'simulated' || analyst.provider === 'github') return true;
                 return m.free !== false; // Test free models or ones where free isn't strictly false
-            }).slice(0, 5); // Limit to top 5 per provider to save time
+            });
 
             for (const model of modelsToTest) {
                 setProgress(`Testing ${analyst.role} with ${model.name || model.id}...`);
