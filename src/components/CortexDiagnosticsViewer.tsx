@@ -148,7 +148,7 @@ export function CortexDiagnosticsViewer() {
             <Zap className="w-3.5 h-3.5" /> Speed (Mean)
           </span>
           <span className="text-xl font-semibold text-neutral-800">
-            {diagnostics.latencyStats?.mean ? `${diagnostics.latencyStats.mean}ms` : 'N/A'}
+            {diagnostics.latencyStats?.mean !== undefined ? `${diagnostics.latencyStats.mean}ms` : 'N/A'}
           </span>
         </div>
       </div>
@@ -224,7 +224,7 @@ export function CortexDiagnosticsViewer() {
           </div>
           <div className="mt-4 text-xs text-indigo-700/80 flex justify-between items-center px-1">
              <span>Cache Hit Ratio: {diagnostics.cacheHitRatio !== undefined ? `${(diagnostics.cacheHitRatio * 100).toFixed(1)}%` : 'N/A'}</span>
-             <span>P95 Latency: {diagnostics.latencyStats?.p95 ? `${diagnostics.latencyStats.p95}ms` : 'N/A'}</span>
+             <span>P95 Latency: {diagnostics.latencyStats?.p95 !== undefined ? `${diagnostics.latencyStats.p95}ms` : 'N/A'}</span>
           </div>
         </div>
       ) : (
@@ -239,7 +239,7 @@ export function CortexDiagnosticsViewer() {
               <li><strong>Speed & Cost:</strong> Groq (Mixtral / Gemma) is recommended for high-speed routing and fast token processing on the free tier.</li>
               <li><strong>Deep Reasoning:</strong> Google Gemini Flash / DeepSeek R1 (via OpenRouter Free) are best suited for deep synthesis and manager verification steps without losing functionality.</li>
               <li><strong>Current Cache Hit Ratio:</strong> {diagnostics.cacheHitRatio !== undefined ? `${(diagnostics.cacheHitRatio * 100).toFixed(1)}%` : 'N/A'}. A higher ratio speeds up analysis and lowers cost.</li>
-              <li><strong>Throughput:</strong> p95 latency is {diagnostics.latencyStats?.p95 ? `${diagnostics.latencyStats.p95}ms` : 'N/A'}, p99 is {diagnostics.latencyStats?.p99 ? `${diagnostics.latencyStats.p99}ms` : 'N/A'}.</li>
+              <li><strong>Throughput:</strong> p95 latency is {diagnostics.latencyStats?.p95 !== undefined ? `${diagnostics.latencyStats.p95}ms` : 'N/A'}, p99 is {diagnostics.latencyStats?.p99 !== undefined ? `${diagnostics.latencyStats.p99}ms` : 'N/A'}.</li>
             </ul>
           )}
         </div>

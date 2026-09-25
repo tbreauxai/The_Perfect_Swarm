@@ -208,6 +208,10 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
             
             // Generate structured role recommendations based on app's actual roles and benchmarks
             const bestModels = globalBenchmarker.getBestModels();
+            const telemetry = globalTelemetryCollector.getSnapshot();
+
+            diagnostics.latencyStats = telemetry.overallLatency;
+            diagnostics.cacheHitRatio = telemetry.cacheHitRatio;
 
             diagnostics.roleRecommendations = [];
 
@@ -257,7 +261,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                     suggestionsHtml += `<li><strong>Deep Reasoning:</strong> ${bestModels.bestReasoning.provider} (${bestModels.bestReasoning.modelName}) passed logic tests in ${bestModels.bestReasoning.reasoningLatency}ms.</li>\n`;
                 }
                 suggestionsHtml += `<li><strong>Current Cache Hit Ratio:</strong> ${diagnostics.cacheHitRatio !== undefined ? `${(diagnostics.cacheHitRatio * 100).toFixed(1)}%` : 'N/A'}. A higher ratio speeds up analysis and lowers cost.</li>\n`;
-                suggestionsHtml += `<li><strong>Throughput:</strong> p95 latency is ${diagnostics.latencyStats?.p95 ? `${diagnostics.latencyStats.p95}ms` : 'N/A'}, p99 is ${diagnostics.latencyStats?.p99 ? `${diagnostics.latencyStats.p99}ms` : 'N/A'}.</li>\n`;
+                suggestionsHtml += `<li><strong>Throughput:</strong> p95 latency is ${diagnostics.latencyStats?.p95 !== undefined ? `${diagnostics.latencyStats.p95}ms` : 'N/A'}, p99 is ${diagnostics.latencyStats?.p99 !== undefined ? `${diagnostics.latencyStats.p99}ms` : 'N/A'}.</li>\n`;
                 suggestionsHtml += '</ul>';
                 diagnostics.modelSuggestions = suggestionsHtml;
             }
