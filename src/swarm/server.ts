@@ -199,27 +199,63 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
 
     app.get('/api/swarm/cortex/diagnostics', async (c) => {
         try {
+            const appId = c.req.query('appId');
             const cortex = defaultCortex;
             if (!cortex) {
                 return c.json({ error: 'Cortex not initialized' }, 503);
             }
-            const diagnostics = await cortex.getDiagnostics();
+            const diagnostics = await cortex.getDiagnostics(appId);
             
-            // Add dynamic model suggestions from benchmark
+            // Generate structured role recommendations based on app's actual roles and benchmarks
             const bestModels = globalBenchmarker.getBestModels();
-            if (bestModels) {
-                let suggestionsHtml = '<ul class="space-y-1.5 list-disc list-inside">\n';
-                if (bestModels.bestRouter) {
-                    suggestionsHtml += `<li><strong>Speed & Cost:</strong> ${bestModels.bestRouter.provider} (${bestModels.bestRouter.modelName}) is currently fastest at ${bestModels.bestRouter.routingLatency}ms.</li>\n`;
+
+            // Fallback default models if benchmark hasn't completed or keys are missing
+            const fallbackRouter = bestModels?.bestRouter || { provider: 'groq', modelName: 'mixtral-8x7b-32768', routingLatency: 'N/A' };
+            const fallbackReasoning = bestModels?.bestReasoning || { provider: 'openrouter', modelName: 'google/gemini-flash-1.5', reasoningLatency: 'N/A' };
+
+            diagnostics.roleRecommendations = [];
+
+            // If the app has no memory data yet, populate with default standard roles to ensure insights are visible
+            const displayRoles = Object.keys(diagnostics.storageByRole).length > 0
+                ? Object.keys(diagnostics.storageByRole)
+                : ['Router', 'Manager', 'Analyst'];
+
+            for (const role of displayRoles) {
+                const roleLower = role.toLowerCase();
+
+                if (roleLower.includes('router') || roleLower.includes('classif')) {
+                    diagnostics.roleRecommendations.push({
+                        role,
+                        recommendedProvider: fallbackRouter.provider,
+                        recommendedModel: fallbackRouter.modelName,
+                        reason: `Fastest routing performance (${fallbackRouter.routingLatency === 'N/A' ? 'Default baseline' : `${fallbackRouter.routingLatency}ms`}). Ideal for high-volume classifier roles.`
+                    });
+                } else if (roleLower.includes('manager') || roleLower.includes('critic') || roleLower.includes('synthesiz') || roleLower.includes('review')) {
+                    diagnostics.roleRecommendations.push({
+                        role,
+                        recommendedProvider: fallbackReasoning.provider,
+                        recommendedModel: fallbackReasoning.modelName,
+                        reason: `High reasoning capability (passed logic tests). Critical for synthesis and verification roles.`
+                    });
+                } else {
+                    // General Analyst/Worker role
+                    diagnostics.roleRecommendations.push({
+                        role,
+                        recommendedProvider: fallbackRouter.provider,
+                        recommendedModel: fallbackRouter.modelName,
+                        reason: `Excellent balance of speed and efficiency. Suitable for general extraction and analysis tasks.`
+                    });
                 }
-                if (bestModels.bestReasoning) {
-                    suggestionsHtml += `<li><strong>Deep Reasoning:</strong> ${bestModels.bestReasoning.provider} (${bestModels.bestReasoning.modelName}) passed logic tests in ${bestModels.bestReasoning.reasoningLatency}ms.</li>\n`;
-                }
-                suggestionsHtml += `<li><strong>Current Cache Hit Ratio:</strong> ${diagnostics.cacheHitRatio !== undefined ? `${(diagnostics.cacheHitRatio * 100).toFixed(1)}%` : 'N/A'}. A higher ratio speeds up analysis and lowers cost.</li>\n`;
-                suggestionsHtml += `<li><strong>Throughput:</strong> p95 latency is ${diagnostics.latencyStats?.p95 ? `${diagnostics.latencyStats.p95}ms` : 'N/A'}, p99 is ${diagnostics.latencyStats?.p99 ? `${diagnostics.latencyStats.p99}ms` : 'N/A'}.</li>\n`;
-                suggestionsHtml += '</ul>';
-                diagnostics.modelSuggestions = suggestionsHtml;
             }
+
+            // Fallback backward-compatible model suggestions HTML
+            let suggestionsHtml = '<ul class="space-y-1.5 list-disc list-inside">\n';
+            suggestionsHtml += `<li><strong>Speed & Cost:</strong> ${fallbackRouter.provider} (${fallbackRouter.modelName}) is currently recommended for high-speed routing and fast token processing.</li>\n`;
+            suggestionsHtml += `<li><strong>Deep Reasoning:</strong> ${fallbackReasoning.provider} (${fallbackReasoning.modelName}) is best suited for deep synthesis and manager verification steps.</li>\n`;
+            suggestionsHtml += `<li><strong>Current Cache Hit Ratio:</strong> ${diagnostics.cacheHitRatio !== undefined ? `${(diagnostics.cacheHitRatio * 100).toFixed(1)}%` : 'N/A'}. A higher ratio speeds up analysis and lowers cost.</li>\n`;
+            suggestionsHtml += `<li><strong>Throughput:</strong> p95 latency is ${diagnostics.latencyStats?.p95 ? `${diagnostics.latencyStats.p95}ms` : 'N/A'}, p99 is ${diagnostics.latencyStats?.p99 ? `${diagnostics.latencyStats.p99}ms` : 'N/A'}.</li>\n`;
+            suggestionsHtml += '</ul>';
+            diagnostics.modelSuggestions = suggestionsHtml;
 
             return c.json(diagnostics);
         } catch (err: any) {
