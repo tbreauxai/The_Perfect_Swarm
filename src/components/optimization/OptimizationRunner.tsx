@@ -495,12 +495,12 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-red-50">
-                                {Object.entries(errorRecords).sort((a,b) => b[1].errorCount - a[1].errorCount).map(([modelId, record]) => (
+                                {Object.entries(errorRecords).sort((a,b) => (b[1] as ModelErrorRecord).errorCount - (a[1] as ModelErrorRecord).errorCount).map(([modelId, record]) => (
                                     <tr key={modelId} className="hover:bg-red-50/50">
                                         <td className="px-4 py-2 font-mono text-red-700">{modelId}</td>
-                                        <td className="px-4 py-2 uppercase tracking-wide text-red-400">{record.provider}</td>
-                                        <td className="px-4 py-2 font-semibold text-red-600">{record.errorCount}</td>
-                                        <td className="px-4 py-2 truncate max-w-md text-red-500 font-mono" title={record.lastError}>{record.lastError}</td>
+                                        <td className="px-4 py-2 uppercase tracking-wide text-red-400">{(record as ModelErrorRecord).provider}</td>
+                                        <td className="px-4 py-2 font-semibold text-red-600">{(record as ModelErrorRecord).errorCount}</td>
+                                        <td className="px-4 py-2 truncate max-w-md text-red-500 font-mono" title={(record as ModelErrorRecord).lastError}>{(record as ModelErrorRecord).lastError}</td>
                                     </tr>
                                 ))}
                             </tbody>
