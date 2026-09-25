@@ -227,10 +227,9 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
             setProgress(`Testing ${agentToTest.role} with ${model.name || model.id}...`);
             const testSettings = {
                 ...settings,
-                agents: [
-                    agentToTest.id === managerAgent.id ? { ...agentToTest, model: model.id } : managerAgent,
-                    agentToTest.id !== managerAgent.id ? { ...agentToTest, model: model.id } : null
-                ].filter(Boolean),
+                agents: settings.agents.map((a: any) => 
+                    a.id === agentToTest.id ? { ...a, model: model.id } : a
+                ),
                 forceFullSwarm: false
             };
 
