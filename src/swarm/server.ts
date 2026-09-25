@@ -199,14 +199,55 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
 
     app.get('/api/swarm/cortex/diagnostics', async (c) => {
         try {
+            const appId = c.req.query('appId');
             const cortex = defaultCortex;
             if (!cortex) {
                 return c.json({ error: 'Cortex not initialized' }, 503);
             }
-            const diagnostics = await cortex.getDiagnostics();
+            const diagnostics = await cortex.getDiagnostics(appId);
             
-            // Add dynamic model suggestions from benchmark
+            // Generate structured role recommendations based on app's actual roles and benchmarks
             const bestModels = globalBenchmarker.getBestModels();
+
+            diagnostics.roleRecommendations = [];
+
+            if (bestModels && Object.keys(diagnostics.storageByRole).length > 0) {
+                for (const [role, count] of Object.entries(diagnostics.storageByRole)) {
+                    const roleLower = role.toLowerCase();
+
+                    if (roleLower.includes('router') || roleLower.includes('classif')) {
+                        if (bestModels.bestRouter) {
+                            diagnostics.roleRecommendations.push({
+                                role,
+                                recommendedProvider: bestModels.bestRouter.provider,
+                                recommendedModel: bestModels.bestRouter.modelName,
+                                reason: `Fastest routing performance (${bestModels.bestRouter.routingLatency}ms). Ideal for high-volume classifier roles.`
+                            });
+                        }
+                    } else if (roleLower.includes('manager') || roleLower.includes('critic') || roleLower.includes('synthesiz') || roleLower.includes('review')) {
+                        if (bestModels.bestReasoning) {
+                            diagnostics.roleRecommendations.push({
+                                role,
+                                recommendedProvider: bestModels.bestReasoning.provider,
+                                recommendedModel: bestModels.bestReasoning.modelName,
+                                reason: `High reasoning capability (passed logic tests). Critical for synthesis and verification roles.`
+                            });
+                        }
+                    } else {
+                        // General Analyst/Worker role
+                        if (bestModels.bestRouter) {
+                            diagnostics.roleRecommendations.push({
+                                role,
+                                recommendedProvider: bestModels.bestRouter.provider,
+                                recommendedModel: bestModels.bestRouter.modelName,
+                                reason: `Excellent balance of speed and efficiency. Suitable for general extraction and analysis tasks.`
+                            });
+                        }
+                    }
+                }
+            }
+
+            // Fallback backward-compatible model suggestions HTML
             if (bestModels) {
                 let suggestionsHtml = '<ul class="space-y-1.5 list-disc list-inside">\n';
                 if (bestModels.bestRouter) {

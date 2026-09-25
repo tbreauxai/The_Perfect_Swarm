@@ -252,6 +252,7 @@ export interface MemoryCortexDiagnostics {
     collectionName: string;
     pointCount: number;
     appCount: number;
+    apps: string[];
     fallbackStoreSize: number;
     storageByDomain: Record<string, number>;
     storageByRole: Record<string, number>;
@@ -262,6 +263,7 @@ export interface MemoryCortexDiagnostics {
     };
     cacheHitRatio?: number;
     modelSuggestions?: string;
+    roleRecommendations?: Array<{ role: string; recommendedProvider: string; recommendedModel: string; reason: string }>;
 }
 
 export interface MemoryCortexConfig {
@@ -1531,7 +1533,7 @@ export class MemoryCortex {
     }
 
 
-    async getDiagnostics(): Promise<MemoryCortexDiagnostics> {
+    async getDiagnostics(appIdFilter?: string): Promise<MemoryCortexDiagnostics> {
         let pointCount = 0;
         let apps = new Set<string>();
         const storageByDomain: Record<string, number> = {};
@@ -1539,59 +1541,80 @@ export class MemoryCortex {
 
         if (this.qdrant && this.isAvailable) {
             try {
-                // Qdrant counts
-                const collectionInfo = await this.withTimeout(this.qdrant.getCollection(this.collectionName));
-                pointCount = collectionInfo.points_count || 0;
+                // Determine if we are filtering by app
+                let scrollFilter: any = undefined;
+                if (appIdFilter && appIdFilter !== 'global') {
+                     scrollFilter = { must: [{ key: "appId", match: { value: appIdFilter } }] };
+                }
 
-                if (typeof (this.qdrant as any).scroll === 'function' && pointCount > 0) {
+                // Get total un-filtered counts first if we want full app list, but it's expensive.
+                // We will scroll to get the list of apps and build the stats based on the filter.
+                if (typeof (this.qdrant as any).scroll === 'function') {
                     let nextOffset: string | number | undefined = undefined;
                     let hasMore = true;
                     let batchCount = 0;
                     
                     while (hasMore && batchCount < 20) { // Safe limit
-                        const scrollRes: any = await this.withTimeout((this.qdrant as any).scroll(this.collectionName, {
+                        // Query ALL to find unique apps
+                        const scrollResAll: any = await this.withTimeout((this.qdrant as any).scroll(this.collectionName, {
                             limit: 1000,
                             offset: nextOffset,
                             with_payload: true,
                             with_vector: false
                         }));
                         
-                        for (const pt of (scrollRes.points || [])) {
+                        for (const pt of (scrollResAll.points || [])) {
                             const payload = (pt.payload || {}) as Record<string, any>;
-                            apps.add(payload.appId || this.defaultAppId);
-                            const domain = payload.domain || 'general';
-                            const role = payload.agentRole || 'unknown';
-                            storageByDomain[domain] = (storageByDomain[domain] || 0) + 1;
-                            storageByRole[role] = (storageByRole[role] || 0) + 1;
+                            const itemAppId = payload.appId || this.defaultAppId;
+                            apps.add(itemAppId);
+
+                            // Apply filter for stats
+                            if (!appIdFilter || appIdFilter === 'global' || itemAppId === appIdFilter) {
+                                pointCount++;
+                                const domain = payload.domain || 'general';
+                                const role = payload.agentRole || 'unknown';
+                                storageByDomain[domain] = (storageByDomain[domain] || 0) + 1;
+                                storageByRole[role] = (storageByRole[role] || 0) + 1;
+                            }
                         }
                         
-                        nextOffset = scrollRes.next_page_offset;
+                        nextOffset = scrollResAll.next_page_offset;
                         hasMore = nextOffset !== null && nextOffset !== undefined;
                         batchCount++;
                     }
                 } else {
                     for (const pt of this.fallbackStore) {
-                        apps.add(pt.payload.appId || this.defaultAppId);
-                        const domain = pt.payload.domain || 'general';
-                        const role = pt.payload.agentRole || 'unknown';
-                        storageByDomain[domain] = (storageByDomain[domain] || 0) + 1;
-                        storageByRole[role] = (storageByRole[role] || 0) + 1;
+                        const itemAppId = pt.payload.appId || this.defaultAppId;
+                        apps.add(itemAppId);
+
+                        if (!appIdFilter || appIdFilter === 'global' || itemAppId === appIdFilter) {
+                            pointCount++;
+                            const domain = pt.payload.domain || 'general';
+                            const role = pt.payload.agentRole || 'unknown';
+                            storageByDomain[domain] = (storageByDomain[domain] || 0) + 1;
+                            storageByRole[role] = (storageByRole[role] || 0) + 1;
+                        }
                     }
                 }
             } catch (err) {
                 console.warn("[MemoryCortex] getDiagnostics qdrant error, falling back to in-memory stats.");
+                pointCount = 0; // reset to let fallback take over below if needed
             }
         }
 
         // If qdrant failed or we are using fallback only
         if (pointCount === 0 && this.fallbackStore.length > 0) {
-            pointCount = this.fallbackStore.length;
             for (const pt of this.fallbackStore) {
-                apps.add(pt.payload.appId || this.defaultAppId);
-                const domain = pt.payload.domain || 'general';
-                const role = pt.payload.agentRole || 'unknown';
-                storageByDomain[domain] = (storageByDomain[domain] || 0) + 1;
-                storageByRole[role] = (storageByRole[role] || 0) + 1;
+                const itemAppId = pt.payload.appId || this.defaultAppId;
+                apps.add(itemAppId);
+
+                if (!appIdFilter || appIdFilter === 'global' || itemAppId === appIdFilter) {
+                    pointCount++;
+                    const domain = pt.payload.domain || 'general';
+                    const role = pt.payload.agentRole || 'unknown';
+                    storageByDomain[domain] = (storageByDomain[domain] || 0) + 1;
+                    storageByRole[role] = (storageByRole[role] || 0) + 1;
+                }
             }
         }
 
@@ -1600,6 +1623,7 @@ export class MemoryCortex {
             collectionName: this.collectionName,
             pointCount,
             appCount: apps.size,
+            apps: Array.from(apps),
             fallbackStoreSize: this.fallbackStore.length,
             storageByDomain,
             storageByRole
