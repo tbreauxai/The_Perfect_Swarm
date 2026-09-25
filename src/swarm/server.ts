@@ -12,6 +12,7 @@ import { globalPayloadCache, globalSemanticCache } from './cache.ts';
 import { globalTieredCache } from './tieredCache.ts';
 import { globalActionPlanCache } from './actionPlanCache.ts';
 import { DEFAULT_PROVIDER_MODELS } from './agent.ts';
+import { globalBenchmarker, initBenchmarker } from './benchmark.ts';
 
 export interface SwarmServerOptions {
     port?: number;
@@ -112,6 +113,10 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
     const defaultCortex = options.defaultCortex;
     let nodeServer: ServerType | null = null;
 
+    if (typeof process !== 'undefined' && process.env) {
+        initBenchmarker(process.env);
+    }
+
     app.listen = function (portOrOpts?: any, hostnameOrCb?: any, cb?: any): any {
         let port = typeof portOrOpts === 'number' ? portOrOpts : (options.port ?? 3000);
         let hostname = typeof hostnameOrCb === 'string' ? hostnameOrCb : (options.host ?? '0.0.0.0');
@@ -199,6 +204,23 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 return c.json({ error: 'Cortex not initialized' }, 503);
             }
             const diagnostics = await cortex.getDiagnostics();
+            
+            // Add dynamic model suggestions from benchmark
+            const bestModels = globalBenchmarker.getBestModels();
+            if (bestModels) {
+                let suggestionsHtml = '<ul class="space-y-1.5 list-disc list-inside">\n';
+                if (bestModels.bestRouter) {
+                    suggestionsHtml += `<li><strong>Speed & Cost:</strong> ${bestModels.bestRouter.provider} (${bestModels.bestRouter.modelName}) is currently fastest at ${bestModels.bestRouter.routingLatency}ms.</li>\n`;
+                }
+                if (bestModels.bestReasoning) {
+                    suggestionsHtml += `<li><strong>Deep Reasoning:</strong> ${bestModels.bestReasoning.provider} (${bestModels.bestReasoning.modelName}) passed logic tests in ${bestModels.bestReasoning.reasoningLatency}ms.</li>\n`;
+                }
+                suggestionsHtml += `<li><strong>Current Cache Hit Ratio:</strong> ${diagnostics.cacheHitRatio !== undefined ? `${(diagnostics.cacheHitRatio * 100).toFixed(1)}%` : 'N/A'}. A higher ratio speeds up analysis and lowers cost.</li>\n`;
+                suggestionsHtml += `<li><strong>Throughput:</strong> p95 latency is ${diagnostics.latencyStats?.p95 ? `${diagnostics.latencyStats.p95}ms` : 'N/A'}, p99 is ${diagnostics.latencyStats?.p99 ? `${diagnostics.latencyStats.p99}ms` : 'N/A'}.</li>\n`;
+                suggestionsHtml += '</ul>';
+                diagnostics.modelSuggestions = suggestionsHtml;
+            }
+
             return c.json(diagnostics);
         } catch (err: any) {
             console.error('[SwarmServer Cortex Diagnostics Error]:', err);
