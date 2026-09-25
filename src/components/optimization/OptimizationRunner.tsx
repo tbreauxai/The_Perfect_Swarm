@@ -117,9 +117,12 @@ Respond ONLY with the text of the prompt you want to give them.`;
             if (!res.ok) return baseTask;
             const data = await res.json();
             
-            if (data.finalAnalysis && typeof data.finalAnalysis === 'object' && (data.finalAnalysis.ui_title?.includes('Error') || data.finalAnalysis.ui_title?.includes('Fallback'))) {
-                const fallbackText = data.finalAnalysis.components?.[0]?.props?.insights?.[0]?.message;
-                if (fallbackText) return fallbackText;
+            if (data.finalAnalysis && typeof data.finalAnalysis === 'object') {
+                if (data.finalAnalysis.components?.[0]?.props?.insights?.[0]?.message) {
+                    return data.finalAnalysis.components[0].props.insights[0].message;
+                } else if (data.finalAnalysis.summary) {
+                    return data.finalAnalysis.summary;
+                }
             }
 
             return typeof data.finalAnalysis === 'string' ? data.finalAnalysis : JSON.stringify(data.finalAnalysis);
@@ -166,11 +169,13 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
             let parsed = null;
             let rawString = '';
             
-            if (data.finalAnalysis && typeof data.finalAnalysis === 'object' && (data.finalAnalysis.ui_title?.includes('Error') || data.finalAnalysis.ui_title?.includes('Fallback'))) {
-                rawString = data.finalAnalysis.components?.[0]?.props?.insights?.[0]?.message || '';
-            } else if (typeof data.finalAnalysis === 'object') {
+            if (data.finalAnalysis && typeof data.finalAnalysis === 'object') {
                 if (data.finalAnalysis.intelligence !== undefined) {
                     parsed = data.finalAnalysis;
+                } else if (data.finalAnalysis.components?.[0]?.props?.insights?.[0]?.message) {
+                    rawString = data.finalAnalysis.components[0].props.insights[0].message;
+                } else if (data.finalAnalysis.summary) {
+                    rawString = data.finalAnalysis.summary;
                 } else {
                     rawString = JSON.stringify(data.finalAnalysis);
                 }
@@ -181,8 +186,8 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
             if (!parsed && rawString) {
                 try {
                     const cleaned = rawString.replace(/```json\n?/gi, '').replace(/```/g, '').trim();
-                    // Sometimes models include extra text before or after the JSON, try to extract just the { } block
-                    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+                    // Attempt to find a JSON block containing "intelligence"
+                    const jsonMatch = cleaned.match(/\{[^{}]*"intelligence"[^{}]*\}/i) || cleaned.match(/\{[\s\S]*\}/);
                     if (jsonMatch) {
                         parsed = JSON.parse(jsonMatch[0]);
                     } else {
@@ -591,7 +596,8 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
                                 <thead className="uppercase tracking-wider border-b-2 border-neutral-200 bg-neutral-50 text-neutral-500 text-[10px] font-semibold">
                                     <tr>
                                         <th className="px-4 py-3">Combination</th>
-                                        <th className="px-4 py-3">Speed</th>
+                                        <th className="px-4 py-3">Time</th>
+                                        <th className="px-4 py-3">Speed Score</th>
                                         <th className="px-4 py-3">Intelligence</th>
                                         <th className="px-4 py-3">Accuracy</th>
                                         <th className="px-4 py-3">Output Snippet</th>
@@ -609,6 +615,7 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
                                                     {(r.durationMs / 1000).toFixed(1)}s
                                                 </span>
                                             </td>
+                                            <td className="px-4 py-3 font-semibold text-purple-700">{r.scores.speed || '-'}</td>
                                             <td className="px-4 py-3 font-semibold text-blue-700">{r.scores.intelligence || '-'}</td>
                                             <td className="px-4 py-3 font-semibold text-emerald-700">{r.scores.accuracy || '-'}</td>
                                             <td className="px-4 py-3 max-w-xs truncate text-xs text-neutral-600 font-mono">
@@ -652,7 +659,8 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
                                     <tr>
                                         <th className="px-4 py-3">Role</th>
                                         <th className="px-4 py-3">Model</th>
-                                        <th className="px-4 py-3">Speed</th>
+                                        <th className="px-4 py-3">Time</th>
+                                        <th className="px-4 py-3">Speed Score</th>
                                         <th className="px-4 py-3">Intelligence</th>
                                         <th className="px-4 py-3">Accuracy</th>
                                         <th className="px-4 py-3">Status</th>
@@ -671,6 +679,7 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
                                                     {(r.durationMs / 1000).toFixed(1)}s
                                                 </span>
                                             </td>
+                                            <td className="px-4 py-3 font-semibold text-purple-700">{r.scores.speed || '-'}</td>
                                             <td className="px-4 py-3 font-semibold text-blue-700">{r.scores.intelligence || '-'}</td>
                                             <td className="px-4 py-3 font-semibold text-emerald-700">{r.scores.accuracy || '-'}</td>
                                             <td className="px-4 py-3 text-xs">
