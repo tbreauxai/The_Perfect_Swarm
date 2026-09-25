@@ -255,6 +255,13 @@ export interface MemoryCortexDiagnostics {
     fallbackStoreSize: number;
     storageByDomain: Record<string, number>;
     storageByRole: Record<string, number>;
+    latencyStats?: {
+        mean: number;
+        p95: number;
+        p99: number;
+    };
+    cacheHitRatio?: number;
+    modelSuggestions?: string;
 }
 
 export interface MemoryCortexConfig {
