@@ -9,8 +9,10 @@ import { SettingsModal, AppSettings } from './components/SettingsModal';
 import { SwarmEventTimeline, SwarmTimelineEvent } from './components/SwarmEventTimeline';
 import { AnalysisViewer } from './components/AnalysisViewer';
 import { CortexDiagnosticsViewer } from './components/CortexDiagnosticsViewer';
+import { OptimizationRunner } from './components/optimization/OptimizationRunner';
 
 export default function App() {
+  const [activeTab, setActiveTab] = useState<'trace' | 'optimization'>('trace');
   const [task, setTask] = useState('');
   const [data, setData] = useState('');
   const [loading, setLoading] = useState(false);
@@ -327,55 +329,78 @@ export default function App() {
 
           {/* Right Column: Execution Trace and Analysis Output */}
           <div className="lg:col-span-8 space-y-6">
-            {(events.length > 0 || finalAnalysis || progressiveStage?.digests) ? (
-              <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200">
-                <h2 className="text-xl font-medium flex items-center justify-between border-b border-neutral-100 pb-4 mb-6">
-                  <span className="flex items-center gap-2">
-                    <Activity className="w-5 h-5 text-indigo-600" />
-                    Execution Trace
-                  </span>
-                  {loading && (
-                    <span className="text-xs font-normal text-indigo-600 bg-indigo-50 border border-indigo-100 px-2.5 py-1 rounded-full flex items-center gap-1.5 animate-pulse">
-                      <Loader2 className="w-3 h-3 animate-spin" />
-                      Live Swarm Streaming
+            <div className="flex gap-4 mb-4 border-b border-neutral-200">
+              <button
+                className={`pb-2 ${activeTab === 'trace' ? 'border-b-2 border-indigo-600 font-semibold text-neutral-900' : 'text-neutral-500 hover:text-neutral-700'}`}
+                onClick={() => setActiveTab('trace')}
+              >
+                Execution Trace
+              </button>
+              <button
+                className={`pb-2 ${activeTab === 'optimization' ? 'border-b-2 border-indigo-600 font-semibold text-neutral-900' : 'text-neutral-500 hover:text-neutral-700'}`}
+                onClick={() => setActiveTab('optimization')}
+              >
+                Optimizer
+              </button>
+            </div>
+
+            {activeTab === 'trace' && (
+              (events.length > 0 || finalAnalysis || progressiveStage?.digests) ? (
+                <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200">
+                  <h2 className="text-xl font-medium flex items-center justify-between border-b border-neutral-100 pb-4 mb-6">
+                    <span className="flex items-center gap-2">
+                      <Activity className="w-5 h-5 text-indigo-600" />
+                      Execution Trace
                     </span>
-                  )}
-                </h2>
+                    {loading && (
+                      <span className="text-xs font-normal text-indigo-600 bg-indigo-50 border border-indigo-100 px-2.5 py-1 rounded-full flex items-center gap-1.5 animate-pulse">
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                        Live Swarm Streaming
+                      </span>
+                    )}
+                  </h2>
 
-                <SwarmEventTimeline
-                  events={events}
-                  expandedEvents={expandedEvents}
-                  onToggleEvent={toggleEvent}
-                />
+                  <SwarmEventTimeline
+                    events={events}
+                    expandedEvents={expandedEvents}
+                    onToggleEvent={toggleEvent}
+                  />
 
-                <AnalysisViewer
-                  finalAnalysis={finalAnalysis}
-                  interimDigests={progressiveStage?.digests}
-                  isSynthesizing={loading && progressiveStage?.stage === 'manager_synthesis'}
-                />
-              </div>
-            ) : loading ? (
-              <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200 h-full flex flex-col items-center justify-center text-center space-y-3 min-h-[400px]">
-                <div className="w-16 h-16 bg-indigo-50 rounded-full flex items-center justify-center mb-2 border border-indigo-100 animate-pulse">
-                  <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
+                  <AnalysisViewer
+                    finalAnalysis={finalAnalysis}
+                    interimDigests={progressiveStage?.digests}
+                    isSynthesizing={loading && progressiveStage?.stage === 'manager_synthesis'}
+                  />
                 </div>
-                <h3 className="text-lg font-medium text-neutral-800">
-                  Initializing Swarm Execution...
-                </h3>
-                <p className="text-sm text-neutral-500 max-w-sm">
-                  Connecting to streaming endpoint, profiling payload, and dispatching analysts in real time.
-                </p>
-              </div>
-            ) : (
-              <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200 h-full flex flex-col items-center justify-center text-center space-y-3 min-h-[400px]">
-                <div className="w-16 h-16 bg-neutral-50 rounded-full flex items-center justify-center mb-2 border border-neutral-100">
-                  <Activity className="w-8 h-8 text-neutral-300" />
+              ) : loading ? (
+                <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200 h-full flex flex-col items-center justify-center text-center space-y-3 min-h-[400px]">
+                  <div className="w-16 h-16 bg-indigo-50 rounded-full flex items-center justify-center mb-2 border border-indigo-100 animate-pulse">
+                    <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
+                  </div>
+                  <h3 className="text-lg font-medium text-neutral-800">
+                    Initializing Swarm Execution...
+                  </h3>
+                  <p className="text-sm text-neutral-500 max-w-sm">
+                    Connecting to streaming endpoint, profiling payload, and dispatching analysts in real time.
+                  </p>
                 </div>
-                <h3 className="text-lg font-medium text-neutral-700">No Traces Yet</h3>
-                <p className="text-sm text-neutral-500 max-w-[250px]">
-                  Provide data and a task, then execute the swarm to see the detailed execution log.
-                </p>
-              </div>
+              ) : (
+                <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200 h-full flex flex-col items-center justify-center text-center space-y-3 min-h-[400px]">
+                  <div className="w-16 h-16 bg-neutral-50 rounded-full flex items-center justify-center mb-2 border border-neutral-100">
+                    <Activity className="w-8 h-8 text-neutral-300" />
+                  </div>
+                  <h3 className="text-lg font-medium text-neutral-700">No Traces Yet</h3>
+                  <p className="text-sm text-neutral-500 max-w-[250px]">
+                    Provide data and a task, then execute the swarm to see the detailed execution log.
+                  </p>
+                </div>
+              )
+            )}
+
+            {activeTab === 'optimization' && (
+               <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200">
+                   <OptimizationRunner task={task} data={data} settings={settings} />
+               </div>
             )}
           </div>
         </div>
