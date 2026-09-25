@@ -33,6 +33,7 @@ interface ModelErrorRecord {
 
 export const OptimizationRunner: React.FC<OptimizationRunnerProps> = ({ task, data, settings }) => {
     const [results, setResults] = useState<OptimizationResult[]>([]);
+    const [history, setHistory] = useState<OptimizationResult[]>([]);
     const [isRunning, setIsRunning] = useState(false);
     const [progress, setProgress] = useState('');
     const [errorRecords, setErrorRecords] = useState<Record<string, ModelErrorRecord>>({});
@@ -43,10 +44,27 @@ export const OptimizationRunner: React.FC<OptimizationRunnerProps> = ({ task, da
             if (saved) {
                 setErrorRecords(JSON.parse(saved));
             }
+            const savedHistory = localStorage.getItem('swarm_optimization_history');
+            if (savedHistory) {
+                setHistory(JSON.parse(savedHistory));
+            }
         } catch (e) {
-            console.error("Failed to load error records", e);
+            console.error("Failed to load local records", e);
         }
     }, []);
+
+    const saveToHistory = (res: OptimizationResult) => {
+        setHistory(prev => {
+            const updated = [...prev.filter(r => r.id !== res.id), res].sort((a, b) => 
+               ((b.scores.intelligence || 0) + (b.scores.accuracy || 0)) - ((a.scores.intelligence || 0) + (a.scores.accuracy || 0))
+            );
+            const top50 = updated.slice(0, 50);
+            try {
+                localStorage.setItem('swarm_optimization_history', JSON.stringify(top50));
+            } catch (e) {}
+            return top50;
+        });
+    };
 
     const recordError = (modelId: string, provider: string, errorMsg: string) => {
         setErrorRecords(prev => {
@@ -90,7 +108,7 @@ Respond ONLY with the text of the prompt you want to give them.`;
                     data: '',
                     settings: {
                         ...settings,
-                        agents: [managerAgent],
+                        agents: [{ id: 'grader-agent', role: 'Prompt Generator Node', provider: 'gemini', model: 'gemini-3.5-flash-lite' }],
                         forceFullSwarm: false
                     }
                 })
@@ -129,7 +147,7 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
                     data: '',
                     settings: {
                         ...settings,
-                        agents: [managerAgent],
+                        agents: [{ id: 'grader-agent', role: 'Grader Node', provider: 'gemini', model: 'gemini-3.5-flash-lite' }],
                         forceFullSwarm: false
                     }
                 })
@@ -277,6 +295,7 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
 
             newResults.push(result);
             setResults(prev => [...prev.filter(r => r.id !== result.id), result]);
+            saveToHistory(result);
             await delay(1000);
         }
 
@@ -392,6 +411,7 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
 
             newResults.push(result);
             setResults(prev => [...prev, result]);
+            saveToHistory(result);
             await delay(2000);
         }
 
@@ -455,10 +475,15 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
                                             {r.error ? (
                                                 <div className="text-red-600 truncate">{r.error}</div>
                                             ) : (
-                                                <div className="flex gap-2 text-[10px]">
-                                                    <span title="Intelligence" className="px-1.5 py-0.5 bg-blue-100 text-blue-800 rounded">INT: {r.scores.intelligence || '-'}</span>
-                                                    <span title="Accuracy" className="px-1.5 py-0.5 bg-emerald-100 text-emerald-800 rounded">ACC: {r.scores.accuracy || '-'}</span>
-                                                    <span title="Speed" className="px-1.5 py-0.5 bg-purple-100 text-purple-800 rounded">SPD: {r.scores.speed || '-'}</span>
+                                                <div className="flex flex-col gap-1">
+                                                    <div className="flex gap-2 text-[10px]">
+                                                        <span title="Intelligence" className="px-1.5 py-0.5 bg-blue-100 text-blue-800 rounded">INT: {r.scores.intelligence || '-'}</span>
+                                                        <span title="Accuracy" className="px-1.5 py-0.5 bg-emerald-100 text-emerald-800 rounded">ACC: {r.scores.accuracy || '-'}</span>
+                                                        <span title="Speed" className="px-1.5 py-0.5 bg-purple-100 text-purple-800 rounded">SPD: {r.scores.speed || '-'}</span>
+                                                    </div>
+                                                    <div className="mt-1 text-[9px] text-neutral-500 max-h-16 overflow-y-auto whitespace-pre-wrap font-mono bg-white p-1 border border-neutral-100 rounded">
+                                                        {typeof r.output === 'object' ? JSON.stringify(r.output, null, 2) : String(r.output || 'No output')}
+                                                    </div>
                                                 </div>
                                             )}
                                         </div>
@@ -581,6 +606,61 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
                 </div>
             )}
             </div>
+            
+            {history.length > 0 && (
+                <div className="mt-8 pt-8 border-t border-neutral-200">
+                    <div className="flex justify-between items-center mb-6">
+                        <div>
+                            <h4 className="text-lg font-semibold text-neutral-800 flex items-center gap-2">
+                                <Trophy className="w-5 h-5 text-yellow-500" />
+                                Local Historical Leaderboard
+                            </h4>
+                            <p className="text-sm text-neutral-500 mt-1">The highest scoring models from all your past benchmarking sessions.</p>
+                        </div>
+                        <button onClick={() => { localStorage.removeItem('swarm_optimization_history'); setHistory([]); }} className="text-xs text-red-600 hover:text-red-800 flex items-center gap-1">
+                            <Trash2 className="w-3 h-3" /> Clear History
+                        </button>
+                    </div>
+
+                    <div className="bg-white rounded-xl border border-neutral-200 shadow-sm overflow-hidden">
+                        <div className="overflow-x-auto max-h-96 overflow-y-auto">
+                            <table className="w-full text-left text-sm whitespace-nowrap">
+                                <thead className="uppercase tracking-wider border-b-2 border-neutral-200 bg-neutral-50 text-neutral-500 text-[10px] font-semibold sticky top-0">
+                                    <tr>
+                                        <th className="px-4 py-3">Role</th>
+                                        <th className="px-4 py-3">Model</th>
+                                        <th className="px-4 py-3">Speed</th>
+                                        <th className="px-4 py-3">Intelligence</th>
+                                        <th className="px-4 py-3">Accuracy</th>
+                                        <th className="px-4 py-3">Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-neutral-200 text-neutral-800">
+                                    {history.map(r => (
+                                        <tr key={`hist-${r.id}-${r.durationMs}`} className="hover:bg-neutral-50">
+                                            <td className="px-4 py-3 font-semibold text-xs text-neutral-600">{r.role}</td>
+                                            <td className="px-4 py-3 font-mono text-xs max-w-[200px] truncate" title={r.model}>
+                                                {r.model}
+                                            </td>
+                                            <td className="px-4 py-3">
+                                                <span className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium ${r.durationMs < 3000 ? 'bg-green-100 text-green-700' : r.durationMs < 8000 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>
+                                                    <Clock className="w-3 h-3" />
+                                                    {(r.durationMs / 1000).toFixed(1)}s
+                                                </span>
+                                            </td>
+                                            <td className="px-4 py-3 font-semibold text-blue-700">{r.scores.intelligence || '-'}</td>
+                                            <td className="px-4 py-3 font-semibold text-emerald-700">{r.scores.accuracy || '-'}</td>
+                                            <td className="px-4 py-3 text-xs">
+                                                {r.error ? <span className="text-red-500">Error</span> : <span className="text-green-600 font-medium">Valid</span>}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
