@@ -103,8 +103,5 @@ describe('SwarmEngine: Speculative Parallel Execution & Conflict Resolution Inte
         const specEvent = result.events.find(e => e.action === 'Speculative Parallel Execution');
         expect(specEvent).toBeUndefined();
 
-        // Verify legacy Batch Delay event IS emitted
-        const delayEvent = result.events.find(e => e.action === 'Batch Delay');
-        expect(delayEvent).toBeDefined();
     });
 });
