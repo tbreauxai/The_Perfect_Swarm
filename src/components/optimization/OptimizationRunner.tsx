@@ -94,45 +94,69 @@ export const OptimizationRunner: React.FC<OptimizationRunnerProps> = ({ task, da
     const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
     const generateTestPrompt = async (managerAgent: any, analystRole: string, baseTask: string): Promise<string> => {
+        const failoverModels = [
+            { provider: managerAgent.provider, model: managerAgent.model },
+            { provider: 'groq', model: 'llama-3.3-70b-versatile' },
+            { provider: 'gemini', model: 'gemini-2.5-flash' },
+            { provider: 'openai', model: 'gpt-4o-mini' }
+        ];
+
         try {
             const promptTask = `As the Swarm Manager, generate a highly specific, complex test prompt designed to challenge a sub-agent with the role: "${analystRole}".
 The overall system task is: "${baseTask}".
 Create a realistic scenario or question that perfectly fits this analyst's domain to test their intelligence and accuracy.
 Respond ONLY with the text of the prompt you want to give them.`;
 
-            const res = await fetch('/api/swarm/analyze', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    task: promptTask,
-                    data: '',
-                    settings: {
-                        ...settings,
-                        agents: [{ id: 'grader-agent', role: 'Prompt Generator Node', provider: 'gemini', model: 'gemini-flash-lite-latest' }],
-                        forceFullSwarm: false
-                    }
-                })
-            });
+            for (const failover of failoverModels) {
+                try {
+                    const res = await fetch('/api/swarm/analyze', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            task: promptTask,
+                            data: '',
+                            settings: {
+                                ...settings,
+                                agents: [{ id: 'grader-agent', role: 'Prompt Generator Node', provider: failover.provider, model: failover.model }],
+                                forceFullSwarm: false
+                            }
+                        })
+                    });
 
-            if (!res.ok) return baseTask;
-            const data = await res.json();
-            
-            if (data.finalAnalysis && typeof data.finalAnalysis === 'object') {
-                if (data.finalAnalysis.components?.[0]?.props?.insights?.[0]?.message) {
-                    return data.finalAnalysis.components[0].props.insights[0].message;
-                } else if (data.finalAnalysis.summary) {
-                    return data.finalAnalysis.summary;
+                    if (!res.ok) continue;
+                    const data = await res.json();
+
+                    if (data.finalAnalysis && typeof data.finalAnalysis === 'object' && !data.finalAnalysis.ui_title?.includes('Error')) {
+                        if (data.finalAnalysis.components?.[0]?.props?.insights?.[0]?.message) {
+                            return data.finalAnalysis.components[0].props.insights[0].message;
+                        } else if (data.finalAnalysis.summary) {
+                            return data.finalAnalysis.summary;
+                        }
+                    }
+
+                    if (typeof data.finalAnalysis === 'string' && !data.finalAnalysis.includes('Error')) {
+                        return data.finalAnalysis;
+                    }
+                } catch (e) {
+                    console.warn(`Test prompt generation failed for ${failover.model}`, e);
                 }
             }
 
-            return typeof data.finalAnalysis === 'string' ? data.finalAnalysis : JSON.stringify(data.finalAnalysis);
+            return baseTask;
         } catch (e) {
-            console.error("Prompt generation failed", e);
+            console.error("Prompt generation failed completely", e);
             return baseTask;
         }
     };
 
     const autoGradeOutput = async (originalTask: string, output: any, durationMs: number, managerAgent: any) => {
+        const failoverModels = [
+            { provider: managerAgent.provider, model: managerAgent.model },
+            { provider: 'groq', model: 'llama-3.3-70b-versatile' },
+            { provider: 'gemini', model: 'gemini-2.5-flash' },
+            { provider: 'openai', model: 'gpt-4o-mini' }
+        ];
+
         try {
             const gradingTask = `You are grading the output of a subordinate AI analyst.
 Original Task: "${originalTask}"
@@ -148,70 +172,78 @@ Score the Analyst's output from 1 to 10 in three distinct categories:
 Respond ONLY with a valid JSON object matching this exact format, with no markdown formatting or other text:
 {"intelligence": 8, "accuracy": 9, "speed": 5}`;
 
-            const res = await fetch('/api/swarm/analyze', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    task: gradingTask,
-                    data: '',
-                    settings: {
-                        ...settings,
-                        agents: [{ id: 'grader-agent', role: 'Grader Node', provider: 'gemini', model: 'gemini-flash-lite-latest' }],
-                        forceFullSwarm: false
-                    }
-                })
-            });
-
-            if (!res.ok) return null;
-            const data = await res.json();
-
-            // Try to parse the JSON output from the manager
-            let parsed = null;
-            let rawString = '';
-            
-            if (data.finalAnalysis && typeof data.finalAnalysis === 'object') {
-                const isFallback = data.finalAnalysis.components?.[0]?.id === 'default-insight-list';
-                
-                if (data.finalAnalysis.intelligence !== undefined) {
-                    parsed = data.finalAnalysis;
-                } else if (isFallback && data.finalAnalysis.components?.[0]?.props?.insights?.[0]?.message) {
-                    rawString = data.finalAnalysis.components[0].props.insights[0].message;
-                } else if (data.finalAnalysis.components?.[0]?.props?.insights?.[0]?.message) {
-                    rawString = data.finalAnalysis.components[0].props.insights[0].message;
-                } else if (data.finalAnalysis.summary) {
-                    rawString = data.finalAnalysis.summary;
-                } else {
-                    rawString = JSON.stringify(data.finalAnalysis);
-                }
-            } else {
-                rawString = String(data.finalAnalysis);
-            }
-
-            if (!parsed && rawString) {
+            for (const failover of failoverModels) {
                 try {
-                    const cleaned = rawString.replace(/```json\n?/gi, '').replace(/```/g, '').trim();
-                    // Attempt to find a JSON block containing "intelligence"
-                    const jsonMatch = cleaned.match(/\{[^{}]*"intelligence"[^{}]*\}/i) || cleaned.match(/\{[\s\S]*\}/);
-                    if (jsonMatch) {
-                        parsed = JSON.parse(jsonMatch[0]);
+                    const res = await fetch('/api/swarm/analyze', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            task: gradingTask,
+                            data: '',
+                            settings: {
+                                ...settings,
+                                agents: [{ id: 'grader-agent', role: 'Grader Node', provider: failover.provider, model: failover.model }],
+                                forceFullSwarm: false
+                            }
+                        })
+                    });
+
+                    if (!res.ok) continue;
+                    const data = await res.json();
+                    if (!data.finalAnalysis || data.finalAnalysis.ui_title?.includes('Error')) continue;
+
+                    // Try to parse the JSON output from the manager
+                    let parsed = null;
+                    let rawString = '';
+
+                    if (typeof data.finalAnalysis === 'object') {
+                        const isFallback = data.finalAnalysis.components?.[0]?.id === 'default-insight-list';
+
+                        if (data.finalAnalysis.intelligence !== undefined) {
+                            parsed = data.finalAnalysis;
+                        } else if (isFallback && data.finalAnalysis.components?.[0]?.props?.insights?.[0]?.message) {
+                            rawString = data.finalAnalysis.components[0].props.insights[0].message;
+                        } else if (data.finalAnalysis.components?.[0]?.props?.insights?.[0]?.message) {
+                            rawString = data.finalAnalysis.components[0].props.insights[0].message;
+                        } else if (data.finalAnalysis.summary) {
+                            rawString = data.finalAnalysis.summary;
+                        } else {
+                            rawString = JSON.stringify(data.finalAnalysis);
+                        }
                     } else {
-                        parsed = JSON.parse(cleaned);
+                        rawString = String(data.finalAnalysis);
                     }
-                } catch(e) {
-                    console.warn("Failed to parse grading string:", rawString);
+
+                    if (!parsed && rawString) {
+                        try {
+                            const cleaned = rawString.replace(/```json\n?/gi, '').replace(/```/g, '').trim();
+                            // Attempt to find a JSON block containing "intelligence"
+                            const jsonMatch = cleaned.match(/\{[^{}]*"intelligence"[^{}]*\}/i) || cleaned.match(/\{[\s\S]*\}/);
+                            if (jsonMatch) {
+                                parsed = JSON.parse(jsonMatch[0]);
+                            } else {
+                                parsed = JSON.parse(cleaned);
+                            }
+                        } catch(e) {
+                            console.warn("Failed to parse grading string:", rawString);
+                        }
+                    }
+
+                    if (parsed && typeof parsed === 'object' && parsed.intelligence !== undefined) {
+                        return {
+                            intelligence: typeof parsed.intelligence === 'number' ? Math.min(10, Math.max(1, parsed.intelligence)) : null,
+                            accuracy: typeof parsed.accuracy === 'number' ? Math.min(10, Math.max(1, parsed.accuracy)) : null,
+                            speed: typeof parsed.speed === 'number' ? Math.min(10, Math.max(1, parsed.speed)) : null,
+                        };
+                    }
+                } catch (e) {
+                    console.warn(`Autograding failed for ${failover.model}`, e);
                 }
             }
 
-            if (parsed && typeof parsed === 'object') {
-                return {
-                    intelligence: typeof parsed.intelligence === 'number' ? Math.min(10, Math.max(1, parsed.intelligence)) : null,
-                    accuracy: typeof parsed.accuracy === 'number' ? Math.min(10, Math.max(1, parsed.accuracy)) : null,
-                    speed: typeof parsed.speed === 'number' ? Math.min(10, Math.max(1, parsed.speed)) : null,
-                };
-            }
             return null;
         } catch (e) {
-            console.error("Autograding failed", e);
+            console.error("Autograding failed completely", e);
             return null;
         }
     };
@@ -299,7 +331,22 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
                 if (!res.ok) throw new Error(`HTTP error ${res.status}`);
                 const resData = await res.json();
                 if (resData.error) throw new Error(resData.error);
+
                 output = resData.finalAnalysis;
+
+                if (!output) {
+                    throw new Error("No output returned from model.");
+                }
+
+                if (output.ui_title?.includes('Error') || output.error) {
+                    throw new Error(output.error || output.ui_title || "Execution error in model response.");
+                }
+
+                // Make sure we didn't just get an empty string or empty object back as valid
+                if (typeof output === 'string' && output.trim().length < 5) {
+                     throw new Error("Output too short to be valid.");
+                }
+
             } catch (e: any) {
                 errorMsg = e.message;
                 recordError(model.id, agentToTest.provider, errorMsg);
@@ -417,6 +464,18 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
                 const resData = await res.json();
                 if (resData.error) throw new Error(resData.error);
                 output = resData.finalAnalysis;
+
+                if (!output) {
+                    throw new Error("No output returned from combination.");
+                }
+
+                if (output.ui_title?.includes('Error') || output.error) {
+                    throw new Error(output.error || output.ui_title || "Execution error in combination response.");
+                }
+
+                if (typeof output === 'string' && output.trim().length < 5) {
+                     throw new Error("Output too short to be valid.");
+                }
             } catch (e: any) {
                 errorMsg = e.message;
             }
