@@ -323,46 +323,69 @@ export const OptimizationRunner: React.FC<OptimizationRunnerProps> = ({ task, da
     };
 
     const generateTestPrompt = async (managerAgent: any, analystRole: string, baseTask: string): Promise<string> => {
+        const failoverModels = [
+            { provider: managerAgent.provider, model: managerAgent.model },
+            { provider: 'groq', model: 'llama-3.3-70b-versatile' },
+            { provider: 'gemini', model: 'gemini-2.5-flash' },
+            { provider: 'openai', model: 'gpt-4o-mini' }
+        ];
+
         try {
             const promptTask = `As the Swarm Manager, generate a highly specific, complex test prompt designed to challenge a sub-agent with the role: "${analystRole}".
 The overall system task is: "${baseTask}".
 Create a realistic scenario or question that perfectly fits this analyst's domain to test their intelligence and accuracy.
 Respond ONLY with the text of the prompt you want to give them.`;
 
-            const grader = resolveGraderAgent(managerAgent);
-            const res = await fetch('/api/swarm/analyze', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    task: promptTask,
-                    data: '',
-                    settings: {
-                        ...settings,
-                        agents: [grader],
-                        forceFullSwarm: false
-                    }
-                })
-            });
+            for (const failover of failoverModels) {
+                try {
+                    const res = await fetch('/api/swarm/analyze', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            task: promptTask,
+                            data: '',
+                            settings: {
+                                ...settings,
+                                agents: [{ id: 'grader-agent', role: 'Prompt Generator Node', provider: failover.provider, model: failover.model }],
+                                forceFullSwarm: false
+                            }
+                        })
+                    });
 
-            if (!res.ok) return baseTask;
-            const data = await res.json();
-            
-            if (data.finalAnalysis && typeof data.finalAnalysis === 'object') {
-                if (data.finalAnalysis.components?.[0]?.props?.insights?.[0]?.message) {
-                    return data.finalAnalysis.components[0].props.insights[0].message;
-                } else if (data.finalAnalysis.summary) {
-                    return data.finalAnalysis.summary;
+                    if (!res.ok) continue;
+                    const data = await res.json();
+
+                    if (data.finalAnalysis && typeof data.finalAnalysis === 'object' && !data.finalAnalysis.ui_title?.includes('Error')) {
+                        if (data.finalAnalysis.components?.[0]?.props?.insights?.[0]?.message) {
+                            return data.finalAnalysis.components[0].props.insights[0].message;
+                        } else if (data.finalAnalysis.summary) {
+                            return data.finalAnalysis.summary;
+                        }
+                    }
+
+                    if (typeof data.finalAnalysis === 'string' && !data.finalAnalysis.includes('Error')) {
+                        return data.finalAnalysis;
+                    }
+                } catch (e) {
+                    console.warn(`Test prompt generation failed for ${failover.model}`, e);
                 }
             }
 
-            return typeof data.finalAnalysis === 'string' ? data.finalAnalysis : JSON.stringify(data.finalAnalysis);
+            return baseTask;
         } catch (e) {
-            console.error("Prompt generation failed", e);
+            console.error("Prompt generation failed completely", e);
             return baseTask;
         }
     };
 
     const autoGradeOutput = async (originalTask: string, output: any, durationMs: number, managerAgent: any) => {
+        const failoverModels = [
+            { provider: managerAgent.provider, model: managerAgent.model },
+            { provider: 'groq', model: 'llama-3.3-70b-versatile' },
+            { provider: 'gemini', model: 'gemini-2.5-flash' },
+            { provider: 'openai', model: 'gpt-4o-mini' }
+        ];
+
         try {
             const gradingTask = `You are grading the output of a subordinate AI analyst.
 Original Task: "${originalTask}"
@@ -378,37 +401,47 @@ Score the Analyst's output from 1 to 10 in three distinct categories:
 Respond ONLY with a valid JSON object matching this exact format, with no markdown formatting or other text:
 {"intelligence": 8, "accuracy": 9, "speed": 5}`;
 
-            const grader = resolveGraderAgent(managerAgent);
-            const res = await fetch('/api/swarm/analyze', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    task: gradingTask,
-                    data: '',
-                    settings: {
-                        ...settings,
-                        agents: [grader],
-                        forceFullSwarm: false
-                    }
-                })
-            });
+            for (const failover of failoverModels) {
+                try {
+                    const res = await fetch('/api/swarm/analyze', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            task: gradingTask,
+                            data: '',
+                            settings: {
+                                ...settings,
+                                agents: [{ id: 'grader-agent', role: 'Grader Node', provider: failover.provider, model: failover.model }],
+                                forceFullSwarm: false
+                            }
+                        })
+                    });
 
-            if (!res.ok) {
-                return {
-                    intelligence: null,
-                    accuracy: null,
-                    speed: calculateSpeedScore(durationMs)
-                };
+                    if (!res.ok) continue;
+                    const data = await res.json();
+                    
+                    const scores = extractGradingScores(data, durationMs);
+                    if (scores.intelligence !== null && scores.accuracy !== null) {
+                        return scores;
+                    }
+                } catch (e) {
+                    console.warn(`Autograding failed for ${failover.model}`, e);
+                }
             }
-            const data = await res.json();
-            return extractGradingScores(data, durationMs);
-        } catch (e) {
-            console.error("Autograding failed", e);
+            
             return {
                 intelligence: null,
                 accuracy: null,
                 speed: calculateSpeedScore(durationMs)
             };
+        } catch (e) {
+            console.error("Autograding failed completely", e);
+            return {
+                intelligence: null,
+                accuracy: null,
+                speed: calculateSpeedScore(durationMs)
+            };
+        }
         }
     };
 
@@ -495,13 +528,22 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
                 if (!res.ok) throw new Error(`HTTP error ${res.status}`);
                 const resData = await res.json();
                 if (resData.error) throw new Error(resData.error);
+
                 output = resData.finalAnalysis;
-                if (output && typeof output === 'object') {
+                if (!output) {
+                    throw new Error("No output returned from model.");
+                }
+
+                if (typeof output === 'object') {
                     if (output.error) throw new Error(String(output.error));
-                    if (typeof output.ui_title === 'string' && output.ui_title.toLowerCase().includes('execution error')) {
-                        const errMsg = output.components?.[0]?.props?.insights?.[0]?.message || 'Execution Error in model output';
+                    if (typeof output.ui_title === 'string' && (output.ui_title.toLowerCase().includes('error') || output.ui_title.toLowerCase().includes('execution error'))) {
+                        const errMsg = output.components?.[0]?.props?.insights?.[0]?.message || output.error || output.ui_title || 'Execution Error in model output';
                         throw new Error(errMsg);
                     }
+                }
+
+                if (typeof output === 'string' && output.trim().length < 5) {
+                    throw new Error("Output too short to be valid.");
                 }
             } catch (e: any) {
                 errorMsg = e.message;
@@ -625,12 +667,26 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
                 const resData = await res.json();
                 if (resData.error) throw new Error(resData.error);
                 output = resData.finalAnalysis;
+<<<<<<< HEAD
                 if (output && typeof output === 'object') {
                     if (output.error) throw new Error(String(output.error));
                     if (typeof output.ui_title === 'string' && output.ui_title.toLowerCase().includes('execution error')) {
                         const errMsg = output.components?.[0]?.props?.insights?.[0]?.message || 'Execution Error in swarm output';
                         throw new Error(errMsg);
                     }
+=======
+
+                if (!output) {
+                    throw new Error("No output returned from combination.");
+                }
+
+                if (output.ui_title?.includes('Error') || output.error) {
+                    throw new Error(output.error || output.ui_title || "Execution error in combination response.");
+                }
+
+                if (typeof output === 'string' && output.trim().length < 5) {
+                     throw new Error("Output too short to be valid.");
+>>>>>>> 659396e02fb21045b3ff63692681b2d09308e603
                 }
             } catch (e: any) {
                 errorMsg = e.message;
