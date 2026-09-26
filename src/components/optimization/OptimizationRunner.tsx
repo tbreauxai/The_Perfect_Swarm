@@ -170,8 +170,12 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
             let rawString = '';
             
             if (data.finalAnalysis && typeof data.finalAnalysis === 'object') {
+                const isFallback = data.finalAnalysis.components?.[0]?.id === 'default-insight-list';
+                
                 if (data.finalAnalysis.intelligence !== undefined) {
                     parsed = data.finalAnalysis;
+                } else if (isFallback && data.finalAnalysis.components?.[0]?.props?.insights?.[0]?.message) {
+                    rawString = data.finalAnalysis.components[0].props.insights[0].message;
                 } else if (data.finalAnalysis.components?.[0]?.props?.insights?.[0]?.message) {
                     rawString = data.finalAnalysis.components[0].props.insights[0].message;
                 } else if (data.finalAnalysis.summary) {
