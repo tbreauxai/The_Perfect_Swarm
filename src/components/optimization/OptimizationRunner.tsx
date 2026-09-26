@@ -108,7 +108,7 @@ Respond ONLY with the text of the prompt you want to give them.`;
                     data: '',
                     settings: {
                         ...settings,
-                        agents: [{ id: 'grader-agent', role: 'Prompt Generator Node', provider: 'gemini', model: 'gemini-3.5-flash-lite-latest' }],
+                        agents: [{ id: 'grader-agent', role: 'Prompt Generator Node', provider: 'gemini', model: 'gemini-flash-lite-latest' }],
                         forceFullSwarm: false
                     }
                 })
@@ -156,7 +156,7 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
                     data: '',
                     settings: {
                         ...settings,
-                        agents: [{ id: 'grader-agent', role: 'Grader Node', provider: 'gemini', model: 'gemini-3.5-flash-lite-latest' }],
+                        agents: [{ id: 'grader-agent', role: 'Grader Node', provider: 'gemini', model: 'gemini-flash-lite-latest' }],
                         forceFullSwarm: false
                     }
                 })
