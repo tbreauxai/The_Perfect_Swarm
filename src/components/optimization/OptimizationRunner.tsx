@@ -25,6 +25,216 @@ export interface OptimizationResult {
     isFullSwarm?: boolean;
 }
 
+/**
+ * Calculates a deterministic speed score from execution duration.
+ * <= 2000ms is 10, >= 10000ms is 1, scaling linearly in between.
+ */
+export const calculateSpeedScore = (durationMs: number): number => {
+    if (durationMs <= 2000) return 10;
+    if (durationMs >= 10000) return 1;
+    return Math.max(1, Math.min(10, Math.round(10 - ((durationMs - 2000) / 8000) * 9)));
+};
+
+/**
+ * Evaluates whether a benchmarked model response represents a full, substantive,
+ * uncorrupted analysis rather than merely the absence of a network error.
+ */
+export function isModelResponseValid(result?: { output?: any; error?: string } | null): boolean {
+    if (!result) return false;
+    if (result.error && typeof result.error === 'string' && result.error.trim().length > 0) {
+        return false;
+    }
+    if (result.output === null || result.output === undefined) return false;
+
+    // String output
+    if (typeof result.output === 'string') {
+        const trimmed = result.output.trim();
+        if (trimmed.length < 20) return false;
+        const lower = trimmed.toLowerCase();
+        if (
+            lower.startsWith('error:') ||
+            lower.includes('schema_validation_failed') ||
+            lower.includes('execution error') ||
+            lower.includes('api key not configured')
+        ) {
+            return false;
+        }
+        return true;
+    }
+
+    // Object output
+    if (typeof result.output === 'object') {
+        if (result.output.error) return false;
+        const titleLower = typeof result.output.ui_title === 'string' ? result.output.ui_title.toLowerCase() : '';
+        if (titleLower.includes('execution error') || titleLower === 'error') {
+            return false;
+        }
+
+        // Generative UI format (ManagerResponse) with components
+        if (Array.isArray(result.output.components) && result.output.components.length > 0) {
+            return result.output.components.some((c: any) => {
+                if (!c || typeof c !== 'object') return false;
+                if (c.type === 'InsightList' && Array.isArray(c.props?.insights) && c.props.insights.length > 0) {
+                    return c.props.insights.some((ins: any) => {
+                        const msg = typeof ins === 'string' ? ins : ins?.message;
+                        if (typeof msg !== 'string') return false;
+                        const msgTrimmed = msg.trim();
+                        return msgTrimmed.length > 10 && !msgTrimmed.toLowerCase().startsWith('error:');
+                    });
+                }
+                if (c.type === 'MetricCard' && c.props?.title && c.props?.value) return true;
+                if (c.type === 'DataTable' && Array.isArray(c.props?.rows) && c.props.rows.length > 0) return true;
+                return false;
+            });
+        }
+
+        // AnalystResponse format with insights / summary
+        if (Array.isArray(result.output.insights) && result.output.insights.length > 0) {
+            return result.output.insights.some((i: any) => typeof i === 'string' && i.trim().length > 10);
+        }
+        if (typeof result.output.summary === 'string' && result.output.summary.trim().length > 20) {
+            return true;
+        }
+
+        // Generic object with message/content
+        if (typeof result.output.message === 'string' && result.output.message.trim().length > 20) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+export type ModelExecutionStatus = 'valid' | 'incomplete' | 'error';
+
+export function getModelExecutionStatus(result?: { output?: any; error?: string } | null): ModelExecutionStatus {
+    if (!result || (result.error && typeof result.error === 'string' && result.error.trim().length > 0)) {
+        return 'error';
+    }
+    if (isModelResponseValid(result)) {
+        return 'valid';
+    }
+    return 'incomplete';
+}
+
+/**
+ * Multi-layer robust score extractor that safely extracts intelligence, accuracy,
+ * and speed scores from any response structure (flat JSON, Generative UI components, or events).
+ */
+export function extractGradingScores(
+    data: any,
+    durationMs: number
+): { intelligence: number | null; accuracy: number | null; speed: number } {
+    const fallbackSpeed = calculateSpeedScore(durationMs);
+    let intVal: number | null = null;
+    let accVal: number | null = null;
+    let spdVal: number | null = null;
+
+    const parseNum = (v: any): number | null => {
+        if (typeof v === 'number' && !isNaN(v)) {
+            return Math.min(10, Math.max(1, Math.round(v)));
+        }
+        if (typeof v === 'string') {
+            const m = v.match(/\b([1-9]|10)\b/);
+            if (m) return parseInt(m[1], 10);
+            const mFloat = v.match(/([0-9]+(?:\.[0-9]+)?)/);
+            if (mFloat) return Math.min(10, Math.max(1, Math.round(parseFloat(mFloat[1]))));
+        }
+        return null;
+    };
+
+    const tryInspectObject = (obj: any) => {
+        if (!obj || typeof obj !== 'object') return;
+        if (intVal === null && (obj.intelligence !== undefined || obj.intellect !== undefined || obj.int !== undefined)) {
+            intVal = parseNum(obj.intelligence ?? obj.intellect ?? obj.int);
+        }
+        if (accVal === null && (obj.accuracy !== undefined || obj.acc !== undefined)) {
+            accVal = parseNum(obj.accuracy ?? obj.acc);
+        }
+        if (spdVal === null && (obj.speed !== undefined || obj.spd !== undefined)) {
+            spdVal = parseNum(obj.speed ?? obj.spd);
+        }
+    };
+
+    const tryScanString = (str: any) => {
+        if (typeof str !== 'string' || !str.trim()) return;
+        const cleaned = str.replace(/```(?:json)?\n?/gi, '').replace(/```/g, '').trim();
+
+        // 1. Try finding JSON block
+        try {
+            const matches = cleaned.match(/\{[\s\S]*?\}/g);
+            if (matches) {
+                for (const m of matches) {
+                    try {
+                        const parsed = JSON.parse(m);
+                        tryInspectObject(parsed);
+                        if (intVal !== null && accVal !== null) return;
+                    } catch {}
+                }
+            }
+        } catch {}
+
+        // 2. Regex matching for "intelligence: X" etc.
+        if (intVal === null) {
+            const m = cleaned.match(/(?:intelligence|intellect|int)\s*(?:score)?[:=\-]?\s*([0-9]+(?:\.[0-9]+)?)/i);
+            if (m) intVal = parseNum(m[1]);
+        }
+        if (accVal === null) {
+            const m = cleaned.match(/(?:accuracy|acc)\s*(?:score)?[:=\-]?\s*([0-9]+(?:\.[0-9]+)?)/i);
+            if (m) accVal = parseNum(m[1]);
+        }
+        if (spdVal === null) {
+            const m = cleaned.match(/(?:speed|spd)\s*(?:score)?[:=\-]?\s*([0-9]+(?:\.[0-9]+)?)/i);
+            if (m) spdVal = parseNum(m[1]);
+        }
+    };
+
+    // Layer 1: Check raw data object
+    tryInspectObject(data);
+    tryInspectObject(data?.finalAnalysis);
+
+    // Layer 2: Check events if present (events contain direct model outputs before guardManagerResponse)
+    if (Array.isArray(data?.events)) {
+        for (const ev of data.events) {
+            tryInspectObject(ev.output);
+            if (typeof ev.output === 'string') tryScanString(ev.output);
+            if (intVal !== null && accVal !== null) break;
+        }
+    }
+
+    // Layer 3: Scan components in Generative UI ManagerResponse
+    if (data?.finalAnalysis && typeof data.finalAnalysis === 'object') {
+        const fa = data.finalAnalysis;
+        if (Array.isArray(fa.components)) {
+            for (const comp of fa.components) {
+                if (comp.props?.insights && Array.isArray(comp.props.insights)) {
+                    for (const ins of comp.props.insights) {
+                        tryScanString(typeof ins === 'string' ? ins : ins?.message);
+                    }
+                }
+                if (comp.props?.title && comp.props?.value) {
+                    const title = String(comp.props.title).toLowerCase();
+                    if (title.includes('intel') && intVal === null) intVal = parseNum(comp.props.value);
+                    if (title.includes('accur') && accVal === null) accVal = parseNum(comp.props.value);
+                    if (title.includes('speed') && spdVal === null) spdVal = parseNum(comp.props.value);
+                }
+            }
+        }
+        if (fa.summary) tryScanString(fa.summary);
+    }
+
+    // Layer 4: Scan finalAnalysis as string
+    if (typeof data?.finalAnalysis === 'string') {
+        tryScanString(data.finalAnalysis);
+    }
+
+    return {
+        intelligence: intVal,
+        accuracy: accVal,
+        speed: spdVal !== null ? spdVal : fallbackSpeed
+    };
+}
+
 interface ModelErrorRecord {
     errorCount: number;
     lastError: string;
@@ -93,6 +303,25 @@ export const OptimizationRunner: React.FC<OptimizationRunnerProps> = ({ task, da
 
     const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+    const resolveGraderAgent = (mgr: any) => {
+        const provider = mgr?.provider && mgr.provider !== 'none' ? mgr.provider : 'gemini';
+        let model = mgr?.model;
+        if (!model || model.trim().length === 0) {
+            if (provider === 'gemini') model = 'gemini-2.5-flash';
+            else if (provider === 'groq') model = 'openai/gpt-oss-120b';
+            else if (provider === 'openrouter') model = 'deepseek/deepseek-r1';
+            else if (provider === 'mistral') model = 'mistral-small-latest';
+            else if (provider === 'github') model = 'gpt-4o-mini';
+            else model = 'simulated-swarm-v1';
+        }
+        return {
+            id: 'manager',
+            role: 'Manager Node',
+            provider,
+            model
+        };
+    };
+
     const generateTestPrompt = async (managerAgent: any, analystRole: string, baseTask: string): Promise<string> => {
         try {
             const promptTask = `As the Swarm Manager, generate a highly specific, complex test prompt designed to challenge a sub-agent with the role: "${analystRole}".
@@ -100,6 +329,7 @@ The overall system task is: "${baseTask}".
 Create a realistic scenario or question that perfectly fits this analyst's domain to test their intelligence and accuracy.
 Respond ONLY with the text of the prompt you want to give them.`;
 
+            const grader = resolveGraderAgent(managerAgent);
             const res = await fetch('/api/swarm/analyze', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -108,7 +338,7 @@ Respond ONLY with the text of the prompt you want to give them.`;
                     data: '',
                     settings: {
                         ...settings,
-                        agents: [{ id: 'grader-agent', role: 'Prompt Generator Node', provider: 'gemini', model: 'gemini-flash-lite-latest' }],
+                        agents: [grader],
                         forceFullSwarm: false
                     }
                 })
@@ -148,6 +378,7 @@ Score the Analyst's output from 1 to 10 in three distinct categories:
 Respond ONLY with a valid JSON object matching this exact format, with no markdown formatting or other text:
 {"intelligence": 8, "accuracy": 9, "speed": 5}`;
 
+            const grader = resolveGraderAgent(managerAgent);
             const res = await fetch('/api/swarm/analyze', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -156,63 +387,28 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
                     data: '',
                     settings: {
                         ...settings,
-                        agents: [{ id: 'grader-agent', role: 'Grader Node', provider: 'gemini', model: 'gemini-flash-lite-latest' }],
+                        agents: [grader],
                         forceFullSwarm: false
                     }
                 })
             });
 
-            if (!res.ok) return null;
-            const data = await res.json();
-
-            // Try to parse the JSON output from the manager
-            let parsed = null;
-            let rawString = '';
-            
-            if (data.finalAnalysis && typeof data.finalAnalysis === 'object') {
-                const isFallback = data.finalAnalysis.components?.[0]?.id === 'default-insight-list';
-                
-                if (data.finalAnalysis.intelligence !== undefined) {
-                    parsed = data.finalAnalysis;
-                } else if (isFallback && data.finalAnalysis.components?.[0]?.props?.insights?.[0]?.message) {
-                    rawString = data.finalAnalysis.components[0].props.insights[0].message;
-                } else if (data.finalAnalysis.components?.[0]?.props?.insights?.[0]?.message) {
-                    rawString = data.finalAnalysis.components[0].props.insights[0].message;
-                } else if (data.finalAnalysis.summary) {
-                    rawString = data.finalAnalysis.summary;
-                } else {
-                    rawString = JSON.stringify(data.finalAnalysis);
-                }
-            } else {
-                rawString = String(data.finalAnalysis);
-            }
-
-            if (!parsed && rawString) {
-                try {
-                    const cleaned = rawString.replace(/```json\n?/gi, '').replace(/```/g, '').trim();
-                    // Attempt to find a JSON block containing "intelligence"
-                    const jsonMatch = cleaned.match(/\{[^{}]*"intelligence"[^{}]*\}/i) || cleaned.match(/\{[\s\S]*\}/);
-                    if (jsonMatch) {
-                        parsed = JSON.parse(jsonMatch[0]);
-                    } else {
-                        parsed = JSON.parse(cleaned);
-                    }
-                } catch(e) {
-                    console.warn("Failed to parse grading string:", rawString);
-                }
-            }
-
-            if (parsed && typeof parsed === 'object') {
+            if (!res.ok) {
                 return {
-                    intelligence: typeof parsed.intelligence === 'number' ? Math.min(10, Math.max(1, parsed.intelligence)) : null,
-                    accuracy: typeof parsed.accuracy === 'number' ? Math.min(10, Math.max(1, parsed.accuracy)) : null,
-                    speed: typeof parsed.speed === 'number' ? Math.min(10, Math.max(1, parsed.speed)) : null,
+                    intelligence: null,
+                    accuracy: null,
+                    speed: calculateSpeedScore(durationMs)
                 };
             }
-            return null;
+            const data = await res.json();
+            return extractGradingScores(data, durationMs);
         } catch (e) {
             console.error("Autograding failed", e);
-            return null;
+            return {
+                intelligence: null,
+                accuracy: null,
+                speed: calculateSpeedScore(durationMs)
+            };
         }
     };
 
@@ -300,17 +496,29 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
                 const resData = await res.json();
                 if (resData.error) throw new Error(resData.error);
                 output = resData.finalAnalysis;
+                if (output && typeof output === 'object') {
+                    if (output.error) throw new Error(String(output.error));
+                    if (typeof output.ui_title === 'string' && output.ui_title.toLowerCase().includes('execution error')) {
+                        const errMsg = output.components?.[0]?.props?.insights?.[0]?.message || 'Execution Error in model output';
+                        throw new Error(errMsg);
+                    }
+                }
             } catch (e: any) {
                 errorMsg = e.message;
                 recordError(model.id, agentToTest.provider, errorMsg);
             }
             const duration = Date.now() - start;
 
-            let autoScore = { intelligence: null, accuracy: null, speed: null };
-            if (output && !errorMsg) {
+            let autoScore = { intelligence: null, accuracy: null, speed: calculateSpeedScore(duration) };
+            if (isModelResponseValid({ output, error: errorMsg })) {
                 setProgress(`Auto-grading ${model.name || model.id}...`);
                 const scoreRes = await autoGradeOutput(agentTestTask, output, duration, managerAgent);
-                if (scoreRes) autoScore = scoreRes as any;
+                if (scoreRes) {
+                    autoScore = {
+                        ...scoreRes,
+                        speed: scoreRes.speed !== null ? scoreRes.speed : calculateSpeedScore(duration)
+                    };
+                }
             }
 
             const result: OptimizationResult = {
@@ -341,7 +549,7 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
             return;
         }
 
-        const validModels = results.filter(r => !r.isFullSwarm && !r.error && (r.scores.accuracy || 0) >= 5);
+        const validModels = results.filter(r => !r.isFullSwarm && isModelResponseValid(r) && (r.scores.accuracy === null || r.scores.accuracy >= 5));
         if (validModels.length < 2) {
             alert("Not enough successful individual models to form combinations. Please test agents first.");
             return;
@@ -417,16 +625,28 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
                 const resData = await res.json();
                 if (resData.error) throw new Error(resData.error);
                 output = resData.finalAnalysis;
+                if (output && typeof output === 'object') {
+                    if (output.error) throw new Error(String(output.error));
+                    if (typeof output.ui_title === 'string' && output.ui_title.toLowerCase().includes('execution error')) {
+                        const errMsg = output.components?.[0]?.props?.insights?.[0]?.message || 'Execution Error in swarm output';
+                        throw new Error(errMsg);
+                    }
+                }
             } catch (e: any) {
                 errorMsg = e.message;
             }
             const duration = Date.now() - start;
 
-            let autoScore = { intelligence: null, accuracy: null, speed: null };
-            if (output && !errorMsg) {
+            let autoScore = { intelligence: null, accuracy: null, speed: calculateSpeedScore(duration) };
+            if (isModelResponseValid({ output, error: errorMsg })) {
                 setProgress(`Auto-grading Combo...`);
                 const scoreRes = await autoGradeOutput(task, output, duration, managerAgent);
-                if (scoreRes) autoScore = scoreRes as any;
+                if (scoreRes) {
+                    autoScore = {
+                        ...scoreRes,
+                        speed: scoreRes.speed !== null ? scoreRes.speed : calculateSpeedScore(duration)
+                    };
+                }
             }
 
             const result: OptimizationResult = {
@@ -506,6 +726,8 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
                                             </div>
                                             {r.error ? (
                                                 <div className="text-red-600 truncate">{r.error}</div>
+                                            ) : !isModelResponseValid(r) ? (
+                                                <div className="text-amber-600 text-[10px] italic">Incomplete or empty response</div>
                                             ) : (
                                                 <div className="flex flex-col gap-1">
                                                     <div className="flex gap-2 text-[10px]">
@@ -625,6 +847,8 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
                                             <td className="px-4 py-3 max-w-xs truncate text-xs text-neutral-600 font-mono">
                                                 {r.error ? (
                                                     <span className="text-red-500 flex items-center gap-1"><AlertCircle className="w-3 h-3" /> {r.error}</span>
+                                                ) : !isModelResponseValid(r) ? (
+                                                    <span className="text-amber-500 flex items-center gap-1"><AlertCircle className="w-3 h-3" /> Incomplete output</span>
                                                 ) : typeof r.output === 'object' ? (
                                                     JSON.stringify(r.output)
                                                 ) : (
@@ -687,7 +911,13 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
                                             <td className="px-4 py-3 font-semibold text-blue-700">{r.scores.intelligence || '-'}</td>
                                             <td className="px-4 py-3 font-semibold text-emerald-700">{r.scores.accuracy || '-'}</td>
                                             <td className="px-4 py-3 text-xs">
-                                                {r.error ? <span className="text-red-500">Error</span> : <span className="text-green-600 font-medium">Valid</span>}
+                                                {r.error ? (
+                                                    <span className="text-red-500 font-medium">Error</span>
+                                                ) : isModelResponseValid(r) ? (
+                                                    <span className="text-green-600 font-medium">Valid</span>
+                                                ) : (
+                                                    <span className="text-amber-500 font-medium" title="Model returned empty or incomplete response">Incomplete</span>
+                                                )}
                                             </td>
                                         </tr>
                                     ))}

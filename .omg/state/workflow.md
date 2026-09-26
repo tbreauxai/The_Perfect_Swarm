@@ -1,8 +1,8 @@
 # OmA Workflow State
 
-- **Mode**: ultragoal
-- **Cycle**: 5 / 5
-- **Assumed Approval**: full-auto (routine non-destructive optimization)
-- **Objective**: Comprehensive End-to-End Multi-App Verification, Typecheck, Vite Build, and Stress Testing
-- **Active Goal**: G5
+- **Mode**: goal
+- **Cycle**: 1 / 5
+- **Assumed Approval**: routine (non-destructive refactoring and test coverage)
+- **Objective**: Harden response validity verification in OptimizationRunner.tsx
+- **Active Goal**: OPT-G1 (and OPT-G2, OPT-G3)
 - **Status**: completed

@@ -1,20 +1,26 @@
 [
   {
-    "id": "goal-1-semantic-action-cache-interceptor-core",
-    "description": "Implement ActionPlanCacheInterceptor and ActionPlan data structures in src/swarm/actionPlanCache.ts. Support high-threshold cosine similarity (> 0.96), sub-linear VP-tree vector indexing, LRU eviction, and plan-only caching (intent, entities, tool steps). Add unit tests in src/swarm/actionPlanCache.test.ts.",
+    "id": "goal-1-optimizer-diagnostics-and-root-cause-analysis",
+    "description": "Perform deep diagnostic of the optimizer auto-grading pipeline and model response validity determination across OptimizationRunner.tsx, parser.ts, server.ts, and engine routing. Document exact failure modes in brief.md.",
     "status": "completed",
-    "verification": "100% pass across actionPlanCache.test.ts (7/7 tests passed in 8ms) verifying sub-2ms lookup, > 0.96 similarity threshold gating, LRU capacity eviction, and plan extraction without storing volatile data."
+    "verification": "Root cause isolation confirmed: hardcoded invalid model 'gemini-flash-lite-latest', ignored managerAgent, schema mismatch between Generative UI ManagerResponse and flat JSON grading schema, speed score not computed deterministically, and naive !r.error validity check."
   },
   {
-    "id": "goal-2-agent-retriever-pipeline-integration",
-    "description": "Integrate ActionPlanCacheInterceptor into the agent-retriever pipeline (MemoryCortex and SwarmEngine retrieval phase) before Qdrant vector search. Implement Cache Hit workflow (bypassing 45ms Qdrant search and executing live data fetches dynamically) and Cache Miss workflow (storing extracted Action Plan). Add integration tests in src/swarm/actionPlanRetriever.test.ts.",
+    "id": "goal-2-harden-response-validity-detection",
+    "description": "Refactor response validity verification in OptimizationRunner.tsx. Replace naive !r.error checks with robust structural inspection (verifying non-null payload, absence of execution error wrappers like ui_title: 'Execution Error', and presence of non-empty content/insights).",
     "status": "completed",
-    "verification": "100% pass across actionPlanRetriever.test.ts (3/3 tests passed in 34ms) verifying 45ms Qdrant search bypass on cache hits, live odds tools execute dynamically with fresh parameters, and cache hit ratio and latency metrics update correctly."
+    "verification": "isModelResponseValid and getModelExecutionStatus implemented, exported, and verified across 18 automated test cases in OptimizationRunner.test.ts; history table, combinations gate, and agent cards now distinguish Valid, Incomplete, and Error states."
   },
   {
-    "id": "goal-3-verification-telemetry-and-benchmarks",
-    "description": "Expose Action Plan cache metrics in TelemetryMetricsCollector and GET /api/swarm/metrics, export modules from src/swarm/index.ts, rebuild distribution bundles, and execute full verification suite with zero regressions.",
+    "id": "goal-3-fix-grading-system-and-score-extraction",
+    "description": "Fix autoGradeOutput and generateTestPrompt to dynamically utilize the user's configured Manager agent credentials and model, compute speed score deterministically from elapsed durationMs, handle Generative UI schema wrapping in extraction, and prevent combination runner deadlock.",
     "status": "completed",
-    "verification": "100% pass across all 34 Vitest test suites (292/292 tests), test:dist (ESM & CJS), test:cli, test:server, and npm run lint with 0 errors; telemetry metrics reflect cache hit ratio and latency savings."
+    "verification": "resolveGraderAgent dynamically routes through managerAgent.provider and managerAgent.model with valid fallback; extractGradingScores multi-layer extractor extracts numeric scores across direct JSON, events, and UI components; calculateSpeedScore deterministically scores durationMs."
+  },
+  {
+    "id": "goal-4-test-and-verify-optimizer-pipeline",
+    "description": "Create automated tests for validity verification and score extraction, run test suite, and verify zero regressions across the codebase.",
+    "status": "completed",
+    "verification": "18/18 tests passed in OptimizationRunner.test.ts; 100% pass across full test suite (npm test), lint clean (tsc --noEmit 0 errors), and dual Vite/Swarm build clean (npm run build)."
   }
 ]

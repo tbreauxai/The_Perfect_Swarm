@@ -52,4 +52,14 @@
 | P5-G4 | End-to-End Validation Suite (Step 26 in `test-portable-swarm.ts`) | completed | Step 26 verifies extended tools, critic baseline enforcement, and transparent file persistence; all 26 steps pass |
 | P5-G5 | Full Dual Build, Typecheck, Distribution Verification, and Git Release | completed | Clean `tsc --noEmit` (0 errors), Vite dual build generates all ESM/CJS bundles + declarations, all 5 test suites pass |
 
+## Track: Model Optimizer Response Validity & Auto-Grading Hardening
+
+| Goal ID | Description | Status | Verification |
+| --- | --- | --- | --- |
+| OPT-G1 | Harden response validity verification in `OptimizationRunner.tsx` via `isModelResponseValid` and `getModelExecutionStatus` | completed | Verified non-empty/non-error payload gating; History table displays 'Valid', 'Incomplete', or 'Error'; 18/18 tests passed |
+| OPT-G2 | Fix `autoGradeOutput` and `generateTestPrompt` dynamic manager routing and deterministic speed score calculation | completed | Score parsing succeeds across Generative UI outputs via `extractGradingScores`; speed score computed deterministically via `calculateSpeedScore` |
+| OPT-G3 | Add automated tests for optimizer response validity and combination filtering; verify zero regressions | completed | 18/18 tests pass in `OptimizationRunner.test.ts`; 100% pass across all 5 test suites in `npm test`, clean `tsc --noEmit`, clean `npm run build` |
+
+
+
 
