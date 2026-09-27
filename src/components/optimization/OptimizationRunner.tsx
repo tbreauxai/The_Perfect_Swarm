@@ -428,9 +428,12 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
                     const scores = extractGradingScores(data, durationMs);
                     if (scores.intelligence !== null && scores.accuracy !== null) {
                         return scores;
+                    } else {
+                        throw new Error(`Failed to extract. Raw: ${JSON.stringify(data?.finalAnalysis || data).substring(0, 800)}`);
                     }
-                } catch (e) {
+                } catch (e: any) {
                     console.warn(`Autograding failed for ${failover.model}`, e);
+                    throw e; // throw instead of suppress so we can see it
                 }
             }
             
