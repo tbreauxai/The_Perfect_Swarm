@@ -446,6 +446,7 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
             console.error("Autograding failed completely", e);
             throw e; // RETHROW SO THE UI CAN SEE IT
         }
+    };
 
     const runAgentOptimization = async (agentToTest: any) => {
         if (!task) {
