@@ -177,15 +177,15 @@ export function extractGradingScores(
 
         // 2. Regex matching for "intelligence: X" etc.
         if (intVal === null) {
-            const m = cleaned.match(/(?:intelligence|intellect|int)[\s\w]*?[:=\-]?\s*([0-9]+(?:\.[0-9]+)?)/i);
+            const m = cleaned.match(/\b(?:intelligence|intellect|int)\b[^,\n\d{}]*?([0-9]+(?:\.[0-9]+)?)/i);
             if (m) intVal = parseNum(m[1]);
         }
         if (accVal === null) {
-            const m = cleaned.match(/(?:accuracy|acc)[\s\w]*?[:=\-]?\s*([0-9]+(?:\.[0-9]+)?)/i);
+            const m = cleaned.match(/\b(?:accuracy|acc)\b[^,\n\d{}]*?([0-9]+(?:\.[0-9]+)?)/i);
             if (m) accVal = parseNum(m[1]);
         }
         if (spdVal === null) {
-            const m = cleaned.match(/(?:speed|spd)[\s\w]*?[:=\-]?\s*([0-9]+(?:\.[0-9]+)?)/i);
+            const m = cleaned.match(/\b(?:speed|spd)\b[^,\n\d{}]*?([0-9]+(?:\.[0-9]+)?)/i);
             if (m) spdVal = parseNum(m[1]);
         }
     };

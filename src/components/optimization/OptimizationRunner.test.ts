@@ -227,5 +227,15 @@ describe('OptimizationRunner - Response Validity Hardening', () => {
             expect(scores.accuracy).toBe(8);
             expect(scores.speed).toBe(10); // Under 2000ms is 10
         });
+
+        it('extracts scores from raw JSON string fallback correctly', () => {
+            const payload = {
+                finalAnalysis: '```json\n{"intelligence": 6, "accuracy": 7, "speed": 5}\n```'
+            };
+            const scores = extractGradingScores(payload, 3000);
+            expect(scores.intelligence).toBe(6);
+            expect(scores.accuracy).toBe(7);
+            expect(scores.speed).toBe(5);
+        });
     });
 });
