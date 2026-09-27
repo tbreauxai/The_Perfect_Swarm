@@ -442,7 +442,6 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
                 speed: calculateSpeedScore(durationMs)
             };
         }
-        }
     };
 
     const runAgentOptimization = async (agentToTest: any) => {
@@ -667,26 +666,20 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
                 const resData = await res.json();
                 if (resData.error) throw new Error(resData.error);
                 output = resData.finalAnalysis;
-<<<<<<< HEAD
-                if (output && typeof output === 'object') {
-                    if (output.error) throw new Error(String(output.error));
-                    if (typeof output.ui_title === 'string' && output.ui_title.toLowerCase().includes('execution error')) {
-                        const errMsg = output.components?.[0]?.props?.insights?.[0]?.message || 'Execution Error in swarm output';
-                        throw new Error(errMsg);
-                    }
-=======
-
                 if (!output) {
                     throw new Error("No output returned from combination.");
                 }
 
-                if (output.ui_title?.includes('Error') || output.error) {
-                    throw new Error(output.error || output.ui_title || "Execution error in combination response.");
+                if (output && typeof output === "object") {
+                    if (output.error) throw new Error(String(output.error));
+                    if (typeof output.ui_title === "string" && (output.ui_title.toLowerCase().includes("error") || output.ui_title.toLowerCase().includes("execution error"))) {
+                        const errMsg = output.components?.[0]?.props?.insights?.[0]?.message || output.error || output.ui_title || "Execution Error in swarm output";
+                        throw new Error(errMsg);
+                    }
                 }
 
-                if (typeof output === 'string' && output.trim().length < 5) {
+                if (typeof output === "string" && output.trim().length < 5) {
                      throw new Error("Output too short to be valid.");
->>>>>>> 659396e02fb21045b3ff63692681b2d09308e603
                 }
             } catch (e: any) {
                 errorMsg = e.message;
