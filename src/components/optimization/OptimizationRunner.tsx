@@ -406,6 +406,7 @@ Score the Analyst's output from 1 to 10 in three distinct categories:
 Respond ONLY with a valid JSON object matching this exact format, with no markdown formatting or other text:
 {"intelligence": 8, "accuracy": 9, "speed": 5}`;
 
+            const errors: string[] = [];
             for (const failover of failoverModels) {
                 try {
                     const res = await fetch('/api/swarm/analyze', {
@@ -422,27 +423,26 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
                         })
                     });
 
-                    if (!res.ok) continue;
+                    if (!res.ok) {
+                        const errText = await res.text();
+                        errors.push(`${failover.model}: ${res.status} ${errText}`);
+                        continue;
+                    }
                     const data = await res.json();
                     
                     const scores = extractGradingScores(data, durationMs);
                     if (scores.intelligence !== null && scores.accuracy !== null) {
                         return scores;
                     } else {
-                        throw new Error(`Failed to extract. Raw: ${JSON.stringify(data?.finalAnalysis || data).substring(0, 800)}`);
+                        errors.push(`${failover.model}: Failed to extract. Raw: ${JSON.stringify(data?.finalAnalysis || data).substring(0, 500)}`);
                     }
                 } catch (e: any) {
-                    console.warn(`Autograding failed for ${failover.model}`, e);
-                    throw e; // throw instead of suppress so we can see it
+                    errors.push(`${failover.model}: ${e.message}`);
                 }
             }
             
-            return {
-                intelligence: null,
-                accuracy: null,
-                speed: calculateSpeedScore(durationMs)
-            };
-        } catch (e) {
+            throw new Error(`All grading failovers failed:\n${errors.join('\n')}`);
+        } catch (e: any) {
             console.error("Autograding failed completely", e);
             return {
                 intelligence: null,
