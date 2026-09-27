@@ -561,12 +561,17 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
             let autoScore = { intelligence: null, accuracy: null, speed: calculateSpeedScore(duration) };
             if (isModelResponseValid({ output, error: errorMsg })) {
                 setProgress(`Auto-grading ${model.name || model.id}...`);
-                const scoreRes = await autoGradeOutput(agentTestTask, output, duration, managerAgent);
-                if (scoreRes) {
-                    autoScore = {
-                        ...scoreRes,
-                        speed: scoreRes.speed !== null ? scoreRes.speed : calculateSpeedScore(duration)
-                    };
+                try {
+                    const scoreRes = await autoGradeOutput(agentTestTask, output, duration, managerAgent);
+                    if (scoreRes) {
+                        autoScore = {
+                            ...scoreRes,
+                            speed: scoreRes.speed !== null ? scoreRes.speed : calculateSpeedScore(duration)
+                        };
+                    }
+                } catch (e: any) {
+                    errorMsg = `Autograding failed: ${e.message}`;
+                    recordError(model.id, agentToTest.provider, errorMsg);
                 }
             }
 
@@ -697,12 +702,16 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
             let autoScore = { intelligence: null, accuracy: null, speed: calculateSpeedScore(duration) };
             if (isModelResponseValid({ output, error: errorMsg })) {
                 setProgress(`Auto-grading Combo...`);
-                const scoreRes = await autoGradeOutput(task, output, duration, managerAgent);
-                if (scoreRes) {
-                    autoScore = {
-                        ...scoreRes,
-                        speed: scoreRes.speed !== null ? scoreRes.speed : calculateSpeedScore(duration)
-                    };
+                try {
+                    const scoreRes = await autoGradeOutput(task, output, duration, managerAgent);
+                    if (scoreRes) {
+                        autoScore = {
+                            ...scoreRes,
+                            speed: scoreRes.speed !== null ? scoreRes.speed : calculateSpeedScore(duration)
+                        };
+                    }
+                } catch (e: any) {
+                    errorMsg = `Combo Autograding failed: ${e.message}`;
                 }
             }
 
