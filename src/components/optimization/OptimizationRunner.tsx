@@ -444,13 +444,8 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
             throw new Error(`All grading failovers failed:\n${errors.join('\n')}`);
         } catch (e: any) {
             console.error("Autograding failed completely", e);
-            return {
-                intelligence: null,
-                accuracy: null,
-                speed: calculateSpeedScore(durationMs)
-            };
+            throw e; // RETHROW SO THE UI CAN SEE IT
         }
-    };
 
     const runAgentOptimization = async (agentToTest: any) => {
         if (!task) {
