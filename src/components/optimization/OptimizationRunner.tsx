@@ -3,6 +3,8 @@ import { fetchAvailableModels, checkProviderModelsHealth, ModelOption } from '..
 import { getApiKeyForProvider } from '../AgentConfigurator';
 import { Loader2, Play, Trophy, Clock, CheckCircle, AlertCircle, Trash2 } from 'lucide-react';
 
+let nextFailoverIndex = 0;
+
 export interface OptimizationRunnerProps {
     task: string;
     data: string;
@@ -328,9 +330,11 @@ export const OptimizationRunner: React.FC<OptimizationRunnerProps> = ({ task, da
     const generateTestPrompt = async (managerAgent: any, analystRole: string, baseTask: string): Promise<string> => {
         const failoverModels = [
             { provider: 'gemini', model: 'gemini-3.5-flash' },
+            { provider: 'groq', model: 'openai/gpt-oss-120b' },
+            { provider: 'groq', model: 'openai/gpt-oss-20b' },
+            { provider: 'openrouter', model: 'meta-llama/llama-3-8b-instruct:free' },
             { provider: 'gemini', model: 'gemini-2.0-flash-lite-preview-02-05' },
-            { provider: 'gemini', model: 'gemini-1.5-flash-8b' },
-            { provider: 'groq', model: 'llama-3.1-8b-instant' }
+            { provider: 'gemini', model: 'gemini-1.5-flash-8b' }
         ];
 
         try {
@@ -339,7 +343,10 @@ The overall system task is: "${baseTask}".
 Create a realistic scenario or question that perfectly fits this analyst's domain to test their intelligence and accuracy.
 Respond ONLY with the text of the prompt you want to give them.`;
 
-            for (const failover of failoverModels) {
+            const errors: string[] = [];
+            for (let i = 0; i < failoverModels.length; i++) {
+                const currentIndex = (nextFailoverIndex + i) % failoverModels.length;
+                const failover = failoverModels[currentIndex];
                 try {
                     const res = await fetch('/api/swarm/analyze', {
                         method: 'POST',
@@ -360,13 +367,16 @@ Respond ONLY with the text of the prompt you want to give them.`;
 
                     if (data.finalAnalysis && typeof data.finalAnalysis === 'object' && !data.finalAnalysis.ui_title?.includes('Error')) {
                         if (data.finalAnalysis.components?.[0]?.props?.insights?.[0]?.message) {
+                            nextFailoverIndex = (currentIndex + 1) % failoverModels.length;
                             return data.finalAnalysis.components[0].props.insights[0].message;
                         } else if (data.finalAnalysis.summary) {
+                            nextFailoverIndex = (currentIndex + 1) % failoverModels.length;
                             return data.finalAnalysis.summary;
                         }
                     }
 
                     if (typeof data.finalAnalysis === 'string' && !data.finalAnalysis.includes('Error')) {
+                        nextFailoverIndex = (currentIndex + 1) % failoverModels.length;
                         return data.finalAnalysis;
                     }
                 } catch (e) {
@@ -384,9 +394,11 @@ Respond ONLY with the text of the prompt you want to give them.`;
     const autoGradeOutput = async (originalTask: string, output: any, durationMs: number, managerAgent: any) => {
         const failoverModels = [
             { provider: 'gemini', model: 'gemini-3.5-flash' },
+            { provider: 'groq', model: 'openai/gpt-oss-120b' },
+            { provider: 'groq', model: 'openai/gpt-oss-20b' },
+            { provider: 'openrouter', model: 'meta-llama/llama-3-8b-instruct:free' },
             { provider: 'gemini', model: 'gemini-2.0-flash-lite-preview-02-05' },
-            { provider: 'gemini', model: 'gemini-1.5-flash-8b' },
-            { provider: 'groq', model: 'llama-3.1-8b-instant' }
+            { provider: 'gemini', model: 'gemini-1.5-flash-8b' }
         ];
 
         try {
@@ -405,7 +417,9 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
 {"intelligence": 8, "accuracy": 9, "speed": 5}`;
 
             const errors: string[] = [];
-            for (const failover of failoverModels) {
+            for (let i = 0; i < failoverModels.length; i++) {
+                const currentIndex = (nextFailoverIndex + i) % failoverModels.length;
+                const failover = failoverModels[currentIndex];
                 try {
                     const res = await fetch('/api/swarm/analyze', {
                         method: 'POST',
@@ -430,6 +444,7 @@ Respond ONLY with a valid JSON object matching this exact format, with no markdo
                     
                     const scores = extractGradingScores(data, durationMs);
                     if (scores.intelligence !== null && scores.accuracy !== null) {
+                        nextFailoverIndex = (currentIndex + 1) % failoverModels.length;
                         return scores;
                     } else {
                         errors.push(`${failover.model}: Failed to extract. Raw: ${JSON.stringify(data?.finalAnalysis || data).substring(0, 500)}`);
