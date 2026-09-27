@@ -125,6 +125,7 @@ export function extractGradingScores(
     data: any,
     durationMs: number
 ): { intelligence: number | null; accuracy: number | null; speed: number } {
+    console.log('EXTRACT GRADING SCORES INPUT:', data);
     const fallbackSpeed = calculateSpeedScore(durationMs);
     let intVal: number | null = null;
     let accVal: number | null = null;
@@ -176,15 +177,15 @@ export function extractGradingScores(
 
         // 2. Regex matching for "intelligence: X" etc.
         if (intVal === null) {
-            const m = cleaned.match(/(?:intelligence|intellect|int)\s*(?:score)?[:=\-]?\s*([0-9]+(?:\.[0-9]+)?)/i);
+            const m = cleaned.match(/(?:intelligence|intellect|int)[\s\w]*?[:=\-]?\s*([0-9]+(?:\.[0-9]+)?)/i);
             if (m) intVal = parseNum(m[1]);
         }
         if (accVal === null) {
-            const m = cleaned.match(/(?:accuracy|acc)\s*(?:score)?[:=\-]?\s*([0-9]+(?:\.[0-9]+)?)/i);
+            const m = cleaned.match(/(?:accuracy|acc)[\s\w]*?[:=\-]?\s*([0-9]+(?:\.[0-9]+)?)/i);
             if (m) accVal = parseNum(m[1]);
         }
         if (spdVal === null) {
-            const m = cleaned.match(/(?:speed|spd)\s*(?:score)?[:=\-]?\s*([0-9]+(?:\.[0-9]+)?)/i);
+            const m = cleaned.match(/(?:speed|spd)[\s\w]*?[:=\-]?\s*([0-9]+(?:\.[0-9]+)?)/i);
             if (m) spdVal = parseNum(m[1]);
         }
     };
@@ -228,6 +229,8 @@ export function extractGradingScores(
         tryScanString(data.finalAnalysis);
     }
 
+    console.log('EXTRACT GRADING SCORES OUTPUT:', { intelligence: intVal, accuracy: accVal, speed: spdVal });
+    
     return {
         intelligence: intVal,
         accuracy: accVal,
@@ -324,6 +327,7 @@ export const OptimizationRunner: React.FC<OptimizationRunnerProps> = ({ task, da
 
     const generateTestPrompt = async (managerAgent: any, analystRole: string, baseTask: string): Promise<string> => {
         const failoverModels = [
+            { provider: 'gemini', model: 'gemini-flash-lite-latest' },
             { provider: managerAgent.provider, model: managerAgent.model },
             { provider: 'groq', model: 'llama-3.3-70b-versatile' },
             { provider: 'gemini', model: 'gemini-2.5-flash' },
@@ -380,6 +384,7 @@ Respond ONLY with the text of the prompt you want to give them.`;
 
     const autoGradeOutput = async (originalTask: string, output: any, durationMs: number, managerAgent: any) => {
         const failoverModels = [
+            { provider: 'gemini', model: 'gemini-flash-lite-latest' },
             { provider: managerAgent.provider, model: managerAgent.model },
             { provider: 'groq', model: 'llama-3.3-70b-versatile' },
             { provider: 'gemini', model: 'gemini-2.5-flash' },
