@@ -330,11 +330,11 @@ export const OptimizationRunner: React.FC<OptimizationRunnerProps> = ({ task, da
     const generateTestPrompt = async (managerAgent: any, analystRole: string, baseTask: string): Promise<string> => {
         const failoverModels = [
             { provider: 'gemini', model: 'gemini-3.5-flash' },
-            { provider: 'groq', model: 'openai/gpt-oss-120b' },
-            { provider: 'groq', model: 'openai/gpt-oss-20b' },
-            { provider: 'openrouter', model: 'meta-llama/llama-3-8b-instruct:free' },
-            { provider: 'gemini', model: 'gemini-2.0-flash-lite-preview-02-05' },
-            { provider: 'gemini', model: 'gemini-1.5-flash-8b' }
+            { provider: 'mistral', model: 'mistral-large-latest' },
+            { provider: 'mistral', model: 'mistral-small-latest' },
+            { provider: 'openrouter', model: 'meta-llama/llama-3.1-8b-instruct:free' },
+            { provider: 'openrouter', model: 'google/gemma-2-9b-it:free' },
+            { provider: 'gemini', model: 'gemini-2.5-flash' }
         ];
 
         try {
@@ -362,7 +362,10 @@ Respond ONLY with the text of the prompt you want to give them.`;
                         })
                     });
 
-                    if (!res.ok) continue;
+                    if (!res.ok) {
+                        if (res.status === 429) await new Promise(r => setTimeout(r, 2500));
+                        continue;
+                    }
                     const data = await res.json();
 
                     if (data.finalAnalysis && typeof data.finalAnalysis === 'object' && !data.finalAnalysis.ui_title?.includes('Error')) {
@@ -394,11 +397,11 @@ Respond ONLY with the text of the prompt you want to give them.`;
     const autoGradeOutput = async (originalTask: string, output: any, durationMs: number, managerAgent: any) => {
         const failoverModels = [
             { provider: 'gemini', model: 'gemini-3.5-flash' },
-            { provider: 'groq', model: 'openai/gpt-oss-120b' },
-            { provider: 'groq', model: 'openai/gpt-oss-20b' },
-            { provider: 'openrouter', model: 'meta-llama/llama-3-8b-instruct:free' },
-            { provider: 'gemini', model: 'gemini-2.0-flash-lite-preview-02-05' },
-            { provider: 'gemini', model: 'gemini-1.5-flash-8b' }
+            { provider: 'mistral', model: 'mistral-large-latest' },
+            { provider: 'mistral', model: 'mistral-small-latest' },
+            { provider: 'openrouter', model: 'meta-llama/llama-3.1-8b-instruct:free' },
+            { provider: 'openrouter', model: 'google/gemma-2-9b-it:free' },
+            { provider: 'gemini', model: 'gemini-2.5-flash' }
         ];
 
         try {
@@ -437,6 +440,7 @@ Do not return the literal string <X>. You MUST actually grade the output and pro
                     });
 
                     if (!res.ok) {
+                        if (res.status === 429) await new Promise(r => setTimeout(r, 2500));
                         const errText = await res.text();
                         errors.push(`${failover.model}: ${res.status} ${errText}`);
                         continue;
