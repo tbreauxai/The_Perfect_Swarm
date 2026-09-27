@@ -327,10 +327,10 @@ export const OptimizationRunner: React.FC<OptimizationRunnerProps> = ({ task, da
 
     const generateTestPrompt = async (managerAgent: any, analystRole: string, baseTask: string): Promise<string> => {
         const failoverModels = [
-            { provider: 'gemini', model: 'gemini-flash-lite-latest' },
+            { provider: 'gemini', model: 'gemini-3.8-flash-lite' },
+            { provider: 'gemini', model: 'gemini-3.8-flash' },
             { provider: managerAgent.provider, model: managerAgent.model },
             { provider: 'groq', model: 'llama-3.3-70b-versatile' },
-            { provider: 'gemini', model: 'gemini-2.5-flash' },
             { provider: 'openai', model: 'gpt-4o-mini' }
         ];
 
@@ -384,10 +384,10 @@ Respond ONLY with the text of the prompt you want to give them.`;
 
     const autoGradeOutput = async (originalTask: string, output: any, durationMs: number, managerAgent: any) => {
         const failoverModels = [
-            { provider: 'gemini', model: 'gemini-flash-lite-latest' },
+            { provider: 'gemini', model: 'gemini-3.8-flash-lite' },
+            { provider: 'gemini', model: 'gemini-3.8-flash' },
             { provider: managerAgent.provider, model: managerAgent.model },
             { provider: 'groq', model: 'llama-3.3-70b-versatile' },
-            { provider: 'gemini', model: 'gemini-2.5-flash' },
             { provider: 'openai', model: 'gpt-4o-mini' }
         ];
 
