@@ -413,8 +413,9 @@ Score the Analyst's output from 1 to 10 in three distinct categories:
 2. "accuracy" (How factually correct and directly aligned it is with the prompt)
 3. "speed" (Based on the ${durationMs}ms execution time. Under 2000ms is a 10, over 10000ms is a 1, scale linearly).
 
-Respond ONLY with a valid JSON object matching this exact format, with no markdown formatting or other text:
-{"intelligence": 8, "accuracy": 9, "speed": 5}`;
+Respond ONLY with a valid JSON object matching this exact format, substituting the <X> placeholders with your actual 1-10 integer scores:
+{"intelligence": <X>, "accuracy": <Y>, "speed": <Z>}
+Do not return the literal string <X>. You MUST actually grade the output and provide real numbers.`;
 
             const errors: string[] = [];
             for (let i = 0; i < failoverModels.length; i++) {

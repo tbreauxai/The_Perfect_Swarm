@@ -436,7 +436,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                     return c.json((data.data || []).map((m: any) => ({
                         id: m.id,
                         name: m.id,
-                        free: typeof m.id === 'string' && (m.id.includes('free') || m.id.includes('open'))
+                        free: true
                     })));
                 }
                 case 'github': {
