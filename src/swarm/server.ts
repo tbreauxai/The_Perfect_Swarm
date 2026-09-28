@@ -301,7 +301,8 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                     defaultAi: body.defaultAi || defaultAi,
                     cortex: body.cortex || defaultCortex,
                     enableDeepAnalysis: body.enableDeepAnalysis,
-                    complexityOverride: body.complexityOverride
+                    complexityOverride: body.complexityOverride,
+                    bypassCache: body.bypassCache
                 };
             } else if (c.req.method === 'GET') {
                 const url = new URL(c.req.url);
@@ -359,7 +360,8 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 defaultAi: body.defaultAi || defaultAi,
                 cortex: body.cortex || defaultCortex,
                 enableDeepAnalysis: body.enableDeepAnalysis,
-                complexityOverride: body.complexityOverride
+                complexityOverride: body.complexityOverride,
+                bypassCache: body.bypassCache
             });
 
             return c.json(result);

@@ -354,6 +354,7 @@ Respond ONLY with the text of the prompt you want to give them.`;
                         body: JSON.stringify({
                             task: promptTask,
                             data: '',
+                            bypassCache: true,
                             settings: {
                                 ...settings,
                                 agents: [{ id: 'grader-agent', role: 'Prompt Generator Node', provider: failover.provider, model: failover.model }],
@@ -431,6 +432,7 @@ Do not return the literal string <X>. You MUST actually grade the output and pro
                         body: JSON.stringify({
                             task: gradingTask,
                             data: '',
+                            bypassCache: true,
                             settings: {
                                 ...settings,
                                 agents: [{ id: 'grader-agent', role: 'Grader Node', provider: failover.provider, model: failover.model }],
@@ -543,6 +545,7 @@ Do not return the literal string <X>. You MUST actually grade the output and pro
                     body: JSON.stringify({
                         task: agentTestTask,
                         data,
+                        bypassCache: true,
                         settings: testSettings
                     })
                 });
@@ -686,6 +689,7 @@ Do not return the literal string <X>. You MUST actually grade the output and pro
                     body: JSON.stringify({
                         task,
                         data,
+                        bypassCache: true,
                         settings: testSettings
                     })
                 });
