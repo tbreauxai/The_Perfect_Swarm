@@ -12,7 +12,7 @@ export class SwarmContext {
     addEvent(event: Omit<SwarmEvent, 'id' | 'timestamp'>): SwarmEvent {
         const fullEvent: SwarmEvent = {
             ...event,
-            id: Math.random().toString(36).substring(2, 9),
+            id: crypto.randomUUID(),
             timestamp: new Date().toISOString()
         };
         this.events.push(fullEvent);

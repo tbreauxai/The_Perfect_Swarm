@@ -248,7 +248,7 @@ export class HierarchicalMessageBus {
         msg: Omit<HierarchicalMessage<T>, 'id' | 'timestamp'> & { id?: string; timestamp?: number }
     ): Promise<MessageDeliveryResult> {
         const startTime = Date.now();
-        const messageId = msg.id || `msg-${Math.random().toString(36).substring(2, 10)}`;
+        const messageId = msg.id || `msg-${crypto.randomUUID()}`;
         const timestamp = msg.timestamp || startTime;
 
         const fullMessage: HierarchicalMessage<T> = {

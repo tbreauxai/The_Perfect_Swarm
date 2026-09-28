@@ -107,7 +107,7 @@ export async function executeFastPath(
             };
         }
 
-        if (finalAnalysis && !finalAnalysis.ui_title?.includes("Error")) {
+        if (finalAnalysis && !finalAnalysis.ui_title?.toLowerCase().includes("error")) {
             globalPayloadCache.set(cacheKey, finalAnalysis);
             globalSemanticCache.set(task, finalAnalysis, { data, configVersion: agentConfigVersion });
             if (memoryCortex) {

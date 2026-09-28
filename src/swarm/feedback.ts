@@ -340,7 +340,7 @@ export class ConceptDriftDetector {
 
         if (phStatistic > this.latencyThreshold) {
             const alert: DriftAlert = {
-                id: Math.random().toString(36).substring(2, 9),
+                id: crypto.randomUUID(),
                 driftType: 'page-hinkley-latency',
                 severity: phStatistic > this.latencyThreshold * 1.5 ? 'critical' : 'warning',
                 metric: 'durationMs',
@@ -377,7 +377,7 @@ export class ConceptDriftDetector {
 
         if (phStatistic > this.qualityThreshold) {
             const alert: DriftAlert = {
-                id: Math.random().toString(36).substring(2, 9),
+                id: crypto.randomUUID(),
                 driftType: 'page-hinkley-quality',
                 severity: phStatistic > this.qualityThreshold * 1.5 ? 'critical' : 'warning',
                 metric: 'qualityScore',
@@ -418,7 +418,7 @@ export class ConceptDriftDetector {
 
             if (sim < this.centroidDriftThreshold) {
                 const alert: DriftAlert = {
-                    id: Math.random().toString(36).substring(2, 9),
+                    id: crypto.randomUUID(),
                     driftType: 'embedding-centroid-shift',
                     severity: sim < this.centroidDriftThreshold - 0.15 ? 'critical' : 'warning',
                     metric: 'centroidCosineSimilarity',
@@ -736,7 +736,7 @@ export class ContinuousFeedbackEngine {
             const valRes = this.driftDetector.validateDataPayload(params.inputData);
             if (!valRes.valid) {
                 activeAlerts.push({
-                    id: Math.random().toString(36).substring(2, 9),
+                    id: crypto.randomUUID(),
                     driftType: 'schema-validation-failure',
                     severity: 'warning',
                     metric: 'inputData',
@@ -759,7 +759,7 @@ export class ContinuousFeedbackEngine {
         }
 
         // 4. Log to Shared Knowledge Repository
-        const outcomeId = `outcome-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+        const outcomeId = `outcome-${Date.now()}-${crypto.randomUUID()}`;
         const record: AnalysisOutcomeRecord = {
             id: outcomeId,
             workflowId: params.workflowId,

@@ -136,11 +136,17 @@ export const statsSummaryTool: SwarmTool<
         const sorted = [...valid].sort((a, b) => a - b);
         const count = sorted.length;
         let sum = 0;
-        let sumSq = 0;
+        let mean_welford = 0;
+        let M2 = 0;
+
         for (let i = 0; i < count; i++) {
             const val = sorted[i];
             sum += val;
-            sumSq += val * val;
+
+            const delta = val - mean_welford;
+            mean_welford += delta / (i + 1);
+            const delta2 = val - mean_welford;
+            M2 += delta * delta2;
         }
 
         const mean = sum / count;
@@ -155,7 +161,7 @@ export const statsSummaryTool: SwarmTool<
             median = sorted[mid];
         }
 
-        const variance = Math.max(0, (sumSq / count) - (mean * mean));
+        const variance = count > 1 ? Math.max(0, M2 / count) : 0; // Population variance
         const stdDev = Math.sqrt(variance);
 
         return {
@@ -649,19 +655,19 @@ export const varianceTool: SwarmTool<
             return { variance: 0 }; // Cannot calculate sample variance for size 1
         }
 
-        let sum = 0;
-        let sumSqRaw = 0;
+        let mean = 0;
+        let M2 = 0;
+
         for (let i = 0; i < count; i++) {
             const val = valid[i];
-            sum += val;
-            sumSqRaw += val * val;
+            const delta = val - mean;
+            mean += delta / (i + 1);
+            const delta2 = val - mean;
+            M2 += delta * delta2;
         }
 
-        const mean = sum / count;
-        const sumSq = sumSqRaw - (sum * sum / count);
-
         const divisor = sample ? count - 1 : count;
-        const variance = Math.max(0, sumSq / divisor);
+        const variance = Math.max(0, M2 / divisor);
 
         return { variance: Number(variance.toFixed(4)) };
     }

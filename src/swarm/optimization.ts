@@ -767,7 +767,7 @@ export class PredictionWorkerPool {
 
         return new Promise<T>((resolve, reject) => {
             const task: PoolTask<T> = {
-                id: options.id || `task-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                id: options.id || `task-${Date.now()}-${crypto.randomUUID()}`,
                 priority: options.priority || 'normal',
                 execute: taskFn,
                 resolve,
