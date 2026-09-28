@@ -604,7 +604,7 @@ Do not return the literal string <X>. You MUST actually grade the output and pro
             newResults.push(result);
             setResults(prev => [...prev.filter(r => r.id !== result.id), result]);
             saveToHistory(result);
-            await delay(1000);
+            await delay(4000);
         }
 
         setProgress('Agent Optimization Complete!');
