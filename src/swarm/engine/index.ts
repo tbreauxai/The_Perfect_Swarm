@@ -752,7 +752,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
 
         // Semantic Action/Plan Cache Interceptor: Check before Qdrant vector retrieval (> 0.96 similarity)
         try {
-            const planLookup = await memoryCortex.lookupActionPlan(task, targetAppId);
+            const planLookup = bypassCache ? { hit: false } : await memoryCortex.lookupActionPlan(task, targetAppId);
             if (planLookup.hit && planLookup.actionPlan) {
                 actionPlanBypassedQdrant = true;
                 context.addEvent({
@@ -807,7 +807,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     prompt: `Retrieving historical baseline constraints (appId='${targetAppId}', includeShared=${includeShared})...`
                 });
 
-                const [retrieved, exemplars] = await Promise.all([
+                const [retrieved, exemplars] = bypassCache ? [[], ""] : await Promise.all([
                     memoryCortex.retrieve(task, { appId: targetAppId, includeShared }, 3).catch(() => []),
                     memoryCortex.retrieveExemplars(task, {
                         appId: targetAppId,
@@ -1050,6 +1050,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     try {
                         rawOutput = await analyst.run(effectiveAnalystPrompt, context, { 
                             responseMimeType: "application/json",
+                            bypassCache,
                             ...activeVariant?.parameters
                         });
                     } catch (innerErr: any) {
@@ -1767,6 +1768,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             parsedManagerOutput = await managerAgent.run(effectiveDynamicPrompt, context, {
                 responseMimeType: "application/json",
                 zodSchema: ManagerResponseSchema,
+                bypassCache,
                 ...activeVariant?.parameters
             });
         }

@@ -120,7 +120,7 @@ export class Agent {
                     );
                     
                     let textOutput: string;
-                    const cachedText = globalPayloadCache.get<string>(cacheFingerprint);
+                    const cachedText = config?.bypassCache ? null : globalPayloadCache.get<string>(cacheFingerprint);
                     
                     if (cachedText) {
                         textOutput = cachedText;
