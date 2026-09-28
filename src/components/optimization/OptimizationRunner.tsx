@@ -554,7 +554,7 @@ Do not return the literal string <X>. You MUST actually grade the output and pro
                 });
                 const resData = await res.json().catch(() => null);
                 if (!res.ok) {
-                    throw new Error(resData?.error ? String(resData.error) : \`HTTP error \${res.status}\`);
+                    throw new Error(resData?.error ? String(resData.error) : `HTTP error ${res.status}`);
                 }
                 if (resData.error) throw new Error(resData.error);
 
