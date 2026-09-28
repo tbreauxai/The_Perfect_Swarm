@@ -330,11 +330,11 @@ export const OptimizationRunner: React.FC<OptimizationRunnerProps> = ({ task, da
     const generateTestPrompt = async (managerAgent: any, analystRole: string, baseTask: string): Promise<string> => {
         const failoverModels = [
             { provider: 'gemini', model: 'gemini-3.5-flash' },
-            { provider: 'mistral', model: 'mistral-large-latest' },
-            { provider: 'mistral', model: 'mistral-small-latest' },
-            { provider: 'openrouter', model: 'meta-llama/llama-3.1-8b-instruct:free' },
-            { provider: 'openrouter', model: 'google/gemma-2-9b-it:free' },
-            { provider: 'gemini', model: 'gemini-2.5-flash' }
+            { provider: 'gemini', model: 'gemini-3.8-flash' },
+            { provider: 'mistral', model: 'open-mistral-nemo' },
+            { provider: 'openrouter', model: 'meta-llama/llama-3.2-3b-instruct:free' },
+            { provider: 'openrouter', model: 'microsoft/phi-3-mini-128k-instruct:free' },
+            { provider: 'gemini', model: 'gemini-1.5-flash' }
         ];
 
         try {
@@ -397,11 +397,11 @@ Respond ONLY with the text of the prompt you want to give them.`;
     const autoGradeOutput = async (originalTask: string, output: any, durationMs: number, managerAgent: any) => {
         const failoverModels = [
             { provider: 'gemini', model: 'gemini-3.5-flash' },
-            { provider: 'mistral', model: 'mistral-large-latest' },
-            { provider: 'mistral', model: 'mistral-small-latest' },
-            { provider: 'openrouter', model: 'meta-llama/llama-3.1-8b-instruct:free' },
-            { provider: 'openrouter', model: 'google/gemma-2-9b-it:free' },
-            { provider: 'gemini', model: 'gemini-2.5-flash' }
+            { provider: 'gemini', model: 'gemini-3.8-flash' },
+            { provider: 'mistral', model: 'open-mistral-nemo' },
+            { provider: 'openrouter', model: 'meta-llama/llama-3.2-3b-instruct:free' },
+            { provider: 'openrouter', model: 'microsoft/phi-3-mini-128k-instruct:free' },
+            { provider: 'gemini', model: 'gemini-1.5-flash' }
         ];
 
         try {
@@ -604,7 +604,7 @@ Do not return the literal string <X>. You MUST actually grade the output and pro
             newResults.push(result);
             setResults(prev => [...prev.filter(r => r.id !== result.id), result]);
             saveToHistory(result);
-            await delay(4000);
+            await delay(6000);
         }
 
         setProgress('Agent Optimization Complete!');
