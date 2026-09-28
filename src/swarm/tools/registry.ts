@@ -103,7 +103,7 @@ export class ToolRegistry {
             return `Tool: ${t.name}\nDescription: ${t.description}\nParameters:\n${paramsDesc}`;
         }).join('\n\n');
 
-        return `### Available Deterministic Tools\nYou can invoke available tools by formatting a JSON block:\n\`\`\`tool_call\n{\n  "tool": "<tool_name>",\n  "parameters": { ... }\n}\n\`\`\`\n\n${toolDefs}`;
+        return `### Available Deterministic Tools\nIMPORTANT: Do NOT use native function/tool calling APIs. You must output the tool request as standard text in the message body.\nYou can invoke available tools by formatting a JSON block:\n\`\`\`tool_execution\n{\n  "tool": "<tool_name>",\n  "parameters": { ... }\n}\n\`\`\`\n\n${toolDefs}`;
     }
 
     /**
@@ -113,8 +113,8 @@ export class ToolRegistry {
         if (!text || typeof text !== 'string') return [];
         const calls: ToolCallRequest[] = [];
 
-        // Match ```tool_call ... ``` or ```json ... ``` with {"tool": "...", "parameters": ...}
-        const regex = /```(?:tool_call|json)?\s*([\s\S]*?)```/gi;
+        // Match ```tool_call ... ```, ```tool_execution ... ``` or ```json ... ``` with {"tool": "...", "parameters": ...}
+        const regex = /```(?:tool_call|tool_execution|json)?\s*([\s\S]*?)```/gi;
         let match: RegExpExecArray | null;
 
         while ((match = regex.exec(text)) !== null) {
@@ -155,7 +155,7 @@ export class ToolRegistry {
      */
     stripToolCalls(text: string): string {
         if (!text || typeof text !== 'string') return '';
-        return text.replace(/```(?:tool_call)\s*[\s\S]*?```/gi, '').trim();
+        return text.replace(/```(?:tool_call|tool_execution)\s*[\s\S]*?```/gi, '').trim();
     }
 
     /**

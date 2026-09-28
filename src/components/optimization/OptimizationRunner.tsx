@@ -343,6 +343,9 @@ The overall system task is: "${baseTask}".
 Create a realistic scenario or question that perfectly fits this analyst's domain to test their intelligence and accuracy.
 Respond ONLY with the text of the prompt you want to give them.`;
 
+            const cleanSettings = { ...settings };
+            delete cleanSettings.activeVariant;
+
             const errors: string[] = [];
             for (let i = 0; i < failoverModels.length; i++) {
                 const currentIndex = (nextFailoverIndex + i) % failoverModels.length;
@@ -356,7 +359,7 @@ Respond ONLY with the text of the prompt you want to give them.`;
                             data: '',
                             bypassCache: true,
                             settings: {
-                                ...settings,
+                                ...cleanSettings,
                                 agents: [{ id: 'grader-agent', role: 'Prompt Generator Node', provider: failover.provider, model: failover.model }],
                                 forceFullSwarm: false,
                                 disableFallback: true
@@ -422,6 +425,9 @@ Respond ONLY with a valid JSON object matching this exact format, substituting t
 {"intelligence": <X>, "accuracy": <Y>, "speed": <Z>}
 Do not return the literal string <X>. You MUST actually grade the output and provide real numbers.`;
 
+            const cleanSettings = { ...settings };
+            delete cleanSettings.activeVariant;
+
             const errors: string[] = [];
             for (let i = 0; i < failoverModels.length; i++) {
                 const currentIndex = (nextFailoverIndex + i) % failoverModels.length;
@@ -435,7 +441,7 @@ Do not return the literal string <X>. You MUST actually grade the output and pro
                             data: '',
                             bypassCache: true,
                             settings: {
-                                ...settings,
+                                ...cleanSettings,
                                 agents: [{ id: 'grader-agent', role: 'Grader Node', provider: failover.provider, model: failover.model }],
                                 forceFullSwarm: false,
                                 disableFallback: true
@@ -545,8 +551,11 @@ Do not return the literal string <X>. You MUST actually grade the output and pro
                 });
             }
 
+            const cleanSettings = { ...settings };
+            delete cleanSettings.activeVariant;
+
             const testSettings = {
-                ...settings,
+                ...cleanSettings,
                 agents: filteredAgents,
                 forceFullSwarm: false,
                 disableFallback: true
