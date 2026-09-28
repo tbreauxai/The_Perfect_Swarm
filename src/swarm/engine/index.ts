@@ -752,7 +752,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
 
         // Semantic Action/Plan Cache Interceptor: Check before Qdrant vector retrieval (> 0.96 similarity)
         try {
-            const planLookup = bypassCache ? { hit: false } : await memoryCortex.lookupActionPlan(task, targetAppId);
+            const planLookup: any = bypassCache ? { hit: false } : await memoryCortex.lookupActionPlan(task, targetAppId);
             if (planLookup.hit && planLookup.actionPlan) {
                 actionPlanBypassedQdrant = true;
                 context.addEvent({
