@@ -358,7 +358,8 @@ Respond ONLY with the text of the prompt you want to give them.`;
                             settings: {
                                 ...settings,
                                 agents: [{ id: 'grader-agent', role: 'Prompt Generator Node', provider: failover.provider, model: failover.model }],
-                                forceFullSwarm: false
+                                forceFullSwarm: false,
+                                disableFallback: true
                             }
                         })
                     });
@@ -436,7 +437,8 @@ Do not return the literal string <X>. You MUST actually grade the output and pro
                             settings: {
                                 ...settings,
                                 agents: [{ id: 'grader-agent', role: 'Grader Node', provider: failover.provider, model: failover.model }],
-                                forceFullSwarm: false
+                                forceFullSwarm: false,
+                                disableFallback: true
                             }
                         })
                     });
@@ -532,7 +534,8 @@ Do not return the literal string <X>. You MUST actually grade the output and pro
                 agents: settings.agents.map((a: any) => 
                     a.id === agentToTest.id ? { ...a, model: model.id } : a
                 ),
-                forceFullSwarm: false
+                forceFullSwarm: false,
+                disableFallback: true
             };
 
             const start = Date.now();
