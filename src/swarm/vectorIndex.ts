@@ -349,22 +349,23 @@ export class VpTreeIndex<T = any> implements VectorIndex<T> {
 
         for (const candIdx of candidates) {
             const cand = items[candIdx];
-            let sum = 0;
-            let sumSq = 0;
+            let mean = 0;
+            let M2 = 0;
             let count = 0;
 
             for (let j = 0; j < testCount; j++) {
                 const targetIdx = j * testStep;
                 if (targetIdx >= items.length || targetIdx === candIdx) continue;
                 const d = MetricMath.distance(cand.vector, items[targetIdx].vector, this.metric);
-                sum += d;
-                sumSq += d * d;
                 count++;
+                const delta = d - mean;
+                mean += delta / count;
+                const delta2 = d - mean;
+                M2 += delta * delta2;
             }
 
             if (count > 1) {
-                const mean = sum / count;
-                const variance = (sumSq / count) - (mean * mean);
+                const variance = M2 / (count - 1); // Sample variance
                 if (variance > bestVariance) {
                     bestVariance = variance;
                     bestIndex = candIdx;

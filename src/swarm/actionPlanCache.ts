@@ -144,7 +144,7 @@ export class ActionPlanCacheInterceptor {
 
         const now = Date.now();
         const duration = ttlMs ?? this.defaultTtlMs;
-        const id = `plan-${Math.random().toString(36).substring(2, 10)}-${now}`;
+        const id = `plan-${crypto.randomUUID()}-${now}`;
 
         // Evict LRU (oldest accessed entry) if at capacity
         if (this.entries.size >= this.maxEntries) {

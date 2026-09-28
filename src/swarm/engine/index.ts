@@ -1777,7 +1777,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         workflowLifecycleResult = lifecycleResult;
 
         if (lifecycleResult?.computedRating && analysts.length > 0) {
-            const isVerifiedSuccess = !finalAnalysis?.ui_title?.includes("Error");
+            const isVerifiedSuccess = !finalAnalysis?.ui_title?.toLowerCase().includes("error");
             for (const analyst of analysts) {
                 globalSpecialistProfiler.recordOutcome(analyst.role, {
                     success: isVerifiedSuccess,
@@ -1791,7 +1791,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         if (coordinationEnabled && coordinationSettings?.hypothesisValidation !== false) {
             const proposed = globalHypothesisLayer.getHypotheses('proposed');
             const validatedThisRun: Hypothesis[] = [];
-            const isVerifiedSuccess = !finalAnalysis?.ui_title?.includes("Error");
+            const isVerifiedSuccess = !finalAnalysis?.ui_title?.toLowerCase().includes("error");
             for (const h of proposed) {
                 const validated = globalHypothesisLayer.validateHypothesis(h.id, {
                     isValid: isVerifiedSuccess,
@@ -1820,7 +1820,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             }
         }
 
-        if (memoryCortex && finalAnalysis && !finalAnalysis.ui_title?.includes("Error")) {
+        if (memoryCortex && finalAnalysis && !finalAnalysis.ui_title?.toLowerCase().includes("error")) {
             const targetAppId = settings?.appId || 'perfect-swarm';
             const qualityRating = lifecycleResult
                 ? lifecycleResult.computedRating
@@ -1875,13 +1875,13 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         throw swarmErr;
     }
 
-    if (finalAnalysis && !finalAnalysis.ui_title?.includes("Error")) {
+    if (finalAnalysis && !finalAnalysis.ui_title?.toLowerCase().includes("error")) {
         globalPayloadCache.set(cacheKey, finalAnalysis);
         globalSemanticCache.set(task, finalAnalysis, { data, configVersion: agentConfigVersion });
     }
 
     const workflowDurationMs = Date.now() - workflowStartTime;
-    const isSuccess = !finalAnalysis?.ui_title?.includes("Error");
+    const isSuccess = !finalAnalysis?.ui_title?.toLowerCase().includes("error");
     globalMetricsCollector.recordTaskExecution({
         success: isSuccess,
         durationMs: workflowDurationMs,
@@ -1958,7 +1958,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     if (tieredCacheEnabled && finalAnalysis) {
         globalTieredCache.set(cacheQuery, finalAnalysis, cacheQuery);
         if (settings?.tieredCacheSettings?.enableStateSnapshots !== false) {
-            const snapId = `snap-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+            const snapId = `snap-${Date.now()}-${crypto.randomUUID()}`;
             workflowSnapshotId = snapId;
             const stateToSnap = {
                 task,
@@ -2076,7 +2076,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
 
     // Step 7b: Adaptive Learning Rates & Shaped Reward Optimization
     if (coordinationEnabled) {
-        const isSuccess = !finalAnalysis?.ui_title?.includes("Error");
+        const isSuccess = !finalAnalysis?.ui_title?.toLowerCase().includes("error");
         const extrinsic = workflowLifecycleResult?.computedRating
             ? workflowLifecycleResult.computedRating / 100
             : (isSuccess ? 0.90 : 0.35);

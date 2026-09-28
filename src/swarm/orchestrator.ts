@@ -17,7 +17,7 @@ export class OrchestratorAgent extends Agent {
     ) {
         super('orchestrator', modelName, provider, apiKey, aiClient);
         this.centralState = centralState;
-        this.orchestratorId = `orchestrator-${Math.random().toString(36).substring(2, 9)}`;
+        this.orchestratorId = `orchestrator-${crypto.randomUUID()}`;
     }
 
     async coordinateAndMerge(

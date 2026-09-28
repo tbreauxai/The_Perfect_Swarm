@@ -388,7 +388,7 @@ export class SwarmTracer {
     public logEvent(event: Omit<TraceEvent, 'id' | 'timestamp'>) {
         const fullEvent: TraceEvent = {
             ...event,
-            id: Math.random().toString(36).substring(7),
+            id: crypto.randomUUID(),
             timestamp: Date.now()
         };
         this.events.push(fullEvent);
@@ -530,7 +530,7 @@ export class PerformanceAnomalyDetector {
     checkLatency(subsystem: string, observedMs: number): PerformanceAnomaly | null {
         if (this.baselineP99 > 0 && observedMs > this.baselineP99 * 2.0) {
             return {
-                id: Math.random().toString(36).substring(7),
+                id: crypto.randomUUID(),
                 subsystem,
                 metric: 'latencyMs',
                 observedValue: observedMs,
@@ -543,7 +543,7 @@ export class PerformanceAnomalyDetector {
         }
         if (this.baselineP95 > 0 && observedMs > this.baselineP95 * 1.5) {
             return {
-                id: Math.random().toString(36).substring(7),
+                id: crypto.randomUUID(),
                 subsystem,
                 metric: 'latencyMs',
                 observedValue: observedMs,

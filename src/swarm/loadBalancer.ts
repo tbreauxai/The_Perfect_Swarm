@@ -484,7 +484,7 @@ export class NodeCapacityManager {
             this.activeSlots.set(key, slots);
         }
 
-        const slotId = `slot-${key}-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+        const slotId = `slot-${key}-${Date.now()}-${crypto.randomUUID()}`;
         let released = false;
 
         const slot: CapacitySlot = {

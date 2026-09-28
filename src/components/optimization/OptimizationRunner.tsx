@@ -373,7 +373,7 @@ Respond ONLY with the text of the prompt you want to give them.`;
                     }
                     const data = await res.json();
 
-                    if (data.finalAnalysis && typeof data.finalAnalysis === 'object' && !data.finalAnalysis.ui_title?.includes('Error')) {
+                    if (data.finalAnalysis && typeof data.finalAnalysis === 'object' && !data.finalAnalysis.ui_title?.toLowerCase().includes('error')) {
                         if (data.finalAnalysis.components?.[0]?.props?.insights?.[0]?.message) {
                             nextFailoverIndex = (currentIndex + 1) % failoverModels.length;
                             return data.finalAnalysis.components[0].props.insights[0].message;
@@ -762,7 +762,7 @@ Do not return the literal string <X>. You MUST actually grade the output and pro
             }
 
             const result: OptimizationResult = {
-                id: `full-swarm-${Date.now()}-${Math.random()}`,
+                id: `full-swarm-${Date.now()}-${crypto.randomUUID()}`,
                 role: 'ALL AGENTS',
                 provider: 'Mixed',
                 model: combo.desc,

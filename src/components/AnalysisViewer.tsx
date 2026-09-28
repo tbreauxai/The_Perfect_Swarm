@@ -110,7 +110,7 @@ export const AnalysisViewer: React.FC<AnalysisViewerProps> = ({ finalAnalysis, i
                     ) : finalAnalysis.components ? (
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             {finalAnalysis.components.map((comp: any) => (
-                                <div key={comp.id || Math.random()} className={comp.type === 'DataTable' ? 'md:col-span-2' : ''}>
+                                <div key={comp.id || crypto.randomUUID()} className={comp.type === 'DataTable' ? 'md:col-span-2' : ''}>
                                     <ComponentRegistry component={comp} />
                                 </div>
                             ))}

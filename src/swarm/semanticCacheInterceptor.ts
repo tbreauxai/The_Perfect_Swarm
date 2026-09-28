@@ -109,7 +109,7 @@ export class SemanticCacheInterceptor {
 
         const now = Date.now();
         const duration = ttlMs ?? this.defaultTtlMs;
-        const id = `semcache-${Math.random().toString(36).substring(2, 10)}-${now}`;
+        const id = `semcache-${crypto.randomUUID()}-${now}`;
 
         // Evict oldest if full
         if (this.entries.size >= this.maxEntries) {
