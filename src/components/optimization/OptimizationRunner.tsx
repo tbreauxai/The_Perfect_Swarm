@@ -532,7 +532,7 @@ Do not return the literal string <X>. You MUST actually grade the output and pro
             const testSettings = {
                 ...settings,
                 agents: settings.agents.map((a: any) => 
-                    a.id === agentToTest.id ? { ...a, model: model.id } : a
+                    a.id === agentToTest.id ? { ...a, provider: agentToTest.provider, model: model.id } : a
                 ),
                 forceFullSwarm: false,
                 disableFallback: true
