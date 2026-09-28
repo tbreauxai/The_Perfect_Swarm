@@ -151,10 +151,9 @@ export class ModelRouter {
         const p = (provider || 'gemini').toLowerCase();
         switch (p) {
             case 'gemini':
-                // gemini-2.5-flash offers 15 RPM / 1M token window on free tier
-                return 'gemini-2.5-flash';
+                return complexity === 'instant' ? 'gemini-3.5-flash-lite' : 'gemini-3.5-flash';
             case 'groq':
-                return complexity === 'instant' ? 'llama-3.1-8b-instant' : 'llama3-70b-8192';
+                return complexity === 'instant' ? 'llama-3.1-8b-instant' : 'llama-3.3-70b-versatile';
             case 'openrouter':
                 return complexity === 'complex'
                     ? 'deepseek/deepseek-r1:free'

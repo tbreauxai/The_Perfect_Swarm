@@ -68,7 +68,7 @@ export async function handleSwarmSse(
 
             await sendEvent('swarm_complete', result);
         } catch (err: any) {
-            await sendEvent('swarm_error', { error: err.stack || err.message || String(err) });
+            await sendEvent('swarm_error', { error: err.message || String(err) });
         }
     });
 }
@@ -353,18 +353,51 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 Object.entries(body.settings || {}).filter(([_, v]) => v !== "" && v !== null && v !== undefined)
             );
 
-            const result = await executeSwarmWorkflow({
-                task: body.task,
-                data: body.data,
-                settings: { ...edgeSettings, ...defaultSettings, ...cleanBodySettings },
-                defaultAi: body.defaultAi || defaultAi,
-                cortex: body.cortex || defaultCortex,
-                enableDeepAnalysis: body.enableDeepAnalysis,
-                complexityOverride: body.complexityOverride,
-                bypassCache: body.bypassCache
-            });
+            let result: any;
+            try {
+                result = await executeSwarmWorkflow({
+                    task: body.task,
+                    data: body.data,
+                    settings: { ...edgeSettings, ...defaultSettings, ...cleanBodySettings },
+                    defaultAi: body.defaultAi || defaultAi,
+                    cortex: body.cortex || defaultCortex,
+                    enableDeepAnalysis: body.enableDeepAnalysis,
+                    complexityOverride: body.complexityOverride,
+                    bypassCache: body.bypassCache
+                });
+            } catch (workflowErr: any) {
+                console.error('[SwarmServer Analyze Workflow Error]:', workflowErr);
+                return c.json({ error: workflowErr.message || 'Swarm workflow execution failed' }, 500);
+            }
 
-            return c.json(result);
+            // Safe post-execution serialization to prevent socket drops on success
+            try {
+                const seen = new WeakSet();
+                const safeReplacer = (_key: string, value: any) => {
+                    if (typeof value === 'bigint') return value.toString();
+                    if (typeof value === 'object' && value !== null) {
+                        if (seen.has(value)) {
+                            return '[Circular]';
+                        }
+                        seen.add(value);
+                    }
+                    return value;
+                };
+
+                const serialized = JSON.stringify(result, safeReplacer);
+                return c.newResponse(serialized, 200, {
+                    'Content-Type': 'application/json; charset=utf-8'
+                });
+            } catch (serializationErr: any) {
+                console.error('[SwarmServer Analyze Serialization Error]:', serializationErr);
+                const safeFallback = {
+                    finalAnalysis: result?.finalAnalysis || 'Analysis completed successfully (fallback serialization)',
+                    events: Array.isArray(result?.events) ? result.events.slice(-10) : [],
+                    metrics: result?.metrics || null,
+                    serializationWarning: serializationErr.message || String(serializationErr)
+                };
+                return c.json(safeFallback, 200);
+            }
         } catch (err: any) {
             console.error('[SwarmServer Analyze Error]:', err);
             return c.json({ error: err.message || 'Internal Server Error' }, 500);

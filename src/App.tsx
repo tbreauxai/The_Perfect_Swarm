@@ -64,8 +64,8 @@ export default function App() {
     agents: [
       { id: 'manager', role: 'Manager Node', provider: 'gemini', model: 'gemini-3.5-flash' },
       { id: 'a1', role: 'Analyst 1', provider: 'gemini', model: 'gemini-3.5-flash' },
-      { id: 'a2', role: 'Analyst 2', provider: 'groq', model: 'llama3-70b-8192' },
-      { id: 'a3', role: 'Analyst 3', provider: 'openrouter', model: 'google/gemma-2-9b-it:free' },
+      { id: 'a2', role: 'Analyst 2', provider: 'gemini', model: 'gemini-3.5-flash-lite' },
+      { id: 'a3', role: 'Analyst 3', provider: 'gemini', model: 'gemini-3.5-flash-lite' },
       { id: 'a4', role: 'Analyst 4', provider: 'mistral', model: 'mistral-small-latest' }
     ]
   });
@@ -399,7 +399,23 @@ export default function App() {
 
             {activeTab === 'optimization' && (
                <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200">
-                   <OptimizationRunner task={task} data={data} settings={settings} />
+                   <OptimizationRunner
+                     task={task}
+                     data={data}
+                     settings={settings}
+                     onApplyModelToSettings={(role, provider, model) => {
+                       setSettings(prev => {
+                         const updated = {
+                           ...prev,
+                           agents: prev.agents.map(a =>
+                             a.role === role ? { ...a, provider, model } : a
+                           )
+                         };
+                         localStorage.setItem('swarm_settings', JSON.stringify(updated));
+                         return updated;
+                       });
+                     }}
+                   />
                </div>
             )}
           </div>

@@ -259,7 +259,8 @@ export function createTelemetryMiddleware(collector: TelemetryMetricsCollector =
         try {
             await next();
             const durationMs = Date.now() - startTime;
-            const success = c.res.status < 400;
+            const status = c.res?.status ?? (c.error ? 500 : 200);
+            const success = status >= 200 && status < 300;
             collector.recordRequest({
                 durationMs,
                 success,

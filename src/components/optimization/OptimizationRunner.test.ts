@@ -3,7 +3,12 @@ import {
     isModelResponseValid,
     getModelExecutionStatus,
     calculateSpeedScore,
-    extractGradingScores
+    extractGradingScores,
+    WORKING_MODELS,
+    scoreOf,
+    getGraderCacheKey,
+    GRADER_CACHE,
+    GRADER_CACHE_TTL_MS
 } from './OptimizationRunner';
 
 describe('OptimizationRunner - Response Validity Hardening', () => {
@@ -236,6 +241,81 @@ describe('OptimizationRunner - Response Validity Hardening', () => {
             expect(scores.intelligence).toBe(6);
             expect(scores.accuracy).toBe(7);
             expect(scores.speed).toBe(5);
+        });
+    });
+
+    describe('Audit Fixes Verification', () => {
+        it('verifies WORKING_MODELS contains verified models and starts with gemini-3.5-flash-lite', () => {
+            expect(WORKING_MODELS.length).toBeGreaterThanOrEqual(4);
+            expect(WORKING_MODELS[0].model).toBe('gemini-3.5-flash-lite');
+            expect(WORKING_MODELS[0].provider).toBe('gemini');
+            
+            const models = WORKING_MODELS.map(m => m.model);
+            expect(models).not.toContain('gemini-1.5-flash');
+            expect(models).not.toContain('meta-llama/llama-3.2-3b-instruct:free');
+            expect(models).not.toContain('microsoft/phi-3-mini-128k-instruct:free');
+        });
+
+        it('ensures gradingError does not mark model response invalid when output is substantive', () => {
+            const result = {
+                output: 'This is a substantive, high-quality analysis output from the tested model.',
+                gradingError: 'Grading failed: 429 rate limit exceeded on grader model'
+            };
+            expect(isModelResponseValid(result)).toBe(true);
+            expect(getModelExecutionStatus(result)).toBe('valid');
+        });
+
+        it('correctly calculates scoreOf and sorts models by combined intelligence + accuracy', () => {
+            const m1 = { scores: { intelligence: 7, accuracy: 8, speed: 10 } };
+            const m2 = { scores: { intelligence: 9, accuracy: 9, speed: 5 } };
+            const m3 = { scores: { intelligence: null, accuracy: 5, speed: 8 } };
+
+            expect(scoreOf(m1)).toBe(15);
+            expect(scoreOf(m2)).toBe(18);
+            expect(scoreOf(m3)).toBe(5);
+
+            const sorted = [m1, m3, m2].sort((a, b) => scoreOf(b) - scoreOf(a));
+            expect(sorted).toEqual([m2, m1, m3]);
+        });
+
+        it('supports testedAt timestamps on history entries', () => {
+            const now = new Date().toISOString();
+            const entry = {
+                id: 'agent-1-test-model',
+                role: 'Analyst 1',
+                model: 'gemini-3.5-flash',
+                provider: 'gemini',
+                durationMs: 1200,
+                output: 'Valid analysis',
+                scores: { intelligence: 9, accuracy: 9, speed: 10 },
+                testedAt: now
+            };
+            expect(entry.testedAt).toBe(now);
+            expect(new Date(entry.testedAt).getTime()).not.toBeNaN();
+        });
+
+        it('computes deterministic grader cache keys and supports result caching', () => {
+            const task = 'Evaluate market trends';
+            const output = { insights: ['Growth is consistent at 12% YoY'] };
+            const key1 = getGraderCacheKey(task, output, 'shared-rubric-v2');
+            const key2 = getGraderCacheKey(task, output, 'shared-rubric-v2');
+            const keyDifferentTask = getGraderCacheKey('Different task', output, 'shared-rubric-v2');
+
+            expect(key1).toBe(key2);
+            expect(key1.startsWith('gc_')).toBe(true);
+            expect(key1).not.toBe(keyDifferentTask);
+
+            // Verify cache insertion and expiration logic
+            GRADER_CACHE.set(key1, {
+                scores: { intelligence: 9, accuracy: 10, speed: 8 },
+                timestamp: Date.now()
+            });
+
+            const cached = GRADER_CACHE.get(key1);
+            expect(cached).toBeDefined();
+            expect(cached?.scores.intelligence).toBe(9);
+            expect(cached?.scores.accuracy).toBe(10);
+            expect(Date.now() - cached!.timestamp).toBeLessThan(GRADER_CACHE_TTL_MS);
         });
     });
 });

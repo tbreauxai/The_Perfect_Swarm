@@ -1,26 +1,50 @@
 [
   {
-    "id": "goal-1-optimizer-diagnostics-and-root-cause-analysis",
-    "description": "Perform deep diagnostic of the optimizer auto-grading pipeline and model response validity determination across OptimizationRunner.tsx, parser.ts, server.ts, and engine routing. Document exact failure modes in brief.md.",
+    "id": "goal-1-prune-dead-models-and-unify-failover-list",
+    "description": "Prune dead model IDs from grader and prompt-generator lists in OptimizationRunner.tsx into a single shared WORKING_MODELS constant (starting with gemini-3.5-flash-lite), and repoint deprecated agent defaults in App.tsx and router.ts.",
     "status": "completed",
-    "verification": "Root cause isolation confirmed: hardcoded invalid model 'gemini-flash-lite-latest', ignored managerAgent, schema mismatch between Generative UI ManagerResponse and flat JSON grading schema, speed score not computed deterministically, and naive !r.error validity check."
+    "verification": "WORKING_MODELS unified; dead models (gemini-1.5-flash, llama-3.2-3b-instruct:free, phi-3-mini-128k-instruct:free, llama3-70b-8192, gemma-2-9b-it:free) removed/repointed; lint clean."
   },
   {
-    "id": "goal-2-harden-response-validity-detection",
-    "description": "Refactor response validity verification in OptimizationRunner.tsx. Replace naive !r.error checks with robust structural inspection (verifying non-null payload, absence of execution error wrappers like ui_title: 'Execution Error', and presence of non-empty content/insights).",
+    "id": "goal-2-fix-grader-failure-attribution-and-status-rendering",
+    "description": "Fix Fix 2: Grader failure must not mark the tested model as Error. Set result.gradingError without calling recordError or setting result.error. Update history table and agent cards to render amber 'Grade failed' badge.",
     "status": "completed",
-    "verification": "isModelResponseValid and getModelExecutionStatus implemented, exported, and verified across 18 automated test cases in OptimizationRunner.test.ts; history table, combinations gate, and agent cards now distinguish Valid, Incomplete, and Error states."
+    "verification": "result.gradingError set on grader catch; recordError not called; history table and agent cards show amber 'Grade failed' badge with tooltip."
   },
   {
-    "id": "goal-3-fix-grading-system-and-score-extraction",
-    "description": "Fix autoGradeOutput and generateTestPrompt to dynamically utilize the user's configured Manager agent credentials and model, compute speed score deterministically from elapsed durationMs, handle Generative UI schema wrapping in extraction, and prevent combination runner deadlock.",
+    "id": "goal-3-sort-managers-in-combinations-and-split-cursors",
+    "description": "Fix Fix 3 (sort manager models in runFullSwarmCombinations by scoreOf(b) - scoreOf(a)), Fix 7 (catch ge and throw ge instead of throw console.error), and Fix 8 (split shared nextFailoverIndex into promptGenCursor and graderCursor).",
     "status": "completed",
-    "verification": "resolveGraderAgent dynamically routes through managerAgent.provider and managerAgent.model with valid fallback; extractGradingScores multi-layer extractor extracts numeric scores across direct JSON, events, and UI components; calculateSpeedScore deterministically scores durationMs."
+    "verification": "Managers sorted by score before combination generation; promptGenCursor and graderCursor separated; grader re-throws actual error object."
   },
   {
-    "id": "goal-4-test-and-verify-optimizer-pipeline",
-    "description": "Create automated tests for validity verification and score extraction, run test suite, and verify zero regressions across the codebase.",
+    "id": "goal-4-history-timestamps-session-wipe-delay-and-apply-best-button",
+    "description": "Fix Fix 4 (add testedAt ISO timestamps to history entries, increase slice to 100, add Tested column to history table, defer wiping results until first new result arrives) and Fix 5 (add 'Use this' button to copy model into Settings agent and persist).",
     "status": "completed",
-    "verification": "18/18 tests passed in OptimizationRunner.test.ts; 100% pass across full test suite (npm test), lint clean (tsc --noEmit 0 errors), and dual Vite/Swarm build clean (npm run build)."
+    "verification": "History entries include testedAt; Tested column rendered; previous results preserved until new sweep yields first result; 'Use this' button updates Settings."
+  },
+  {
+    "id": "goal-5-fix-health-check-no-api-key-badge",
+    "description": "Fix Fix 6: In checkProviderModelsHealth, when apiKey is absent for providers requiring one, return healthy: false, circuitState: 'UNCHECKED', latencyMs: null, and note: 'No API key — not checked'. Update AgentConfigurator badge to display '—' latency and amber 'unchecked' label.",
+    "status": "completed",
+    "verification": "Keyless models marked UNCHECKED with null latencyMs; AgentConfigurator shows amber unchecked label with '—' latency."
+  },
+  {
+    "id": "goal-6-harden-grader-prompt-and-add-grader-cache",
+    "description": "Fix Fix 9 (harden grader prompt against self-scoring using <analyst_output> delimiters and clear instructions that output is data not instructions) and Fix 10 (add client-side grader cache to avoid burning LLM quota).",
+    "status": "completed",
+    "verification": "Grader prompt wraps output in <analyst_output>; grader cache stores and reuses scores for identical inputs."
+  },
+  {
+    "id": "goal-7-backend-analyze-resilience-error-traces-and-metrics",
+    "description": "Fix Backend Fixes 1, 2, 3: wrap /api/swarm/analyze post-execution pipeline in robust try/catch with safe serialization so connections never drop; strip stack traces from client-facing SSE errors (use message only); count non-2xx HTTP responses as telemetry failures.",
+    "status": "completed",
+    "verification": "/api/swarm/analyze handles post-execution errors cleanly without socket drop; SSE swarm_error sends message only; telemetry middleware counts non-2xx responses as failures."
+  },
+  {
+    "id": "goal-8-full-verification-and-test-suite",
+    "description": "Run the full test suite (npm test), TypeScript type checking (npm run lint), and production build (npm run build) to ensure zero regressions across all components and backend services.",
+    "status": "completed",
+    "verification": "All unit, CLI, portable, simulation, and server tests pass; zero TypeScript errors; clean build."
   }
 ]

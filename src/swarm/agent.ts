@@ -10,7 +10,7 @@ import { parseJsonSafe, guardManagerResponse, guardAnalystResponse } from './par
 import { ManagerResponseSchema, AnalystResponseSchema } from './schemas.ts';
 
 export const DEFAULT_PROVIDER_MODELS: Record<string, string> = {
-    gemini: 'gemini-2.5-flash',
+    gemini: 'gemini-3.5-flash',
     groq: 'openai/gpt-oss-120b',
     openrouter: 'deepseek/deepseek-r1',
     mistral: 'mistral-small-latest',

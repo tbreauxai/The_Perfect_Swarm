@@ -126,4 +126,18 @@ describe('AgentConfigurator & SettingsModal Swarm Agents Tab', () => {
         globalModelHealthChecker.circuitBreaker.resetAll();
         globalModelHealthChecker.cache.clear();
     });
+
+    it('returns UNCHECKED with null latencyMs when apiKey is missing for key-requiring providers', async () => {
+        const { checkProviderModelsHealth } = await import('../services/providerService');
+        const testModels = [
+            { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash', free: true }
+        ];
+
+        const results = await checkProviderModelsHealth('gemini', testModels, '');
+        expect(results['gemini:gemini-3.5-flash']).toBeDefined();
+        expect(results['gemini:gemini-3.5-flash'].healthy).toBe(false);
+        expect(results['gemini:gemini-3.5-flash'].circuitState).toBe('UNCHECKED');
+        expect(results['gemini:gemini-3.5-flash'].latencyMs).toBeNull();
+        expect(results['gemini:gemini-3.5-flash'].note).toBe('No API key — not checked');
+    });
 });

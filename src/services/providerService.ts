@@ -67,19 +67,20 @@ export async function checkProviderModelsHealth(
 ): Promise<Record<string, ModelHealthStatus>> {
     if (!models || models.length === 0) return {};
     
-    // If no API key is present on the frontend, assume models are healthy so the UI allows selection
+    // If no API key is present on the frontend, mark models as unchecked with null latency
     if (!apiKey && provider !== 'simulated' && provider !== 'openrouter') {
         const mockHealth: Record<string, ModelHealthStatus> = {};
         for (const m of models) {
             mockHealth[`${provider.toLowerCase().trim()}:${m.id.trim()}`] = {
                 provider,
                 modelId: m.id,
-                latencyMs: 0,
+                latencyMs: null,
                 lastChecked: Date.now(),
-                healthy: true,
-                circuitState: 'CLOSED',
-                tier1Success: true,
-                tier2Success: true,
+                healthy: false,
+                circuitState: 'UNCHECKED',
+                tier1Success: false,
+                tier2Success: false,
+                note: 'No API key — not checked',
                 expiresAt: Date.now() + 600000 // 10 minutes
             };
         }

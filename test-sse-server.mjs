@@ -214,6 +214,17 @@ async function runSseServerTests() {
         console.log('✓ Direct JSON analysis response received:', analyzeData.finalAnalysis?.ui_title);
         if (!analyzeData.finalAnalysis) throw new Error('Missing finalAnalysis in direct JSON response');
 
+        // Step F: Verify telemetry metrics accurately reflect failures
+        console.log('\n[Test 6] GET /api/swarm/metrics (Accuracy Verification)');
+        const metricsRes = await fetch(`${baseUrl}/api/swarm/metrics`);
+        if (metricsRes.status !== 200) throw new Error(`Metrics expected 200, got ${metricsRes.status}`);
+        const metricsData = await metricsRes.json();
+        console.log('✓ Telemetry metrics received:', { totalRequests: metricsData.totalRequests, failureCount: metricsData.failureCount });
+        if (metricsData.failureCount < 1) {
+            throw new Error(`Expected failureCount >= 1 due to 400 response, got ${metricsData.failureCount}`);
+        }
+        console.log('✓ Telemetry metrics accurately count non-2xx HTTP responses as failures.');
+
         console.log('\n✓ ALL SWARM HTTP/SSE STREAMING SERVER TESTS PASSED SUCCESSFULLY!\n');
     } finally {
         server.close();

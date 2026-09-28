@@ -89,8 +89,9 @@ export const AgentConfigurator: React.FC<AgentConfiguratorProps> = ({
         const health = healthStatusByModel[key];
         if (!health) return '';
         if (health.circuitState === 'OPEN') return ' [⛔ Circuit Tripped]';
+        if (health.circuitState === 'UNCHECKED' || (health.latencyMs === null && !health.healthy)) return ' [⚠ unchecked]';
         if (!health.healthy) return ' [⚠ Degraded]';
-        return ` [✓ ${health.latencyMs}ms]`;
+        return ` [✓ ${health.latencyMs != null ? `${health.latencyMs}ms` : '—'}]`;
     };
 
     const isModelAllowedUnderFilter = (provider: string, model: ModelOption): boolean => {
@@ -98,6 +99,7 @@ export const AgentConfigurator: React.FC<AgentConfiguratorProps> = ({
         const key = getModelKey(provider, model.id);
         const health = healthStatusByModel[key];
         if (!health) return true; // not yet checked or pending
+        if (health.circuitState === 'UNCHECKED') return true;
         return health.healthy && health.circuitState !== 'OPEN';
     };
 
@@ -145,9 +147,14 @@ export const AgentConfigurator: React.FC<AgentConfiguratorProps> = ({
                                         ⛔ Model Disabled (Circuit Breaker OPEN)
                                     </span>
                                 )}
+                                {activeHealth && activeHealth.circuitState === 'UNCHECKED' && (
+                                    <span className="text-[10px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200 font-medium" title={activeHealth.note || 'No API key — not checked'}>
+                                        ⚠ Unchecked (—)
+                                    </span>
+                                )}
                                 {activeHealth && activeHealth.healthy && (
                                     <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded-full border border-emerald-200 font-medium">
-                                        ✓ Healthy ({activeHealth.latencyMs}ms)
+                                        ✓ Healthy ({activeHealth.latencyMs != null ? `${activeHealth.latencyMs}ms` : '—'})
                                     </span>
                                 )}
                                 {isKeyRequired && (

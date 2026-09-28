@@ -3,7 +3,7 @@
  * Pure TypeScript, zero external runtime dependencies.
  */
 
-export type CircuitState = 'CLOSED' | 'OPEN' | 'HALF_OPEN';
+export type CircuitState = 'CLOSED' | 'OPEN' | 'HALF_OPEN' | 'UNCHECKED';
 
 export interface ModelCircuitBreakerConfig {
     /** Number of consecutive failures to trip circuit breaker from CLOSED to OPEN (default: 3) */
@@ -27,13 +27,14 @@ export interface ModelHealthStatus {
     modelId: string;
     provider: string;
     healthy: boolean;
-    latencyMs: number;
+    latencyMs: number | null;
     tier1Success: boolean; // Lightweight HEAD / metadata reachability check
     tier2Success: boolean; // Minimal inference ping check
     circuitState: CircuitState;
     lastChecked: number;
     expiresAt: number;
     error?: string;
+    note?: string;
 }
 
 export interface HealthCheckOptions {
