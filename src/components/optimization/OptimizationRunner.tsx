@@ -531,9 +531,11 @@ Do not return the literal string <X>. You MUST actually grade the output and pro
             setProgress(`Testing ${agentToTest.role} with ${model.name || model.id}...`);
             const testSettings = {
                 ...settings,
-                agents: settings.agents.map((a: any) => 
-                    a.id === agentToTest.id ? { ...a, provider: agentToTest.provider, model: model.id } : a
-                ),
+                agents: settings.agents
+                    .filter((a: any) => a.id === agentToTest.id || a.id === managerAgent.id)
+                    .map((a: any) => 
+                        a.id === agentToTest.id ? { ...a, provider: agentToTest.provider, model: model.id } : a
+                    ),
                 forceFullSwarm: false,
                 disableFallback: true
             };
