@@ -3,7 +3,7 @@ import { Agent } from './agent.ts';
 import { SwarmContext } from './context.ts';
 import { ProviderRegistry } from './providers/registry.ts';
 import { GeminiAdapter } from './providers/gemini.ts';
-import { GeminiEmbeddingProvider } from './memory.ts';
+import { GeminiEmbeddingProvider } from './memory/index.ts';
 import { SwarmClient } from './client.ts';
 import { createTokenChunks } from './profiler.ts';
 import { ModelRouter } from './router.ts';

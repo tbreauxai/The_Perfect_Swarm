@@ -9,7 +9,7 @@ import { SettingsModal, AppSettings } from './components/SettingsModal';
 import { SwarmEventTimeline, SwarmTimelineEvent } from './components/SwarmEventTimeline';
 import { AnalysisViewer } from './components/AnalysisViewer';
 import { CortexDiagnosticsViewer } from './components/CortexDiagnosticsViewer';
-import { OptimizationRunner } from './components/optimization/OptimizationRunner';
+import { OptimizationRunner } from './components/optimization/OptimizationRunner/index.tsx';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'trace' | 'optimization'>('trace');

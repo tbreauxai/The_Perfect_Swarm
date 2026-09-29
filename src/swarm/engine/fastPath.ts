@@ -12,7 +12,7 @@ import { globalKnowledgeGraph } from '../knowledgeGraph.ts';
 import { globalHypothesisLayer, globalLearningRateManager } from '../coordination.ts';
 import type { SwarmWorkflowResult, SwarmWorkflowParams } from './types.ts';
 import { ANALYST_SYSTEM_INSTRUCTION } from './constants.ts';
-import { MemoryCortex } from '../memory.ts';
+import { MemoryCortex } from '../memory/index.ts';
 
 export async function executeFastPath(
     fastPathDecision: any, analysts: Agent[], context: SwarmContext, params: SwarmWorkflowParams, settings: any,

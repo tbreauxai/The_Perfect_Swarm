@@ -4,7 +4,7 @@ import {
     getModelExecutionStatus,
     calculateSpeedScore,
     extractGradingScores
-} from './OptimizationRunner';
+} from './OptimizationRunner/utils.ts';
 
 describe('OptimizationRunner - Response Validity Hardening', () => {
     describe('calculateSpeedScore', () => {

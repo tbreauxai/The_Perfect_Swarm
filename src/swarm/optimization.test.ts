@@ -5,7 +5,7 @@ import {
     DomainPreFilter,
     ConfidenceEarlyExitEvaluator,
     type PartialPrediction
-} from './optimization.ts';
+} from './optimization/index.ts';
 
 describe('Goal 1: Sub-Computation Caching, Token Weight Profiling & Domain Pre-Filtering', () => {
     beforeEach(() => {

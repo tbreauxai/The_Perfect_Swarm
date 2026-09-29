@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { SemanticCacheInterceptor } from './semanticCacheInterceptor.ts';
-import { MemoryCortex, DeterministicLocalEmbeddingProvider } from './memory.ts';
+import { MemoryCortex, DeterministicLocalEmbeddingProvider } from './memory/index.ts';
 
 describe('Semantic Cache Interceptor', () => {
     it('should correctly intercept semantic cache hits and misses', async () => {

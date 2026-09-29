@@ -17,11 +17,11 @@ export * from './providers/mistral.ts';
 export * from './providers/github.ts';
 
 // Memory, Adaptive Routing & Lifecycle Verification
-export * from './memory.ts';
+export * from './memory/index.ts';
 export * from './router.ts';
 export * from './lifecycle.ts';
 export * from './cache.ts';
-export * from './loadBalancer.ts';
+export * from './loadBalancer/index.ts';
 export * from './engine/index.ts';
 export * from './server.ts';
 export * from './tools/index.ts';
@@ -39,6 +39,6 @@ export * from './feedback.ts';
 export * from './knowledgeGraph.ts';
 export * from './coordination.ts';
 export * from './health.ts';
-export * from './optimization.ts';
+export * from './optimization/index.ts';
 export * from './actionPlanCache.ts';
 

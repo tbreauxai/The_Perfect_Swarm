@@ -1,5 +1,5 @@
 import { GoogleGenAI } from "@google/genai";
-import { MemoryCortex } from "../memory.ts";
+import { MemoryCortex } from "../memory/index.ts";
 import type { LearnedMemoryEvent, SwarmEngineSettings } from "../types.ts";
 import type { SwarmWorkflowParams, SwarmWorkflowResult } from "./types.ts";
 import { executeSwarmWorkflow } from "./index.ts";

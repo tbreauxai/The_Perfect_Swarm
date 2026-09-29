@@ -11,7 +11,7 @@ import {
     globalPayloadCache,
     AdaptiveLoadBalancer,
     globalLoadBalancer,
-    SpecialistAffinityRouter,
+    SpecialistAffinityRouter, SpecialistCapabilityProfiler, TokenBudgetManager,
     NodeCapacityManager
 } from './src/swarm/index.ts';
 
@@ -369,7 +369,7 @@ Synthesizing structured findings.
     simNodeCap.setMaxConcurrency('perf-node', 1);
     simNodeCap.setMaxConcurrency('data-node', 1);
 
-    const simRouter = new SpecialistAffinityRouter(undefined, undefined, undefined, simNodeCap);
+    const simRouter = new SpecialistAffinityRouter(new TokenBudgetManager(), new AdaptiveLoadBalancer(), new SpecialistCapabilityProfiler(), simNodeCap);
 
     const taskDomain = 'Comprehensive multi-tenant infrastructure security audit, query indexing, and latency benchmarking';
     const testChunks = [

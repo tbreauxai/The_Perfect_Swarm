@@ -4,7 +4,7 @@ import { SwarmContext } from './context.ts';
 import { ProviderRegistry } from './providers/registry.ts';
 import { sanitizeModelOutput } from './providers/adapter.ts';
 import { SwarmTracer } from './profiler.ts';
-import { globalLoadBalancer, type AdaptiveLoadBalancer } from './loadBalancer.ts';
+import { globalLoadBalancer, type AdaptiveLoadBalancer } from './loadBalancer/index.ts';
 import { globalPayloadCache, PayloadCache } from './cache.ts';
 import { parseJsonSafe, guardManagerResponse, guardAnalystResponse } from './parser.ts';
 import { ManagerResponseSchema, AnalystResponseSchema } from './schemas.ts';

@@ -7,7 +7,7 @@ import {
     DomainPreFilter,
     ConfidenceEarlyExitEvaluator,
     type PartialPrediction
-} from './optimization.ts';
+} from './optimization/index.ts';
 import { executeSwarmWorkflow } from './engine/index.ts';
 import { ProviderRegistry } from './providers/registry.ts';
 
@@ -231,7 +231,7 @@ describe('Goal 2: Worker Pool Parallelization, Tiered Inference & Streaming Inte
 
             // Seed cache
             const cacheTask = 'H2H Analysis: Real Madrid vs Barcelona';
-            const { globalDomainSubComputationCache } = await import('./optimization.ts');
+            const { globalDomainSubComputationCache } = await import('./optimization/index.ts');
             globalDomainSubComputationCache.set('market_odds', cacheTask, cachedAnalysis);
 
             const result = await executeSwarmWorkflow({

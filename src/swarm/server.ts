@@ -5,7 +5,7 @@ import { createAdaptorServer, type ServerType } from '@hono/node-server';
 import { executeSwarmWorkflow, type SwarmWorkflowParams, type SwarmWorkflowResult } from './engine/index.ts';
 import type { SwarmEvent } from './types.ts';
 import type { GoogleGenAI } from '@google/genai';
-import type { MemoryCortex } from './memory.ts';
+import type { MemoryCortex } from './memory/index.ts';
 import { globalMetricsCollector } from './profiler.ts';
 import { globalTelemetryCollector, createTelemetryMiddleware } from './telemetry.ts';
 import { globalPayloadCache, globalSemanticCache } from './cache.ts';

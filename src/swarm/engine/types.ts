@@ -1,6 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import { SwarmContext } from "../context.ts";
-import { MemoryCortex } from "../memory.ts";
+import { MemoryCortex } from "../memory/index.ts";
 import type { SwarmEvent, LearnedMemoryEvent, SwarmEngineSettings } from "../types.ts";
 import type { TaskComplexity } from "../router.ts";
 import type { UnifiedSwarmBaselineReport, SwarmBaselineReport } from "../profiler.ts";

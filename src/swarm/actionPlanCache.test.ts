@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { ActionPlanCacheInterceptor, type ActionPlanInput } from './actionPlanCache.ts';
-import { DeterministicLocalEmbeddingProvider } from './memory.ts';
+import { DeterministicLocalEmbeddingProvider } from './memory/index.ts';
 
 describe('ActionPlanCacheInterceptor', () => {
     let interceptor: ActionPlanCacheInterceptor;

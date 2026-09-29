@@ -12,7 +12,7 @@ const safeEnv = typeof process !== "undefined" ? process.env : {} as Record<stri
 import { executeFastPath } from "./fastPath.ts";
 import { GoogleGenAI } from '@google/genai';
 import { Agent } from '../agent.ts';
-import { MemoryCortex } from '../memory.ts';
+import { MemoryCortex } from '../memory/index.ts';
 import { SwarmContext } from '../context.ts';
 import type { SwarmEvent, ProviderCredential, Provider, LearnedMemoryEvent, AgentRunConfig, SwarmEngineSettings, AgentConfig } from '../types.ts';
 import { profileData, createTokenChunks, SwarmTracer, globalMetricsCollector, SwarmMetricsCollector, globalUnifiedProfiler, type SwarmBaselineReport, type UnifiedSwarmBaselineReport } from '../profiler.ts';
@@ -23,7 +23,7 @@ import { AnalystResponseSchema, ManagerResponseSchema } from '../schemas.ts';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { ToolRegistry, globalToolRegistry, type SwarmTool } from '../tools/index.ts';
 import { guardAnalystResponse, guardManagerResponse, parseJsonSafe } from '../parser.ts';
-import { globalSpecialistRouter, globalTokenBudgetManager, globalSpecialistProfiler, globalNodeCapacityManager, type SpecialistRoutingPlan } from '../loadBalancer.ts';
+import { globalSpecialistRouter, globalTokenBudgetManager, globalSpecialistProfiler, globalNodeCapacityManager, type SpecialistRoutingPlan } from '../loadBalancer/index.ts';
 import {
     globalHierarchicalMessageBus,
     globalClusterTopologyManager,
@@ -113,7 +113,7 @@ import {
     type EarlyExitDecision,
     type TokenWeightReport,
     type PreFilterResult
-} from '../optimization.ts';
+} from '../optimization/index.ts';
 
 const ALL_PROVIDERS: Provider[] = ['gemini', 'openrouter', 'groq', 'github', 'mistral'];
 

@@ -5,7 +5,7 @@ import {
     AdaptiveLoadBalancer,
     SpecialistCapabilityProfiler,
     NodeCapacityManager
-} from './loadBalancer.ts';
+} from './loadBalancer/index.ts';
 
 describe('TokenBudgetManager & SpecialistAffinityRouter', () => {
     let tokenManager: TokenBudgetManager;
@@ -23,7 +23,7 @@ describe('TokenBudgetManager & SpecialistAffinityRouter', () => {
             }
         });
         loadBalancer = new AdaptiveLoadBalancer();
-        router = new SpecialistAffinityRouter(tokenManager, loadBalancer);
+        router = new SpecialistAffinityRouter(tokenManager, loadBalancer, new SpecialistCapabilityProfiler(), new NodeCapacityManager());
     });
 
     describe('TokenBudgetManager', () => {
@@ -235,7 +235,7 @@ describe('TokenBudgetManager & SpecialistAffinityRouter', () => {
 
         it('adaptively steers chunk routing toward specialists with higher reinforcement learning rewards', () => {
             // Configure two specialists with equal domain affinity
-            const routerWithRL = new SpecialistAffinityRouter(tokenManager, loadBalancer, profiler);
+            const routerWithRL = new SpecialistAffinityRouter(tokenManager, loadBalancer, profiler, new NodeCapacityManager());
 
             const specialists = [
                 { id: 's1', role: 'Security Specialist A', provider: 'gemini' },

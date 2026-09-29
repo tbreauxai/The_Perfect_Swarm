@@ -9,11 +9,11 @@ export default defineConfig({
       entry: {
         index: path.resolve(__dirname, 'src/swarm/index.ts'),
         engine: path.resolve(__dirname, 'src/swarm/engine/index.ts'),
-        memory: path.resolve(__dirname, 'src/swarm/memory.ts'),
+        memory: path.resolve(__dirname, 'src/swarm/memory/index.ts'),
         router: path.resolve(__dirname, 'src/swarm/router.ts'),
         lifecycle: path.resolve(__dirname, 'src/swarm/lifecycle.ts'),
         cache: path.resolve(__dirname, 'src/swarm/cache.ts'),
-        loadBalancer: path.resolve(__dirname, 'src/swarm/loadBalancer.ts'),
+        loadBalancer: path.resolve(__dirname, 'src/swarm/loadBalancer/index.ts'),
         profiler: path.resolve(__dirname, 'src/swarm/profiler.ts'),
         server: path.resolve(__dirname, 'src/swarm/server.ts'),
         tools: path.resolve(__dirname, 'src/swarm/tools/index.ts'),
@@ -31,7 +31,7 @@ export default defineConfig({
         knowledgeGraph: path.resolve(__dirname, 'src/swarm/knowledgeGraph.ts'),
         coordination: path.resolve(__dirname, 'src/swarm/coordination.ts'),
         health: path.resolve(__dirname, 'src/swarm/health.ts'),
-        optimization: path.resolve(__dirname, 'src/swarm/optimization.ts'),
+        optimization: path.resolve(__dirname, 'src/swarm/optimization/index.ts'),
         actionPlanCache: path.resolve(__dirname, 'src/swarm/actionPlanCache.ts')
       },
       formats: ['es', 'cjs'],

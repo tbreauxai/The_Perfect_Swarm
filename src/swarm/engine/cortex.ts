@@ -1,5 +1,5 @@
 import { GoogleGenAI } from "@google/genai";
-import { MemoryCortex } from "../memory.ts";
+import { MemoryCortex } from "../memory/index.ts";
 export const defaultCortexRegistry = new Map<string, MemoryCortex>();
 
 export function getOrCreateDefaultCortex(appId: string, aiClient?: GoogleGenAI): MemoryCortex {

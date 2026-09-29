@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { executeSwarmWorkflow } from './engine/index.ts';
 import { ProviderRegistry } from './providers/registry.ts';
-import { globalTokenBudgetManager, globalSpecialistProfiler, globalNodeCapacityManager } from './loadBalancer.ts';
+import { globalTokenBudgetManager, globalSpecialistProfiler, globalNodeCapacityManager } from './loadBalancer/index.ts';
 
 describe('Dynamic Task Routing & Token Allocation in Engine Step 4', () => {
     beforeEach(() => {

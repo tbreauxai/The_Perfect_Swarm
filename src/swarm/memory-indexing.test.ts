@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { MemoryCortex, DeterministicLocalEmbeddingProvider } from './memory.ts';
+import { MemoryCortex, DeterministicLocalEmbeddingProvider } from './memory/index.ts';
 import { SemanticBaselineCache, SemanticSimilarityEngine } from './cache.ts';
 
 describe('MemoryCortex: O(log n) Vector Indexing & Deduplication', () => {

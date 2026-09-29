@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { MemoryCortex, DeterministicLocalEmbeddingProvider } from './memory.ts';
+import { MemoryCortex, DeterministicLocalEmbeddingProvider } from './memory/index.ts';
 import { executeSwarmWorkflow } from './engine/index.ts';
 import { SwarmContext } from './context.ts';
 import { ToolRegistry } from './tools/registry.ts';

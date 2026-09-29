@@ -1,288 +1,8 @@
 import { QdrantClient } from '@qdrant/js-client-rest';
 import { GoogleGenAI } from '@google/genai';
-// node:fs and node:path are dynamically imported to allow Cloudflare Edge deployment
-import { createVectorIndex, type VectorIndex, type VectorIndexMetrics } from './vectorIndex.ts';
-import { SemanticCacheInterceptor, type SemanticCacheInterceptorConfig, type SemanticCacheStats } from './semanticCacheInterceptor.ts';
-import { ActionPlanCacheInterceptor, type ActionPlanCacheConfig, type ActionPlanCacheStats, type ActionPlan, type ActionPlanInput, type ActionPlanCacheLookupResult } from './actionPlanCache.ts';
-
-export interface MemoryMetadata {
-    appId?: string;
-    domain?: string;
-    agentRole?: string;
-    sessionId?: string;
-    qualityRating?: number; // 0.0 to 1.0
-    verified?: boolean;
-    feedback?: string;
-    frequency?: number;
-    tags?: string[];
-    timestamp?: string;
-    lastSeen?: string;
-    [key: string]: any;
-}
-
-export type RrfProfile = 'semantic' | 'lexical' | 'balanced' | 'hybrid' | 'quantitative';
-export type RrfWeights = { denseWeight: number; sparseWeight: number };
-
-export const RRF_PRESETS: Record<RrfProfile, RrfWeights> = {
-    semantic: { denseWeight: 4.0, sparseWeight: 0.5 },
-    lexical: { denseWeight: 0.5, sparseWeight: 4.0 },
-    balanced: { denseWeight: 1.0, sparseWeight: 1.0 },
-    hybrid: { denseWeight: 2.0, sparseWeight: 1.5 },
-    quantitative: { denseWeight: 0.2, sparseWeight: 4.0 }
-};
-
-export interface RetrievalOptions {
-    appId?: string;
-    targetApps?: string | string[];
-    domain?: string;
-    limit?: number;
-    minRating?: number;
-    verifiedOnly?: boolean;
-    agentRole?: string;
-    includeShared?: boolean;
-    denseWeight?: number;
-    sparseWeight?: number;
-    profile?: RrfProfile | RrfWeights;
-    rrfProfile?: RrfProfile | RrfWeights;
-}
-
-export interface ConsolidationOptions {
-    appId?: string;
-    minRating?: number;
-    maxAgeDays?: number;
-    pruneLowQuality?: boolean;
-}
-
-export interface ConsolidationResult {
-    inspected: number;
-    pruned: number;
-    retained: number;
-    prunedIds: string[];
-}
-
-export interface ExportMemoriesOptions {
-    appId?: string;
-    minRating?: number;
-    verifiedOnly?: boolean;
-    includeVectors?: boolean;
-    format?: 'snapshot' | 'json' | 'jsonl';
-}
-
-export interface MemorySnapshotPoint {
-    id: string;
-    content: string;
-    metadata: MemoryMetadata & {
-        appId: string;
-        qualityRating: number;
-        verified: boolean;
-        frequency: number;
-        timestamp: string;
-        lastSeen: string;
-    };
-    denseVector?: number[];
-    sparseVector?: SparseVector;
-}
-
-export interface MemorySnapshot {
-    version: string;
-    exportedAt: string;
-    collectionName: string;
-    pointCount: number;
-    memories: MemorySnapshotPoint[];
-}
-
-export interface ImportMemoriesOptions {
-    targetAppId?: string;
-    deduplicate?: boolean;
-    recomputeVectors?: boolean;
-    minRating?: number;
-}
-
-export interface ImportMemoriesResult {
-    imported: number;
-    skipped: number;
-    deduplicated: number;
-    importedIds: string[];
-}
-
-export interface StoredMemoryPoint {
-    id: string;
-    denseVector: number[];
-    sparseVector: SparseVector;
-    payload: MemoryMetadata & {
-        content: string;
-        appId: string;
-        frequency: number;
-        qualityRating: number;
-        verified: boolean;
-        timestamp: string;
-        lastSeen: string;
-    };
-}
-
-export interface SparseVector {
-    indices: number[];
-    values: number[];
-}
-
-/**
- * Tokenizes text into sparse term frequency vector for BM25-style lexical search.
- */
-export class SparseTokenizer {
-    static encode(text: string, vocabSize: number = 10000): SparseVector {
-        const tokens = text.toLowerCase().match(/\b\w+\b/g) || [];
-        const termFreqs: Record<number, number> = {};
-
-        for (const token of tokens) {
-            let hash = 5381;
-            for (let i = 0; i < token.length; i++) {
-                hash = ((hash << 5) + hash) + token.charCodeAt(i);
-                hash |= 0;
-            }
-            const index = Math.abs(hash) % vocabSize;
-            termFreqs[index] = (termFreqs[index] || 0) + 1;
-        }
-
-        const indices = Object.keys(termFreqs).map(Number).sort((a, b) => a - b);
-        const values = indices.map(i => termFreqs[i]);
-
-        return { indices, values };
-    }
-}
-
-/**
- * Pluggable embedding provider interface.
- */
-export interface EmbeddingProvider {
-    readonly dimension: number;
-    embed(text: string): Promise<number[]>;
-}
-
-/**
- * Google AI Gemini dense embedding provider using text-embedding-004.
- */
-export class GeminiEmbeddingProvider implements EmbeddingProvider {
-    readonly dimension = 768;
-    private aiClient: GoogleGenAI;
-    private modelNames: string[];
-    private timeoutMs: number;
-
-    constructor(
-        aiClient: GoogleGenAI,
-        modelName: string = 'text-embedding-005',
-        timeoutMs: number = 5000
-    ) {
-        this.aiClient = aiClient;
-        this.modelNames = [modelName, 'text-embedding-005', 'text-embedding-004'];
-        this.timeoutMs = timeoutMs;
-    }
-
-    async embed(text: string): Promise<number[]> {
-        let timeoutId: any;
-        const timeoutPromise = new Promise<never>((_, reject) => {
-            timeoutId = setTimeout(() => {
-                reject(new Error(`[TIMEOUT] Gemini embedding request timed out after ${this.timeoutMs}ms.`));
-            }, this.timeoutMs);
-        });
-
-        let lastError: any;
-        for (const model of this.modelNames) {
-            try {
-                const response: any = await Promise.race([
-                    this.aiClient.models.embedContent({
-                        model: model,
-                        contents: [text],
-                    }),
-                    timeoutPromise
-                ]);
-                return response.embeddings?.[0]?.values || response.embeddings?.[0]?.value || [];
-            } catch (err: any) {
-                lastError = err;
-                const msg = err.message || '';
-                // If model not found, try the next one in the fallback list
-                if (msg.includes('404') || msg.includes('not found') || msg.includes('not supported')) {
-                    continue;
-                }
-                break;
-            }
-        }
-        clearTimeout(timeoutId);
-        throw lastError;
-    }
-}
-
-/**
- * Deterministic local dense embedding generator (768 dimensions).
- * Enables offline execution, zero-cost operation, and local testing without external API keys.
- */
-export class DeterministicLocalEmbeddingProvider implements EmbeddingProvider {
-    readonly dimension = 768;
-
-    static computeVector(text: string, dimension: number = 768): number[] {
-        const vector = new Array(dimension).fill(0);
-        const tokens = (text || '').toLowerCase().match(/\b\w+\b/g) || [];
-        if (tokens.length === 0) return vector;
-
-        for (const token of tokens) {
-            let hash = 5381;
-            for (let i = 0; i < token.length; i++) {
-                hash = ((hash << 5) + hash) + token.charCodeAt(i);
-                hash |= 0;
-            }
-            const index = Math.abs(hash) % dimension;
-            vector[index] += 1;
-        }
-
-        let sumSq = 0;
-        for (let i = 0; i < dimension; i++) sumSq += vector[i] * vector[i];
-        const norm = Math.sqrt(sumSq) || 1;
-        for (let i = 0; i < dimension; i++) vector[i] /= norm;
-
-        return vector;
-    }
-
-    async embed(text: string): Promise<number[]> {
-        return DeterministicLocalEmbeddingProvider.computeVector(text, this.dimension);
-    }
-}
-
-
-export interface MemoryCortexDiagnostics {
-    qdrantAvailable: boolean;
-    collectionName: string;
-    pointCount: number;
-    appCount: number;
-    apps: string[];
-    fallbackStoreSize: number;
-    storageByDomain: Record<string, number>;
-    storageByRole: Record<string, number>;
-    latencyStats?: {
-        mean: number;
-        p95: number;
-        p99: number;
-    };
-    cacheHitRatio?: number;
-    modelSuggestions?: string;
-    roleRecommendations?: Array<{ role: string; recommendedProvider: string; recommendedModel: string; reason: string }>;
-}
-
-export interface MemoryCortexConfig {
-    url?: string;
-    apiKey?: string;
-    collectionName?: string;
-    collectionNameTemplate?: string;
-    defaultAppId?: string;
-    embeddingProvider?: EmbeddingProvider;
-    aiClient?: GoogleGenAI;
-    isolatedStore?: boolean;
-    autoConsolidateThreshold?: number;
-    autoConsolidationOptions?: ConsolidationOptions;
-    persistPath?: string;
-    autoSave?: boolean;
-    semanticCacheConfig?: SemanticCacheInterceptorConfig;
-    actionPlanCache?: ActionPlanCacheInterceptor;
-    actionPlanCacheConfig?: ActionPlanCacheConfig;
-}
+import { createVectorIndex, type VectorIndex, type VectorIndexMetrics } from '../vectorIndex.ts';
+import { SemanticCacheInterceptor, type SemanticCacheInterceptorConfig, type SemanticCacheStats } from '../semanticCacheInterceptor.ts';
+import { ActionPlanCacheInterceptor, type ActionPlanCacheConfig, type ActionPlanCacheStats, type ActionPlan, type ActionPlanInput, type ActionPlanCacheLookupResult } from '../actionPlanCache.ts';
 
 /**
  * High-performance, hybrid continuous learning vector cortex powered by Qdrant.
@@ -317,55 +37,6 @@ export class MemoryCortex {
     private semanticCache: SemanticCacheInterceptor;
     private actionPlanCache: ActionPlanCacheInterceptor;
 
-    static clearFallbackStore(collectionName: string = "pwa_swarm_dev_cortex_v2"): void {
-        const store = MemoryCortex.globalFallbackStores.get(collectionName);
-        if (store) store.length = 0;
-        const index = MemoryCortex.globalVectorIndexes.get(collectionName);
-        if (index) index.clear();
-    }
-
-    /**
-     * Synchronizes the in-memory vector index with current fallbackStore items.
-     */
-    private syncVectorIndex(): void {
-        this.vectorIndex.clear();
-        for (const pt of this.fallbackStore) {
-            this.vectorIndex.insert(pt.id, pt.denseVector, pt);
-        }
-    }
-
-    /**
-     * Returns real-time metrics of the in-memory sub-linear vector index.
-     */
-    getIndexMetrics(): VectorIndexMetrics {
-        return this.vectorIndex.getMetrics();
-    }
-
-    // Safe embedding wrapper that permanently downgrades to local embeddings if the API fails
-    private async safeEmbed(text: string): Promise<number[]> {
-        try {
-            return await this.embeddingProvider.embed(text);
-        } catch (err: any) {
-            console.warn(`[MemoryCortex] Primary embedding provider failed (${err.message || String(err)}). Permanently downgrading to DeterministicLocalEmbeddingProvider.`);
-            this.embeddingProvider = new DeterministicLocalEmbeddingProvider();
-            return await this.embeddingProvider.embed(text);
-        }
-    }
-
-    private async withTimeout<T>(promise: Promise<T>, ms: number = 3000): Promise<T> {
-        let timeoutId: any;
-        const timeoutPromise = new Promise<T>((_, reject) => {
-            timeoutId = setTimeout(() => {
-                reject(new Error(`Qdrant operation timed out after ${ms}ms`));
-            }, ms);
-        });
-        try {
-            return await Promise.race([promise, timeoutPromise]);
-        } finally {
-            clearTimeout(timeoutId);
-        }
-    }
-
     constructor(config: MemoryCortexConfig) {
         const safeEnv = typeof process !== 'undefined' ? process.env : {} as Record<string, string | undefined>;
         const url = config.url || safeEnv.QDRANT_URL;
@@ -377,7 +48,6 @@ export class MemoryCortex {
         this.autoConsolidationOptions = config.autoConsolidationOptions;
         this.persistPath = config.persistPath;
         this.autoSave = config.autoSave !== false;
-
         if (config.isolatedStore) {
             this.fallbackStore = [];
             this.vectorIndex = createVectorIndex<StoredMemoryPoint>('vptree', { metric: 'cosine' });
@@ -424,7 +94,6 @@ export class MemoryCortex {
             maxEntries: config.semanticCacheConfig?.maxEntries ?? 500,
             defaultTtlMs: config.semanticCacheConfig?.defaultTtlMs
         });
-
         this.actionPlanCache = config.actionPlanCache || new ActionPlanCacheInterceptor({
             similarityThreshold: config.actionPlanCacheConfig?.similarityThreshold ?? 0.96,
             maxEntries: config.actionPlanCacheConfig?.maxEntries ?? 500,
@@ -432,10 +101,75 @@ export class MemoryCortex {
         });
     }
 
+    get ready(): boolean {
+        return true;
+    }
+
+    get isQdrantAvailable(): boolean {
+        return this.isAvailable;
+    }
+
+    get fallbackCount(): number {
+        return this.fallbackStore.length;
+    }
+
+    get pendingConsolidationCount(): number {
+        return this.storesSinceConsolidation;
+    }
+
+    static clearFallbackStore(collectionName: string = "pwa_swarm_dev_cortex_v2"): void {
+        const store = MemoryCortex.globalFallbackStores.get(collectionName);
+        if (store) store.length = 0;
+        const index = MemoryCortex.globalVectorIndexes.get(collectionName);
+        if (index) index.clear();
+    }
+
+    /**
+     * Synchronizes the in-memory vector index with current fallbackStore items.
+     */
+    private syncVectorIndex(): void {
+        this.vectorIndex.clear();
+        for (const pt of this.fallbackStore) {
+            this.vectorIndex.insert(pt.id, pt.denseVector, pt);
+        }
+    }
+
+    /**
+     * Returns real-time metrics of the in-memory sub-linear vector index.
+     */
+    getIndexMetrics(): VectorIndexMetrics {
+        return this.vectorIndex.getMetrics();
+    }
+
+    private async safeEmbed(text: string): Promise<number[]> {
+        try {
+            return await this.embeddingProvider.embed(text);
+        } catch (err: any) {
+            console.warn(`[MemoryCortex] Primary embedding provider failed (${err.message || String(err)}). Permanently downgrading to DeterministicLocalEmbeddingProvider.`);
+            this.embeddingProvider = new DeterministicLocalEmbeddingProvider();
+            return await this.embeddingProvider.embed(text);
+        }
+    }
+
+    private async withTimeout<T>(promise: Promise<T>, ms: number = 3000): Promise<T> {
+        let timeoutId: any;
+        const timeoutPromise = new Promise<T>((_, reject) => {
+                        timeoutId = setTimeout(() => {
+                            reject(new Error(`Qdrant operation timed out after ${ms}ms`));
+                        }, ms);
+                    });
+        try {
+            return await Promise.race([promise, timeoutPromise]);
+        } finally {
+            clearTimeout(timeoutId);
+        }
+    }
+
     private getCollectionName(appId?: string): string {
         if (this.collectionNameTemplate && appId) {
             return this.collectionNameTemplate.replace('{appId}', appId);
         }
+
         return this.collectionName;
     }
 
@@ -456,9 +190,7 @@ export class MemoryCortex {
      */
     async initialize(appId?: string): Promise<boolean> {
         const targetCollection = this.getCollectionName(appId);
-
         if (this.initialized && this.initializedCollections.has(targetCollection)) return true;
-
         if (!this.qdrant || !this.isAvailable) {
             this.initialized = true;
             this.initializedCollections.add(targetCollection);
@@ -575,6 +307,7 @@ export class MemoryCortex {
             normA += a[i] * a[i];
             normB += b[i] * b[i];
         }
+
         if (normA === 0 || normB === 0) return 0;
         return dot / (Math.sqrt(normA) * Math.sqrt(normB));
     }
@@ -585,6 +318,7 @@ export class MemoryCortex {
         for (let i = 0; i < target.indices.length; i++) {
             targetMap.set(target.indices[i], target.values[i]);
         }
+
         let score = 0;
         for (let i = 0; i < query.indices.length; i++) {
             const targetVal = targetMap.get(query.indices[i]);
@@ -592,6 +326,7 @@ export class MemoryCortex {
                 score += query.values[i] * targetVal;
             }
         }
+
         return score;
     }
 
@@ -604,7 +339,6 @@ export class MemoryCortex {
         const appId = metadata.appId || this.defaultAppId;
         const now = new Date().toISOString();
         let storedId: string | null = null;
-
         if (this.qdrant && this.isAvailable) {
             try {
                 const denseVector = await this.safeEmbed(content);
@@ -749,7 +483,6 @@ export class MemoryCortex {
         await this.initialize();
         if (memories.length === 0) return [];
         const now = new Date().toISOString();
-
         if (this.qdrant && this.isAvailable) {
             try {
                 const points = await Promise.all(
@@ -796,7 +529,6 @@ export class MemoryCortex {
             }
         }
 
-        // Ephemeral in-memory fallback
         try {
             const results = await Promise.all(
                 memories.map(mem => this.store(mem.content, mem.metadata, false))
@@ -814,7 +546,6 @@ export class MemoryCortex {
     async rateMemory(id: string, rating: number, feedback?: string): Promise<boolean> {
         await this.initialize();
         const normalizedRating = Math.max(0, Math.min(1, rating));
-
         if (this.qdrant && this.isAvailable) {
             try {
                 await this.withTimeout(this.qdrant.setPayload(this.collectionName, {
@@ -834,7 +565,6 @@ export class MemoryCortex {
             }
         }
 
-        // Ephemeral in-memory fallback
         const point = this.fallbackStore.find(p => p.id === id);
         if (point) {
             point.payload.qualityRating = normalizedRating;
@@ -848,11 +578,7 @@ export class MemoryCortex {
         return false;
     }
 
-    async retrieve(
-        query: string,
-        optionsOrDomain?: string | RetrievalOptions,
-        limit: number = 3
-    ): Promise<any[]> {
+    async retrieve(query: string, optionsOrDomain?: string | RetrievalOptions, limit: number = 3): Promise<any[]> {
         await this.initialize();
         let options: RetrievalOptions = {};
         if (typeof optionsOrDomain === 'string') {
@@ -864,8 +590,6 @@ export class MemoryCortex {
         }
 
         const queryDense = await this.safeEmbed(query);
-
-        // Check Action Plan Cache Interceptor first (> 0.96 threshold)
         const planMatch = this.actionPlanCache.lookup(queryDense, options.appId);
         if (planMatch.hit && planMatch.actionPlan) {
             return [{
@@ -877,14 +601,12 @@ export class MemoryCortex {
             }];
         }
 
-        // Check Semantic Cache Interceptor first (> 0.96 threshold)
         const cachedMatch = this.semanticCache.lookup<any[]>(queryDense, options.appId);
         if (cachedMatch.hit && cachedMatch.payload) {
             return cachedMatch.payload;
         }
 
         let results: any[] = [];
-
         if (this.qdrant && this.isAvailable) {
             try {
                 const sparseVector = SparseTokenizer.encode(query);
@@ -961,7 +683,6 @@ export class MemoryCortex {
             results = await this.retrieveFromFallbackWithVector(queryDense, options);
         }
 
-        // Store result in semantic cache for future queries (> 0.96 similarity)
         if (results.length > 0) {
             this.semanticCache.set(queryDense, results, options.appId);
         }
@@ -971,40 +692,35 @@ export class MemoryCortex {
 
     private async retrieveFromFallbackWithVector(queryDense: number[], options: RetrievalOptions): Promise<any[]> {
         if (this.fallbackStore.length === 0) return [];
-
         const filterPredicate = (pt: StoredMemoryPoint) => {
-            if (options.appId) {
-                if (options.includeShared) {
-                    if (pt.payload.appId !== options.appId && pt.payload.appId !== 'global' && pt.payload.appId !== 'shared') {
-                        return false;
-                    }
-                } else if (pt.payload.appId !== options.appId) {
-                    return false;
-                }
-            }
-            if (options.targetApps) {
-                const targets = Array.isArray(options.targetApps) ? options.targetApps : [options.targetApps];
-                const ptTargetApps = Array.isArray(pt.payload.targetApps) ? pt.payload.targetApps : (pt.payload.targetApps ? [pt.payload.targetApps] : []);
-                const matchFound = targets.some(t => ptTargetApps.includes(t) || pt.payload.appId === t);
-                if (!matchFound) return false;
-            }
-            if (options.domain && pt.payload.domain !== options.domain) return false;
-            if (options.agentRole && pt.payload.agentRole !== options.agentRole) return false;
-            if (options.minRating !== undefined && (pt.payload.qualityRating ?? 0) < options.minRating) return false;
-            if (options.verifiedOnly && !pt.payload.verified) return false;
-            return true;
-        };
-
-        // Sub-linear O(log n) candidate retrieval from vector index
+                        if (options.appId) {
+                            if (options.includeShared) {
+                                if (pt.payload.appId !== options.appId && pt.payload.appId !== 'global' && pt.payload.appId !== 'shared') {
+                                    return false;
+                                }
+                            } else if (pt.payload.appId !== options.appId) {
+                                return false;
+                            }
+                        }
+                        if (options.targetApps) {
+                            const targets = Array.isArray(options.targetApps) ? options.targetApps : [options.targetApps];
+                            const ptTargetApps = Array.isArray(pt.payload.targetApps) ? pt.payload.targetApps : (pt.payload.targetApps ? [pt.payload.targetApps] : []);
+                            const matchFound = targets.some(t => ptTargetApps.includes(t) || pt.payload.appId === t);
+                            if (!matchFound) return false;
+                        }
+                        if (options.domain && pt.payload.domain !== options.domain) return false;
+                        if (options.agentRole && pt.payload.agentRole !== options.agentRole) return false;
+                        if (options.minRating !== undefined && (pt.payload.qualityRating ?? 0) < options.minRating) return false;
+                        if (options.verifiedOnly && !pt.payload.verified) return false;
+                        return true;
+                    };
         const searchK = Math.min(this.vectorIndex.size, Math.max((options.limit || 3) * 3, 15));
         const indexHits = this.vectorIndex.search(queryDense, {
-            k: searchK,
-            filter: (item) => filterPredicate(item.data)
-        });
-
+                        k: searchK,
+                        filter: (item) => filterPredicate(item.data)
+                    });
         let candidates: StoredMemoryPoint[];
         const denseRankMap = new Map<string, number>();
-
         if (indexHits.length > 0) {
             candidates = indexHits.map(h => h.data);
             indexHits.forEach((hit, idx) => denseRankMap.set(hit.id, idx));
@@ -1027,13 +743,11 @@ export class MemoryCortex {
      */
     async retrieveExemplars(task: string, options?: RetrievalOptions): Promise<string> {
         const topMemories = await this.retrieve(task, {
-            ...options,
-            minRating: options?.minRating ?? 0.7,
-            limit: options?.limit || 2
-        });
-
+                        ...options,
+                        minRating: options?.minRating ?? 0.7,
+                        limit: options?.limit || 2
+                    });
         if (!topMemories || topMemories.length === 0) return "";
-
         return topMemories.map((m: any, idx: number) => {
             const score = m.qualityRating !== undefined ? ` (Quality Rating: ${(m.qualityRating * 100).toFixed(0)}%)` : '';
             const feedbackText = m.feedback ? `\nFeedback: ${m.feedback}` : '';
@@ -1050,11 +764,8 @@ export class MemoryCortex {
         const pruneLowQuality = options?.pruneLowQuality ?? true;
         const appId = options?.appId;
         const maxAgeDays = options?.maxAgeDays;
-
         const prunedIds: string[] = [];
         let inspected = 0;
-
-        // Process in-memory fallback store
         if (this.fallbackStore.length > 0) {
             const now = Date.now();
             const remaining: StoredMemoryPoint[] = [];
@@ -1087,7 +798,6 @@ export class MemoryCortex {
             }
         }
 
-        // Process Qdrant store if available
         if (this.qdrant && this.isAvailable) {
             try {
                 if (typeof (this.qdrant as any).scroll === 'function') {
@@ -1159,10 +869,7 @@ export class MemoryCortex {
         const verifiedOnly = options?.verifiedOnly;
         const appId = options?.appId;
         const includeVectors = options?.includeVectors !== false;
-
         const snapshotPoints: MemorySnapshotPoint[] = [];
-
-        // 1. In-memory fallback points
         if (this.fallbackStore.length > 0) {
             for (const pt of this.fallbackStore) {
                 if (appId && pt.payload.appId !== appId) continue;
@@ -1179,7 +886,6 @@ export class MemoryCortex {
             }
         }
 
-        // 2. Qdrant points if available
         if (this.qdrant && this.isAvailable) {
             try {
                 if (typeof (this.qdrant as any).scroll === 'function') {
@@ -1258,6 +964,7 @@ export class MemoryCortex {
         if (!targetPath) {
             throw new Error("[MemoryCortex] saveToFile requires a filePath or configured persistPath");
         }
+
         let fs, path;
         try {
             fs = await import('no' + 'de:fs');
@@ -1265,11 +972,12 @@ export class MemoryCortex {
         } catch {
             throw new Error("[MemoryCortex] Local file saving is not supported in this environment (Edge/Browser).");
         }
-        
+
         const dir = path.dirname(targetPath);
         if (dir && !fs.existsSync(dir)) {
             fs.mkdirSync(dir, { recursive: true });
         }
+
         const isJsonl = targetPath.endsWith('.jsonl');
         const content = isJsonl ? await this.exportJsonl() : await this.exportJson();
         fs.writeFileSync(targetPath, content, 'utf-8');
@@ -1284,7 +992,7 @@ export class MemoryCortex {
         if (!targetPath) {
             throw new Error("[MemoryCortex] loadFromFile requires a filePath or configured persistPath");
         }
-        
+
         let fs;
         try {
             fs = await import('no' + 'de:fs');
@@ -1295,6 +1003,7 @@ export class MemoryCortex {
         if (!fs.existsSync(targetPath)) {
             throw new Error(`[MemoryCortex] Snapshot file not found: ${targetPath}`);
         }
+
         const raw = fs.readFileSync(targetPath, 'utf-8');
         return await this.importMemories(raw, options);
     }
@@ -1302,18 +1011,13 @@ export class MemoryCortex {
     /**
      * Imports a portable snapshot or array of memories into the Cortex.
      */
-    async importMemories(
-        input: MemorySnapshot | string | any[],
-        options?: ImportMemoriesOptions
-    ): Promise<ImportMemoriesResult> {
+    async importMemories(input: MemorySnapshot | string | any[], options?: ImportMemoriesOptions): Promise<ImportMemoriesResult> {
         await this.initialize();
         const deduplicate = options?.deduplicate !== false;
         const recomputeVectors = options?.recomputeVectors ?? false;
         const targetAppId = options?.targetAppId;
         const minRating = options?.minRating;
-
         let rawItems: any[] = [];
-
         if (typeof input === 'string') {
             const trimmed = input.trim();
             if (trimmed.startsWith('{') && !trimmed.includes('\n{"')) {
@@ -1339,8 +1043,6 @@ export class MemoryCortex {
         let skipped = 0;
         let deduplicated = 0;
         const importedIds: string[] = [];
-
-        // Pre-filter items
         const validItems = [];
         for (const item of rawItems) {
             const content = item.content || item.payload?.content;
@@ -1517,10 +1219,12 @@ export class MemoryCortex {
                 }
             } catch {}
         }
+
         if (!this.qdrant) {
             this.initialized = false;
             return true;
         }
+
         try {
             await this.qdrant.deleteCollection(this.collectionName);
             this.initialized = false;
@@ -1532,13 +1236,11 @@ export class MemoryCortex {
         }
     }
 
-
     async getDiagnostics(appIdFilter?: string): Promise<MemoryCortexDiagnostics> {
         let pointCount = 0;
         let apps = new Set<string>();
         const storageByDomain: Record<string, number> = {};
         const storageByRole: Record<string, number> = {};
-
         if (this.qdrant && this.isAvailable) {
             try {
                 // Determine if we are filtering by app
@@ -1602,7 +1304,6 @@ export class MemoryCortex {
             }
         }
 
-        // If qdrant failed or we are using fallback only
         if (pointCount === 0 && this.fallbackStore.length > 0) {
             for (const pt of this.fallbackStore) {
                 const itemAppId = pt.payload.appId || this.defaultAppId;
@@ -1628,22 +1329,6 @@ export class MemoryCortex {
             storageByDomain,
             storageByRole
         };
-    }
-
-    get ready(): boolean {
-        return true;
-    }
-
-    get isQdrantAvailable(): boolean {
-        return this.isAvailable;
-    }
-
-    get fallbackCount(): number {
-        return this.fallbackStore.length;
-    }
-
-    get pendingConsolidationCount(): number {
-        return this.storesSinceConsolidation;
     }
 
     getSemanticCacheStats(): SemanticCacheStats {
@@ -1672,4 +1357,6 @@ export class MemoryCortex {
         return this.actionPlanCache.set(queryDense, plan, ttlMs);
     }
 }
-
+import { SparseTokenizer } from './SparseTokenizer.ts';
+import { GeminiEmbeddingProvider, DeterministicLocalEmbeddingProvider } from './EmbeddingProviders.ts';
+import { StoredMemoryPoint, ConsolidationOptions, MemoryCortexConfig, RetrievalOptions, ConsolidationResult, ExportMemoriesOptions, ImportMemoriesOptions, ImportMemoriesResult, MemoryCortexDiagnostics, SparseVector, MemorySnapshot, MemorySnapshotPoint, MemoryMetadata, RrfProfile, EmbeddingProvider } from "./types.ts";
