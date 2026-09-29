@@ -46,6 +46,8 @@ export interface HealthCheckOptions {
     maxConcurrency?: number;
     /** Bypass cache and force fresh check */
     forceRefresh?: boolean;
+    /** Skip tier 2 checks */
+    skipTier2?: boolean;
     /** Custom Tier 1 check hook */
     customTier1Check?: (provider: string, modelId: string, apiKey?: string, signal?: AbortSignal) => Promise<boolean>;
     /** Custom Tier 2 check hook */
@@ -347,16 +349,20 @@ export class TwoTierModelHealthChecker {
                 this.cache.set(provider, modelId, status, ttlMs);
                 return status;
             }
-
             // Tier 2: Minimal inference ping (only if Tier 1 passed)
             let tier2Pass = false;
-            try {
-                tier2Pass = options?.customTier2Check
-                    ? await options.customTier2Check(provider, modelId, apiKey, controller.signal)
-                    : await this.defaultTier2Check(provider, modelId, apiKey, controller.signal);
-            } catch (err: any) {
-                tier2Pass = false;
+            if (options?.skipTier2) {
+                tier2Pass = true; // skip = assume passed if tier 1 passed
+            } else {
+                try {
+                    tier2Pass = options?.customTier2Check
+                        ? await options.customTier2Check(provider, modelId, apiKey, controller.signal)
+                        : await this.defaultTier2Check(provider, modelId, apiKey, controller.signal);
+                } catch (err: any) {
+                    tier2Pass = false;
+                }
             }
+
 
             clearTimeout(timeoutId);
             const latencyMs = Date.now() - startTime;
