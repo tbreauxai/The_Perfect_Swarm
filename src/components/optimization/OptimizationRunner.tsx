@@ -3,6 +3,36 @@ import { fetchAvailableModels, checkProviderModelsHealth, ModelOption } from '..
 import { getApiKeyForProvider } from '../AgentConfigurator';
 import { Loader2, Play, Trophy, Clock, CheckCircle, AlertCircle, Trash2 } from 'lucide-react';
 
+const TIER2_CACHE_KEY = 'swarm_tier2_health_cache';
+const TIER2_TTL = 60 * 60 * 1000; // 60 mins
+
+async function ensureTier2Health(provider: string, modelId: string, settings: any): Promise<boolean> {
+    try {
+        const cacheRaw = localStorage.getItem(TIER2_CACHE_KEY);
+        const cache = cacheRaw ? JSON.parse(cacheRaw) : {};
+        const key = `${provider}:${modelId}`;
+        const cached = cache[key];
+
+        if (cached && (Date.now() - cached.at < TIER2_TTL)) {
+            return cached.passed;
+        }
+        const apiKey = getApiKeyForProvider(settings, provider);
+        const result = await checkProviderModelsHealth(provider, [{ id: modelId, name: modelId }], apiKey, { skipTier2: false });
+
+        const resultKey = `${provider.toLowerCase().trim()}:${modelId.trim()}`;
+        const passed = result[resultKey]?.healthy ?? true;
+
+        cache[key] = { passed, at: Date.now() };
+        localStorage.setItem(TIER2_CACHE_KEY, JSON.stringify(cache));
+
+        return passed;
+    } catch (e) {
+        // fail open on 429s or timeouts
+        return true;
+    }
+}
+
+
 // One shared failover list, used by BOTH the prompt-generator and the grader.
 // Order matters: cheapest verified model first, so grading stays cheap.
 export const WORKING_MODELS = [
@@ -23,6 +53,34 @@ interface GraderCacheEntry {
 
 export const GRADER_CACHE = new Map<string, GraderCacheEntry>();
 export const GRADER_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+// Cache of in-flight analyze calls for deduplication
+const IN_FLIGHT_ANALYZE_CALLS = new Map<string, Promise<Response>>();
+
+async function fetchAnalyze(body: any, timeoutMs: number): Promise<Response> {
+    const serializedBody = JSON.stringify(body);
+    let promise = IN_FLIGHT_ANALYZE_CALLS.get(serializedBody);
+
+    if (!promise) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+        promise = fetch('/api/swarm/analyze', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: serializedBody,
+            signal: controller.signal
+        }).finally(() => {
+            clearTimeout(timeoutId);
+            IN_FLIGHT_ANALYZE_CALLS.delete(serializedBody);
+        });
+
+        IN_FLIGHT_ANALYZE_CALLS.set(serializedBody, promise);
+    }
+
+    return promise.then(res => res.clone());
+}
+
 
 export function getGraderCacheKey(task: string, output: any, graderModel: string = 'default'): string {
     const serialized = typeof output === 'object' ? JSON.stringify(output) : String(output || '');
@@ -315,10 +373,24 @@ export const OptimizationRunner: React.FC<OptimizationRunnerProps> = ({ task, da
             const updated = [...prev.filter(r => r.id !== entry.id), entry].sort((a, b) => 
                scoreOf(b) - scoreOf(a)
             );
-            const top100 = updated.slice(0, 100);
+            const top100 = updated.slice(0, 100).map(r => {
+                if (r.output) {
+                    const raw = typeof r.output === 'string' ? r.output : JSON.stringify(r.output);
+                    if (raw.length > 2000) {
+                        return { ...r, output: raw.slice(0, 2000) + '... [truncated]' };
+                    }
+                }
+                return r;
+            });
             try {
-                localStorage.setItem('swarm_optimization_history', JSON.stringify(top100));
+                try {
+                    const stringified = JSON.stringify(top100);
+                    localStorage.setItem('swarm_optimization_history', stringified);
+                } catch (e: any) {
+                    if (e.name === 'QuotaExceededError') alert('LocalStorage Quota Exceeded');
+                }
             } catch (e) {}
+
             return top100;
         });
     };
@@ -352,7 +424,7 @@ export const OptimizationRunner: React.FC<OptimizationRunnerProps> = ({ task, da
                                 if (m.startsWith('gemini')) prov = 'gemini';
                                 else if (m.startsWith('mistral') || m.startsWith('open-mistral')) prov = 'mistral';
                                 else if (m.includes('llama') || m.includes('mixtral')) prov = 'groq';
-                                return { ...a, provider: prov, model: m, temperature: a.role.toLowerCase().includes('manager') ? 0.3 : 0.7 };
+                                return { ...a, provider: prov, model: m, temperature: a.role.toLowerCase().includes('manager') ? 0.3 : (a.role.toLowerCase().includes('grader') ? 0.15 : 0.7) };
                             }
                             return a;
                         });
@@ -405,9 +477,24 @@ export const OptimizationRunner: React.FC<OptimizationRunnerProps> = ({ task, da
                     provider
                 }
             };
+            const limitedErrors = {};
+            for (const key of Object.keys(updated)) {
+                limitedErrors[key] = updated[key].map((err: any) => {
+                    const msg = err.error || '';
+                    if (msg.length > 2000) return { ...err, error: msg.slice(0, 2000) + '... [truncated]' };
+                    return err;
+                });
+            }
+
             try {
-                localStorage.setItem('swarm_model_errors', JSON.stringify(updated));
+                try {
+                    const stringified = JSON.stringify(limitedErrors);
+                    localStorage.setItem('swarm_model_errors', stringified);
+                } catch (e: any) {
+                    if (e.name === 'QuotaExceededError') alert('LocalStorage Quota Exceeded');
+                }
             } catch (e) {
+
                 console.error("Failed to save error records", e);
             }
             return updated;
@@ -444,23 +531,28 @@ export const OptimizationRunner: React.FC<OptimizationRunnerProps> = ({ task, da
         const failoverModels = WORKING_MODELS;
 
         try {
-            const promptTask = `As the Swarm Manager, generate a highly specific, complex test prompt designed to challenge a sub-agent with the role: "${analystRole}".
+            const promptTask = `As the Swarm Manager, generate a focused sub-150-word test prompt designed to challenge a sub-agent with the role: "${analystRole}".
 The overall system task is: "${baseTask}".
 Create a realistic scenario or question that perfectly fits this analyst's domain to test their intelligence and accuracy.
 Respond ONLY with the text of the prompt you want to give them.`;
 
             const cleanSettings = { ...settings };
             delete cleanSettings.activeVariant;
-
             const errors: string[] = [];
+            const skippedProviders = new Set<string>();
             for (let i = 0; i < failoverModels.length; i++) {
                 const currentIndex = (promptGenCursor + i) % failoverModels.length;
                 const failover = failoverModels[currentIndex];
+                if (skippedProviders.has(failover.provider)) continue;
+
+                const isHealthy = await ensureTier2Health(failover.provider, failover.model, settings);
+                if (!isHealthy) {
+                    recordError(failover.model, failover.provider, "Tier-2 health check failed lazily before prompt generation.");
+                    continue;
+                }
+
                 try {
-                    const res = await fetch('/api/swarm/analyze', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
+                    const requestBody = {
                             task: promptTask,
                             data: '',
                             bypassCache: true,
@@ -470,13 +562,16 @@ Respond ONLY with the text of the prompt you want to give them.`;
                                 forceFullSwarm: false,
                                 disableFallback: true
                             }
-                        })
-                    });
-
+                        };
+                    const res = await fetchAnalyze(requestBody, requestBody.settings?.forceFullSwarm ? 180000 : 120000);
                     if (!res.ok) {
+                        if (res.status === 401 || res.status === 400) {
+                            skippedProviders.add(failover.provider);
+                        }
                         if (res.status === 429) await new Promise(r => setTimeout(r, 2500));
                         continue;
                     }
+
                     const data = await res.json();
 
                     if (data.finalAnalysis && typeof data.finalAnalysis === 'object' && !data.finalAnalysis.ui_title?.toLowerCase().includes('error')) {
@@ -520,7 +615,8 @@ Respond ONLY with the text of the prompt you want to give them.`;
         const failoverModels = WORKING_MODELS;
 
         try {
-            const serializedOutput = typeof output === 'object' ? JSON.stringify(output) : String(output || '');
+            const rawOutput = typeof output === 'object' ? JSON.stringify(output) : String(output || '');
+            const serializedOutput = rawOutput.length > 3000 ? rawOutput.slice(0, 3000) + '... [truncated]' : rawOutput;
             const gradingTask = `You are an evaluator grading the output of a subordinate AI analyst.
 Original Task: "${originalTask}"
 
@@ -539,16 +635,21 @@ Respond with a JSON object on its own lines, exactly:
 
             const cleanSettings = { ...settings };
             delete cleanSettings.activeVariant;
-
             const errors: string[] = [];
+            const skippedProviders = new Set<string>();
             for (let i = 0; i < failoverModels.length; i++) {
                 const currentIndex = (graderCursor + i) % failoverModels.length;
                 const failover = failoverModels[currentIndex];
+                if (skippedProviders.has(failover.provider)) continue;
+
+                const isHealthy = await ensureTier2Health(failover.provider, failover.model, settings);
+                if (!isHealthy) {
+                    recordError(failover.model, failover.provider, "Tier-2 health check failed lazily before grading.");
+                    continue;
+                }
+
                 try {
-                    const res = await fetch('/api/swarm/analyze', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
+                    const requestBody = {
                             task: gradingTask,
                             data: '',
                             bypassCache: false, // Let grading queries utilize backend cache if available
@@ -558,15 +659,18 @@ Respond with a JSON object on its own lines, exactly:
                                 forceFullSwarm: false,
                                 disableFallback: true
                             }
-                        })
-                    });
-
+                        };
+                    const res = await fetchAnalyze(requestBody, requestBody.settings?.forceFullSwarm ? 180000 : 120000);
                     if (!res.ok) {
+                        if (res.status === 401 || res.status === 400) {
+                            skippedProviders.add(failover.provider);
+                        }
                         if (res.status === 429) await new Promise(r => setTimeout(r, 2500));
                         const errText = await res.text();
                         errors.push(`${failover.model}: ${res.status} ${errText}`);
                         continue;
                     }
+
                     const data = await res.json();
                     
                     const scores = extractGradingScores(data, durationMs);
@@ -675,8 +779,14 @@ Respond with a JSON object on its own lines, exactly:
                     model: 'simulated-model'
                 });
             }
+            const isHealthy = await ensureTier2Health(agentToTest.provider, model.id, settings);
+            if (!isHealthy) {
+                recordError(model.id, agentToTest.provider, "Tier-2 health check failed lazily before test.");
+                continue;
+            }
 
             const cleanSettings = { ...settings };
+
             delete cleanSettings.activeVariant;
 
             const testSettings = {
@@ -690,16 +800,13 @@ Respond with a JSON object on its own lines, exactly:
             let output = null;
             let errorMsg = undefined;
             try {
-                const res = await fetch('/api/swarm/analyze', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
+                const requestBody = {
                         task: agentTestTask,
                         data,
                         bypassCache: true,
                         settings: testSettings
-                    })
-                });
+                    };
+                    const res = await fetchAnalyze(requestBody, requestBody.settings?.forceFullSwarm ? 180000 : 120000);
                 const resData = await res.json().catch(() => null);
                 if (!res.ok) {
                     throw new Error(resData?.error ? String(resData.error) : `HTTP error ${res.status}`);
@@ -851,16 +958,13 @@ Respond with a JSON object on its own lines, exactly:
             let output = null;
             let errorMsg = undefined;
             try {
-                const res = await fetch('/api/swarm/analyze', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
+                const requestBody = {
                         task,
                         data,
                         bypassCache: true,
                         settings: testSettings
-                    })
-                });
+                    };
+                    const res = await fetchAnalyze(requestBody, requestBody.settings?.forceFullSwarm ? 180000 : 120000);
                 if (!res.ok) throw new Error(`HTTP error ${res.status}`);
                 const resData = await res.json();
                 if (resData.error) throw new Error(resData.error);
