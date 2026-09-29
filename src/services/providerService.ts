@@ -11,6 +11,8 @@ import {
     type CircuitState
 } from '../swarm/health.ts';
 
+export { globalModelHealthChecker };
+
 export interface ModelOption {
     id: string;
     name: string;
@@ -19,17 +21,81 @@ export interface ModelOption {
     health?: ModelHealthStatus;
 }
 
+export const QUARANTINED_MODELS_STORAGE_KEY = 'swarm_quarantined_models_v1';
+export const MODEL_404_STRIKES_STORAGE_KEY = 'swarm_model_404_strikes_v1';
+
+export function getQuarantinedModels(): string[] {
+    try {
+        if (typeof localStorage !== 'undefined') {
+            const raw = localStorage.getItem(QUARANTINED_MODELS_STORAGE_KEY);
+            return raw ? JSON.parse(raw) : [];
+        }
+    } catch {}
+    return [];
+}
+
+export function isModelQuarantined(provider: string, modelId: string): boolean {
+    const key = `${provider.toLowerCase().trim()}:${modelId.trim()}`;
+    return getQuarantinedModels().includes(key);
+}
+
+export function recordModel404(provider: string, modelId: string): boolean {
+    const key = `${provider.toLowerCase().trim()}:${modelId.trim()}`;
+    try {
+        if (typeof localStorage !== 'undefined') {
+            const raw = localStorage.getItem(MODEL_404_STRIKES_STORAGE_KEY);
+            const strikes: Record<string, number> = raw ? JSON.parse(raw) : {};
+            strikes[key] = (strikes[key] || 0) + 1;
+            localStorage.setItem(MODEL_404_STRIKES_STORAGE_KEY, JSON.stringify(strikes));
+
+            if (strikes[key] >= 3) {
+                const quarantined = getQuarantinedModels();
+                if (!quarantined.includes(key)) {
+                    quarantined.push(key);
+                    localStorage.setItem(QUARANTINED_MODELS_STORAGE_KEY, JSON.stringify(quarantined));
+                }
+                return true; // model quarantined
+            }
+        }
+    } catch {}
+    return false;
+}
+
+export function clearModel404Strikes(provider: string, modelId: string): void {
+    const key = `${provider.toLowerCase().trim()}:${modelId.trim()}`;
+    try {
+        if (typeof localStorage !== 'undefined') {
+            const raw = localStorage.getItem(MODEL_404_STRIKES_STORAGE_KEY);
+            if (raw) {
+                const strikes: Record<string, number> = JSON.parse(raw);
+                delete strikes[key];
+                localStorage.setItem(MODEL_404_STRIKES_STORAGE_KEY, JSON.stringify(strikes));
+            }
+        }
+    } catch {}
+}
+
+export function clearAllQuarantinedModels(): void {
+    try {
+        if (typeof localStorage !== 'undefined') {
+            localStorage.removeItem(QUARANTINED_MODELS_STORAGE_KEY);
+            localStorage.removeItem(MODEL_404_STRIKES_STORAGE_KEY);
+        }
+    } catch {}
+}
+
 export async function fetchAvailableModels(provider: string, apiKey?: string): Promise<ModelOption[]> {
     try {
         switch (provider) {
             case 'simulated': {
-                return [
+                const models = [
                     {
                         id: 'simulated-swarm-v1',
                         name: 'Simulated Swarm Model (Zero-API-Key)',
                         free: true
                     }
                 ];
+                return models.filter(m => !isModelQuarantined(provider, m.id));
             }
             case 'openrouter':
             case 'groq':
@@ -45,7 +111,8 @@ export async function fetchAvailableModels(provider: string, apiKey?: string): P
                     const err = await res.json().catch(() => ({}));
                     throw new Error(err.error || `Failed to fetch ${provider} models via backend proxy`);
                 }
-                return res.json();
+                const rawModels: ModelOption[] = await res.json();
+                return rawModels.filter(m => !isModelQuarantined(provider, m.id));
             }
             default:
                 return [];

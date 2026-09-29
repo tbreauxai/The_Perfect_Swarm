@@ -36,6 +36,7 @@ export interface FingerprintOptions {
     complexity?: string;
     model?: string;
     agentConfigVersion?: string;
+    maxTokens?: number;
 }
 
 export class PayloadCache {

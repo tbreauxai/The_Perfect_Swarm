@@ -1,50 +1,50 @@
 [
   {
-    "id": "goal-1-prune-dead-models-and-unify-failover-list",
-    "description": "Prune dead model IDs from grader and prompt-generator lists in OptimizationRunner.tsx into a single shared WORKING_MODELS constant (starting with gemini-3.5-flash-lite), and repoint deprecated agent defaults in App.tsx and router.ts.",
+    "id": "goal-1-consensus-majority-voting",
+    "description": "Implement consensus / majority voting (#1) in OptimizationRunner.tsx: run analyst model tests 3x with in-flight dedup, calculate majority/average score, gated by a consensus toggle defaulting to on.",
     "status": "completed",
-    "verification": "WORKING_MODELS unified; dead models (gemini-1.5-flash, llama-3.2-3b-instruct:free, phi-3-mini-128k-instruct:free, llama3-70b-8192, gemma-2-9b-it:free) removed/repointed; lint clean."
+    "verification": "Analyst models run 3x when consensus toggle is active; average/majority scores computed; toggle controls behavior; unit tests pass."
   },
   {
-    "id": "goal-2-fix-grader-failure-attribution-and-status-rendering",
-    "description": "Fix Fix 2: Grader failure must not mark the tested model as Error. Set result.gradingError without calling recordError or setting result.error. Update history table and agent cards to render amber 'Grade failed' badge.",
+    "id": "goal-2-exponential-backoff-and-circuit-breaker-failover",
+    "description": "Implement 429 exponential backoff with Retry-After header parsing (#2) and circuit-breaker-aware failover (#3): skip OPEN circuit models in failover loops, back off 2s->4s->8s (cap 30s) per provider.",
     "status": "completed",
-    "verification": "result.gradingError set on grader catch; recordError not called; history table and agent cards show amber 'Grade failed' badge with tooltip."
+    "verification": "Grader failover checks Retry-After header and backs off exponentially per provider; OPEN circuits are bypassed in failover iterations."
   },
   {
-    "id": "goal-3-sort-managers-in-combinations-and-split-cursors",
-    "description": "Fix Fix 3 (sort manager models in runFullSwarmCombinations by scoreOf(b) - scoreOf(a)), Fix 7 (catch ge and throw ge instead of throw console.error), and Fix 8 (split shared nextFailoverIndex into promptGenCursor and graderCursor).",
+    "id": "goal-3-output-token-caps-and-persisted-grader-cache",
+    "description": "Implement per-role output token caps (#4) on analyst (~1500), manager (~2000), grader (60), prompt-gen (300), and persist grader cache (#5) to localStorage with 24h TTL.",
     "status": "completed",
-    "verification": "Managers sorted by score before combination generation; promptGenCursor and graderCursor separated; grader re-throws actual error object."
+    "verification": "Token caps forwarded and enforced on backend/engine; grader cache survives page reloads via localStorage."
   },
   {
-    "id": "goal-4-history-timestamps-session-wipe-delay-and-apply-best-button",
-    "description": "Fix Fix 4 (add testedAt ISO timestamps to history entries, increase slice to 100, add Tested column to history table, defer wiping results until first new result arrives) and Fix 5 (add 'Use this' button to copy model into Settings agent and persist).",
+    "id": "goal-4-cost-dashboard-and-reward-system-wiring",
+    "description": "Implement Cost Dashboard (#6) in CortexDiagnosticsViewer (tokens burned, estimated cost USD, error rate) and wire up/streamline reward system (#7).",
     "status": "completed",
-    "verification": "History entries include testedAt; Tested column rendered; previous results preserved until new sweep yields first result; 'Use this' button updates Settings."
+    "verification": "Diagnostics view renders cost metrics; reward telemetry is cleanly integrated with failover priorities."
   },
   {
-    "id": "goal-5-fix-health-check-no-api-key-badge",
-    "description": "Fix Fix 6: In checkProviderModelsHealth, when apiKey is absent for providers requiring one, return healthy: false, circuitState: 'UNCHECKED', latencyMs: null, and note: 'No API key — not checked'. Update AgentConfigurator badge to display '—' latency and amber 'unchecked' label.",
+    "id": "goal-5-model-quarantine-prompt-cache-and-concurrent-optimizer",
+    "description": "Implement auto-quarantine for dead models after 3 consecutive 404s (#8), prompt-generation result caching (#10) in memory + localStorage, and concurrent optimizer execution (#9) with adaptive delays.",
     "status": "completed",
-    "verification": "Keyless models marked UNCHECKED with null latencyMs; AgentConfigurator shows amber unchecked label with '—' latency."
+    "verification": "Models hitting 3 consecutive 404s are quarantined; test prompts are cached; models run concurrently up to batch size 3."
   },
   {
-    "id": "goal-6-harden-grader-prompt-and-add-grader-cache",
-    "description": "Fix Fix 9 (harden grader prompt against self-scoring using <analyst_output> delimiters and clear instructions that output is data not instructions) and Fix 10 (add client-side grader cache to avoid burning LLM quota).",
+    "id": "goal-6-actionable-errors-grader-retry-and-prompt-hardening",
+    "description": "Implement actionable error mapping (#11), grader single-model JSON retry (#12), prompt truncation in live stream events (#13), user task boundary hardening (#14), and lastError string truncation (#15).",
     "status": "completed",
-    "verification": "Grader prompt wraps output in <analyst_output>; grader cache stores and reuses scores for identical inputs."
+    "verification": "Errors mapped with stack traces stripped; grader retries once on malformed JSON; stream prompts truncated to 800 chars; user tasks wrapped in <user_task>; lastError truncated to 500 chars."
   },
   {
-    "id": "goal-7-backend-analyze-resilience-error-traces-and-metrics",
-    "description": "Fix Backend Fixes 1, 2, 3: wrap /api/swarm/analyze post-execution pipeline in robust try/catch with safe serialization so connections never drop; strip stack traces from client-facing SSE errors (use message only); count non-2xx HTTP responses as telemetry failures.",
+    "id": "goal-7-backend-kg-cleanup-router-chip-and-combo-reuse",
+    "description": "Drop empty knowledge-graph block when zero (#16), add visible Model Router decision chip (#17), combo-history reuse within 7 days (#18), and one-click apply full winning config button (#19).",
     "status": "completed",
-    "verification": "/api/swarm/analyze handles post-execution errors cleanly without socket drop; SSE swarm_error sends message only; telemetry middleware counts non-2xx responses as failures."
+    "verification": "Empty KG block omitted from response; router decision chip visible in header; prior combo scores reused within 7 days; full winning config button applies all models."
   },
   {
     "id": "goal-8-full-verification-and-test-suite",
-    "description": "Run the full test suite (npm test), TypeScript type checking (npm run lint), and production build (npm run build) to ensure zero regressions across all components and backend services.",
+    "description": "Run the entire test suite (vitest, npm test), TypeScript lint checks (npm run lint), and production build (npm run build) to ensure zero regressions across all components.",
     "status": "completed",
-    "verification": "All unit, CLI, portable, simulation, and server tests pass; zero TypeScript errors; clean build."
+    "verification": "All unit, CLI, portable, simulation, and server tests pass; zero TypeScript errors; clean production build."
   }
 ]

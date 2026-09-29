@@ -442,4 +442,30 @@ describe('TokenBudgetManager & SpecialistAffinityRouter', () => {
             expect(plan.specialistSummary['Security Auditor Standby'].chunksAssigned).toBe(1);
         });
     });
+
+    describe('AdaptiveLoadBalancer - Reward Telemetry Integration', () => {
+        it('tracks and updates provider reward score with EMA smoothing', () => {
+            const lb = new AdaptiveLoadBalancer();
+            expect(lb.getReward('groq')).toBe(0.85); // default
+
+            lb.recordReward('groq', 1.0);
+            expect(lb.getReward('groq')).toBeCloseTo((0.85 * 0.70) + (1.0 * 0.30), 2);
+
+            lb.recordReward('groq', 0.2);
+            expect(lb.getReward('groq')).toBeLessThan(0.85);
+        });
+
+        it('prioritizes providers with higher reinforcement rewards in calculateScore', () => {
+            const lb = new AdaptiveLoadBalancer();
+
+            // Set identical latency for two providers
+            lb.recordReward('provider-high', 1.0);
+            lb.recordReward('provider-low', 0.1);
+
+            const scoreHigh = lb.calculateScore('provider-high');
+            const scoreLow = lb.calculateScore('provider-low');
+
+            expect(scoreHigh).toBeGreaterThan(scoreLow);
+        });
+    });
 });

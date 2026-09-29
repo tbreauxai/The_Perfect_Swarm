@@ -10,6 +10,7 @@ export interface AgentConfig {
     provider: string;
     model: string;
     apiKey?: string;
+    maxTokens?: number;
 }
 
 export interface SwarmExperimentSettings {
@@ -194,3 +195,32 @@ export interface LearnedMemoryEvent {
         [key: string]: any;
     };
 }
+
+/**
+ * Maps raw backend/network errors to clean actionable user-facing messages,
+ * stripping stack-traces and internal server paths.
+ */
+export function formatActionableError(rawError: unknown): string {
+    if (!rawError) return 'An unexpected error occurred during execution.';
+    const errStr = typeof rawError === 'string' ? rawError : (rawError as any).message || String(rawError);
+
+    if (/\b401\b|unauthorized|invalid[_\s]api[_\s]key|api[_\s]key[_\s]not[_\s]configured/i.test(errStr)) {
+        return 'API key invalid — check Settings → API keys';
+    }
+    if (/\b429\b|rate[_\s]limit|quota[_\s]exceeded|too[_\s]many[_\s]requests/i.test(errStr)) {
+        return 'Quota exhausted — cooling down, try again shortly';
+    }
+    if (/\b5\d{2}\b|internal[_\s]server[_\s]error|bad[_\s]gateway|service[_\s]unavailable/i.test(errStr)) {
+        return 'Provider error — failover engaged';
+    }
+
+    const lines = errStr.split('\n');
+    const cleaned = lines
+        .filter(l => !/^\s*at\s+/i.test(l))
+        .join('\n')
+        .replace(/\/app\/[^\s:]+/g, '')
+        .trim();
+
+    return cleaned || 'An unexpected error occurred during execution.';
+}
+

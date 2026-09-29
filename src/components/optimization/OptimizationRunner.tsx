@@ -1,7 +1,70 @@
 import React, { useState, useEffect } from 'react';
-import { fetchAvailableModels, checkProviderModelsHealth, ModelOption } from '../../services/providerService';
+import {
+    fetchAvailableModels,
+    checkProviderModelsHealth,
+    ModelOption,
+    getModelCircuitState,
+    globalModelHealthChecker,
+    getQuarantinedModels,
+    isModelQuarantined,
+    recordModel404,
+    clearModel404Strikes,
+    clearAllQuarantinedModels
+} from '../../services/providerService';
 import { getApiKeyForProvider } from '../AgentConfigurator';
-import { Loader2, Play, Trophy, Clock, CheckCircle, AlertCircle, Trash2 } from 'lucide-react';
+import { Loader2, Play, Trophy, Clock, CheckCircle, AlertCircle, Trash2, Ban } from 'lucide-react';
+
+export interface ProviderBackoffState {
+    consecutive429: number;
+    backoffUntil: number;
+}
+export const PROVIDER_BACKOFFS = new Map<string, ProviderBackoffState>();
+
+export function getProviderBackoff(provider: string): ProviderBackoffState | undefined {
+    return PROVIDER_BACKOFFS.get(provider.toLowerCase());
+}
+
+export function parseRetryAfterMs(headerVal: string | null): number | null {
+    if (!headerVal) return null;
+    const trimmed = headerVal.trim();
+    const asSeconds = Number(trimmed);
+    if (!isNaN(asSeconds) && asSeconds > 0) {
+        return Math.min(30000, Math.max(1000, Math.round(asSeconds * 1000)));
+    }
+    const parsedDate = Date.parse(trimmed);
+    if (!isNaN(parsedDate)) {
+        const diffMs = parsedDate - Date.now();
+        if (diffMs > 0) {
+            return Math.min(30000, Math.max(1000, diffMs));
+        }
+    }
+    return null;
+}
+
+export function calculateBackoffMs(provider: string, retryAfterHeader?: string | null): number {
+    const parsed = parseRetryAfterMs(retryAfterHeader ?? null);
+    if (parsed !== null) {
+        return parsed;
+    }
+    const current = PROVIDER_BACKOFFS.get(provider.toLowerCase())?.consecutive429 ?? 0;
+    // Exponential backoff: 2s -> 4s -> 8s -> 16s -> capped at 30s
+    return Math.min(30000, 2000 * Math.pow(2, current));
+}
+
+export function recordProvider429(provider: string, retryAfterHeader?: string | null): number {
+    const pKey = provider.toLowerCase();
+    const backoffMs = calculateBackoffMs(provider, retryAfterHeader);
+    const current = PROVIDER_BACKOFFS.get(pKey)?.consecutive429 ?? 0;
+    PROVIDER_BACKOFFS.set(pKey, {
+        consecutive429: current + 1,
+        backoffUntil: Date.now() + backoffMs
+    });
+    return backoffMs;
+}
+
+export function recordProviderSuccess(provider: string): void {
+    PROVIDER_BACKOFFS.delete(provider.toLowerCase());
+}
 
 const TIER2_CACHE_KEY = 'swarm_tier2_health_cache';
 const TIER2_TTL = 60 * 60 * 1000; // 60 mins
@@ -46,13 +109,98 @@ export const WORKING_MODELS = [
 let promptGenCursor = 0;
 let graderCursor = 0;
 
-interface GraderCacheEntry {
+export interface GraderCacheEntry {
     scores: { intelligence: number | null; accuracy: number | null; speed: number };
     timestamp: number;
 }
 
-export const GRADER_CACHE = new Map<string, GraderCacheEntry>();
+export const GRADER_CACHE_STORAGE_KEY = 'swarm_grader_cache_v1';
 export const GRADER_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+export function loadGraderCache(): Map<string, GraderCacheEntry> {
+    const cache = new Map<string, GraderCacheEntry>();
+    try {
+        if (typeof localStorage !== 'undefined') {
+            const raw = localStorage.getItem(GRADER_CACHE_STORAGE_KEY);
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                const now = Date.now();
+                if (typeof parsed === 'object' && parsed !== null) {
+                    for (const [k, v] of Object.entries(parsed)) {
+                        const entry = v as GraderCacheEntry;
+                        if (entry && typeof entry.timestamp === 'number' && (now - entry.timestamp < GRADER_CACHE_TTL_MS)) {
+                            cache.set(k, entry);
+                        }
+                    }
+                }
+            }
+        }
+    } catch (e) {
+        console.warn('Failed to load grader cache from localStorage', e);
+    }
+    return cache;
+}
+
+export function saveGraderCache(cache: Map<string, GraderCacheEntry>): void {
+    try {
+        if (typeof localStorage !== 'undefined') {
+            const obj: Record<string, GraderCacheEntry> = {};
+            const now = Date.now();
+            for (const [k, v] of cache.entries()) {
+                if (now - v.timestamp < GRADER_CACHE_TTL_MS) {
+                    obj[k] = v;
+                }
+            }
+            localStorage.setItem(GRADER_CACHE_STORAGE_KEY, JSON.stringify(obj));
+        }
+    } catch (e) {
+        console.warn('Failed to save grader cache to localStorage', e);
+    }
+}
+
+export const GRADER_CACHE = loadGraderCache();
+
+export const PROMPT_GEN_CACHE_STORAGE_KEY = 'swarm_prompt_gen_cache_v1';
+
+export function getPromptGenCacheKey(analystRole: string, baseTask: string): string {
+    return `${analystRole.toLowerCase().trim()}:::${baseTask.trim()}`;
+}
+
+export function loadPromptGenCache(): Map<string, string> {
+    const cache = new Map<string, string>();
+    try {
+        if (typeof localStorage !== 'undefined') {
+            const raw = localStorage.getItem(PROMPT_GEN_CACHE_STORAGE_KEY);
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                if (typeof parsed === 'object' && parsed !== null) {
+                    for (const [k, v] of Object.entries(parsed)) {
+                        if (typeof v === 'string') cache.set(k, v);
+                    }
+                }
+            }
+        }
+    } catch (e) {
+        console.warn('Failed to load prompt gen cache from localStorage', e);
+    }
+    return cache;
+}
+
+export function savePromptGenCache(cache: Map<string, string>): void {
+    try {
+        if (typeof localStorage !== 'undefined') {
+            const obj: Record<string, string> = {};
+            for (const [k, v] of cache.entries()) {
+                obj[k] = v;
+            }
+            localStorage.setItem(PROMPT_GEN_CACHE_STORAGE_KEY, JSON.stringify(obj));
+        }
+    } catch (e) {
+        console.warn('Failed to save prompt gen cache to localStorage', e);
+    }
+}
+
+export const PROMPT_GEN_CACHE = loadPromptGenCache();
 
 // Cache of in-flight analyze calls for deduplication
 const IN_FLIGHT_ANALYZE_CALLS = new Map<string, Promise<Response>>();
@@ -96,6 +244,28 @@ export function getGraderCacheKey(task: string, output: any, graderModel: string
 export const scoreOf = (r?: { scores?: { intelligence?: number | null; accuracy?: number | null } } | null): number =>
     (r?.scores?.intelligence || 0) + (r?.scores?.accuracy || 0);
 
+/**
+ * Computes the consensus score from multiple test samples:
+ * checks for a strict majority (> 50%), and falls back to rounded average.
+ */
+export function calculateConsensusScore(values: (number | null | undefined)[]): number | null {
+    const valid = values.filter((v): v is number => typeof v === 'number' && !isNaN(v));
+    if (valid.length === 0) return null;
+
+    const counts = new Map<number, number>();
+    for (const v of valid) {
+        counts.set(v, (counts.get(v) || 0) + 1);
+    }
+    for (const [v, count] of counts.entries()) {
+        if (count > valid.length / 2) {
+            return v;
+        }
+    }
+
+    const sum = valid.reduce((a, b) => a + b, 0);
+    return Math.round(sum / valid.length);
+}
+
 export interface OptimizationRunnerProps {
     task: string;
     data: string;
@@ -120,6 +290,7 @@ export interface OptimizationResult {
     fromCache?: boolean;
     isFullSwarm?: boolean;
     testedAt?: string;
+    consensusSamples?: number;
 }
 
 /**
@@ -348,9 +519,12 @@ export const OptimizationRunner: React.FC<OptimizationRunnerProps> = ({ task, da
     const [progress, setProgress] = useState('');
     const [errorRecords, setErrorRecords] = useState<Record<string, ModelErrorRecord>>({});
     const [promptGenStatus, setPromptGenStatus] = useState<{ ok: boolean; error?: string; at?: string } | null>(null);
+    const [consensusMode, setConsensusMode] = useState<boolean>(true);
+    const [quarantinedCount, setQuarantinedCount] = useState<number>(() => getQuarantinedModels().length);
 
     useEffect(() => {
         try {
+            setQuarantinedCount(getQuarantinedModels().length);
             const saved = localStorage.getItem('swarm_model_errors');
             if (saved) {
                 setErrorRecords(JSON.parse(saved));
@@ -467,34 +641,22 @@ export const OptimizationRunner: React.FC<OptimizationRunnerProps> = ({ task, da
     };
 
     const recordError = (modelId: string, provider: string, errorMsg: string) => {
+        const safeError = String(errorMsg || '').slice(0, 500);
         setErrorRecords(prev => {
             const current = prev[modelId] || { errorCount: 0, lastError: '', provider };
             const updated = {
                 ...prev,
                 [modelId]: {
                     errorCount: current.errorCount + 1,
-                    lastError: errorMsg,
+                    lastError: safeError,
                     provider
                 }
             };
-            const limitedErrors = {};
-            for (const key of Object.keys(updated)) {
-                limitedErrors[key] = updated[key].map((err: any) => {
-                    const msg = err.error || '';
-                    if (msg.length > 2000) return { ...err, error: msg.slice(0, 2000) + '... [truncated]' };
-                    return err;
-                });
-            }
 
             try {
-                try {
-                    const stringified = JSON.stringify(limitedErrors);
-                    localStorage.setItem('swarm_model_errors', stringified);
-                } catch (e: any) {
-                    if (e.name === 'QuotaExceededError') alert('LocalStorage Quota Exceeded');
-                }
-            } catch (e) {
-
+                const stringified = JSON.stringify(updated);
+                localStorage.setItem('swarm_model_errors', stringified);
+            } catch (e: any) {
                 console.error("Failed to save error records", e);
             }
             return updated;
@@ -528,6 +690,12 @@ export const OptimizationRunner: React.FC<OptimizationRunnerProps> = ({ task, da
     };
 
     const generateTestPrompt = async (managerAgent: any, analystRole: string, baseTask: string): Promise<string> => {
+        const cacheKey = getPromptGenCacheKey(analystRole, baseTask);
+        const cached = PROMPT_GEN_CACHE.get(cacheKey);
+        if (cached) {
+            return cached;
+        }
+
         const failoverModels = WORKING_MODELS;
 
         try {
@@ -545,6 +713,18 @@ Respond ONLY with the text of the prompt you want to give them.`;
                 const failover = failoverModels[currentIndex];
                 if (skippedProviders.has(failover.provider)) continue;
 
+                // Skip known failing models if circuit breaker is OPEN
+                const circuitState = getModelCircuitState(failover.provider, failover.model);
+                if (circuitState === 'OPEN') {
+                    continue;
+                }
+
+                // Check provider 429 backoff
+                const backoff = PROVIDER_BACKOFFS.get(failover.provider.toLowerCase());
+                if (backoff && Date.now() < backoff.backoffUntil) {
+                    continue;
+                }
+
                 const isHealthy = await ensureTier2Health(failover.provider, failover.model, settings);
                 if (!isHealthy) {
                     recordError(failover.model, failover.provider, "Tier-2 health check failed lazily before prompt generation.");
@@ -558,7 +738,7 @@ Respond ONLY with the text of the prompt you want to give them.`;
                             bypassCache: true,
                             settings: {
                                 ...cleanSettings,
-                                agents: [{ id: 'grader-agent', role: 'Prompt Generator Node', provider: failover.provider, model: failover.model }],
+                                agents: [{ id: 'grader-agent', role: 'Prompt Generator Node', provider: failover.provider, model: failover.model, maxTokens: 300 }],
                                 forceFullSwarm: false,
                                 disableFallback: true
                             }
@@ -567,8 +747,15 @@ Respond ONLY with the text of the prompt you want to give them.`;
                     if (!res.ok) {
                         if (res.status === 401 || res.status === 400) {
                             skippedProviders.add(failover.provider);
+                            globalModelHealthChecker.circuitBreaker.recordFailure(failover.provider, failover.model, `${res.status} Client Error`);
+                        } else if (res.status === 429) {
+                            const retryAfter = res.headers.get('retry-after');
+                            const backoffMs = recordProvider429(failover.provider, retryAfter);
+                            globalModelHealthChecker.circuitBreaker.recordFailure(failover.provider, failover.model, '429 Rate Limit');
+                            await delay(backoffMs);
+                        } else {
+                            globalModelHealthChecker.circuitBreaker.recordFailure(failover.provider, failover.model, `HTTP ${res.status}`);
                         }
-                        if (res.status === 429) await new Promise(r => setTimeout(r, 2500));
                         continue;
                     }
 
@@ -576,19 +763,35 @@ Respond ONLY with the text of the prompt you want to give them.`;
 
                     if (data.finalAnalysis && typeof data.finalAnalysis === 'object' && !data.finalAnalysis.ui_title?.toLowerCase().includes('error')) {
                         if (data.finalAnalysis.components?.[0]?.props?.insights?.[0]?.message) {
+                            const prompt = data.finalAnalysis.components[0].props.insights[0].message;
+                            PROMPT_GEN_CACHE.set(cacheKey, prompt);
+                            savePromptGenCache(PROMPT_GEN_CACHE);
+                            recordProviderSuccess(failover.provider);
+                            globalModelHealthChecker.circuitBreaker.recordSuccess(failover.provider, failover.model);
                             promptGenCursor = (currentIndex + 1) % failoverModels.length;
-                            return data.finalAnalysis.components[0].props.insights[0].message;
+                            return prompt;
                         } else if (data.finalAnalysis.summary) {
+                            const prompt = data.finalAnalysis.summary;
+                            PROMPT_GEN_CACHE.set(cacheKey, prompt);
+                            savePromptGenCache(PROMPT_GEN_CACHE);
+                            recordProviderSuccess(failover.provider);
+                            globalModelHealthChecker.circuitBreaker.recordSuccess(failover.provider, failover.model);
                             promptGenCursor = (currentIndex + 1) % failoverModels.length;
-                            return data.finalAnalysis.summary;
+                            return prompt;
                         }
                     }
 
                     if (typeof data.finalAnalysis === 'string' && !data.finalAnalysis.includes('Error')) {
+                        const prompt = data.finalAnalysis;
+                        PROMPT_GEN_CACHE.set(cacheKey, prompt);
+                        savePromptGenCache(PROMPT_GEN_CACHE);
+                        recordProviderSuccess(failover.provider);
+                        globalModelHealthChecker.circuitBreaker.recordSuccess(failover.provider, failover.model);
                         promptGenCursor = (currentIndex + 1) % failoverModels.length;
-                        return data.finalAnalysis;
+                        return prompt;
                     }
-                } catch (e) {
+                } catch (e: any) {
+                    globalModelHealthChecker.circuitBreaker.recordFailure(failover.provider, failover.model, e?.message || 'Network error');
                     console.warn(`Test prompt generation failed for ${failover.model}`, e);
                 }
             }
@@ -642,6 +845,20 @@ Respond with a JSON object on its own lines, exactly:
                 const failover = failoverModels[currentIndex];
                 if (skippedProviders.has(failover.provider)) continue;
 
+                // Check circuit breaker state from health system to skip known failing models
+                const circuitState = getModelCircuitState(failover.provider, failover.model);
+                if (circuitState === 'OPEN') {
+                    errors.push(`${failover.model}: Circuit breaker is OPEN, skipping`);
+                    continue;
+                }
+
+                // Check provider 429 backoff
+                const backoff = PROVIDER_BACKOFFS.get(failover.provider.toLowerCase());
+                if (backoff && Date.now() < backoff.backoffUntil) {
+                    errors.push(`${failover.model}: Provider ${failover.provider} in 429 backoff until ${new Date(backoff.backoffUntil).toLocaleTimeString()}`);
+                    continue;
+                }
+
                 const isHealthy = await ensureTier2Health(failover.provider, failover.model, settings);
                 if (!isHealthy) {
                     recordError(failover.model, failover.provider, "Tier-2 health check failed lazily before grading.");
@@ -655,7 +872,7 @@ Respond with a JSON object on its own lines, exactly:
                             bypassCache: false, // Let grading queries utilize backend cache if available
                             settings: {
                                 ...cleanSettings,
-                                agents: [{ id: 'grader-agent', role: 'Grader Node', provider: failover.provider, model: failover.model }],
+                                agents: [{ id: 'grader-agent', role: 'Grader Node', provider: failover.provider, model: failover.model, maxTokens: 60 }],
                                 forceFullSwarm: false,
                                 disableFallback: true
                             }
@@ -664,22 +881,47 @@ Respond with a JSON object on its own lines, exactly:
                     if (!res.ok) {
                         if (res.status === 401 || res.status === 400) {
                             skippedProviders.add(failover.provider);
+                            globalModelHealthChecker.circuitBreaker.recordFailure(failover.provider, failover.model, `${res.status} Client Error`);
+                        } else if (res.status === 429) {
+                            const retryAfter = res.headers.get('retry-after');
+                            const backoffMs = recordProvider429(failover.provider, retryAfter);
+                            globalModelHealthChecker.circuitBreaker.recordFailure(failover.provider, failover.model, '429 Rate Limit');
+                            await delay(backoffMs);
+                        } else {
+                            globalModelHealthChecker.circuitBreaker.recordFailure(failover.provider, failover.model, `HTTP ${res.status}`);
                         }
-                        if (res.status === 429) await new Promise(r => setTimeout(r, 2500));
                         const errText = await res.text();
                         errors.push(`${failover.model}: ${res.status} ${errText}`);
                         continue;
                     }
 
-                    const data = await res.json();
-                    
-                    const scores = extractGradingScores(data, durationMs);
+                    let scores = extractGradingScores(data, durationMs);
+                    if (scores.intelligence === null || scores.accuracy === null) {
+                        try {
+                            const retryBody = {
+                                ...requestBody,
+                                task: `${gradingTask}\nRespond with ONLY the JSON object, no other text.`
+                            };
+                            const retryRes = await fetchAnalyze(retryBody, 60000);
+                            if (retryRes.ok) {
+                                const retryData = await retryRes.json();
+                                const retryScores = extractGradingScores(retryData, durationMs);
+                                if (retryScores.intelligence !== null && retryScores.accuracy !== null) {
+                                    scores = retryScores;
+                                }
+                            }
+                        } catch {}
+                    }
+
                     if (scores.intelligence !== null && scores.accuracy !== null) {
+                        recordProviderSuccess(failover.provider);
+                        globalModelHealthChecker.circuitBreaker.recordSuccess(failover.provider, failover.model);
                         graderCursor = (currentIndex + 1) % failoverModels.length;
                         GRADER_CACHE.set(cacheKey, {
                             scores,
                             timestamp: Date.now()
                         });
+                        saveGraderCache(GRADER_CACHE);
                         return {
                             ...scores,
                             fromCache: false
@@ -688,6 +930,7 @@ Respond with a JSON object on its own lines, exactly:
                         errors.push(`${failover.model}: Failed to extract. Raw: ${JSON.stringify(data?.finalAnalysis || data).substring(0, 500)}`);
                     }
                 } catch (e: any) {
+                    globalModelHealthChecker.circuitBreaker.recordFailure(failover.provider, failover.model, e?.message || 'Network error');
                     errors.push(`${failover.model}: ${e.message}`);
                 }
             }
@@ -747,6 +990,9 @@ Respond with a JSON object on its own lines, exactly:
         }
 
         const modelsToTest = models.filter(m => {
+            if (isModelQuarantined(agentToTest.provider, m.id)) {
+                return false;
+            }
             const key = `${agentToTest.provider.toLowerCase().trim()}:${m.id.trim()}`;
             const health = healthMap[key];
             if (health && (health.circuitState === 'OPEN' || !health.healthy)) {
@@ -762,13 +1008,19 @@ Respond with a JSON object on its own lines, exactly:
             return;
         }
 
-        for (const model of modelsToTest) {
-            setProgress(`Testing ${agentToTest.role} with ${model.name || model.id}...`);
+        const isAnalyst = agentToTest.id !== managerAgent.id && !agentToTest.role.toLowerCase().includes('manager');
+        const sampleCount = (consensusMode && isAnalyst) ? 3 : 1;
+
+        const testSingleModel = async (model: ModelOption): Promise<OptimizationResult> => {
             const filteredAgents = settings.agents
                 .filter((a: any) => a.id === agentToTest.id || a.id === managerAgent.id)
-                .map((a: any) => 
-                    a.id === agentToTest.id ? { ...a, provider: agentToTest.provider, model: model.id } : a
-                );
+                .map((a: any) => {
+                    const isMgr = a.id === managerAgent.id || a.role === 'Manager Node';
+                    const defaultCap = isMgr ? 2000 : 1500;
+                    return a.id === agentToTest.id 
+                        ? { ...a, provider: agentToTest.provider, model: model.id, maxTokens: a.maxTokens || defaultCap } 
+                        : { ...a, maxTokens: a.maxTokens || defaultCap };
+                });
             
             const hasSubAgents = filteredAgents.some((a: any) => a.id !== managerAgent.id && a.role !== 'Manager Node');
             if (!hasSubAgents) {
@@ -776,17 +1028,29 @@ Respond with a JSON object on its own lines, exactly:
                     id: 'mock-analyst-test',
                     role: 'Mock Analyst',
                     provider: 'simulated',
-                    model: 'simulated-model'
+                    model: 'simulated-model',
+                    maxTokens: 1500
                 });
             }
             const isHealthy = await ensureTier2Health(agentToTest.provider, model.id, settings);
             if (!isHealthy) {
                 recordError(model.id, agentToTest.provider, "Tier-2 health check failed lazily before test.");
-                continue;
+                const failRes: OptimizationResult = {
+                    id: `${agentToTest.id}-${model.id}`,
+                    role: agentToTest.role,
+                    provider: agentToTest.provider,
+                    model: model.id,
+                    durationMs: 0,
+                    output: null,
+                    error: "Tier-2 health check failed lazily before test.",
+                    scores: { intelligence: null, accuracy: null, speed: 1 },
+                    isFullSwarm: false
+                };
+                saveToHistory(failRes);
+                return failRes;
             }
 
             const cleanSettings = { ...settings };
-
             delete cleanSettings.activeVariant;
 
             const testSettings = {
@@ -796,91 +1060,168 @@ Respond with a JSON object on its own lines, exactly:
                 disableFallback: true
             };
 
-            const start = Date.now();
-            let output = null;
-            let errorMsg = undefined;
-            try {
-                const requestBody = {
+            const sampleOutputs: any[] = [];
+            const sampleScores: { intelligence: number | null; accuracy: number | null; speed: number | null }[] = [];
+            let sampleDurationsTotal = 0;
+            let lastErrorMsg: string | undefined = undefined;
+            let lastGradingError: string | undefined = undefined;
+            let anyFromCache = false;
+
+            for (let sIdx = 0; sIdx < sampleCount; sIdx++) {
+                const sampleLabel = sampleCount > 1 ? ` (sample ${sIdx + 1}/${sampleCount})` : '';
+                setProgress(`Testing ${agentToTest.role} with ${model.name || model.id}${sampleLabel}...`);
+
+                const start = Date.now();
+                let output = null;
+                let errorMsg = undefined;
+                try {
+                    const requestBody = {
                         task: agentTestTask,
                         data,
                         bypassCache: true,
                         settings: testSettings
                     };
                     const res = await fetchAnalyze(requestBody, requestBody.settings?.forceFullSwarm ? 180000 : 120000);
-                const resData = await res.json().catch(() => null);
-                if (!res.ok) {
-                    throw new Error(resData?.error ? String(resData.error) : `HTTP error ${res.status}`);
-                }
-                if (resData.error) throw new Error(resData.error);
-
-                output = resData.finalAnalysis;
-                if (!output) {
-                    throw new Error("No output returned from model.");
-                }
-
-                if (typeof output === 'object') {
-                    if (output.error) throw new Error(String(output.error));
-                    if (typeof output.ui_title === 'string' && (output.ui_title.toLowerCase().includes('error') || output.ui_title.toLowerCase().includes('execution error'))) {
-                        const errMsg = output.components?.[0]?.props?.insights?.[0]?.message || output.error || output.ui_title || 'Execution Error in model output';
-                        throw new Error(errMsg);
+                    const resData = await res.json().catch(() => null);
+                    if (!res.ok) {
+                        if (res.status === 404) {
+                            recordModel404(agentToTest.provider, model.id);
+                            setQuarantinedCount(getQuarantinedModels().length);
+                        }
+                        if (res.status === 429) {
+                            recordProvider429(agentToTest.provider, res.headers.get('retry-after'));
+                            globalModelHealthChecker.circuitBreaker.recordFailure(agentToTest.provider, model.id, '429 Rate Limit');
+                        } else {
+                            globalModelHealthChecker.circuitBreaker.recordFailure(agentToTest.provider, model.id, `HTTP ${res.status}`);
+                        }
+                        throw new Error(resData?.error ? String(resData.error) : `HTTP error ${res.status}`);
                     }
-                }
-
-                if (typeof output === 'string' && output.trim().length < 5) {
-                    throw new Error("Output too short to be valid.");
-                }
-            } catch (e: any) {
-                errorMsg = e.message;
-                recordError(model.id, agentToTest.provider, errorMsg);
-            }
-            const duration = Date.now() - start;
-
-            let autoScore = { intelligence: null, accuracy: null, speed: calculateSpeedScore(duration) };
-            let gradingErrorMsg: string | undefined = undefined;
-            let fromCacheFlag: boolean | undefined = undefined;
-            if (isModelResponseValid({ output, error: errorMsg })) {
-                setProgress(`Auto-grading ${model.name || model.id}...`);
-                try {
-                    const scoreRes = await autoGradeOutput(agentTestTask, output, duration, managerAgent);
-                    if (scoreRes) {
-                        autoScore = {
-                            ...scoreRes,
-                            speed: scoreRes.speed !== null ? scoreRes.speed : calculateSpeedScore(duration)
-                        };
-                        fromCacheFlag = scoreRes.fromCache;
+                    if (resData.error) {
+                        const errStr = String(resData.error);
+                        if (errStr.includes('404') || errStr.toLowerCase().includes('not found')) {
+                            recordModel404(agentToTest.provider, model.id);
+                            setQuarantinedCount(getQuarantinedModels().length);
+                        }
+                        globalModelHealthChecker.circuitBreaker.recordFailure(agentToTest.provider, model.id, errStr);
+                        throw new Error(resData.error);
                     }
+
+                    output = resData.finalAnalysis;
+                    if (!output) {
+                        throw new Error("No output returned from model.");
+                    }
+
+                    if (typeof output === 'object') {
+                        if (output.error) throw new Error(String(output.error));
+                        if (typeof output.ui_title === 'string' && (output.ui_title.toLowerCase().includes('error') || output.ui_title.toLowerCase().includes('execution error'))) {
+                            const errMsg = output.components?.[0]?.props?.insights?.[0]?.message || output.error || output.ui_title || 'Execution Error in model output';
+                            throw new Error(errMsg);
+                        }
+                    }
+
+                    if (typeof output === 'string' && output.trim().length < 5) {
+                        throw new Error("Output too short to be valid.");
+                    }
+
+                    recordProviderSuccess(agentToTest.provider);
+                    clearModel404Strikes(agentToTest.provider, model.id);
+                    globalModelHealthChecker.circuitBreaker.recordSuccess(agentToTest.provider, model.id);
                 } catch (e: any) {
-                    // The model produced a valid output; only the GRADER failed.
-                    // Record it on the result, not on the model.
-                    gradingErrorMsg = `Grading failed: ${e.message}`;
-                    // Do NOT call recordError here and do NOT set errorMsg!
+                    globalModelHealthChecker.circuitBreaker.recordFailure(agentToTest.provider, model.id, e.message);
+                    errorMsg = e.message;
+                    lastErrorMsg = errorMsg;
+                    recordError(model.id, agentToTest.provider, errorMsg);
+                    if (e.message?.includes('404') || e.message?.toLowerCase().includes('not found')) {
+                        recordModel404(agentToTest.provider, model.id);
+                        setQuarantinedCount(getQuarantinedModels().length);
+                    }
+                }
+                const sampleDuration = Date.now() - start;
+                sampleDurationsTotal += sampleDuration;
+
+                if (isModelResponseValid({ output, error: errorMsg })) {
+                    sampleOutputs.push(output);
+                    setProgress(`Auto-grading ${model.name || model.id}${sampleLabel}...`);
+                    try {
+                        const scoreRes = await autoGradeOutput(agentTestTask, output, sampleDuration, managerAgent);
+                        if (scoreRes) {
+                            sampleScores.push({
+                                intelligence: scoreRes.intelligence,
+                                accuracy: scoreRes.accuracy,
+                                speed: scoreRes.speed !== null ? scoreRes.speed : calculateSpeedScore(sampleDuration)
+                            });
+                            if (scoreRes.fromCache) anyFromCache = true;
+                        }
+                    } catch (e: any) {
+                        lastGradingError = `Grading failed: ${e.message}`;
+                    }
+                }
+
+                if (sIdx < sampleCount - 1) {
+                    await delay(1000);
                 }
             }
+
+            const effectiveDuration = Math.round(sampleDurationsTotal / Math.max(1, sampleCount));
+            let autoScore = { 
+                intelligence: null as number | null, 
+                accuracy: null as number | null, 
+                speed: calculateSpeedScore(effectiveDuration) as number | null 
+            };
+
+            if (sampleScores.length > 0) {
+                autoScore = {
+                    intelligence: calculateConsensusScore(sampleScores.map(s => s.intelligence)),
+                    accuracy: calculateConsensusScore(sampleScores.map(s => s.accuracy)),
+                    speed: calculateConsensusScore(sampleScores.map(s => s.speed)) ?? calculateSpeedScore(effectiveDuration)
+                };
+            }
+
+            const chosenOutput = sampleOutputs.length > 0 ? sampleOutputs[sampleOutputs.length - 1] : null;
 
             const result: OptimizationResult = {
                 id: `${agentToTest.id}-${model.id}`,
                 role: agentToTest.role,
                 provider: agentToTest.provider,
                 model: model.id,
-                durationMs: duration,
-                output,
-                error: errorMsg,
-                gradingError: gradingErrorMsg,
+                durationMs: effectiveDuration,
+                output: chosenOutput,
+                error: sampleOutputs.length > 0 ? undefined : lastErrorMsg,
+                gradingError: lastGradingError,
                 scores: autoScore,
-                fromCache: fromCacheFlag,
-                isFullSwarm: false
+                fromCache: anyFromCache,
+                isFullSwarm: false,
+                consensusSamples: sampleCount > 1 ? sampleScores.length : undefined
             };
 
-            newResults.push(result);
-            setResults(prev => {
-                const base = hasClearedOldRoleResults 
-                    ? prev 
-                    : prev.filter(r => r.role !== agentToTest.role);
-                hasClearedOldRoleResults = true;
-                return [...base.filter(r => r.id !== result.id), result];
-            });
             saveToHistory(result);
-            await delay(6000);
+            return result;
+        };
+
+        const BATCH_SIZE = 3;
+        for (let i = 0; i < modelsToTest.length; i += BATCH_SIZE) {
+            const batch = modelsToTest.slice(i, i + BATCH_SIZE);
+            const batchResults = await Promise.all(batch.map(m => testSingleModel(m)));
+            for (const result of batchResults) {
+                newResults.push(result);
+                setResults(prev => {
+                    const base = hasClearedOldRoleResults 
+                        ? prev 
+                        : prev.filter(r => r.role !== agentToTest.role);
+                    hasClearedOldRoleResults = true;
+                    return [...base.filter(r => r.id !== result.id), result];
+                });
+            }
+
+            if (i + BATCH_SIZE < modelsToTest.length) {
+                const backoff = getProviderBackoff(agentToTest.provider);
+                if (backoff && backoff.backoffUntil > Date.now()) {
+                    const waitTime = Math.max(4000, backoff.backoffUntil - Date.now());
+                    await delay(waitTime);
+                } else {
+                    await delay(2000);
+                }
+            }
         }
 
         setProgress('Agent Optimization Complete!');
@@ -944,8 +1285,32 @@ Respond with a JSON object on its own lines, exactly:
         }
 
         const newResults: OptimizationResult[] = [];
+        const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
         for (const combo of combinations) {
+            // Check combo-history reuse within 7 days (#18)
+            const priorCombo = history.find(h =>
+                h.isFullSwarm &&
+                h.model === combo.desc &&
+                h.testedAt &&
+                (Date.now() - new Date(h.testedAt).getTime() < SEVEN_DAYS_MS) &&
+                isModelResponseValid(h) &&
+                h.scores.accuracy !== null
+            );
+
+            if (priorCombo) {
+                setProgress(`Reusing prior combo benchmark (${new Date(priorCombo.testedAt!).toLocaleDateString()}): ${combo.desc.substring(0, 45)}...`);
+                const reused: OptimizationResult = {
+                    ...priorCombo,
+                    id: `full-swarm-${Date.now()}-${crypto.randomUUID()}`,
+                    fromCache: true
+                };
+                newResults.push(reused);
+                setResults(prev => [...prev, reused]);
+                await delay(600);
+                continue;
+            }
+
             setProgress(`Testing Swarm Combo: ${combo.desc.substring(0, 50)}...`);
 
             const testSettings = {
@@ -1041,6 +1406,10 @@ Respond with a JSON object on its own lines, exactly:
         ));
     };
 
+    const winningCombo = [...results, ...history]
+        .filter(r => r.isFullSwarm && isModelResponseValid(r))
+        .sort((a, b) => scoreOf(b) - scoreOf(a))[0];
+
     return (
         <div className="space-y-6">
             <div className="flex items-center justify-between">
@@ -1058,6 +1427,31 @@ Respond with a JSON object on its own lines, exactly:
                             <span><strong>Prompt Generation Failed:</strong> Falling back to base task. ({promptGenStatus.error})</span>
                         </div>
                     )}
+                </div>
+                <div className="flex items-center gap-3">
+                    {quarantinedCount > 0 && (
+                        <button
+                            onClick={() => {
+                                clearAllQuarantinedModels();
+                                setQuarantinedCount(0);
+                            }}
+                            className="flex items-center gap-1.5 text-xs text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 px-2.5 py-1.5 rounded transition-colors"
+                            title="Clear all 404 quarantined models"
+                        >
+                            <Ban className="w-3.5 h-3.5" />
+                            <span>Quarantined ({quarantinedCount}) [Clear]</span>
+                        </button>
+                    )}
+                    <label className="flex items-center gap-2 text-xs text-neutral-600 cursor-pointer select-none bg-neutral-50 px-2.5 py-1.5 rounded border border-neutral-200 hover:bg-neutral-100 transition-colors">
+                        <input
+                            type="checkbox"
+                            checked={consensusMode}
+                            onChange={(e) => setConsensusMode(e.target.checked)}
+                            disabled={isRunning}
+                            className="rounded text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
+                        />
+                        <span className="font-medium">Consensus (3× vote)</span>
+                    </label>
                 </div>
             </div>
 
@@ -1103,6 +1497,9 @@ Respond with a JSON object on its own lines, exactly:
                                                         <span title="Speed" className="px-1.5 py-0.5 bg-purple-100 text-purple-800 rounded">SPD: {r.scores.speed || '-'}</span>
                                                         {r.fromCache && (
                                                             <span title="Grading retrieved from cache" className="px-1.5 py-0.5 bg-slate-100 text-slate-700 rounded font-medium">⚡ cached</span>
+                                                        )}
+                                                        {r.consensusSamples && r.consensusSamples > 1 && (
+                                                            <span title={`Consensus score from ${r.consensusSamples} samples`} className="px-1.5 py-0.5 bg-indigo-100 text-indigo-800 rounded font-medium">{r.consensusSamples}× vote</span>
                                                         )}
                                                         {r.gradingError && (
                                                             <span title={r.gradingError} className="px-1.5 py-0.5 bg-amber-100 text-amber-800 rounded font-medium">Grade failed</span>
@@ -1177,14 +1574,27 @@ Respond with a JSON object on its own lines, exactly:
                         <p className="text-sm text-neutral-500 mt-1">Tests combinations of the highest scoring error-free models.</p>
                     </div>
 
-                    <button
-                        onClick={runFullSwarmCombinations}
-                        disabled={isRunning}
-                        className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                        {isRunning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-                        Test Combinations
-                    </button>
+                    <div className="flex items-center gap-2">
+                        {winningCombo && (
+                            <button
+                                onClick={() => applyBestToSettings(winningCombo)}
+                                disabled={isRunning}
+                                className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center gap-2 shadow-sm text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                                title={`Apply full winning configuration: ${winningCombo.model}`}
+                            >
+                                <CheckCircle className="w-4 h-4" />
+                                Apply Best Configuration
+                            </button>
+                        )}
+                        <button
+                            onClick={runFullSwarmCombinations}
+                            disabled={isRunning}
+                            className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                        >
+                            {isRunning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+                            Test Combinations
+                        </button>
+                    </div>
                 </div>
 
             {results.filter(r => r.isFullSwarm).length > 0 && (
@@ -1293,10 +1703,13 @@ Respond with a JSON object on its own lines, exactly:
                                                         Grade failed
                                                     </span>
                                                 ) : isModelResponseValid(r) ? (
-                                                    <span className="inline-flex items-center gap-1.5">
+                                                    <span className="inline-flex items-center gap-1.5 flex-wrap">
                                                         <span className="text-green-600 font-medium">Valid</span>
                                                         {r.fromCache && (
                                                             <span title="Grading retrieved from cache" className="px-1.5 py-0.5 bg-slate-100 text-slate-700 rounded text-[10px] font-medium">⚡ cached</span>
+                                                        )}
+                                                        {r.consensusSamples && r.consensusSamples > 1 && (
+                                                            <span title={`Consensus score from ${r.consensusSamples} samples`} className="px-1.5 py-0.5 bg-indigo-100 text-indigo-800 rounded text-[10px] font-medium">{r.consensusSamples}× vote</span>
                                                         )}
                                                     </span>
                                                 ) : (

@@ -1,6 +1,6 @@
 import { executeSwarmWorkflow, type SwarmWorkflowResult, type SwarmStagePayload, getOrCreateDefaultCortex } from './engine/index.ts';
 import { MemoryCortex, type RetrievalOptions, type MemorySnapshot, type ExportMemoriesOptions, type ImportMemoriesOptions, type ImportMemoriesResult, type MemoryMetadata } from './memory.ts';
-import type { SwarmEvent } from './types.ts';
+import { type SwarmEvent, formatActionableError } from './types.ts';
 
 export type ClientExecutionMode = 'embedded' | 'remote';
 
@@ -287,7 +287,7 @@ export class SwarmClient {
                     } else if (eventType === 'swarm_complete') {
                         yield { type: 'complete', finalAnalysis: parsedData.finalAnalysis };
                     } else if (eventType === 'swarm_error') {
-                        const errMsg = parsedData.error || 'Swarm remote error';
+                        const errMsg = formatActionableError(parsedData.error || 'Swarm remote error');
                         yield {
                             type: 'error',
                             error: errMsg,

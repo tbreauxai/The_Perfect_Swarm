@@ -29,6 +29,7 @@ export class Agent {
     public modelName: string;
     public provider: Provider;
     public id?: string;
+    public maxTokens?: number;
     private apiKey: string;
     private aiClient?: GoogleGenAI;
     private systemInstruction?: string;
@@ -43,7 +44,8 @@ export class Agent {
         aiClient?: GoogleGenAI,
         fallbacks: ProviderCredential[] = [],
         loadBalancer?: AdaptiveLoadBalancer,
-        id?: string
+        id?: string,
+        maxTokens?: number
     ) {
         this.role = role;
         this.modelName = modelName;
@@ -53,6 +55,7 @@ export class Agent {
         this.fallbacks = [...fallbacks];
         this.loadBalancer = loadBalancer;
         this.id = id;
+        this.maxTokens = maxTokens;
     }
 
     setSystemInstruction(instruction: string): void {
@@ -113,14 +116,25 @@ export class Agent {
                 try {
                     const adapter = ProviderRegistry.get(currentTarget.provider);
                     
+                    const roleLower = this.role.toLowerCase();
+                    const defaultRoleTokens = roleLower.includes('grader') ? 60
+                        : roleLower.includes('prompt generator') ? 300
+                        : roleLower.includes('manager') ? 2000
+                        : 1500;
+
+                    const effectiveConfig: AgentRunConfig = {
+                        ...config,
+                        maxTokens: config?.maxTokens ?? this.maxTokens ?? defaultRoleTokens
+                    };
+
                     const cacheFingerprint = PayloadCache.computeFingerprint(
                         `agent_run:${this.role}`,
                         prompt,
-                        { model: currentTarget.modelName || this.modelName }
+                        { model: currentTarget.modelName || this.modelName, maxTokens: effectiveConfig.maxTokens }
                     );
                     
                     let textOutput: string;
-                    const cachedText = config?.bypassCache ? null : globalPayloadCache.get<string>(cacheFingerprint);
+                    const cachedText = effectiveConfig.bypassCache ? null : globalPayloadCache.get<string>(cacheFingerprint);
                     
                     if (cachedText) {
                         textOutput = cachedText;
@@ -143,7 +157,7 @@ export class Agent {
                                 systemInstruction: this.systemInstruction,
                                 apiKey: currentTarget.apiKey,
                                 aiClient: currentTarget.aiClient || this.aiClient,
-                                config,
+                                config: effectiveConfig,
                                 timeoutMs
                             })
                         );

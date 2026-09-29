@@ -8,6 +8,7 @@ import { Loader2, BrainCircuit, FileText, Activity, AlertCircle, Settings, Squar
 import { SettingsModal, AppSettings } from './components/SettingsModal';
 import { SwarmEventTimeline, SwarmTimelineEvent } from './components/SwarmEventTimeline';
 import { AnalysisViewer } from './components/AnalysisViewer';
+import { formatActionableError } from './swarm/types';
 import React from 'react';
 const CortexDiagnosticsViewer = React.lazy(() => import('./components/CortexDiagnosticsViewer').then(module => ({ default: module.CortexDiagnosticsViewer })));
 const OptimizationRunner = React.lazy(() => import('./components/optimization/OptimizationRunner').then(module => ({ default: module.OptimizationRunner })));
@@ -198,7 +199,10 @@ export default function App() {
           try {
             const parsedData = JSON.parse(dataStr);
             if (eventType === 'swarm_event') {
-              setEvents(prev => [...prev, parsedData]);
+              const truncatedEvent = parsedData && typeof parsedData === 'object' && typeof parsedData.prompt === 'string'
+                ? { ...parsedData, prompt: parsedData.prompt.slice(0, 800) }
+                : parsedData;
+              setEvents(prev => [...prev, truncatedEvent]);
             } else if (eventType === 'swarm_stage') {
               setProgressiveStage(parsedData);
             } else if (eventType === 'swarm_complete') {
@@ -207,10 +211,15 @@ export default function App() {
                 setFinalAnalysis(parsedData.finalAnalysis);
               }
               if (parsedData.events && Array.isArray(parsedData.events)) {
-                setEvents(parsedData.events);
+                const truncatedEvents = parsedData.events.map((e: any) =>
+                  e && typeof e === 'object' && typeof e.prompt === 'string'
+                    ? { ...e, prompt: e.prompt.slice(0, 800) }
+                    : e
+                );
+                setEvents(truncatedEvents);
               }
             } else if (eventType === 'swarm_error') {
-              setError(parsedData.error || 'Swarm execution error');
+              setError(formatActionableError(parsedData.error || 'Swarm execution error'));
             }
           } catch (err) {
             console.warn('Error parsing SSE block:', err, block);
@@ -221,7 +230,7 @@ export default function App() {
       if (err.name === 'AbortError') {
         setError('Analysis cancelled by user.');
       } else {
-        setError(err.message || 'An unexpected error occurred during execution.');
+        setError(formatActionableError(err.message || 'An unexpected error occurred during execution.'));
       }
     } finally {
       setLoading(false);
@@ -347,20 +356,43 @@ export default function App() {
               </button>
             </div>
 
-            {activeTab === 'trace' && (
-              (events.length > 0 || finalAnalysis || progressiveStage?.digests) ? (
+            {activeTab === 'trace' && (() => {
+              const routerEvent = events.find(e => e.agentRole === 'Model Router');
+              const routerDecision = routerEvent ? {
+                complexity: routerEvent.output?.complexity || (routerEvent.action.includes('Fast-Path') ? 'instant' : 'complex'),
+                isFastPath: routerEvent.action.includes('Fast-Path') || routerEvent.output?.fastPath?.eligible === true,
+                reason: routerEvent.output?.reason || (routerEvent.action.includes('Fast-Path') ? 'Single analyst fast-path short-circuit' : 'Full multi-agent swarm synthesis')
+              } : null;
+
+              return (events.length > 0 || finalAnalysis || progressiveStage?.digests) ? (
                 <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200">
                   <h2 className="text-xl font-medium flex items-center justify-between border-b border-neutral-100 pb-4 mb-6">
                     <span className="flex items-center gap-2">
                       <Activity className="w-5 h-5 text-indigo-600" />
                       Execution Trace
                     </span>
-                    {loading && (
-                      <span className="text-xs font-normal text-indigo-600 bg-indigo-50 border border-indigo-100 px-2.5 py-1 rounded-full flex items-center gap-1.5 animate-pulse">
-                        <Loader2 className="w-3 h-3 animate-spin" />
-                        Live Swarm Streaming
-                      </span>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {routerDecision && (
+                        <span
+                          className={`text-xs font-medium px-2.5 py-1 rounded-full border flex items-center gap-1.5 ${
+                            routerDecision.isFastPath
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                              : 'bg-purple-50 text-purple-700 border-purple-200'
+                          }`}
+                          title={`Model Router: ${routerDecision.reason}`}
+                        >
+                          <span className="w-1.5 h-1.5 rounded-full bg-current" />
+                          <span>Route: {routerDecision.isFastPath ? '⚡ Fast Path' : '🌐 Full Swarm'}</span>
+                          <span className="opacity-70">({routerDecision.complexity})</span>
+                        </span>
+                      )}
+                      {loading && (
+                        <span className="text-xs font-normal text-indigo-600 bg-indigo-50 border border-indigo-100 px-2.5 py-1 rounded-full flex items-center gap-1.5 animate-pulse">
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                          Live Swarm Streaming
+                        </span>
+                      )}
+                    </div>
                   </h2>
 
                   <SwarmEventTimeline
@@ -397,8 +429,8 @@ export default function App() {
                     Provide data and a task, then execute the swarm to see the detailed execution log.
                   </p>
                 </div>
-              )
-            )}
+              );
+            })()}
 
             {activeTab === 'optimization' && (
                <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200">

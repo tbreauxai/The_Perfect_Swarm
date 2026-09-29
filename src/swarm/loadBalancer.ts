@@ -12,6 +12,7 @@ export interface ProviderTelemetry {
     successCount: number;
     failureCount: number;
     rateLimitCount: number;
+    rewardScore?: number;
     lastError?: string;
     lastErrorTimestamp?: number;
     cooldownUntil?: number;
@@ -56,11 +57,29 @@ export class AdaptiveLoadBalancer {
                 totalRequests: 0,
                 successCount: 0,
                 failureCount: 0,
-                rateLimitCount: 0
+                rateLimitCount: 0,
+                rewardScore: 0.85
             };
             this.telemetry.set(key, t);
         }
         return t;
+    }
+
+    /**
+     * Records reinforcement learning reward signal for a provider.
+     * Higher reward boosts provider priority during failover cascades.
+     */
+    recordReward(provider: Provider, reward: number): void {
+        const t = this.getOrCreateTelemetry(provider);
+        const clamped = Math.max(0.0, Math.min(1.0, reward));
+        t.rewardScore = t.rewardScore !== undefined
+            ? Math.round(((t.rewardScore * 0.70) + (clamped * 0.30)) * 1000) / 1000
+            : clamped;
+    }
+
+    getReward(provider: Provider): number {
+        const t = this.getOrCreateTelemetry(provider);
+        return t.rewardScore ?? 0.85;
     }
 
     /**
@@ -103,6 +122,10 @@ export class AdaptiveLoadBalancer {
         if (t.status === 'degraded') {
             score *= 0.3;
         }
+
+        // Higher RL reward elevates provider priority during failover cascades
+        const rewardMultiplier = t.rewardScore !== undefined ? 0.5 + (t.rewardScore * 0.5) : 0.925;
+        score *= rewardMultiplier;
 
         // Penalize in-flight concurrency to prevent burst rate limits
         score -= t.inFlightRequests * 50;

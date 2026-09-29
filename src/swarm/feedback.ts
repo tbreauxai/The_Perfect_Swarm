@@ -213,6 +213,9 @@ export class PolicyOptimizer {
     } {
         const score = reward.compositeReward;
         this.rewardHistory.push(score);
+        if (this.rewardHistory.length > 1000) {
+            this.rewardHistory.shift();
+        }
         this.generation++;
         this.totalMutations++;
 
