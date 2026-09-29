@@ -63,12 +63,38 @@ export function CortexDiagnosticsViewer() {
       setLoading(false);
     }
   };
-
   useEffect(() => {
     fetchDiagnostics();
-    const interval = setInterval(fetchDiagnostics, 10000); // refresh every 10s
-    return () => clearInterval(interval);
+
+    let interval: any;
+
+    const startPolling = () => {
+      if (interval) clearInterval(interval);
+      interval = setInterval(fetchDiagnostics, 30000); // refresh every 30s
+    };
+
+    const stopPolling = () => {
+      if (interval) clearInterval(interval);
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        stopPolling();
+      } else {
+        fetchDiagnostics();
+        startPolling();
+      }
+    };
+
+    startPolling();
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      stopPolling();
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, [selectedApp]);
+
 
   if (loading && !diagnostics) {
     return (

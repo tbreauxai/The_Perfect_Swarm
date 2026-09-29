@@ -57,7 +57,7 @@ export const AgentConfigurator: React.FC<AgentConfiguratorProps> = ({
 
                         // Trigger parallel async 2-tier health check (cached for 5-10 min)
                         setCheckingHealth(prev => ({ ...prev, [provider]: true }));
-                        checkProviderModelsHealth(provider, models, apiKey)
+                        checkProviderModelsHealth(provider, models, apiKey, { skipTier2: true })
                             .then(healthMap => {
                                 setHealthStatusByModel(prev => ({ ...prev, ...healthMap }));
                                 setCheckingHealth(prev => ({ ...prev, [provider]: false }));
@@ -78,6 +78,28 @@ export const AgentConfigurator: React.FC<AgentConfiguratorProps> = ({
     const getModelKey = (provider: string, modelId: string): string => {
         return `${provider.toLowerCase().trim()}:${modelId.trim()}`;
     };
+    const handleRetestModel = async (provider: string, modelId: string) => {
+        const apiKey = getApiKeyForProvider(settings, provider);
+        const singleModelOption: ModelOption = { id: modelId, name: modelId };
+
+        setCheckingHealth(prev => ({ ...prev, [provider]: true }));
+        try {
+            const result = await checkProviderModelsHealth(provider, [singleModelOption], apiKey, { skipTier2: false });
+            setHealthStatusByModel(prev => ({ ...prev, ...result }));
+
+            // Update shared cache
+            const TIER2_CACHE_KEY = 'swarm_tier2_health_cache';
+            try {
+                const cacheRaw = localStorage.getItem(TIER2_CACHE_KEY);
+                const cache = cacheRaw ? JSON.parse(cacheRaw) : {};
+                cache[`${provider}:${modelId}`] = { passed: result[`${provider.toLowerCase().trim()}:${modelId.trim()}`]?.healthy ?? true, at: Date.now() };
+                localStorage.setItem(TIER2_CACHE_KEY, JSON.stringify(cache));
+            } catch (e) {}
+        } finally {
+            setCheckingHealth(prev => ({ ...prev, [provider]: false }));
+        }
+    };
+
 
     const isModelTripped = (provider: string, modelId: string): boolean => {
         const key = getModelKey(provider, modelId);
@@ -166,7 +188,8 @@ export const AgentConfigurator: React.FC<AgentConfiguratorProps> = ({
                         </div>
                         <div className="flex gap-2">
                             <div className="w-1/3">
-                                <select
+                                <div className="flex items-center w-full">
+                                        <select
                                     value={agent.provider}
                                     onChange={e => onUpdateAgent(agent.id, 'provider', e.target.value)}
                                     className="w-full px-3 py-2 rounded-lg border border-neutral-300 outline-none text-sm bg-white focus:border-indigo-500"
@@ -179,6 +202,15 @@ export const AgentConfigurator: React.FC<AgentConfiguratorProps> = ({
                                     <option value="mistral">Mistral</option>
                                     <option value="github">GitHub Models</option>
                                 </select>
+                                    <button
+                                        onClick={() => handleRetestModel(agent.provider, agent.model)}
+                                        className="ml-2 px-2 py-1 bg-neutral-200 hover:bg-neutral-300 rounded text-xs text-neutral-700 whitespace-nowrap"
+                                        title="Force Tier-2 Health Check"
+                                    >
+                                        Retest
+                                    </button>
+
+                                    </div>
                             </div>
                             <div className="w-2/3 relative">
                                 {agent.provider !== 'none' ? (
@@ -188,6 +220,7 @@ export const AgentConfigurator: React.FC<AgentConfiguratorProps> = ({
                                             <span className="animate-pulse">Loading models...</span>
                                         </div>
                                     ) : providerModels.length > 0 ? (
+                                        <div className="flex items-center w-full">
                                         <select
                                             value={agent.model}
                                             onChange={e => onUpdateAgent(agent.id, 'model', e.target.value)}
@@ -221,6 +254,15 @@ export const AgentConfigurator: React.FC<AgentConfiguratorProps> = ({
                                                 </optgroup>
                                             )}
                                         </select>
+                                    <button
+                                        onClick={() => handleRetestModel(agent.provider, agent.model)}
+                                        className="ml-2 px-2 py-1 bg-neutral-200 hover:bg-neutral-300 rounded text-xs text-neutral-700 whitespace-nowrap"
+                                        title="Force Tier-2 Health Check"
+                                    >
+                                        Retest
+                                    </button>
+
+                                    </div>
                                     ) : (
                                         <input
                                             type="text"

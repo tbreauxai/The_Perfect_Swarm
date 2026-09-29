@@ -8,8 +8,9 @@ import { Loader2, BrainCircuit, FileText, Activity, AlertCircle, Settings, Squar
 import { SettingsModal, AppSettings } from './components/SettingsModal';
 import { SwarmEventTimeline, SwarmTimelineEvent } from './components/SwarmEventTimeline';
 import { AnalysisViewer } from './components/AnalysisViewer';
-import { CortexDiagnosticsViewer } from './components/CortexDiagnosticsViewer';
-import { OptimizationRunner } from './components/optimization/OptimizationRunner';
+import React from 'react';
+const CortexDiagnosticsViewer = React.lazy(() => import('./components/CortexDiagnosticsViewer').then(module => ({ default: module.CortexDiagnosticsViewer })));
+const OptimizationRunner = React.lazy(() => import('./components/optimization/OptimizationRunner').then(module => ({ default: module.OptimizationRunner })));
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'trace' | 'optimization'>('trace');
@@ -324,7 +325,9 @@ export default function App() {
               </div>
             </div>
             {/* Real-time Diagnostics Widget */}
-            <CortexDiagnosticsViewer />
+            <React.Suspense fallback={<div className="p-8 text-center text-neutral-500">Loading diagnostics...</div>}>
+              <CortexDiagnosticsViewer />
+            </React.Suspense>
           </div>
 
           {/* Right Column: Execution Trace and Analysis Output */}
@@ -399,6 +402,7 @@ export default function App() {
 
             {activeTab === 'optimization' && (
                <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200">
+                   <React.Suspense fallback={<div className="p-8 text-center text-neutral-500">Loading optimizer...</div>}>
                    <OptimizationRunner
                      task={task}
                      data={data}
@@ -416,6 +420,7 @@ export default function App() {
                        });
                      }}
                    />
+                 </React.Suspense>
                </div>
             )}
           </div>
