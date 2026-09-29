@@ -289,6 +289,7 @@ export const OptimizationRunner: React.FC<OptimizationRunnerProps> = ({ task, da
     const [isRunning, setIsRunning] = useState(false);
     const [progress, setProgress] = useState('');
     const [errorRecords, setErrorRecords] = useState<Record<string, ModelErrorRecord>>({});
+    const [promptGenStatus, setPromptGenStatus] = useState<{ ok: boolean; error?: string; at?: string } | null>(null);
 
     useEffect(() => {
         try {
@@ -323,7 +324,47 @@ export const OptimizationRunner: React.FC<OptimizationRunnerProps> = ({ task, da
     };
 
     const applyBestToSettings = (result: OptimizationResult) => {
-        if (onApplyModelToSettings) {
+        if (result.isFullSwarm) {
+            try {
+                const saved = localStorage.getItem('swarm_settings');
+                if (saved) {
+                    const parsed = JSON.parse(saved);
+                    if (Array.isArray(parsed.agents)) {
+                        // Reconstruct settings from the combo description string (e.g. "Manager: xxx | Analyst 1: yyy")
+                        const updates: Record<string, string> = {};
+                        const parts = result.model.split('|').map(s => s.trim());
+                        parts.forEach(p => {
+                            const [roleStr, modelStr] = p.split(':').map(s => s.trim());
+                            if (roleStr && modelStr) {
+                                updates[roleStr] = modelStr;
+                            }
+                        });
+
+                        parsed.agents = parsed.agents.map((a: any) => {
+                            let matchRole = a.role;
+                            if (a.role.toLowerCase().includes('manager')) matchRole = 'Manager Node';
+                            // It's possible the role string matching was case sensitive or exact, let's check exact too.
+                            const matchingKey = Object.keys(updates).find(k => k === a.role || k === matchRole || a.role.includes(k) || k.includes(a.role));
+                            if (matchingKey && updates[matchingKey]) {
+                                const m = updates[matchingKey];
+                                // Attempt to guess provider or keep existing
+                                let prov = a.provider;
+                                if (m.startsWith('gemini')) prov = 'gemini';
+                                else if (m.startsWith('mistral') || m.startsWith('open-mistral')) prov = 'mistral';
+                                else if (m.includes('llama') || m.includes('mixtral')) prov = 'groq';
+                                return { ...a, provider: prov, model: m, temperature: a.role.toLowerCase().includes('manager') ? 0.3 : 0.7 };
+                            }
+                            return a;
+                        });
+                        localStorage.setItem('swarm_settings', JSON.stringify(parsed));
+                        // Dispatch storage event to notify other tabs/components that settings changed
+                        window.dispatchEvent(new Event('storage'));
+                    }
+                }
+            } catch (e) {
+                console.error("Failed to apply combo settings", e);
+            }
+        } else if (onApplyModelToSettings) {
             onApplyModelToSettings(result.role, result.provider, result.model);
         } else {
             try {
@@ -341,6 +382,16 @@ export const OptimizationRunner: React.FC<OptimizationRunnerProps> = ({ task, da
                 console.error("Failed to update settings in localStorage", e);
             }
         }
+
+        // Show a simple toast feedback
+        const toast = document.createElement('div');
+        toast.className = 'fixed bottom-4 right-4 bg-gray-800 text-white px-4 py-2 rounded shadow-lg z-50 transition-opacity duration-300';
+        toast.innerText = `Active config updated: ${result.isFullSwarm ? 'Swarm Combination' : result.model}`;
+        document.body.appendChild(toast);
+        setTimeout(() => {
+            toast.style.opacity = '0';
+            setTimeout(() => document.body.removeChild(toast), 300);
+        }, 2000);
     };
 
     const recordError = (modelId: string, provider: string, errorMsg: string) => {
@@ -448,8 +499,9 @@ Respond ONLY with the text of the prompt you want to give them.`;
             }
 
             return baseTask;
-        } catch (e) {
+        } catch (e: any) {
             console.error("Prompt generation failed completely", e);
+            setPromptGenStatus({ ok: false, error: String(e?.message || e), at: new Date().toISOString() });
             return baseTask;
         }
     };
@@ -896,6 +948,12 @@ Respond with a JSON object on its own lines, exactly:
                     <p className="text-sm text-neutral-500 mt-1">
                         Tests available models in each analyst role to find the best balance of speed and intelligence.
                     </p>
+                    {promptGenStatus && !promptGenStatus.ok && (
+                        <div className="mt-2 inline-flex items-center gap-2 px-3 py-1.5 bg-amber-50 text-amber-700 rounded-md border border-amber-200 text-xs">
+                            <AlertCircle className="w-3 h-3" />
+                            <span><strong>Prompt Generation Failed:</strong> Falling back to base task. ({promptGenStatus.error})</span>
+                        </div>
+                    )}
                 </div>
             </div>
 
@@ -1145,15 +1203,13 @@ Respond with a JSON object on its own lines, exactly:
                                                 {r.testedAt ? new Date(r.testedAt).toLocaleString() : '—'}
                                             </td>
                                             <td className="px-4 py-3 text-xs">
-                                                {!r.isFullSwarm && (
-                                                    <button
-                                                        onClick={() => applyBestToSettings(r)}
-                                                        title={`Copy ${r.model} into Settings for ${r.role}`}
-                                                        className="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded text-[11px] font-medium transition-colors"
-                                                    >
-                                                        Use this
-                                                    </button>
-                                                )}
+                                                <button
+                                                    onClick={() => applyBestToSettings(r)}
+                                                    title={`Copy ${r.model} into Settings for ${r.role}`}
+                                                    className="px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded text-[11px] font-medium transition-colors"
+                                                >
+                                                    Use this
+                                                </button>
                                             </td>
                                         </tr>
                                     ))}
