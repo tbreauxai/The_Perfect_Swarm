@@ -60,6 +60,12 @@
 | OPT-G2 | Fix `autoGradeOutput` and `generateTestPrompt` dynamic manager routing and deterministic speed score calculation | completed | Score parsing succeeds across Generative UI outputs via `extractGradingScores`; speed score computed deterministically via `calculateSpeedScore` |
 | OPT-G3 | Add automated tests for optimizer response validity and combination filtering; verify zero regressions | completed | 18/18 tests pass in `OptimizationRunner.test.ts`; 100% pass across all 5 test suites in `npm test`, clean `tsc --noEmit`, clean `npm run build` |
 
+## Track: Phase 6 - System Audit, Runtime Consensus, Universal Reasoning Sanitization & Failover Hardening
 
-
-
+| Goal ID | Description | Status | Verification |
+| --- | --- | --- | --- |
+| P6-G1 | Implement Runtime Consensus Pipeline & Arbitration (`consensusPipeline.ts`) | completed | `consensusPipeline.ts` calculates consensus score, agreement level, majority/unanimous findings, and minority dissent; verified via vitest (5/5 tests pass) |
+| P6-G2 | Universal Reasoning Tag Sanitization in `adapter.ts` | completed | Strips `<think>`, `<thought>`, `<reasoning>`, `[THOUGHT]`, and truncated unclosed blocks; verified via vitest (7/7 tests pass) |
+| P6-G3 | Agent Failover Array Mutation Fix & Free OpenRouter Alignment | completed | Removed `targetChain.splice` during schema validation retry; set default OpenRouter model to `deepseek/deepseek-r1:free` |
+| P6-G4 | Fast-Path Deterministic Tool Invocation & Action Plan Cache Interception | completed | Equips `fastPath.ts` with `ToolRegistry` schema injection, deterministic tool execution, sub-5ms `actionPlanCache` bypass, and `guardAnalystResponse` normalization; verified via `fastPath.test.ts` (3/3 pass) |
+| P6-G5 | ModelRouter Word Boundaries, Token Bounding, LRU Cache Scaling & Full Verification | completed | `router.ts` word-boundary matching, `lifecycle.ts` bounded retries with `bypassCache`, `actionPlanCache.ts` and `semanticCacheInterceptor.ts` purgeExpired + strict LRU bounds; 43/43 vitest files (467 tests pass), tsc clean, build:swarm + build:client clean, npm test 100% pass, benchmark 38.7k items/sec |

@@ -47,6 +47,17 @@ export class GeminiAdapter implements ProviderAdapter {
             ]);
         } catch (error: any) {
             console.error(`[GEMINI ERROR] ${new Date().toISOString()}\nModel: ${options.modelName}\nError: ${JSON.stringify(error, null, 2)}\nFull Error Object: ${error}`);
+            const errStr = String(error?.message || error || '');
+            if (
+                error?.status === 429 ||
+                errStr.includes('429') ||
+                errStr.includes('RESOURCE_EXHAUSTED') ||
+                errStr.includes('quota')
+            ) {
+                if (!errStr.startsWith('[RATE_LIMIT_429]')) {
+                    throw new Error(`[RATE_LIMIT_429] Gemini quota/rate limit exceeded: ${errStr}`);
+                }
+            }
             throw error;
         } finally {
             clearTimeout(timeoutId);

@@ -299,8 +299,13 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                     data: body.data,
                     settings: { ...edgeSettings, ...defaultSettings, ...cleanBodySettings },
                     defaultAi: body.defaultAi || defaultAi,
-                    cortex: body.cortex || defaultCortex,
+                    cortex: body.cortex || body.memoryCortex || defaultCortex,
+                    memoryCortex: body.memoryCortex || body.cortex || defaultCortex,
+                    tools: body.tools,
                     enableDeepAnalysis: body.enableDeepAnalysis,
+                    forceFullSwarm: body.forceFullSwarm,
+                    speculativeParallel: body.speculativeParallel,
+                    maxSpeculativeConcurrency: body.maxSpeculativeConcurrency,
                     complexityOverride: body.complexityOverride,
                     bypassCache: body.bypassCache
                 };
@@ -360,8 +365,13 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                     data: body.data,
                     settings: { ...edgeSettings, ...defaultSettings, ...cleanBodySettings },
                     defaultAi: body.defaultAi || defaultAi,
-                    cortex: body.cortex || defaultCortex,
+                    cortex: body.cortex || body.memoryCortex || defaultCortex,
+                    memoryCortex: body.memoryCortex || body.cortex || defaultCortex,
+                    tools: body.tools,
                     enableDeepAnalysis: body.enableDeepAnalysis,
+                    forceFullSwarm: body.forceFullSwarm,
+                    speculativeParallel: body.speculativeParallel,
+                    maxSpeculativeConcurrency: body.maxSpeculativeConcurrency,
                     complexityOverride: body.complexityOverride,
                     bypassCache: body.bypassCache
                 });

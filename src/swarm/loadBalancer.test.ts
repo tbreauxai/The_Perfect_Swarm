@@ -4,7 +4,8 @@ import {
     SpecialistAffinityRouter, 
     AdaptiveLoadBalancer,
     SpecialistCapabilityProfiler,
-    NodeCapacityManager
+    NodeCapacityManager,
+    parseRetryAfterMs
 } from './loadBalancer.ts';
 
 describe('TokenBudgetManager & SpecialistAffinityRouter', () => {
@@ -466,6 +467,47 @@ describe('TokenBudgetManager & SpecialistAffinityRouter', () => {
             const scoreLow = lb.calculateScore('provider-low');
 
             expect(scoreHigh).toBeGreaterThan(scoreLow);
+        });
+    });
+
+    describe('Dynamic Retry-After Backoff & parseRetryAfterMs', () => {
+        it('parses numeric seconds and milliseconds properties accurately', () => {
+            expect(parseRetryAfterMs({ retryAfter: 3 })).toBe(3000);
+            expect(parseRetryAfterMs({ retryAfterMs: 4500 })).toBe(4500);
+        });
+
+        it('parses HTTP retry-after headers in seconds and clamps between bounds', () => {
+            const mockHeaders = new Map<string, string>([['retry-after', '8']]);
+            expect(parseRetryAfterMs({ headers: mockHeaders })).toBe(8000);
+
+            // Clamping below 1000ms
+            expect(parseRetryAfterMs({ retryAfterMs: 200 })).toBe(1000);
+
+            // Clamping above 60000ms
+            expect(parseRetryAfterMs({ retryAfter: 120 })).toBe(60000);
+        });
+
+        it('parses string error messages with diverse retry directives', () => {
+            expect(parseRetryAfterMs(new Error('Rate limit exceeded. Please try again in 4.5s.'))).toBe(4500);
+            expect(parseRetryAfterMs(new Error('TPM threshold reached: retry-after: 2'))).toBe(2000);
+            expect(parseRetryAfterMs(new Error('429 Too Many Requests: wait 10 seconds'))).toBe(10000);
+            expect(parseRetryAfterMs(new Error('Groq quota reached. Try again in 2500ms.'))).toBe(2500);
+            expect(parseRetryAfterMs(new Error('Generic 429 without time specification'))).toBe(15000); // default
+        });
+
+        it('applies calibrated dynamic cooldown in AdaptiveLoadBalancer.recordFailure', () => {
+            const lb = new AdaptiveLoadBalancer();
+            const now = Date.now();
+
+            lb.recordFailure('groq', new Error('[RATE_LIMIT_429] 429 Too Many Requests. Try again in 2.5s.'));
+            const telemetry = lb.getTelemetry('groq');
+
+            expect(telemetry.status).toBe('cooldown');
+            expect(telemetry.cooldownUntil).toBeDefined();
+            // Expected ~2500ms cooldown (allow slight execution tolerance +/- 500ms)
+            const remaining = telemetry.cooldownUntil! - now;
+            expect(remaining).toBeGreaterThanOrEqual(2000);
+            expect(remaining).toBeLessThanOrEqual(3500);
         });
     });
 });

@@ -59,11 +59,13 @@ export class MistralAdapter implements ProviderAdapter {
             if (!response.ok) {
                 const errorText = await response.text();
                 if (response.status === 429) {
+                    const retryAfter = response.headers.get('retry-after');
+                    const retrySuffix = retryAfter ? ` (retry-after: ${retryAfter}s)` : '';
                     let detail = errorText;
                     try {
                         const parsed = JSON.parse(errorText);
                         if (parsed.code === 1300 || parsed.code) {
-                            throw new Error(`[RATE_LIMIT_429] Mistral API rate limit exceeded (Code 1300): ${parsed.message || errorText}`);
+                            throw new Error(`[RATE_LIMIT_429] Mistral API rate limit exceeded (Code 1300): ${parsed.message || errorText}${retrySuffix}`);
                         } else if (parsed.message) {
                             detail = parsed.message;
                         }
@@ -72,7 +74,7 @@ export class MistralAdapter implements ProviderAdapter {
                             throw e;
                         }
                     }
-                    throw new Error(`[RATE_LIMIT_429] Mistral API rate limit exceeded: ${detail}`);
+                    throw new Error(`[RATE_LIMIT_429] Mistral API rate limit exceeded: ${detail}${retrySuffix}`);
                 }
                 if (response.status >= 500) {
                     throw new Error(`[SERVER_ERROR_${response.status}] Mistral server error: ${errorText}`);

@@ -179,4 +179,41 @@ describe('ActionPlanCacheInterceptor', () => {
         const res3 = smallInterceptor.lookup(vec3);
         expect(res3.hit).toBe(true);
     });
+
+    it('purges expired entries before evicting unexpired active entries', async () => {
+        const cache = new ActionPlanCacheInterceptor({ maxEntries: 2, defaultTtlMs: 50 });
+        const vec1 = [1, 0, 0, 0];
+        const vec2 = [0, 1, 0, 0];
+        const vec3 = [0, 0, 1, 0];
+
+        // vec1 expires in 1ms, vec2 has 10,000ms TTL
+        cache.set(vec1, { intent: 'intent1', entities: {}, toolExecutionSteps: [] }, 1);
+        cache.set(vec2, { intent: 'intent2', entities: {}, toolExecutionSteps: [] }, 10000);
+
+        // Wait 10ms so vec1 expires
+        await new Promise(r => setTimeout(r, 10));
+
+        // Insert vec3: vec1 was expired, so vec1 is purged rather than evicting vec2
+        cache.set(vec3, { intent: 'intent3', entities: {}, toolExecutionSteps: [] }, 10000);
+
+        expect(cache.getStats().size).toBe(2);
+        expect(cache.lookup(vec1).hit).toBe(false);
+        expect(cache.lookup(vec2).hit).toBe(true);
+        expect(cache.lookup(vec3).hit).toBe(true);
+    });
+
+    it('guarantees size <= maxEntries under high-throughput continuous insertions', () => {
+        const capacity = 5;
+        const cache = new ActionPlanCacheInterceptor({ maxEntries: capacity });
+
+        for (let i = 0; i < 50; i++) {
+            const vec = new Array(768).fill(0);
+            vec[i % 768] = 1;
+            cache.set(vec, { intent: `intent-${i}`, entities: {}, toolExecutionSteps: [] });
+            expect(cache.getStats().size).toBeLessThanOrEqual(capacity);
+        }
+
+        expect(cache.getStats().size).toBe(capacity);
+        expect(cache.getStats().evictions).toBe(45);
+    });
 });

@@ -21,6 +21,9 @@ export interface FastPathDecision {
     estimatedTokens: number;
 }
 
+const DEEP_KEYWORDS_REGEX = /\b(audit|deep|verify|verification|critique|root\s+cause|red\s+team|investigate|investigation|cross-reference|security|benchmark|correlate|correlation|vulnerability|vulnerabilities|synthesize|synthesis)\b/i;
+const FORMAT_KEYWORDS_REGEX = /\b(format|table|csv|clean|structure|json|reformat)\b/i;
+
 export class ModelRouter {
     /**
      * Evaluates whether an incoming task and payload should be short-circuited via the fast-path.
@@ -55,17 +58,20 @@ export class ModelRouter {
             };
         }
 
-        const lower = taskClean.toLowerCase();
-        const deepKeywords = [
-            'audit', 'deep', 'verify', 'critique', 'root cause', 'red team',
-            'investigate', 'cross-reference', 'security', 'benchmark', 'correlate', 'vulnerability', 'synthesize'
-        ];
-
-        if (deepKeywords.some(k => lower.includes(k))) {
+        if (DEEP_KEYWORDS_REGEX.test(taskClean)) {
             return {
                 eligible: false,
                 reason: 'Task contains deep analysis or verification keywords.',
                 targetTier: 'complex',
+                estimatedTokens
+            };
+        }
+
+        if (FORMAT_KEYWORDS_REGEX.test(taskClean)) {
+            return {
+                eligible: false,
+                reason: 'Formatting task requires standard schema processing.',
+                targetTier: 'formatting',
                 estimatedTokens
             };
         }
@@ -79,16 +85,6 @@ export class ModelRouter {
                 eligible: true,
                 reason: `Low-complexity intent (${estimatedTokens} est. tokens) qualifies for fast-path short-circuiting.`,
                 targetTier: 'instant',
-                estimatedTokens
-            };
-        }
-
-        const formatKeywords = ['format', 'table', 'csv', 'clean', 'structure', 'json', 'reformat'];
-        if (formatKeywords.some(k => lower.includes(k))) {
-            return {
-                eligible: false,
-                reason: 'Formatting task requires standard schema processing.',
-                targetTier: 'formatting',
                 estimatedTokens
             };
         }
@@ -115,9 +111,7 @@ export class ModelRouter {
         const estTokens = Math.ceil((taskClean.length + dataLength) / 4);
         if (estTokens >= 60) return false;
 
-        const lower = taskClean.toLowerCase();
-        const deepKeywords = ['audit', 'deep', 'verify', 'critique', 'root cause', 'red team', 'investigate', 'security', 'benchmark', 'synthesize'];
-        return !deepKeywords.some(k => lower.includes(k));
+        return !DEEP_KEYWORDS_REGEX.test(taskClean) && !FORMAT_KEYWORDS_REGEX.test(taskClean);
     }
 
     /**
@@ -132,13 +126,11 @@ export class ModelRouter {
         if (!forceFullSwarm && this.isFastPathEligible(task, dataLength, false, forceFullSwarm)) {
             return 'instant';
         }
-        const lower = (task || '').toLowerCase();
-        const deepKeywords = ['audit', 'deep', 'verify', 'critique', 'root cause', 'red team', 'complex', 'investigate', 'cross-reference', 'security', 'benchmark', 'synthesize'];
-        if (deepKeywords.some(k => lower.includes(k)) || chunkCount > 2 || dataLength > 15000) {
+        const taskClean = (task || '').trim();
+        if (DEEP_KEYWORDS_REGEX.test(taskClean) || chunkCount > 2 || dataLength > 15000) {
             return 'complex';
         }
-        const formatKeywords = ['format', 'table', 'csv', 'clean', 'structure', 'json', 'reformat'];
-        if (formatKeywords.some(k => lower.includes(k))) {
+        if (FORMAT_KEYWORDS_REGEX.test(taskClean)) {
             return 'formatting';
         }
         return 'simple';
@@ -151,15 +143,15 @@ export class ModelRouter {
         const p = (provider || 'gemini').toLowerCase();
         switch (p) {
             case 'gemini':
-                return complexity === 'instant' ? 'gemini-3.5-flash-lite' : 'gemini-3.5-flash';
+                return complexity === 'instant' ? 'gemini-2.5-flash-lite' : 'gemini-2.5-flash';
             case 'groq':
                 return complexity === 'instant' ? 'llama-3.1-8b-instant' : 'llama-3.3-70b-versatile';
             case 'openrouter':
                 return complexity === 'complex'
                     ? 'deepseek/deepseek-r1:free'
                     : complexity === 'instant'
-                    ? 'meta-llama/llama-3.1-8b-instruct:free'
-                    : 'google/gemini-2.0-flash-exp:free';
+                    ? 'meta-llama/llama-3.3-70b-instruct:free'
+                    : 'deepseek/deepseek-r1:free';
             case 'mistral':
                 // mistral-small-latest is available on Mistral free API tier
                 return 'mistral-small-latest';

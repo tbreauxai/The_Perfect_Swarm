@@ -136,3 +136,24 @@ Round 3 (all 10, PR #44): grader temp 0.15 · analyze timeouts · 401/400 provid
 
 ### 29. [COMPLETED] Dead Code: OpenRouterAdapter
 - Removed unused `resolveFreeModel` from `src/swarm/providers/openrouter.ts` and pruned obsolete test references in `test-portable-swarm.ts`.
+
+
+## Tier 6 - System Optimization & Multi-Agent Intelligence (2026-09-29 Full Audit)
+
+### 30. [COMPLETED] Cross-Analyst Runtime Consensus Pipeline (`consensusPipeline.ts`)
+- Implemented pairwise best-match semantic insight alignment, unanimous and majority consensus finding extraction, dissenting view isolation, calibrated agreement & confidence scores, and structured prompt injection into Manager Node.
+
+### 31. [COMPLETED] Universal LLM Reasoning Sanitization (`adapter.ts`)
+- Strips all `<think>`, `<thought>`, `<reasoning>`, `[THOUGHT]`, unclosed truncated reasoning blocks, and fenced code blocks (`json`, `js`, `javascript`, `jsonc`) across all provider adapters.
+
+### 32. [COMPLETED] Agent Failover Chain Safety & Free Model Alignment (`agent.ts`)
+- Eliminated array mutation bug (`targetChain.splice`) during schema validation retry loops; updated default OpenRouter model recommendation to `deepseek/deepseek-r1:free`.
+
+### 33. [COMPLETED] Fast-Path Deterministic Tool Invocation & Action Plan Cache (`fastPath.ts`)
+- Equipped fast-path short-circuiting with `ToolRegistry` schema injection, deterministic tool execution, sub-5ms Action Plan Cache pre-checks, and `guardAnalystResponse` normalization.
+
+### 34. [COMPLETED] ModelRouter Word-Boundary Precision & Token Protection (`router.ts` & `lifecycle.ts`)
+- Refactored `ModelRouter` with word-boundary regexes `\b(keyword)\b` to prevent false-positive escalations, updated OpenRouter free recommendations, and bounded `AnalysisLifecycle` retry prompts with `bypassCache` on verification loops.
+
+### 35. [COMPLETED] Cache Interceptor LRU Capacity Bounds & Expired Purging (`actionPlanCache.ts` & `semanticCacheInterceptor.ts`)
+- Enforced `purgeExpired()` and strict while-loop LRU eviction limits on `actionPlanCache` and `semanticCacheInterceptor` for bounded memory footprints during high-throughput execution.

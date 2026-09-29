@@ -41,7 +41,9 @@ export class GroqAdapter implements ProviderAdapter {
         if (!response.ok) {
             const errorText = await response.text();
             if (response.status === 429) {
-                throw new Error(`[RATE_LIMIT_429] Groq rate limit / quota exceeded: ${errorText}`);
+                const retryAfter = response.headers.get('retry-after');
+                const retrySuffix = retryAfter ? ` (retry-after: ${retryAfter}s)` : '';
+                throw new Error(`[RATE_LIMIT_429] Groq rate limit / quota exceeded: ${errorText}${retrySuffix}`);
             }
             if (response.status >= 500) {
                 throw new Error(`[SERVER_ERROR_${response.status}] Groq service unavailable: ${errorText}`);

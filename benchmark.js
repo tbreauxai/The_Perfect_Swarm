@@ -1,4 +1,4 @@
-import { MemoryCortex } from './src/swarm/memory.js';
+import { MemoryCortex } from './dist/swarm/memory.js';
 
 async function run() {
     const memory = new MemoryCortex({});

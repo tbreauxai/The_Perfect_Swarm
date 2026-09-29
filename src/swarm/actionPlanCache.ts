@@ -134,6 +134,23 @@ export class ActionPlanCacheInterceptor {
     }
 
     /**
+     * Purges all expired entries from cache.
+     * Returns count of purged expired entries.
+     */
+    purgeExpired(): number {
+        const now = Date.now();
+        let purged = 0;
+        for (const [id, plan] of this.entries.entries()) {
+            if (now > plan.expiresAt) {
+                this.entries.delete(id);
+                this.vectorIndex.delete(id);
+                purged++;
+            }
+        }
+        return purged;
+    }
+
+    /**
      * Stores an Action Plan in the semantic cache keyed by the query embedding vector.
      * Enforces the zero-stale-odds invariant by stripping volatile odds or raw responses.
      */
@@ -146,14 +163,18 @@ export class ActionPlanCacheInterceptor {
         const duration = ttlMs ?? this.defaultTtlMs;
         const id = `plan-${crypto.randomUUID()}-${now}`;
 
-        // Evict LRU (oldest accessed entry) if at capacity
+        // 1. If at capacity, first purge any expired entries
         if (this.entries.size >= this.maxEntries) {
+            this.purgeExpired();
+        }
+
+        // 2. If still at capacity, evict LRU (oldest accessed entry)
+        while (this.entries.size >= this.maxEntries) {
             const oldestKey = this.entries.keys().next().value;
-            if (oldestKey) {
-                this.entries.delete(oldestKey);
-                this.vectorIndex.delete(oldestKey);
-                this.evictionsCount++;
-            }
+            if (!oldestKey) break;
+            this.entries.delete(oldestKey);
+            this.vectorIndex.delete(oldestKey);
+            this.evictionsCount++;
         }
 
         // Sanitize entities and steps: NEVER store volatile live odds responses or raw analysis text

@@ -102,6 +102,23 @@ export class SemanticCacheInterceptor {
     }
 
     /**
+     * Purges all expired entries from cache.
+     * Returns count of purged expired entries.
+     */
+    purgeExpired(): number {
+        const now = Date.now();
+        let purged = 0;
+        for (const [id, entry] of this.entries.entries()) {
+            if (now > entry.expiresAt) {
+                this.entries.delete(id);
+                this.vectorIndex.delete(id);
+                purged++;
+            }
+        }
+        return purged;
+    }
+
+    /**
      * Stores a query result in the semantic cache.
      */
     set<T = any>(queryVector: number[], payload: T, appId?: string, ttlMs?: number): void {
@@ -111,14 +128,18 @@ export class SemanticCacheInterceptor {
         const duration = ttlMs ?? this.defaultTtlMs;
         const id = `semcache-${crypto.randomUUID()}-${now}`;
 
-        // Evict oldest if full
+        // 1. If at capacity, first purge any expired entries
         if (this.entries.size >= this.maxEntries) {
+            this.purgeExpired();
+        }
+
+        // 2. If still at capacity, evict oldest accessed
+        while (this.entries.size >= this.maxEntries) {
             const oldestKey = this.entries.keys().next().value;
-            if (oldestKey) {
-                this.entries.delete(oldestKey);
-                this.vectorIndex.delete(oldestKey);
-                this.evictionsCount++;
-            }
+            if (!oldestKey) break;
+            this.entries.delete(oldestKey);
+            this.vectorIndex.delete(oldestKey);
+            this.evictionsCount++;
         }
 
         const entry: SemanticCacheEntry<T> = {

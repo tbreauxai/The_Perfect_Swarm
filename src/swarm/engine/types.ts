@@ -10,6 +10,7 @@ import type { TieredCacheMetrics } from "../tieredCache.ts";
 import type { ClusterDigest } from "../communication.ts";
 import type { TaskDecompositionPlan } from "../coordination.ts";
 import type { SwarmTool, ToolRegistry } from "../tools/index.ts";
+import type { AnalystConsensusDigest } from "./consensusPipeline.ts";
 export interface SwarmStagePayload {
     stage: 'routing' | 'cluster_aggregation' | 'partial_prediction' | 'manager_synthesis' | 'critic_verification' | 'completed';
     task?: string;
@@ -40,6 +41,7 @@ export interface SwarmWorkflowParams {
     onPartialResult?: (partialResult: any) => void;
     context?: SwarmContext;
     cortex?: MemoryCortex;
+    memoryCortex?: MemoryCortex;
     tools?: SwarmTool[] | ToolRegistry;
 }
 
@@ -113,6 +115,7 @@ export interface SwarmWorkflowResult {
         tokenWeightRatio?: number;
         tokensSaved?: number;
     };
+    consensus?: AnalystConsensusDigest;
 }
 
 export interface SwarmFeedbackReport {

@@ -48,7 +48,9 @@ export class OpenRouterAdapter implements ProviderAdapter {
         if (!response.ok) {
             const errorText = await response.text();
             if (response.status === 429) {
-                throw new Error(`[RATE_LIMIT_429] OpenRouter rate limit / credit exhaustion: ${errorText}`);
+                const retryAfter = response.headers.get('retry-after');
+                const retrySuffix = retryAfter ? ` (retry-after: ${retryAfter}s)` : '';
+                throw new Error(`[RATE_LIMIT_429] OpenRouter rate limit / credit exhaustion: ${errorText}${retrySuffix}`);
             }
             if (response.status >= 500) {
                 throw new Error(`[SERVER_ERROR_${response.status}] OpenRouter service error: ${errorText}`);

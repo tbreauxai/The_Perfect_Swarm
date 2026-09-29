@@ -65,9 +65,19 @@ export class AnalysisLifecycle {
             attempt++;
             
             // 1. Proposer executes (incorporating feedback if this is a retry)
-            const executePrompt = feedback 
-                ? `${proposerPrompt}\n\n[Previous Feedback to Address]:\n${feedback}\n\n[Raw Data]:\n${JSON.stringify(rawData)}`
-                : `${proposerPrompt}\n\n[Raw Data]:\n${JSON.stringify(rawData)}`;
+            let executePrompt: string;
+            if (feedback) {
+                const feedbackSummary = feedback.length > 2000 ? `${feedback.slice(0, 2000)}...` : feedback;
+                const rawDataSnippet = proposerPrompt.includes('[Raw Data]') || proposerPrompt.includes('Analyst Reports')
+                    ? ''
+                    : `\n\n[Raw Data Context]:\n${typeof rawData === 'string' ? rawData.slice(0, 2500) : JSON.stringify(rawData).slice(0, 2500)}`;
+                executePrompt = `${proposerPrompt}\n\n[Previous Verification Critique & Corrections Required (Attempt ${attempt - 1})]:\n${feedbackSummary}${rawDataSnippet}\n\nPlease revise your proposal to address the critic's feedback while preserving valid insights.`;
+            } else {
+                const rawDataSection = proposerPrompt.includes('[Raw Data]') || proposerPrompt.includes('Analyst Reports')
+                    ? ''
+                    : `\n\n[Raw Data]:\n${typeof rawData === 'string' ? rawData.slice(0, 4000) : JSON.stringify(rawData).slice(0, 4000)}`;
+                executePrompt = `${proposerPrompt}${rawDataSection}`;
+            }
 
             context.addEvent({
                 agentRole: this.proposer.role,
@@ -76,7 +86,10 @@ export class AnalysisLifecycle {
                 prompt: executePrompt
             });
             
-            const proposalRaw = await this.proposer.run(executePrompt, context, { responseMimeType: 'application/json' });
+            const proposalRaw = await this.proposer.run(executePrompt, context, {
+                responseMimeType: 'application/json',
+                bypassCache: attempt > 1
+            });
             
             currentProposal = parseJsonSafe(proposalRaw, { rawText: proposalRaw, error: "Failed to parse JSON" });
 
@@ -96,7 +109,14 @@ export class AnalysisLifecycle {
                 cleanedRawData = rest;
             }
 
-            let verifyPrompt = `${criticPrompt}${baselineSection}\n\n[Raw Data]:\n${JSON.stringify(cleanedRawData)}\n\n[Proposed Analysis]:\n${JSON.stringify(currentProposal, null, 2)}\n\nEvaluate this proposal. Ensure it strictly respects the Historical Baselines and accurate data facts. You MUST output strict JSON in this format: { "pass": boolean, "feedback": "Detailed string explaining flaws, or confirming success" }.`;
+            const rawDataSample = typeof cleanedRawData === 'string'
+                ? cleanedRawData.slice(0, 4000)
+                : JSON.stringify(cleanedRawData).slice(0, 4000);
+            const proposalSample = typeof currentProposal === 'string'
+                ? currentProposal.slice(0, 6000)
+                : JSON.stringify(currentProposal, null, 2).slice(0, 6000);
+
+            let verifyPrompt = `${criticPrompt}${baselineSection}\n\n[Raw Data Sample]:\n${rawDataSample}\n\n[Proposed Analysis]:\n${proposalSample}\n\nEvaluate this proposal. Ensure it strictly respects the Historical Baselines and accurate data facts. You MUST output strict JSON in this format: { "pass": boolean, "feedback": "Detailed string explaining flaws, or confirming success" }.`;
             
             const compressedCritique = globalPromptCompressor.compress(verifyPrompt, {
                 targetReductionRatio: 0.42,
@@ -106,10 +126,13 @@ export class AnalysisLifecycle {
             });
             verifyPrompt = compressedCritique.compressedText;
             if (!verifyPrompt.includes('Evaluate this proposal')) {
-                verifyPrompt = `${criticPrompt}${baselineSection}\n\n[Raw Data]:\n${JSON.stringify(cleanedRawData)}\n\n[Proposed Analysis]:\n${JSON.stringify(currentProposal, null, 2)}\n\nEvaluate this proposal. Ensure it strictly respects the Historical Baselines and accurate data facts. You MUST output strict JSON in this format: { "pass": boolean, "feedback": "Detailed string explaining flaws, or confirming success" }.`;
+                verifyPrompt = `${criticPrompt}${baselineSection}\n\n[Raw Data Sample]:\n${rawDataSample}\n\n[Proposed Analysis]:\n${proposalSample}\n\nEvaluate this proposal. Ensure it strictly respects the Historical Baselines and accurate data facts. You MUST output strict JSON in this format: { "pass": boolean, "feedback": "Detailed string explaining flaws, or confirming success" }.`;
             }
 
-            const verificationRaw = await this.critic.run(verifyPrompt, context, { responseMimeType: 'application/json' });
+            const verificationRaw = await this.critic.run(verifyPrompt, context, {
+                responseMimeType: 'application/json',
+                bypassCache: true
+            });
             
             const verification: VerificationResult = guardVerificationResult(verificationRaw);
 

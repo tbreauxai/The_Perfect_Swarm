@@ -703,8 +703,10 @@ export class TieredCache<T = any> {
             : (typeof value === 'string' ? value : JSON.stringify(value || normKey));
 
         // Manage L1 capacity & LRU demotion
-        if (this.l1Map.size >= this.l1Max) {
-            this.demoteOldestL1();
+        if (!this.l1Map.has(normKey)) {
+            while (this.l1Map.size >= this.l1Max) {
+                this.demoteOldestL1();
+            }
         }
 
         this.l1Map.set(normKey, {
@@ -799,8 +801,10 @@ export class TieredCache<T = any> {
      * Promotes an item to L1 hot cache.
      */
     private promoteToL1(key: string, value: T): void {
-        if (this.l1Map.size >= this.l1Max) {
-            this.demoteOldestL1();
+        if (!this.l1Map.has(key)) {
+            while (this.l1Map.size >= this.l1Max) {
+                this.demoteOldestL1();
+            }
         }
         this.l1Map.set(key, {
             key,
@@ -838,10 +842,14 @@ export class TieredCache<T = any> {
      * Demotes an item to L3 cold compressed snapshot storage.
      */
     private demoteToL3(key: string, value: T): void {
-        if (this.l3Map.size >= this.l3Max) {
+        while (this.l3Map.size >= this.l3Max) {
             // Evict oldest L3
             const firstKey = this.l3Map.keys().next().value;
-            if (firstKey) this.l3Map.delete(firstKey);
+            if (firstKey) {
+                this.l3Map.delete(firstKey);
+            } else {
+                break;
+            }
         }
 
         const serialized = typeof value === 'string' ? value : JSON.stringify(value);

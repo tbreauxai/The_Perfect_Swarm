@@ -1,32 +1,32 @@
 [
   {
-    "id": "goal-1-state-and-memory-leaks",
-    "description": "Preserve optimizer state across tab switches via CSS hidden in App.tsx (#20), bound latency arrays with rolling 1000 window in profiler.ts (#25), and cleanup context.subscribe event listeners in engine/index.ts try...finally (#26).",
+    "id": "goal-1-runtime-consensus-and-reasoning",
+    "description": "Implement runtime consensus pipeline in engine, expand universal reasoning tag sanitization in adapter.ts, fix failover loop array mutation, and align default free OpenRouter model in agent.ts.",
     "status": "completed",
-    "verification": "OptimizationRunner remains mounted when switching tabs; latency arrays capped at 1000 items; unsubscribe is called upon workflow termination."
+    "verification": "consensusPipeline extracts agreement ratios and majority findings; adapter strips all reasoning tag variants; agent failover handles schema retries without mutating target chain."
   },
   {
-    "id": "goal-2-critic-agent-and-dead-code",
-    "description": "Add default Verification Critic agent to App.tsx initial state (#27) and prune dead resolveFreeModel from OpenRouterAdapter (#29).",
+    "id": "goal-2-fast-path-tools-and-action-cache",
+    "description": "Equip fast-path execution with deterministic tool calling from ToolRegistry, action plan cache interception, and guardAnalystResponse normalization.",
     "status": "completed",
-    "verification": "Critic agent present in initial settings; dead OpenRouterAdapter method removed with clean test execution."
+    "verification": "Fast-path executes arithmetic/date tools, bypasses remote calls on action plan cache hits, and outputs valid guarded schema."
   },
   {
-    "id": "goal-3-ui-virtualization-and-throttling",
-    "description": "Virtualize/window SwarmEventTimeline rendering (#21), throttle SSE state updates with requestAnimationFrame in App.tsx (#22), and add pagination to generative DataTable (#28).",
+    "id": "goal-3-precision-routing-and-token-protection",
+    "description": "Refactor ModelRouter with word-boundary matching for complexity classification, update OpenRouter free model recommendations, and bound verification retry prompts in AnalysisLifecycle.",
     "status": "completed",
-    "verification": "Timeline renders windowed events without lag; SSE events buffered and flushed via RAF; DataTable renders pages with navigation controls."
+    "verification": "Word-boundary regexes prevent false-positive escalations; verification retries do not duplicate raw payload; router tests pass."
   },
   {
-    "id": "goal-4-security-and-engine-refactor",
-    "description": "Implement Ephemeral Keys toggle in SettingsModal/App.tsx (#23) and refactor engine monolith into modular pipeline stages (#24).",
+    "id": "goal-4-cache-interceptor-and-dedup-scaling",
+    "description": "Enforce LRU capacity limits on actionPlanCache and semanticCacheInterceptor to guarantee bounded memory footprints under long-running sweeps.",
     "status": "completed",
-    "verification": "Ephemeral keys toggle prevents saving keys to localStorage; engine stages extracted into clean modular pipeline files."
+    "verification": "Action plan and semantic cache enforce max entry bounds with clean eviction under high-throughput test runs."
   },
   {
-    "id": "goal-5-full-verification-and-todo-update",
-    "description": "Update todo.md items 20-29 as COMPLETED, run full vitest/server tests, TypeScript lint check, and production build.",
+    "id": "goal-5-system-verification-and-benchmarking",
+    "description": "Execute full test suites (vitest, cli, server), TypeScript verification, distribution builds, benchmark execution, and update todo.md.",
     "status": "completed",
-    "verification": "todo.md updated; tsc --noEmit 0 errors; npm test 100% pass; npm run build successful."
+    "verification": "100% test pass rate, 0 type errors, clean build bundles, and benchmark demonstrates high-throughput efficiency."
   }
 ]

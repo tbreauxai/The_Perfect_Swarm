@@ -1,31 +1,37 @@
-# Ultragoal Brief: Perfect Swarm Architecture, State, & Robustness (2026-09-29 Tier 4 & Tier 5)
+# Ultragoal Brief: System Audit & Full Efficiency and Intelligence Optimization (2026-09-29)
 
 ## Objective
-Implement remaining optimizations #20 to #29 from `todo.md` (Tier 4: Architecture, State, & Safety and Tier 5: Memory Leaks & Edge Cases):
-
-1. **Goal 1 (State & Memory Leaks):**
-   - #20: Preserve Optimizer State on Tab Switch in `App.tsx` (permanent mount with CSS hidden toggle).
-   - #25: Unbounded Metrics Arrays in `src/swarm/profiler.ts` (rolling 1000 window on raw latency arrays).
-   - #26: Event Listener Leak in `src/swarm/engine/index.ts` (capture `context.subscribe` unsubscribe and cleanup in `try...finally`).
-
-2. **Goal 2 (Agent Config & Dead Code Cleanup):**
-   - #27: Add default Critic Agent to `App.tsx` initial agents list.
-   - #29: Remove dead `resolveFreeModel` from `src/swarm/providers/openrouter.ts` and clean references.
-
-3. **Goal 3 (UI Virtualization & Throttling):**
-   - #21: Virtualize / window timeline rendering in `SwarmEventTimeline.tsx` to handle 500+ events smoothly.
-   - #22: Throttle SSE event state updates in `App.tsx` using `requestAnimationFrame` batching.
-   - #28: Add pagination to `src/components/generative/DataTable.tsx` to prevent DOM freeze on large tabular outputs.
-
-4. **Goal 4 (Security & Engine Architecture):**
-   - #23: Secure Settings Storage in `SettingsModal.tsx` & `App.tsx` (Ephemeral Keys toggle to store in memory only).
-   - #24: Modularize `executeSwarmWorkflow` in `src/swarm/engine/` by extracting pipeline stages.
-
-5. **Goal 5 (Verification & TODO Update):**
-   - Mark items #20-#29 as `[COMPLETED]` in `todo.md`.
-   - Run `npm run lint` (`tsc --noEmit`), `npm test`, and `npm run build` with zero errors.
+Execute a comprehensive optimization loop across all core files to maximize efficiency, intelligence, accuracy, and lightweight execution, enabling free-tier multi-agent swarms to go toe-to-toe with premium paid models.
 
 ## Constraints & System Boundaries
-- Zero conversational filler and fail-closed ledger checkpointing.
-- Preserve backward compatibility with existing server and client contracts.
-- Ensure all automated unit tests, server tests, and build scripts pass without regressions.
+- Zero conversational filler.
+- Preserve backward compatibility across ESM/CJS distribution bundles, CLI, and HTTP/SSE server contracts.
+- Strictly keep execution lightweight without adding heavy dependencies or introducing latency overhead.
+- Ensure 100% test pass rate across unit tests, CLI tests, server streaming tests, and zero TypeScript errors (`tsc --noEmit`).
+
+## Micro-Goal Breakdown
+1. **goal-1-runtime-consensus-and-reasoning**:
+   - Extract `src/swarm/engine/consensusPipeline.ts` to compute semantic consensus, agreement ratios, and isolate dissent across specialist analysts for the Manager Node.
+   - Expand `sanitizeModelOutput` in `src/swarm/providers/adapter.ts` to universally strip all reasoning tags (`<think>`, `<thought>`, `<reasoning>`, `[THOUGHT]`).
+   - Fix array mutation bug during schema validation retries in `src/swarm/agent.ts` and set `DEFAULT_PROVIDER_MODELS.openrouter` to free model default.
+
+2. **goal-2-fast-path-tools-and-action-cache**:
+   - Wire `ToolRegistry` schema injection, tool call parsing, and deterministic tool execution into `src/swarm/engine/fastPath.ts`.
+   - Add sub-5ms `actionPlanCache` lookup to fast-path before remote model invocation.
+   - Enforce resilient schema guarding via `guardAnalystResponse` in fast-path.
+
+3. **goal-3-precision-routing-and-token-protection**:
+   - Refactor `ModelRouter` in `src/swarm/router.ts` using word-boundary regex matching to eliminate false-positive complexity escalations.
+   - Align OpenRouter model recommendations with active free endpoints.
+   - Optimize verification retry prompt construction in `src/swarm/lifecycle.ts` to eliminate redundant raw data duplication and protect token ceilings.
+
+4. **goal-4-cache-interceptor-and-dedup-scaling**:
+   - Add LRU cache bounds and fast key eviction to `src/swarm/actionPlanCache.ts` and `src/swarm/semanticCacheInterceptor.ts`.
+   - Ensure cache operations remain bounded in memory under continuous multi-run scenarios.
+
+5. **goal-5-system-verification-and-benchmarking**:
+   - Run complete test suite (`npm test`), CLI test (`npm run test:cli`), and server test (`npm run test:server`).
+   - Run TypeScript typecheck (`npm run lint`).
+   - Build production and distribution bundles (`npm run build`).
+   - Run baseline profiler & benchmark (`node benchmark.js`).
+   - Update `todo.md` with Tier 6 audit completions.

@@ -12,7 +12,7 @@ import { ManagerResponseSchema, AnalystResponseSchema } from './schemas.ts';
 export const DEFAULT_PROVIDER_MODELS: Record<string, string> = {
     gemini: 'gemini-3.5-flash',
     groq: 'openai/gpt-oss-120b',
-    openrouter: 'deepseek/deepseek-r1',
+    openrouter: 'deepseek/deepseek-r1:free',
     mistral: 'mistral-small-latest',
     github: 'gpt-4o-mini'
 };
@@ -169,7 +169,7 @@ export class Agent {
                     let validationSuccess = true;
 
                     if (config?.responseMimeType === 'application/json' || config?.zodSchema) {
-                        if (textOutput.includes('```tool_call') || textOutput.includes('[TOOL_CALL]')) {
+                        if (textOutput.includes('```tool_call') || textOutput.includes('[TOOL_CALL') || textOutput.includes('[TOOL_EXECUTION')) {
                             parsedOutput = textOutput;
                         } else {
                             parsedOutput = parseJsonSafe(textOutput);
@@ -247,8 +247,7 @@ export class Agent {
                     // Auto-correction for schema failures (retry same provider once)
                     if (errMsg.includes('SCHEMA_VALIDATION_FAILED') && attempt < maxRetries) {
                         prompt = `${prompt}\n\n[SYSTEM: Your previous response failed schema validation. Please correct the following errors and output STRICT JSON only: ${errMsg}]`;
-                        // Insert the current target back into the chain so we don't skip the next fallback
-                        targetChain.splice(targetIdx + 1, 0, currentTarget);
+                        continue;
                     }
 
                     const errorEvent = {

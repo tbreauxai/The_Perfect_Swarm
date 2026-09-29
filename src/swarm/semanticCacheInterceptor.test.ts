@@ -56,4 +56,40 @@ describe('Semantic Cache Interceptor', () => {
 
         expect(statsAfter.hits).toBeGreaterThan(statsBefore.hits);
     });
+
+    it('strictly bounds entries <= maxEntries and records clean evictions', () => {
+        const capacity = 3;
+        const interceptor = new SemanticCacheInterceptor({ maxEntries: capacity });
+
+        for (let i = 0; i < 10; i++) {
+            const vec = new Array(768).fill(0);
+            vec[i] = 1;
+            interceptor.set(vec, { item: i });
+            expect(interceptor.getStats().size).toBeLessThanOrEqual(capacity);
+        }
+
+        expect(interceptor.getStats().size).toBe(capacity);
+        expect(interceptor.getStats().evictions).toBe(7);
+    });
+
+    it('purges expired entries before evicting unexpired entries', async () => {
+        const interceptor = new SemanticCacheInterceptor({ maxEntries: 2, defaultTtlMs: 50 });
+        const vec1 = [1, 0, 0, 0];
+        const vec2 = [0, 1, 0, 0];
+        const vec3 = [0, 0, 1, 0];
+
+        // vec1 expires in 1ms, vec2 has 10,000ms TTL
+        interceptor.set(vec1, { id: 1 }, undefined, 1);
+        interceptor.set(vec2, { id: 2 }, undefined, 10000);
+
+        await new Promise(r => setTimeout(r, 10));
+
+        // Inserting vec3 should purge vec1 and keep vec2
+        interceptor.set(vec3, { id: 3 }, undefined, 10000);
+
+        expect(interceptor.getStats().size).toBe(2);
+        expect(interceptor.lookup(vec1).hit).toBe(false);
+        expect(interceptor.lookup(vec2).hit).toBe(true);
+        expect(interceptor.lookup(vec3).hit).toBe(true);
+    });
 });

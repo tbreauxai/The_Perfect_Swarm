@@ -69,6 +69,16 @@ export class ToolRegistry {
                 }
             }
 
+            if (typeof tool.execute !== 'function') {
+                return {
+                    tool: name,
+                    parameters,
+                    error: `Tool '${name}' does not implement an execute() function.`,
+                    success: false,
+                    durationMs: Date.now() - startTime
+                };
+            }
+
             const result = await tool.execute(parameters);
             return {
                 tool: name,
@@ -112,39 +122,57 @@ export class ToolRegistry {
     parseToolCalls(text: string): ToolCallRequest[] {
         if (!text || typeof text !== 'string') return [];
         const calls: ToolCallRequest[] = [];
+        const seen = new Set<string>();
 
-        // Match ```tool_call ... ```, ```tool_execution ... ``` or ```json ... ``` with {"tool": "...", "parameters": ...}
-        const regex = /```(?:tool_call|tool_execution|json)?\s*([\s\S]*?)```/gi;
-        let match: RegExpExecArray | null;
-
-        while ((match = regex.exec(text)) !== null) {
-            const body = match[1].trim();
+        const addCandidate = (body: string) => {
             try {
-                const parsed = JSON.parse(body);
+                const parsed = JSON.parse(body.trim());
                 if (parsed && typeof parsed.tool === 'string' && this.has(parsed.tool)) {
-                    calls.push({
-                        tool: parsed.tool,
-                        parameters: parsed.parameters || {}
-                    });
+                    const key = `${parsed.tool}:${JSON.stringify(parsed.parameters || {})}`;
+                    if (!seen.has(key)) {
+                        seen.add(key);
+                        calls.push({
+                            tool: parsed.tool,
+                            parameters: parsed.parameters || {}
+                        });
+                    }
                 }
             } catch {
-                // Not valid JSON or not a tool call block, ignore
+                // Not valid JSON, ignore
+            }
+        };
+
+        // 1. Fenced code blocks ```tool_call ... ``` or ```tool_execution ... ``` or ```json ... ```
+        const fenceRegex = /```(?:tool_call|tool_execution|json)?\s*([\s\S]*?)```/gi;
+        let match: RegExpExecArray | null;
+        while ((match = fenceRegex.exec(text)) !== null) {
+            const body = match[1].trim();
+            const objs = extractJsonObjects(body);
+            if (objs.length > 0) {
+                for (const o of objs) addCandidate(o);
+            } else {
+                addCandidate(body);
             }
         }
 
-        // Also check if entire string is a standalone raw JSON tool call
-        if (calls.length === 0 && text.trim().startsWith('{')) {
-            try {
-                const parsed = JSON.parse(text.trim());
-                if (parsed && typeof parsed.tool === 'string' && this.has(parsed.tool)) {
-                    calls.push({
-                        tool: parsed.tool,
-                        parameters: parsed.parameters || {}
-                    });
-                }
-            } catch {
-                // Ignore
-            }
+        // 2. Bracket blocks [TOOL_CALL] ... [/TOOL_CALL] or [TOOL_EXECUTION] ... [/TOOL_EXECUTION]
+        const closedBracketRegex = /\[(?:TOOL_CALL|TOOL_EXECUTION)\]([\s\S]*?)\[\/(?:TOOL_CALL|TOOL_EXECUTION)\]/gi;
+        while ((match = closedBracketRegex.exec(text)) !== null) {
+            const objs = extractJsonObjects(match[1]);
+            for (const o of objs) addCandidate(o);
+        }
+
+        // 3. Inline bracket blocks [TOOL_CALL: ...] or [TOOL_EXECUTION: ...] or [TOOL_CALL] ...
+        const inlineBracketRegex = /\[(?:TOOL_CALL|TOOL_EXECUTION)(?::|\s*)([\s\S]*?)\]/gi;
+        while ((match = inlineBracketRegex.exec(text)) !== null) {
+            const objs = extractJsonObjects(match[1]);
+            for (const o of objs) addCandidate(o);
+        }
+
+        // 4. Standalone raw JSON objects if no calls were extracted yet
+        if (calls.length === 0) {
+            const objs = extractJsonObjects(text);
+            for (const o of objs) addCandidate(o);
         }
 
         return calls;
@@ -155,7 +183,12 @@ export class ToolRegistry {
      */
     stripToolCalls(text: string): string {
         if (!text || typeof text !== 'string') return '';
-        return text.replace(/```(?:tool_call|tool_execution)\s*[\s\S]*?```/gi, '').trim();
+        return text
+            .replace(/```(?:tool_call|tool_execution)\s*[\s\S]*?```/gi, '')
+            .replace(/\[(?:TOOL_CALL|TOOL_EXECUTION)\][\s\S]*?\[\/(?:TOOL_CALL|TOOL_EXECUTION)\]/gi, '')
+            .replace(/\[(?:TOOL_CALL|TOOL_EXECUTION):\s*\{[\s\S]*?\}\]/gi, '')
+            .replace(/\[(?:TOOL_CALL|TOOL_EXECUTION)\s*\{[\s\S]*?\}\]/gi, '')
+            .trim();
     }
 
     /**

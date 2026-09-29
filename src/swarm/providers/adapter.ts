@@ -25,20 +25,46 @@ export function cleanToken(key: string | undefined | null): string {
 
 /**
  * Sanitizes model outputs:
- * 1. Strips <think>...</think> reasoning traces emitted by DeepSeek / Llama reasoning models.
- * 2. Strips markdown code blocks.
- * 3. Extracts clean JSON object or array substring if requested.
+ * 1. Strips all reasoning traces (<think>, <thought>, <reasoning>, [THOUGHT]) emitted by reasoning models.
+ * 2. Recovers from truncated unclosed reasoning tags.
+ * 3. Strips markdown code blocks.
+ * 4. Extracts clean JSON object or array substring if requested.
  */
 export function sanitizeModelOutput(raw: string, isJson: boolean = false): string {
-    if (!raw) return '';
-    let text = raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+    if (!raw || typeof raw !== 'string') return '';
+
+    // 1. Universal reasoning tag sanitization (DeepSeek R1, LLaMA 3.3, Qwen, etc.)
+    let text = raw
+        .replace(/<think>[\s\S]*?<\/think>/gi, '')
+        .replace(/<thought>[\s\S]*?<\/thought>/gi, '')
+        .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '')
+        .replace(/\[THOUGHT\][\s\S]*?\[\/THOUGHT\]/gi, '');
+
+    // 2. Handle unclosed reasoning tags if model output was truncated mid-reasoning
+    for (const tag of ['<think>', '<thought>', '<reasoning>', '[THOUGHT]']) {
+        const tagIdx = text.toLowerCase().indexOf(tag.toLowerCase());
+        if (tagIdx !== -1) {
+            const containerIdx = text.slice(tagIdx).search(/[{\[]/);
+            if (containerIdx !== -1) {
+                text = text.substring(0, tagIdx) + text.substring(tagIdx + containerIdx);
+            } else {
+                text = text.substring(0, tagIdx);
+            }
+        }
+    }
+
+    text = text.trim();
     if (!isJson) return text;
 
-    text = text.replace(/```(?:json)?/gi, '').trim();
-    
+    // 3. Strip outer markdown fences
+    text = text.replace(/^```(?:json|javascript|js|jsonc)?\s*/i, '');
+    text = text.replace(/\s*```$/i, '');
+    text = text.replace(/```(?:json|javascript|js|jsonc)?/gi, '').trim();
+
+    // 4. Locate JSON container boundary
     const firstObj = text.indexOf('{');
     const firstArr = text.indexOf('[');
-    
+
     if (firstObj !== -1 && (firstArr === -1 || firstObj < firstArr)) {
         const lastObj = text.lastIndexOf('}');
         if (lastObj !== -1) {
