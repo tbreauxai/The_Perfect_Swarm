@@ -27,8 +27,23 @@ export default function App() {
   } | null>(null);
   const [error, setError] = useState('');
   const abortControllerRef = useRef<AbortController | null>(null);
+  const eventBufferRef = useRef<SwarmTimelineEvent[]>([]);
+  const rafIdRef = useRef<number | null>(null);
+
+  const flushEventBuffer = () => {
+    if (eventBufferRef.current.length > 0) {
+      const buffered = [...eventBufferRef.current];
+      eventBufferRef.current = [];
+      setEvents(prev => [...prev, ...buffered]);
+    }
+    if (rafIdRef.current !== null) {
+      cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = null;
+    }
+  };
 
   const cancelSwarm = () => {
+    flushEventBuffer();
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
@@ -68,7 +83,8 @@ export default function App() {
       { id: 'a1', role: 'Analyst 1', provider: 'gemini', model: 'gemini-3.5-flash' },
       { id: 'a2', role: 'Analyst 2', provider: 'gemini', model: 'gemini-3.5-flash-lite' },
       { id: 'a3', role: 'Analyst 3', provider: 'gemini', model: 'gemini-3.5-flash-lite' },
-      { id: 'a4', role: 'Analyst 4', provider: 'mistral', model: 'mistral-small-latest' }
+      { id: 'a4', role: 'Analyst 4', provider: 'mistral', model: 'mistral-small-latest' },
+      { id: 'critic', role: 'Verification Critic', provider: 'gemini', model: 'gemini-3.5-flash-lite' }
     ]
   });
 
@@ -86,6 +102,12 @@ export default function App() {
           modified = true;
         }
 
+        // Auto-populate Verification Critic agent if missing from legacy settings
+        if (Array.isArray(parsed.agents) && !parsed.agents.some((a: any) => a.id === 'critic' || a.role === 'Verification Critic')) {
+          parsed.agents.push({ id: 'critic', role: 'Verification Critic', provider: 'gemini', model: 'gemini-3.5-flash-lite' });
+          modified = true;
+        }
+
         if (modified) {
           localStorage.setItem('swarm_settings', JSON.stringify(parsed));
         }
@@ -97,13 +119,27 @@ export default function App() {
     }
   }, []);
 
+  const sanitizeSettingsForStorage = (stg: AppSettings): Partial<AppSettings> => {
+    if (!stg.ephemeralKeys) return stg;
+    return {
+      ...stg,
+      geminiApiKey: '',
+      openRouterApiKey: '',
+      groqApiKey: '',
+      mistralApiKey: '',
+      qdrantApiKey: '',
+      githubToken: '',
+      agents: stg.agents.map(a => ({ ...a, apiKey: '' }))
+    };
+  };
+
   const updateSetting = (key: keyof AppSettings, value: any) => {
     if (key === 'disableFallback') {
       localStorage.setItem('swarm_disable_fallback_explicit', 'true');
     }
     const newSettings = { ...settings, [key]: value };
     setSettings(newSettings);
-    localStorage.setItem('swarm_settings', JSON.stringify(newSettings));
+    localStorage.setItem('swarm_settings', JSON.stringify(sanitizeSettingsForStorage(newSettings)));
   };
 
   const updateAgent = (id: string, field: string, value: string) => {
@@ -112,7 +148,7 @@ export default function App() {
         ...prev,
         agents: prev.agents.map(a => a.id === id ? { ...a, [field]: value } : a)
       };
-      localStorage.setItem('swarm_settings', JSON.stringify(newSettings));
+      localStorage.setItem('swarm_settings', JSON.stringify(sanitizeSettingsForStorage(newSettings)));
       return newSettings;
     });
   };
@@ -135,6 +171,11 @@ export default function App() {
 
     setLoading(true);
     setError('');
+    eventBufferRef.current = [];
+    if (rafIdRef.current !== null) {
+      cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = null;
+    }
     setEvents([]);
     setFinalAnalysis(null);
     setProgressiveStage(null);
@@ -202,10 +243,17 @@ export default function App() {
               const truncatedEvent = parsedData && typeof parsedData === 'object' && typeof parsedData.prompt === 'string'
                 ? { ...parsedData, prompt: parsedData.prompt.slice(0, 800) }
                 : parsedData;
-              setEvents(prev => [...prev, truncatedEvent]);
+              eventBufferRef.current.push(truncatedEvent);
+              if (rafIdRef.current === null) {
+                rafIdRef.current = requestAnimationFrame(() => {
+                  flushEventBuffer();
+                });
+              }
             } else if (eventType === 'swarm_stage') {
+              flushEventBuffer();
               setProgressiveStage(parsedData);
             } else if (eventType === 'swarm_complete') {
+              flushEventBuffer();
               setProgressiveStage(null);
               if (parsedData.finalAnalysis) {
                 setFinalAnalysis(parsedData.finalAnalysis);
@@ -219,6 +267,7 @@ export default function App() {
                 setEvents(truncatedEvents);
               }
             } else if (eventType === 'swarm_error') {
+              flushEventBuffer();
               setError(formatActionableError(parsedData.error || 'Swarm execution error'));
             }
           } catch (err) {
@@ -233,6 +282,7 @@ export default function App() {
         setError(formatActionableError(err.message || 'An unexpected error occurred during execution.'));
       }
     } finally {
+      flushEventBuffer();
       setLoading(false);
       abortControllerRef.current = null;
     }
@@ -356,105 +406,105 @@ export default function App() {
               </button>
             </div>
 
-            {activeTab === 'trace' && (() => {
-              const routerEvent = events.find(e => e.agentRole === 'Model Router');
-              const routerDecision = routerEvent ? {
-                complexity: routerEvent.output?.complexity || (routerEvent.action.includes('Fast-Path') ? 'instant' : 'complex'),
-                isFastPath: routerEvent.action.includes('Fast-Path') || routerEvent.output?.fastPath?.eligible === true,
-                reason: routerEvent.output?.reason || (routerEvent.action.includes('Fast-Path') ? 'Single analyst fast-path short-circuit' : 'Full multi-agent swarm synthesis')
-              } : null;
+            <div className={activeTab === 'trace' ? 'block' : 'hidden'}>
+              {(() => {
+                const routerEvent = events.find(e => e.agentRole === 'Model Router');
+                const routerDecision = routerEvent ? {
+                  complexity: routerEvent.output?.complexity || (routerEvent.action.includes('Fast-Path') ? 'instant' : 'complex'),
+                  isFastPath: routerEvent.action.includes('Fast-Path') || routerEvent.output?.fastPath?.eligible === true,
+                  reason: routerEvent.output?.reason || (routerEvent.action.includes('Fast-Path') ? 'Single analyst fast-path short-circuit' : 'Full multi-agent swarm synthesis')
+                } : null;
 
-              return (events.length > 0 || finalAnalysis || progressiveStage?.digests) ? (
-                <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200">
-                  <h2 className="text-xl font-medium flex items-center justify-between border-b border-neutral-100 pb-4 mb-6">
-                    <span className="flex items-center gap-2">
-                      <Activity className="w-5 h-5 text-indigo-600" />
-                      Execution Trace
-                    </span>
-                    <div className="flex items-center gap-2">
-                      {routerDecision && (
-                        <span
-                          className={`text-xs font-medium px-2.5 py-1 rounded-full border flex items-center gap-1.5 ${
-                            routerDecision.isFastPath
-                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                              : 'bg-purple-50 text-purple-700 border-purple-200'
-                          }`}
-                          title={`Model Router: ${routerDecision.reason}`}
-                        >
-                          <span className="w-1.5 h-1.5 rounded-full bg-current" />
-                          <span>Route: {routerDecision.isFastPath ? '⚡ Fast Path' : '🌐 Full Swarm'}</span>
-                          <span className="opacity-70">({routerDecision.complexity})</span>
-                        </span>
-                      )}
-                      {loading && (
-                        <span className="text-xs font-normal text-indigo-600 bg-indigo-50 border border-indigo-100 px-2.5 py-1 rounded-full flex items-center gap-1.5 animate-pulse">
-                          <Loader2 className="w-3 h-3 animate-spin" />
-                          Live Swarm Streaming
-                        </span>
-                      )}
+                return (events.length > 0 || finalAnalysis || progressiveStage?.digests) ? (
+                  <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200">
+                    <h2 className="text-xl font-medium flex items-center justify-between border-b border-neutral-100 pb-4 mb-6">
+                      <span className="flex items-center gap-2">
+                        <Activity className="w-5 h-5 text-indigo-600" />
+                        Execution Trace
+                      </span>
+                      <div className="flex items-center gap-2">
+                        {routerDecision && (
+                          <span
+                            className={`text-xs font-medium px-2.5 py-1 rounded-full border flex items-center gap-1.5 ${
+                              routerDecision.isFastPath
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                : 'bg-purple-50 text-purple-700 border-purple-200'
+                            }`}
+                            title={`Model Router: ${routerDecision.reason}`}
+                          >
+                            <span className="w-1.5 h-1.5 rounded-full bg-current" />
+                            <span>Route: {routerDecision.isFastPath ? '⚡ Fast Path' : '🌐 Full Swarm'}</span>
+                            <span className="opacity-70">({routerDecision.complexity})</span>
+                          </span>
+                        )}
+                        {loading && (
+                          <span className="text-xs font-normal text-indigo-600 bg-indigo-50 border border-indigo-100 px-2.5 py-1 rounded-full flex items-center gap-1.5 animate-pulse">
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                            Live Swarm Streaming
+                          </span>
+                        )}
+                      </div>
+                    </h2>
+
+                    <SwarmEventTimeline
+                      events={events}
+                      expandedEvents={expandedEvents}
+                      onToggleEvent={toggleEvent}
+                    />
+
+                    <AnalysisViewer
+                      finalAnalysis={finalAnalysis}
+                      interimDigests={progressiveStage?.digests}
+                      isSynthesizing={loading && progressiveStage?.stage === 'manager_synthesis'}
+                    />
+                  </div>
+                ) : loading ? (
+                  <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200 h-full flex flex-col items-center justify-center text-center space-y-3 min-h-[400px]">
+                    <div className="w-16 h-16 bg-indigo-50 rounded-full flex items-center justify-center mb-2 border border-indigo-100 animate-pulse">
+                      <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
                     </div>
-                  </h2>
-
-                  <SwarmEventTimeline
-                    events={events}
-                    expandedEvents={expandedEvents}
-                    onToggleEvent={toggleEvent}
-                  />
-
-                  <AnalysisViewer
-                    finalAnalysis={finalAnalysis}
-                    interimDigests={progressiveStage?.digests}
-                    isSynthesizing={loading && progressiveStage?.stage === 'manager_synthesis'}
-                  />
-                </div>
-              ) : loading ? (
-                <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200 h-full flex flex-col items-center justify-center text-center space-y-3 min-h-[400px]">
-                  <div className="w-16 h-16 bg-indigo-50 rounded-full flex items-center justify-center mb-2 border border-indigo-100 animate-pulse">
-                    <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
+                    <h3 className="text-lg font-medium text-neutral-800">
+                      Initializing Swarm Execution...
+                    </h3>
+                    <p className="text-sm text-neutral-500 max-w-sm">
+                      Connecting to streaming endpoint, profiling payload, and dispatching analysts in real time.
+                    </p>
                   </div>
-                  <h3 className="text-lg font-medium text-neutral-800">
-                    Initializing Swarm Execution...
-                  </h3>
-                  <p className="text-sm text-neutral-500 max-w-sm">
-                    Connecting to streaming endpoint, profiling payload, and dispatching analysts in real time.
-                  </p>
-                </div>
-              ) : (
-                <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200 h-full flex flex-col items-center justify-center text-center space-y-3 min-h-[400px]">
-                  <div className="w-16 h-16 bg-neutral-50 rounded-full flex items-center justify-center mb-2 border border-neutral-100">
-                    <Activity className="w-8 h-8 text-neutral-300" />
+                ) : (
+                  <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200 h-full flex flex-col items-center justify-center text-center space-y-3 min-h-[400px]">
+                    <div className="w-16 h-16 bg-neutral-50 rounded-full flex items-center justify-center mb-2 border border-neutral-100">
+                      <Activity className="w-8 h-8 text-neutral-300" />
+                    </div>
+                    <h3 className="text-lg font-medium text-neutral-700">No Traces Yet</h3>
+                    <p className="text-sm text-neutral-500 max-w-[250px]">
+                      Provide data and a task, then execute the swarm to see the detailed execution log.
+                    </p>
                   </div>
-                  <h3 className="text-lg font-medium text-neutral-700">No Traces Yet</h3>
-                  <p className="text-sm text-neutral-500 max-w-[250px]">
-                    Provide data and a task, then execute the swarm to see the detailed execution log.
-                  </p>
-                </div>
-              );
-            })()}
+                );
+              })()}
+            </div>
 
-            {activeTab === 'optimization' && (
-               <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200">
-                   <React.Suspense fallback={<div className="p-8 text-center text-neutral-500">Loading optimizer...</div>}>
-                   <OptimizationRunner
-                     task={task}
-                     data={data}
-                     settings={settings}
-                     onApplyModelToSettings={(role, provider, model) => {
-                       setSettings(prev => {
-                         const updated = {
-                           ...prev,
-                           agents: prev.agents.map(a =>
-                             a.role === role ? { ...a, provider, model } : a
-                           )
-                         };
-                         localStorage.setItem('swarm_settings', JSON.stringify(updated));
-                         return updated;
-                       });
-                     }}
-                   />
-                 </React.Suspense>
-               </div>
-            )}
+            <div className={activeTab === 'optimization' ? 'block bg-white p-6 rounded-2xl shadow-sm border border-neutral-200' : 'hidden'}>
+               <React.Suspense fallback={<div className="p-8 text-center text-neutral-500">Loading optimizer...</div>}>
+               <OptimizationRunner
+                 task={task}
+                 data={data}
+                 settings={settings}
+                 onApplyModelToSettings={(role, provider, model) => {
+                   setSettings(prev => {
+                     const updated = {
+                       ...prev,
+                       agents: prev.agents.map(a =>
+                         a.role === role ? { ...a, provider, model } : a
+                       )
+                     };
+                     localStorage.setItem('swarm_settings', JSON.stringify(updated));
+                     return updated;
+                   });
+                 }}
+               />
+             </React.Suspense>
+            </div>
           </div>
         </div>
 

@@ -13,6 +13,7 @@ export interface AppSettings {
     appId?: string;
     disableFallback?: boolean;
     forceFullSwarm?: boolean;
+    ephemeralKeys?: boolean;
     agents: AgentConfig[];
 }
 
@@ -20,7 +21,7 @@ interface SettingsModalProps {
     isOpen: boolean;
     onClose: () => void;
     settings: AppSettings;
-    onUpdateSetting: (key: keyof AppSettings, value: string) => void;
+    onUpdateSetting: (key: keyof AppSettings, value: any) => void;
     onUpdateAgent: (id: string, field: string, value: string) => void;
     envStatus: {
         hasGeminiKey?: boolean;
@@ -80,6 +81,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <div className="p-5 overflow-y-auto space-y-6 max-h-[60vh]">
                     {activeTab === 'keys' && (
                         <div className="space-y-6">
+                            <div className="p-3 bg-amber-50/80 rounded-xl border border-amber-200 flex items-center justify-between">
+                                <div className="pr-3">
+                                    <label className="text-xs font-semibold text-amber-900 block">Ephemeral Keys Mode</label>
+                                    <p className="text-[11px] text-amber-700">Keep API keys only in React session memory; do not save plaintext keys to localStorage.</p>
+                                </div>
+                                <input
+                                    type="checkbox"
+                                    checked={!!settings.ephemeralKeys}
+                                    onChange={(e) => onUpdateSetting('ephemeralKeys', e.target.checked)}
+                                    className="h-4 w-4 rounded border-amber-300 text-amber-600 focus:ring-amber-500 cursor-pointer"
+                                />
+                            </div>
+
                             <div className="space-y-4">
                                 <div className="p-3 bg-neutral-50 rounded-xl border border-neutral-200 space-y-3">
                                     <div className="flex items-center justify-between mb-1">

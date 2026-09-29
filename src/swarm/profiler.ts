@@ -268,6 +268,9 @@ export class SwarmMetricsCollector {
         }
 
         this.latencies.push(validDuration);
+        if (this.latencies.length > 1000) {
+            this.latencies.shift();
+        }
         if (this.overallEma === 0) {
             this.overallEma = validDuration;
         } else {
@@ -285,6 +288,9 @@ export class SwarmMetricsCollector {
             else rec.failures++;
             if (error) rec.lastError = error;
             rec.latencies.push(validDuration);
+            if (rec.latencies.length > 1000) {
+                rec.latencies.shift();
+            }
             rec.ema = rec.ema === 0 ? validDuration : Math.round((this.emaAlpha * validDuration) + ((1 - this.emaAlpha) * rec.ema));
         }
 
@@ -299,6 +305,9 @@ export class SwarmMetricsCollector {
             else rec.failures++;
             if (error) rec.lastError = error;
             rec.latencies.push(validDuration);
+            if (rec.latencies.length > 1000) {
+                rec.latencies.shift();
+            }
             rec.ema = rec.ema === 0 ? validDuration : Math.round((this.emaAlpha * validDuration) + ((1 - this.emaAlpha) * rec.ema));
         }
     }

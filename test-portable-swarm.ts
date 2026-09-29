@@ -116,35 +116,7 @@ async function runPortableValidation() {
         throw new Error('ModelRouter complexity tier failed to upgrade instant when forceFullSwarm=true');
     }
 
-    /*
-    console.log('\n=== Step 4b: Guaranteed Free-Tier Model Routing & OpenRouter :free Resolution ===');
-    const orComplex = ModelRouter.getRecommendedModel('openrouter', 'complex');
-    const orInstant = ModelRouter.getRecommendedModel('openrouter', 'instant');
-    const geminiComplex = ModelRouter.getRecommendedModel('gemini', 'complex');
-    const mistralComplex = ModelRouter.getRecommendedModel('mistral', 'complex');
-    const resolvedFree = OpenRouterAdapter.resolveFreeModel('deepseek/deepseek-r1');
-    const alreadyFree = OpenRouterAdapter.resolveFreeModel('meta-llama/llama-3.3-70b-instruct:free');
-    const customFree = OpenRouterAdapter.resolveFreeModel('qwen/qwen-2.5-coder-32b-instruct');
 
-    console.log('OpenRouter Complex Model:', orComplex);
-    console.log('OpenRouter Instant Model:', orInstant);
-    console.log('Gemini Complex Model (free tier):', geminiComplex);
-    console.log('Mistral Complex Model (free tier):', mistralComplex);
-    console.log('Resolved free model (from deepseek/deepseek-r1):', resolvedFree);
-
-    if (!orComplex.endsWith(':free') || !orInstant.endsWith(':free')) {
-        throw new Error('OpenRouter recommended model missing guaranteed :free suffix');
-    }
-    if (geminiComplex !== 'gemini-2.5-flash') {
-        throw new Error('Gemini complex model should default to gemini-2.5-flash for high quota free tier');
-    }
-    if (mistralComplex !== 'mistral-small-latest') {
-        throw new Error('Mistral complex model should default to mistral-small-latest');
-    }
-    if (resolvedFree !== 'deepseek/deepseek-r1:free' || alreadyFree !== 'meta-llama/llama-3.3-70b-instruct:free' || customFree !== 'qwen/qwen-2.5-coder-32b-instruct:free') {
-        throw new Error('OpenRouterAdapter.resolveFreeModel resolution failure');
-    }
-    */
 
     console.log('\n=== Step 5: Agent Execution via Custom Adapter ===');
     const agent = new Agent('Mock Analyst', 'mock-v1', 'custom-mock', 'fake-key');

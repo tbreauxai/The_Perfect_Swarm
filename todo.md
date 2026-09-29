@@ -104,23 +104,35 @@ Round 3 (all 10, PR #44): grader temp 0.15 · analyze timeouts · 401/400 provid
 
 ## Tier 4 - Architecture, State, & Safety (2026-09-29 Audit)
 
-### 20. [NEW] Preserve Optimizer State on Tab Switch
-- **Find it**: App.tsx conditionally renders <OptimizationRunner /> when ctiveTab === 'optimization'. This destroys component state (testing progress, fetched history) when switching tabs.
-- **Fix**: Mount both tabs permanently and use CSS hidden to toggle visibility.
+### 20. [COMPLETED] Preserve Optimizer State on Tab Switch
+- Mounted both trace and optimizer tabs permanently with CSS `hidden` toggling in `App.tsx`, preserving test progress and state across tab switches.
 
-### 21. [NEW] Virtualize Timeline Rendering
-- **Find it**: SwarmEventTimeline.tsx maps over all events sequentially. Massive swarms (500+ events) freeze the browser due to DOM bloat.
-- **Fix**: Introduce list virtualization to only render visible events in the viewport.
+### 21. [COMPLETED] Virtualize Timeline Rendering
+- Implemented windowed virtualization with scroll tracking in `SwarmEventTimeline.tsx` to bound rendered DOM nodes for 500+ event swarms.
 
-### 22. [NEW] Throttle SSE State Updates
-- **Find it**: App.tsx calls setEvents immediately for every SSE chunk. High-throughput bursts flood the React render queue.
-- **Fix**: Buffer incoming SSE events and flush them to state using equestAnimationFrame batching.
+### 22. [COMPLETED] Throttle SSE State Updates
+- Buffered incoming SSE events via `eventBufferRef` and batched React state flushes with `requestAnimationFrame` in `App.tsx`.
 
-### 23. [NEW] Secure Settings Storage
-- **Find it**: SettingsModal.tsx saves API keys to plaintext localStorage.
-- **Fix**: Add an Ephemeral Keys toggle to store keys only in React state during development, preventing persistent XSS exposure.
+### 23. [COMPLETED] Secure Settings Storage
+- Added Ephemeral Keys Mode toggle in `SettingsModal.tsx` and sanitized keys in `App.tsx` to keep API keys strictly in session memory instead of `localStorage`.
 
-### 24. [NEW] Refactor engine monolith
-- **Find it**: src/swarm/engine/index.ts is ~2200 lines orchestrating every feature.
-- **Fix**: Break xecuteSwarmWorkflow into a modular Pipeline pattern. Extract Data Profiling, Hierarchical Coordination, and Caching into distinct middleware files.
+### 24. [COMPLETED] Refactor engine monolith
+- Decomposed `src/swarm/engine/index.ts` by extracting modular middleware: `cachingPipeline.ts`, `profilingPipeline.ts`, and `coordinationPipeline.ts`.
 
+
+## Tier 5 - Memory Leaks & Edge Cases (Round 2 Audit)
+
+### 25. [COMPLETED] Unbounded Metrics Arrays (Memory Leak)
+- Enforced a rolling window of 1000 items on raw latency arrays in `SwarmMetricsCollector` (`src/swarm/profiler.ts`).
+
+### 26. [COMPLETED] Event Listener Leak in SwarmContext
+- Captured `context.subscribe(onEvent)` unsubscribe callback and called it in a `try...finally` block in `src/swarm/engine/index.ts`.
+
+### 27. [COMPLETED] Missing Critic Agent Configuration
+- Added default Verification Critic agent to initial state and legacy migration in `App.tsx`.
+
+### 28. [COMPLETED] DataTable DOM Freeze
+- Implemented client-side pagination with page slicing and navigation controls in `src/components/generative/DataTable.tsx`.
+
+### 29. [COMPLETED] Dead Code: OpenRouterAdapter
+- Removed unused `resolveFreeModel` from `src/swarm/providers/openrouter.ts` and pruned obsolete test references in `test-portable-swarm.ts`.

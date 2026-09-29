@@ -19,14 +19,54 @@ interface SwarmEventTimelineProps {
     onToggleEvent: (id: string) => void;
 }
 
+const ESTIMATED_ITEM_HEIGHT = 100;
+const BUFFER = 8;
+const VIEWPORT_HEIGHT = 700;
+
 export const SwarmEventTimeline: React.FC<SwarmEventTimelineProps> = ({
     events,
     expandedEvents,
     onToggleEvent
 }) => {
+    const containerRef = React.useRef<HTMLDivElement>(null);
+    const [scrollTop, setScrollTop] = React.useState(0);
+
+    const isVirtualized = events.length > 50;
+
+    const { startIndex, endIndex, topPadding, bottomPadding } = React.useMemo(() => {
+        if (!isVirtualized) {
+            return { startIndex: 0, endIndex: events.length, topPadding: 0, bottomPadding: 0 };
+        }
+        const visibleCount = Math.ceil(VIEWPORT_HEIGHT / ESTIMATED_ITEM_HEIGHT) + BUFFER * 2;
+        const start = Math.max(0, Math.floor(scrollTop / ESTIMATED_ITEM_HEIGHT) - BUFFER);
+        const end = Math.min(events.length, start + visibleCount);
+        const top = start * ESTIMATED_ITEM_HEIGHT;
+        const bottom = Math.max(0, (events.length - end) * ESTIMATED_ITEM_HEIGHT);
+        return { startIndex: start, endIndex: end, topPadding: top, bottomPadding: bottom };
+    }, [isVirtualized, events.length, scrollTop]);
+
+    const visibleEvents = isVirtualized ? events.slice(startIndex, endIndex) : events;
+
+    const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+        setScrollTop(e.currentTarget.scrollTop);
+    };
+
     return (
-        <div className="space-y-6 relative before:absolute before:inset-0 before:ml-5 before:-translate-x-px md:before:mx-auto md:before:translate-x-0 before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-neutral-200 before:to-transparent">
-            {events.map((event) => {
+        <div
+            ref={containerRef}
+            onScroll={isVirtualized ? handleScroll : undefined}
+            className={isVirtualized ? "max-h-[700px] overflow-y-auto pr-2 relative" : "relative"}
+        >
+            {isVirtualized && (
+                <div className="sticky top-0 z-20 flex justify-end mb-2">
+                    <span className="text-[11px] font-mono bg-neutral-100/90 backdrop-blur px-2.5 py-1 rounded-full text-neutral-600 border border-neutral-200 shadow-xs">
+                        Virtualized: rendering {visibleEvents.length} of {events.length} events
+                    </span>
+                </div>
+            )}
+            <div className="space-y-6 relative before:absolute before:inset-0 before:ml-5 before:-translate-x-px md:before:mx-auto md:before:translate-x-0 before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-neutral-200 before:to-transparent">
+                {topPadding > 0 && <div style={{ height: topPadding }} aria-hidden="true" />}
+                {visibleEvents.map((event) => {
                 const isExpanded = expandedEvents[event.id];
                 const isError = !!event.error;
                 const isCompletion = event.action.includes("Completed");
@@ -283,6 +323,8 @@ export const SwarmEventTimeline: React.FC<SwarmEventTimelineProps> = ({
                     </div>
                 );
             })}
+                {bottomPadding > 0 && <div style={{ height: bottomPadding }} aria-hidden="true" />}
+            </div>
         </div>
     );
 };

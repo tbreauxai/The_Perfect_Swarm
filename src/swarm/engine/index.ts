@@ -10,6 +10,9 @@ import { SwarmEngine } from "./SwarmEngine.ts";
 export { SwarmEngine };
 const safeEnv = typeof process !== "undefined" ? process.env : {} as Record<string, string | undefined>;
 import { executeFastPath } from "./fastPath.ts";
+import { checkSubComputationCache, checkTieredCacheLookup, checkSemanticCacheMatch } from "./cachingPipeline.ts";
+import { runDataProfilingPipeline } from "./profilingPipeline.ts";
+import { publishInteragentCoordination, arbitrateAndPropagateCoordination } from "./coordinationPipeline.ts";
 import { GoogleGenAI } from '@google/genai';
 import { Agent } from '../agent.ts';
 import { MemoryCortex } from '../memory.ts';
@@ -121,11 +124,10 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     const workflowStartTime = Date.now();
     const { task, data, settings, defaultAi, enableDeepAnalysis, complexityOverride, onEvent } = params;
     const context = params.context || new SwarmContext();
-    if (onEvent) {
-        context.subscribe(onEvent);
-    }
+    const unsubscribe = onEvent ? context.subscribe(onEvent) : undefined;
 
-    const optSettings = settings?.optimizationSettings;
+    try {
+        const optSettings = settings?.optimizationSettings;
     const optimizationEnabled = optSettings?.enabled !== false;
     let preFilterResult: PreFilterResult | undefined;
     let tokenWeightReport: TokenWeightReport | undefined;
@@ -135,37 +137,14 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
 
     // 0a. Fast sub-computation cache check (bypasses full pipeline if team form / odds pre-computed)
     if (optimizationEnabled && optSettings?.enableSubComputationCache !== false && !params.forceFullSwarm && !settings?.forceFullSwarm) {
-        const cachedSub = globalDomainSubComputationCache.get('market_odds', task) ||
-                          globalDomainSubComputationCache.get('team_form', task) ||
-                          globalDomainSubComputationCache.get('custom', task);
-        if (cachedSub) {
-            context.addEvent({
-                agentRole: 'Domain Sub-Computation Cache',
-                action: 'Cache Hit (Sub-Computation Bypassed)',
-                modelName: 'Local/DomainSubComputationCache',
-                prompt: `Sub-computation cache hit for '${task.slice(0, 80)}'`,
-                output: cachedSub,
-                durationMs: 0
-            });
-            params.onPartialResult?.(cachedSub);
-            params.onStage?.({
-                stage: 'completed',
-                task
-            });
-            return {
-                events: context.events,
-                finalAnalysis: cachedSub,
-                metrics: globalMetricsCollector.getBaselineReport(),
-                optimization: {
-                    earlyExit: true,
-                    tier: 'tier1_approx',
-                    latencySavedMs: 75000,
-                    partialResultEmitted: true,
-                    subcomputationsCached: globalDomainSubComputationCache.getMetrics().subcomputationsSaved,
-                    tokensSaved: 500
-                }
-            };
-        }
+        const subResult = checkSubComputationCache({
+            task,
+            context,
+            onPartialResult: params.onPartialResult,
+            onStage: params.onStage,
+            getMetrics: () => globalMetricsCollector.getBaselineReport()
+        });
+        if (subResult) return subResult;
     }
 
     const targetAppId = settings?.appId || 'perfect-swarm';
@@ -249,25 +228,13 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     const cacheQuery = `${task}\n${data || ''}`.trim();
 
     if (tieredCacheEnabled && !forceFullSwarm && !bypassCache) {
-        const lookup = globalTieredCache.lookup(cacheQuery, {
-            similarityThreshold: settings?.tieredCacheSettings?.l2SimilarityThreshold
+        const lookup = checkTieredCacheLookup({
+            query: cacheQuery,
+            task,
+            similarityThreshold: settings?.tieredCacheSettings?.l2SimilarityThreshold,
+            context
         });
         if (lookup.found && lookup.value) {
-            context.addEvent({
-                agentRole: 'Tiered Cache Engine',
-                action: `Tiered Cache Hit (${lookup.tier})`,
-                modelName: 'Local/TieredCache',
-                prompt: `Cache hit on tier '${lookup.tier}' for query: "${task.slice(0, 80)}" (Similarity: ${Math.round((lookup.similarity ?? 1.0) * 100)}%, Latency: ${lookup.latencyMs}ms)`,
-                output: {
-                    tier: lookup.tier,
-                    similarity: lookup.similarity,
-                    key: lookup.key,
-                    latencyMs: lookup.latencyMs,
-                    cacheMetrics: globalTieredCache.getMetrics()
-                },
-                durationMs: lookup.latencyMs
-            });
-
             params.onStage?.({
                 stage: 'completed',
                 task
@@ -436,7 +403,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     // agent provider/model configuration that produced them.
     const semanticMatch: SemanticMatchResult = (forceFullSwarm || tieredCacheEnabled || bypassCache)
         ? { hit: false, similarity: 0 }
-        : globalSemanticCache.findMatch(task, { data, threshold: 0.80, configVersion: agentConfigVersion });
+        : checkSemanticCacheMatch({ task, data, configVersion: agentConfigVersion });
 
     if (semanticMatch.hit && semanticMatch.entry) {
         context.addEvent({
@@ -676,78 +643,28 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     let workflowTotalTokens: number = 0;
 
     try {
-        // Step 1: Data Profiling, Pre-Filtering & Token Weight Profiling
-        let effectiveDataPayload = data || "";
-        if (optimizationEnabled && optSettings?.enablePreFiltering !== false && data) {
-            preFilterResult = globalDomainPreFilter.filter(data);
-            if (preFilterResult.tokensSaved > 0) {
-                effectiveDataPayload = typeof preFilterResult.filteredData === 'string'
-                    ? preFilterResult.filteredData
-                    : JSON.stringify(preFilterResult.filteredData);
-                context.addEvent({
-                    agentRole: 'Domain Pre-Filter',
-                    action: 'Irrelevant Data Pruned',
-                    modelName: 'Local/DomainPreFilter',
-                    prompt: `Pruned ${preFilterResult.prunedFieldsCount} noisy fields & ${preFilterResult.prunedRecordsCount} records, saving ~${preFilterResult.tokensSaved} tokens (${Math.round(preFilterResult.reductionRatio * 100)}% reduction)`,
-                    output: preFilterResult,
-                    durationMs: 0
-                });
-            }
-        }
-
-        const { rawInput, profile } = profileData(effectiveDataPayload);
-        context.addEvent({
-            agentRole: 'System Profiler',
-            action: 'Metadata Extracted',
-            modelName: 'Local/TypeScript',
-            prompt: 'Analyzing payload size...',
-            output: profile,
-            durationMs: 0
+        // Step 1: Modular Data Profiling, Pre-Filtering, Decomposition & Budgeting Pipeline
+        const profilingResult = runDataProfilingPipeline({
+            task,
+            data,
+            analysts,
+            settings,
+            optimizationEnabled,
+            coordinationEnabled,
+            context
         });
-
-        if (optimizationEnabled) {
-            tokenWeightReport = globalTokenWeightProfiler.profile(effectiveDataPayload, (settings as any)?.historicalBaseline);
-            context.addEvent({
-                agentRole: 'Token Weight Profiler',
-                action: 'Metadata Token Weight Profiling',
-                modelName: 'Local/TokenWeightProfiler',
-                prompt: `Metadata token weight: ${tokenWeightReport.metadataTokens}/${tokenWeightReport.totalTokens} tokens (${Math.round(tokenWeightReport.metadataWeightRatio * 100)}%). Bloated: ${tokenWeightReport.isBloated}`,
-                output: tokenWeightReport,
-                durationMs: 0
-            });
-        }
-
-        // Step 1b: Hierarchical Task Decomposition
-        if (coordinationEnabled && coordinationSettings?.hierarchicalDecomposition !== false) {
-            const specialistRoles = analysts.map(a => a.role);
-            workflowDecompositionPlan = globalTaskDecomposer.decompose(task, specialistRoles);
-            context.addEvent({
-                agentRole: 'Strategy Coordinator',
-                action: 'Hierarchical Task Decomposition',
-                modelName: 'Local/HierarchicalTaskDecomposer',
-                prompt: `Decomposed macro-task into ${workflowDecompositionPlan.subtasks.length} strategic subtasks across ${workflowDecompositionPlan.executionWaves.length} waves`,
-                output: {
-                    macroTask: workflowDecompositionPlan.macroTask,
-                    strategySummary: workflowDecompositionPlan.strategySummary,
-                    subtasksCount: workflowDecompositionPlan.subtasks.length,
-                    executionWavesCount: workflowDecompositionPlan.executionWaves.length,
-                    subtasks: workflowDecompositionPlan.subtasks
-                },
-                durationMs: 0
-            });
-        }
-
-        // Step 2: Token Budgeting & Batch Planning
-        const { chunks, originalChunkCount, maxTokensPerChunk, totalTokens, warning } = createTokenChunks(rawInput);
+        const effectiveDataPayload = profilingResult.effectiveDataPayload;
+        preFilterResult = profilingResult.preFilterResult;
+        tokenWeightReport = profilingResult.tokenWeightReport;
+        workflowDecompositionPlan = profilingResult.workflowDecompositionPlan;
+        const chunks = profilingResult.chunks;
+        const originalChunkCount = profilingResult.originalChunkCount;
+        const maxTokensPerChunk = profilingResult.maxTokensPerChunk;
+        const totalTokens = profilingResult.totalTokens;
+        const warning = profilingResult.warning;
+        const profile = profilingResult.profile;
+        const rawInput = profilingResult.rawInput;
         workflowTotalTokens = totalTokens;
-        context.addEvent({
-            agentRole: 'System Profiler',
-            action: 'Token Budgeting',
-            modelName: 'Local/TypeScript',
-            prompt: `Data exceeds single-pass threshold? ${chunks.length > 1 ? 'Yes' : 'No'}`,
-            output: { chunks: chunks.length, originalChunks: originalChunkCount, maxTokensPerChunk, totalTokens, warning },
-            durationMs: 0
-        });
 
         // Step 3: Targeted Memory Grounding (Hybrid Qdrant / In-Memory Cortex)
         let historicalContext = "";
@@ -1472,54 +1389,12 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
 
         // Step 4b: Interagent Message Publishing & Hypothesis Proposal
         if (coordinationEnabled) {
-            let totalHypothesesProposed = 0;
-            for (let a = 0; a < analysts.length; a++) {
-                const analyst = analysts[a];
-                const reports = allAnalystReports[a];
-                for (const rep of reports) {
-                    if (!rep) continue;
-                    globalMessageChannel.publish({
-                        senderId: analyst.role,
-                        topic: 'specialist_finding',
-                        payload: {
-                            role: analyst.role,
-                            summary: rep.summary,
-                            insightsCount: (rep.insights || []).length,
-                            anomaliesCount: (rep.anomalies || []).length
-                        }
-                    });
-
-                    if (coordinationSettings?.hypothesisValidation !== false) {
-                        const candidateInsights = rep.insights || [];
-                        for (const ins of candidateInsights.slice(0, 3)) {
-                            const claim = typeof ins === 'string' ? ins : (ins.description || ins.title || JSON.stringify(ins));
-                            if (claim && claim.length > 5) {
-                                globalHypothesisLayer.proposeHypothesis({
-                                    claim,
-                                    proposedBy: analyst.role,
-                                    confidence: 0.70,
-                                    evidence: [rep.summary || 'Observed during specialist analysis']
-                                });
-                                totalHypothesesProposed++;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (totalHypothesesProposed > 0) {
-                context.addEvent({
-                    agentRole: 'Hypothesis Decision Layer',
-                    action: 'Hypotheses Proposed',
-                    modelName: 'Local/HypothesisValidationLayer',
-                    prompt: `Specialists proposed ${totalHypothesesProposed} hypotheses for hierarchical arbitration`,
-                    output: {
-                        proposedCount: totalHypothesesProposed,
-                        pendingHypotheses: globalHypothesisLayer.getHypotheses('proposed').length
-                    },
-                    durationMs: 0
-                });
-            }
+            publishInteragentCoordination({
+                analysts,
+                allAnalystReports,
+                coordinationSettings,
+                context
+            });
         }
 
         // Multi-Stage Progressive Stream: Cluster Digests Ready
@@ -1791,36 +1666,13 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         }
 
         // Step 5b: Hierarchical Hypothesis Arbitration & Knowledge Graph Propagation
-        if (coordinationEnabled && coordinationSettings?.hypothesisValidation !== false) {
-            const proposed = globalHypothesisLayer.getHypotheses('proposed');
-            const validatedThisRun: Hypothesis[] = [];
-            const isVerifiedSuccess = !finalAnalysis?.ui_title?.toLowerCase().includes("error");
-            for (const h of proposed) {
-                const validated = globalHypothesisLayer.validateHypothesis(h.id, {
-                    isValid: isVerifiedSuccess,
-                    validatedBy: managerAgent.role || 'Manager Node',
-                    feedback: isVerifiedSuccess ? 'Corroborated by synthesized swarm findings' : 'Refuted by synthesis failure'
-                });
-                if (validated && validated.status === 'validated') {
-                    validatedThisRun.push(validated);
-                }
-            }
-
-            if (validatedThisRun.length > 0) {
-                context.addEvent({
-                    agentRole: 'Hypothesis Validation Layer',
-                    action: 'Hypotheses Validated & Propagated',
-                    modelName: 'Local/HypothesisValidationLayer',
-                    prompt: `Validated ${validatedThisRun.length} hypotheses and propagated findings into Shared Knowledge Graph`,
-                    output: {
-                        validatedCount: validatedThisRun.length,
-                        knowledgeGraphVersion: globalKnowledgeGraph.getVersion(),
-                        knowledgeGraphStats: globalKnowledgeGraph.getStats(),
-                        hypotheses: validatedThisRun.map(h => ({ id: h.id, claim: h.claim, confidence: h.confidence }))
-                    },
-                    durationMs: 0
-                });
-            }
+        if (coordinationEnabled) {
+            arbitrateAndPropagateCoordination({
+                finalAnalysis,
+                managerRole: managerAgent.role || 'Manager Node',
+                coordinationSettings,
+                context
+            });
         }
 
         if (memoryCortex && finalAnalysis && !finalAnalysis.ui_title?.toLowerCase().includes("error")) {
@@ -2194,6 +2046,11 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             tokensSaved: preFilterResult?.tokensSaved ?? 0
         } : undefined
     };
+    } finally {
+        if (unsubscribe) {
+            unsubscribe();
+        }
+    }
 }
 
 /**

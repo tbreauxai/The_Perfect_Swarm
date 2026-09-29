@@ -1,50 +1,32 @@
 [
   {
-    "id": "goal-1-consensus-majority-voting",
-    "description": "Implement consensus / majority voting (#1) in OptimizationRunner.tsx: run analyst model tests 3x with in-flight dedup, calculate majority/average score, gated by a consensus toggle defaulting to on.",
+    "id": "goal-1-state-and-memory-leaks",
+    "description": "Preserve optimizer state across tab switches via CSS hidden in App.tsx (#20), bound latency arrays with rolling 1000 window in profiler.ts (#25), and cleanup context.subscribe event listeners in engine/index.ts try...finally (#26).",
     "status": "completed",
-    "verification": "Analyst models run 3x when consensus toggle is active; average/majority scores computed; toggle controls behavior; unit tests pass."
+    "verification": "OptimizationRunner remains mounted when switching tabs; latency arrays capped at 1000 items; unsubscribe is called upon workflow termination."
   },
   {
-    "id": "goal-2-exponential-backoff-and-circuit-breaker-failover",
-    "description": "Implement 429 exponential backoff with Retry-After header parsing (#2) and circuit-breaker-aware failover (#3): skip OPEN circuit models in failover loops, back off 2s->4s->8s (cap 30s) per provider.",
+    "id": "goal-2-critic-agent-and-dead-code",
+    "description": "Add default Verification Critic agent to App.tsx initial state (#27) and prune dead resolveFreeModel from OpenRouterAdapter (#29).",
     "status": "completed",
-    "verification": "Grader failover checks Retry-After header and backs off exponentially per provider; OPEN circuits are bypassed in failover iterations."
+    "verification": "Critic agent present in initial settings; dead OpenRouterAdapter method removed with clean test execution."
   },
   {
-    "id": "goal-3-output-token-caps-and-persisted-grader-cache",
-    "description": "Implement per-role output token caps (#4) on analyst (~1500), manager (~2000), grader (60), prompt-gen (300), and persist grader cache (#5) to localStorage with 24h TTL.",
+    "id": "goal-3-ui-virtualization-and-throttling",
+    "description": "Virtualize/window SwarmEventTimeline rendering (#21), throttle SSE state updates with requestAnimationFrame in App.tsx (#22), and add pagination to generative DataTable (#28).",
     "status": "completed",
-    "verification": "Token caps forwarded and enforced on backend/engine; grader cache survives page reloads via localStorage."
+    "verification": "Timeline renders windowed events without lag; SSE events buffered and flushed via RAF; DataTable renders pages with navigation controls."
   },
   {
-    "id": "goal-4-cost-dashboard-and-reward-system-wiring",
-    "description": "Implement Cost Dashboard (#6) in CortexDiagnosticsViewer (tokens burned, estimated cost USD, error rate) and wire up/streamline reward system (#7).",
+    "id": "goal-4-security-and-engine-refactor",
+    "description": "Implement Ephemeral Keys toggle in SettingsModal/App.tsx (#23) and refactor engine monolith into modular pipeline stages (#24).",
     "status": "completed",
-    "verification": "Diagnostics view renders cost metrics; reward telemetry is cleanly integrated with failover priorities."
+    "verification": "Ephemeral keys toggle prevents saving keys to localStorage; engine stages extracted into clean modular pipeline files."
   },
   {
-    "id": "goal-5-model-quarantine-prompt-cache-and-concurrent-optimizer",
-    "description": "Implement auto-quarantine for dead models after 3 consecutive 404s (#8), prompt-generation result caching (#10) in memory + localStorage, and concurrent optimizer execution (#9) with adaptive delays.",
+    "id": "goal-5-full-verification-and-todo-update",
+    "description": "Update todo.md items 20-29 as COMPLETED, run full vitest/server tests, TypeScript lint check, and production build.",
     "status": "completed",
-    "verification": "Models hitting 3 consecutive 404s are quarantined; test prompts are cached; models run concurrently up to batch size 3."
-  },
-  {
-    "id": "goal-6-actionable-errors-grader-retry-and-prompt-hardening",
-    "description": "Implement actionable error mapping (#11), grader single-model JSON retry (#12), prompt truncation in live stream events (#13), user task boundary hardening (#14), and lastError string truncation (#15).",
-    "status": "completed",
-    "verification": "Errors mapped with stack traces stripped; grader retries once on malformed JSON; stream prompts truncated to 800 chars; user tasks wrapped in <user_task>; lastError truncated to 500 chars."
-  },
-  {
-    "id": "goal-7-backend-kg-cleanup-router-chip-and-combo-reuse",
-    "description": "Drop empty knowledge-graph block when zero (#16), add visible Model Router decision chip (#17), combo-history reuse within 7 days (#18), and one-click apply full winning config button (#19).",
-    "status": "completed",
-    "verification": "Empty KG block omitted from response; router decision chip visible in header; prior combo scores reused within 7 days; full winning config button applies all models."
-  },
-  {
-    "id": "goal-8-full-verification-and-test-suite",
-    "description": "Run the entire test suite (vitest, npm test), TypeScript lint checks (npm run lint), and production build (npm run build) to ensure zero regressions across all components.",
-    "status": "completed",
-    "verification": "All unit, CLI, portable, simulation, and server tests pass; zero TypeScript errors; clean production build."
+    "verification": "todo.md updated; tsc --noEmit 0 errors; npm test 100% pass; npm run build successful."
   }
 ]
