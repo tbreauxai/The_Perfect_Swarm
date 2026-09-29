@@ -2,6 +2,29 @@ import type { SwarmTool, ToolExecutionResult, ToolCallRequest } from './types.ts
 import { standardBuiltinTools } from './builtin.ts';
 
 /**
+ * Extracts all top-level JSON objects from a string by scanning for
+ * balanced brace pairs. Returns raw JSON substrings.
+ */
+function extractJsonObjects(text: string): string[] {
+    const results: string[] = [];
+    let depth = 0;
+    let start = -1;
+    for (let i = 0; i < text.length; i++) {
+        if (text[i] === '{') {
+            if (depth === 0) start = i;
+            depth++;
+        } else if (text[i] === '}') {
+            depth--;
+            if (depth === 0 && start !== -1) {
+                results.push(text.slice(start, i + 1));
+                start = -1;
+            }
+        }
+    }
+    return results;
+}
+
+/**
  * Registry for managing and executing deterministic tools in the Swarm runtime.
  */
 export class ToolRegistry {
