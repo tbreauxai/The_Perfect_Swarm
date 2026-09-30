@@ -13,6 +13,8 @@ import { globalTieredCache } from './tieredCache.ts';
 import { globalActionPlanCache } from './actionPlanCache.ts';
 import { DEFAULT_PROVIDER_MODELS } from './agent.ts';
 import { globalBenchmarker, initBenchmarker } from './benchmark.ts';
+import { globalFeedbackEngine, analystLedger } from './feedback.ts';
+import { globalLoadBalancer } from './agent.ts';
 
 export interface SwarmServerOptions {
     port?: number;
@@ -66,7 +68,10 @@ export async function handleSwarmSse(
                 }
             });
 
-            await sendEvent('swarm_complete', result);
+            await sendEvent('swarm_complete', {
+                ...result,
+                workflowId: result.workflowId
+            });
         } catch (err: any) {
             await sendEvent('swarm_error', { error: err.message || String(err) });
         }
@@ -179,6 +184,56 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
         return c.json({ status: 'ok', edge: true });
     });
 
+    app.post('/api/swarm/feedback', async (c) => {
+        try {
+            const body = await c.req.json().catch(() => ({}));
+            const { workflowId, outcome, stake, profit, gradedAt, appId = 'perfect-swarm' } = body;
+
+            if (!workflowId || !['win', 'loss', 'push'].includes(outcome)) {
+                return c.json({ error: 'Invalid workflowId or outcome' }, 400);
+            }
+
+            const workflowRecord = globalFeedbackEngine.getKnowledgeRepository().queryOutcomes().find((o: any) => o.workflowId === workflowId);
+            if (!workflowRecord) {
+                return c.json({ error: 'Workflow not found' }, 404);
+            }
+
+            if ((workflowRecord as any).feedbackProcessed) {
+                // Idempotency support
+                return c.json({ ok: true, message: 'Feedback already processed', workflowId });
+            }
+
+            const accuracyScore = outcome === 'win' ? 1.0 : outcome === 'loss' ? 0.0 : 0.5;
+
+            const fbResult = await globalFeedbackEngine.processFeedback({
+                workflowId,
+                task: workflowRecord.task,
+                appId: workflowRecord.appId,
+                durationMs: workflowRecord.metrics.durationMs,
+                targetTier: workflowRecord.metrics.targetTier,
+                tokenSavings: workflowRecord.metrics.tokenSavings,
+                tokensConsumed: workflowRecord.metrics.tokensConsumed,
+                qualityScore: workflowRecord.metrics.qualityScore,
+                accuracyScore,
+                errorCount: workflowRecord.metrics.errorCount
+            });
+
+            // Update per-analyst ledger
+            const roles = ['SpecialistRouter', 'Manager Node', 'Verification Node']; // Using default roles since agentRoles isn't on AnalysisOutcomeRecord by default
+            for (const role of roles) {
+                analystLedger.recordOutcome(appId, role, outcome);
+            }
+
+            (workflowRecord as any).feedbackProcessed = true;
+            (workflowRecord as any).gradedAt = gradedAt || Date.now();
+
+            return c.json({ ok: true, workflowId, outcome, accuracyScore, compositeReward: fbResult.reward.compositeReward });
+        } catch (err: any) {
+            console.error('[SwarmServer Feedback Error]:', err);
+            return c.json({ error: err.message || 'Internal Server Error' }, 500);
+        }
+    });
+
     app.get('/api/swarm/metrics', (c) => {
         // Sync cache metrics from cache layers
         const payloadStats = globalPayloadCache.getStats();
@@ -190,7 +245,8 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
         const totalMisses = payloadStats.misses + semanticStats.misses + tieredMetrics.misses + actionPlanStats.misses;
         globalTelemetryCollector.syncCacheMetrics(totalHits, totalMisses);
 
-        return c.json(globalTelemetryCollector.getSnapshot());
+        const snapshot = globalTelemetryCollector.getSnapshot();
+        return c.json({ ...snapshot, analystAccuracy: analystLedger.getMetrics() });
     });
 
     app.get('/api/swarm/config', (c) => {

@@ -126,6 +126,9 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     const workflowStartTime = Date.now();
     const { task, data, settings, defaultAi, enableDeepAnalysis, complexityOverride, onEvent } = params;
     const context = params.context || new SwarmContext();
+    if (!(context as any).id) {
+        (context as any).id = `wf-${Date.now()}`;
+    }
     const unsubscribe = onEvent ? context.subscribe(onEvent) : undefined;
 
     try {
@@ -294,6 +297,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             }
 
             return {
+                workflowId: (context as any).id,
                 events: context.events,
                 finalAnalysis: lookup.value,
                 metrics,
@@ -382,6 +386,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         }
 
         return {
+            workflowId: (context as any).id,
             events: context.events,
             finalAnalysis: cachedAnalysis,
             metrics,
@@ -469,6 +474,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         }
 
         return {
+            workflowId: (context as any).id,
             events: context.events,
             finalAnalysis: semanticMatch.entry.payload,
             metrics,
@@ -2004,6 +2010,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     }
 
     return {
+        workflowId: (context as any).id,
         events: context.events,
         finalAnalysis,
         metrics,

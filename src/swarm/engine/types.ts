@@ -46,6 +46,7 @@ export interface SwarmWorkflowParams {
 }
 
 export interface SwarmWorkflowResult {
+    workflowId?: string;
     events: SwarmEvent[];
     finalAnalysis: any;
     metrics?: SwarmBaselineReport;
