@@ -509,12 +509,14 @@ export class MemoryCortex {
             }
 
             // Create compound payload indexes for multi-tenant and learning queries
-            await this.ensurePayloadIndex(targetCollection, "domain", "keyword");
-            await this.ensurePayloadIndex(targetCollection, "appId", "keyword");
-            await this.ensurePayloadIndex(targetCollection, "targetApps", "keyword");
-            await this.ensurePayloadIndex(targetCollection, "agentRole", "keyword");
-            await this.ensurePayloadIndex(targetCollection, "qualityRating", "float");
-            await this.ensurePayloadIndex(targetCollection, "verified", "bool");
+            await Promise.all([
+                this.ensurePayloadIndex(targetCollection, "domain", "keyword"),
+                this.ensurePayloadIndex(targetCollection, "appId", "keyword"),
+                this.ensurePayloadIndex(targetCollection, "targetApps", "keyword"),
+                this.ensurePayloadIndex(targetCollection, "agentRole", "keyword"),
+                this.ensurePayloadIndex(targetCollection, "qualityRating", "float"),
+                this.ensurePayloadIndex(targetCollection, "verified", "bool")
+            ]);
 
             this.initialized = true;
             this.initializedCollections.add(targetCollection);
