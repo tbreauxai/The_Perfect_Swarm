@@ -24,7 +24,7 @@ import {
     savePromptGenCache,
     PROMPT_GEN_CACHE,
     PROMPT_GEN_CACHE_STORAGE_KEY
-} from './OptimizationRunner';
+} from './utils';
 import {
     isModelQuarantined,
     recordModel404,
