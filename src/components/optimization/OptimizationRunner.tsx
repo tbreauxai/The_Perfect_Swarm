@@ -393,7 +393,6 @@ export function extractGradingScores(
     data: any,
     durationMs: number
 ): { intelligence: number | null; accuracy: number | null; speed: number } {
-    console.log('EXTRACT GRADING SCORES INPUT:', data);
     const fallbackSpeed = calculateSpeedScore(durationMs);
     let intVal: number | null = null;
     let accVal: number | null = null;
@@ -497,8 +496,6 @@ export function extractGradingScores(
         tryScanString(data.finalAnalysis);
     }
 
-    console.log('EXTRACT GRADING SCORES OUTPUT:', { intelligence: intVal, accuracy: accVal, speed: spdVal });
-    
     return {
         intelligence: intVal,
         accuracy: accVal,
