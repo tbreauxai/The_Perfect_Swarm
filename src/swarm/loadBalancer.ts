@@ -683,6 +683,11 @@ export interface SpecialistCapabilityProfile {
     averageReward: number;       // Empirical mean reward
     latencyEmaMs: number;
     domainStats: Record<string, DomainCapabilityStats>;
+    accuracyWins: number;
+    accuracyLosses: number;
+    accuracyPushes: number;
+    accuracyScore: number;       // 0.0 to 1.0 (historical accuracy from win/loss/push outcomes)
+    totalAccreditedOutcomes: number;
     lastUpdated: number;
 }
 
@@ -690,6 +695,7 @@ export interface CapabilityProfilerConfig {
     explorationConstant?: number;      // c in UCB1 formula: UCB1 = mu_i + c * sqrt(2 * ln(N) / N_i), default 0.707
     emaAlpha?: number;                 // Smoothing factor for latency EMA (default 0.25)
     defaultLatencyBaselineMs?: number; // Latency normalization baseline (default 1500ms)
+    defaultAccuracyWeight?: number;    // Weight of prediction accuracy in capability score [0.0, 1.0] (default 0.30)
 }
 
 /**
@@ -703,12 +709,14 @@ export class SpecialistCapabilityProfiler {
     private explorationConstant: number;
     private emaAlpha: number;
     private defaultLatencyBaselineMs: number;
+    private defaultAccuracyWeight: number;
     private totalTrials: number = 0;
 
     constructor(config?: CapabilityProfilerConfig) {
         this.explorationConstant = config?.explorationConstant ?? 0.707;
         this.emaAlpha = config?.emaAlpha ?? 0.25;
         this.defaultLatencyBaselineMs = config?.defaultLatencyBaselineMs ?? 1500;
+        this.defaultAccuracyWeight = config?.defaultAccuracyWeight ?? 0.30;
     }
 
     private getOrCreateProfile(agentRole: string): SpecialistCapabilityProfile {
@@ -725,6 +733,11 @@ export class SpecialistCapabilityProfiler {
                 averageReward: 0.85,
                 latencyEmaMs: this.defaultLatencyBaselineMs,
                 domainStats: {},
+                accuracyWins: 0,
+                accuracyLosses: 0,
+                accuracyPushes: 0,
+                accuracyScore: 0.85,
+                totalAccreditedOutcomes: 0,
                 lastUpdated: Date.now()
             };
             this.profiles.set(key, profile);
@@ -810,6 +823,37 @@ export class SpecialistCapabilityProfiler {
     }
 
     /**
+     * Records prediction/bet outcome accuracy (win, loss, push) for an analyst role.
+     * Distinct from execution reliability: does not penalize execution completion rate or mark failures.
+     */
+    recordAccuracy(agentRole: string, outcome: 'win' | 'loss' | 'push' | number): void {
+        const key = (agentRole || '').trim();
+        if (!key) return;
+
+        const profile = this.getOrCreateProfile(key);
+
+        if (outcome === 'win' || outcome === 1) {
+            profile.accuracyWins++;
+        } else if (outcome === 'loss' || outcome === 0) {
+            profile.accuracyLosses++;
+        } else if (outcome === 'push' || outcome === 0.5) {
+            profile.accuracyPushes++;
+        } else if (typeof outcome === 'number') {
+            if (outcome >= 0.7) profile.accuracyWins++;
+            else if (outcome <= 0.3) profile.accuracyLosses++;
+            else profile.accuracyPushes++;
+        } else {
+            return;
+        }
+
+        profile.totalAccreditedOutcomes++;
+        const total = profile.totalAccreditedOutcomes;
+        const totalScore = (profile.accuracyWins * 1.0) + (profile.accuracyPushes * 0.5);
+        profile.accuracyScore = Math.round((totalScore / Math.max(1, total)) * 1000) / 1000;
+        profile.lastUpdated = Date.now();
+    }
+
+    /**
      * Calculates Upper Confidence Bound (UCB1) capability score for an agent role.
      * Balances empirical performance (exploitation) with exploration uncertainty.
      */
@@ -831,6 +875,10 @@ export class SpecialistCapabilityProfiler {
             meanReward = (ds.averageReward * 0.70) + (profile.averageReward * 0.30);
         }
 
+        if (profile.totalAccreditedOutcomes > 0 && this.defaultAccuracyWeight > 0) {
+            meanReward = (meanReward * (1 - this.defaultAccuracyWeight)) + (profile.accuracyScore * this.defaultAccuracyWeight);
+        }
+
         // Exploration component: c * sqrt(2 * ln(N) / N_i)
         const explorationBonus = this.explorationConstant * Math.sqrt((2 * Math.log(totalN)) / agentN);
         const ucb = meanReward + explorationBonus;
@@ -840,11 +888,14 @@ export class SpecialistCapabilityProfiler {
 
     /**
      * Calculates empirical capability score based on verification rewards and task completion rate
-     * without Multi-Armed Bandit exploration inflation. Ideal for stable cluster lead election.
+     * without Multi-Armed Bandit exploration inflation. Blends prediction accuracy when historical outcomes exist.
      */
-    getCapabilityScore(agentRole: string, domain?: string): number {
+    getCapabilityScore(agentRole: string, domain?: string, options?: { accuracyWeight?: number }): number {
         const profile = this.profiles.get((agentRole || '').trim());
         if (!profile || profile.trials === 0) {
+            if (profile && profile.totalAccreditedOutcomes > 0) {
+                return profile.accuracyScore;
+            }
             return 0.85;
         }
 
@@ -854,7 +905,15 @@ export class SpecialistCapabilityProfiler {
             meanReward = (ds.averageReward * 0.70) + (profile.averageReward * 0.30);
         }
 
-        return Math.round(meanReward * profile.completionRate * 1000) / 1000;
+        const executionScore = meanReward * profile.completionRate;
+        const weight = options?.accuracyWeight ?? this.defaultAccuracyWeight;
+
+        if (profile.totalAccreditedOutcomes > 0 && weight > 0) {
+            const blended = (executionScore * (1 - weight)) + (profile.accuracyScore * weight);
+            return Math.round(blended * 1000) / 1000;
+        }
+
+        return Math.round(executionScore * 1000) / 1000;
     }
 
     getProfile(agentRole: string): SpecialistCapabilityProfile | undefined {

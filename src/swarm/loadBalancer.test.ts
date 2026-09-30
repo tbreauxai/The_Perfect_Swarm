@@ -510,4 +510,95 @@ describe('TokenBudgetManager & SpecialistAffinityRouter', () => {
             expect(remaining).toBeLessThanOrEqual(3500);
         });
     });
+
+    describe('SpecialistCapabilityProfiler - Accuracy Dimension & Outcomes-Driven Routing', () => {
+        let profiler: SpecialistCapabilityProfiler;
+
+        beforeEach(() => {
+            profiler = new SpecialistCapabilityProfiler({ defaultAccuracyWeight: 0.30 });
+        });
+
+        it('tracks win, loss, and push outcomes cleanly on specialist profile without corrupting execution metrics', () => {
+            // First simulate normal execution trials
+            profiler.recordOutcome('Quant Specialist', { success: true, durationMs: 400 });
+            profiler.recordOutcome('Quant Specialist', { success: true, durationMs: 450 });
+
+            const preProfile = profiler.getProfile('Quant Specialist');
+            expect(preProfile?.trials).toBe(2);
+            expect(preProfile?.successes).toBe(2);
+            expect(preProfile?.failures).toBe(0);
+            expect(preProfile?.completionRate).toBe(1.0);
+            expect(preProfile?.accuracyWins).toBe(0);
+            expect(preProfile?.totalAccreditedOutcomes).toBe(0);
+
+            // Record outcome feedback: 2 wins, 1 push, 1 loss
+            profiler.recordAccuracy('Quant Specialist', 'win');
+            profiler.recordAccuracy('Quant Specialist', 'win');
+            profiler.recordAccuracy('Quant Specialist', 'push');
+            profiler.recordAccuracy('Quant Specialist', 'loss');
+
+            const postProfile = profiler.getProfile('Quant Specialist');
+            expect(postProfile?.accuracyWins).toBe(2);
+            expect(postProfile?.accuracyPushes).toBe(1);
+            expect(postProfile?.accuracyLosses).toBe(1);
+            expect(postProfile?.totalAccreditedOutcomes).toBe(4);
+            // (2 * 1.0 + 1 * 0.5 + 1 * 0.0) / 4 = 2.5 / 4 = 0.625
+            expect(postProfile?.accuracyScore).toBe(0.625);
+
+            // Crucial: execution trials and completion rate remain untouched by bet outcomes
+            expect(postProfile?.trials).toBe(2);
+            expect(postProfile?.failures).toBe(0);
+            expect(postProfile?.completionRate).toBe(1.0);
+        });
+
+        it('separates execution failure from a losing bet outcome', () => {
+            profiler.recordOutcome('Market Specialist', { success: false, error: 'Socket timeout' });
+            profiler.recordAccuracy('Market Specialist', 'win');
+
+            const profile = profiler.getProfile('Market Specialist');
+            expect(profile?.failures).toBe(1);
+            expect(profile?.completionRate).toBe(0.0);
+            expect(profile?.accuracyWins).toBe(1);
+            expect(profile?.accuracyScore).toBe(1.0);
+        });
+
+        it('blends accuracy score into capabilityScore and ucb1Score to prioritize winning analysts', () => {
+            // Both specialists have identical clean execution records
+            profiler.recordOutcome('Hot Streak Specialist', { success: true, durationMs: 500 });
+            profiler.recordOutcome('Cold Streak Specialist', { success: true, durationMs: 500 });
+
+            // Winner picks 3 wins (1.0 accuracy)
+            profiler.recordAccuracy('Hot Streak Specialist', 'win');
+            profiler.recordAccuracy('Hot Streak Specialist', 'win');
+            profiler.recordAccuracy('Hot Streak Specialist', 'win');
+
+            // Cold streak picks 3 losses (0.0 accuracy)
+            profiler.recordAccuracy('Cold Streak Specialist', 'loss');
+            profiler.recordAccuracy('Cold Streak Specialist', 'loss');
+            profiler.recordAccuracy('Cold Streak Specialist', 'loss');
+
+            const hotScore = profiler.getCapabilityScore('Hot Streak Specialist');
+            const coldScore = profiler.getCapabilityScore('Cold Streak Specialist');
+
+            expect(hotScore).toBeGreaterThan(coldScore);
+
+            const hotUcb = profiler.getUcb1Score('Hot Streak Specialist');
+            const coldUcb = profiler.getUcb1Score('Cold Streak Specialist');
+
+            expect(hotUcb).toBeGreaterThan(coldUcb);
+        });
+
+        it('supports configurable accuracy weighting and safe reset', () => {
+            profiler.recordOutcome('Custom Specialist', { success: true });
+            profiler.recordAccuracy('Custom Specialist', 'win');
+
+            const baseScore = profiler.getCapabilityScore('Custom Specialist', undefined, { accuracyWeight: 0.0 });
+            const weightedScore = profiler.getCapabilityScore('Custom Specialist', undefined, { accuracyWeight: 0.5 });
+
+            expect(weightedScore).toBeGreaterThan(baseScore);
+
+            profiler.reset();
+            expect(profiler.getProfile('Custom Specialist')).toBeUndefined();
+        });
+    });
 });

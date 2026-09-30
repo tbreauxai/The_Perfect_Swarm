@@ -14,7 +14,7 @@ import { globalActionPlanCache } from './actionPlanCache.ts';
 import { DEFAULT_PROVIDER_MODELS } from './agent.ts';
 import { globalBenchmarker, initBenchmarker } from './benchmark.ts';
 import { globalFeedbackEngine, analystLedger } from './feedback.ts';
-import { globalLoadBalancer } from './loadBalancer.ts';
+import { globalLoadBalancer, globalSpecialistProfiler } from './loadBalancer.ts';
 
 export interface SwarmServerOptions {
     port?: number;
@@ -222,11 +222,12 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 agentRoles: (workflowRecord as any).agentRoles
             });
 
-            // Update per-analyst ledger with the REAL analyst roles from the workflow record
+            // Update per-analyst ledger and specialist profiler with REAL analyst roles from the workflow record
             const targetAppId = workflowRecord.appId || appId || 'perfect-swarm';
             const roles = ((workflowRecord as any).agentRoles || []).filter(Boolean);
             for (const role of roles) {
                 analystLedger.recordOutcome(targetAppId, role, outcome);
+                globalSpecialistProfiler.recordAccuracy(role, outcome);
             }
 
             for (const r of workflowRecords) {
@@ -253,7 +254,11 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
         globalTelemetryCollector.syncCacheMetrics(totalHits, totalMisses);
 
         const snapshot = globalTelemetryCollector.getSnapshot();
-        return c.json({ ...snapshot, analystAccuracy: analystLedger.getMetrics() });
+        return c.json({
+            ...snapshot,
+            analystAccuracy: analystLedger.getMetrics(),
+            specialistProfiles: globalSpecialistProfiler.getAllProfiles()
+        });
     });
 
     app.get('/api/swarm/config', (c) => {

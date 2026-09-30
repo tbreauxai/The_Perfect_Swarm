@@ -1,24 +1,33 @@
-# Ultragoal Brief: Real Analyst Role Attribution in Analyst Ledger (2026-09-30)
+# Ultragoal Brief: Outcomes-Driven Routing and Persisted Analyst Ledger (2026-09-30)
 
 ## Objective
-Fix per-analyst learning attribution across the feedback loop by replacing hardcoded pipeline node names (`SpecialistRouter`, `Manager Node`, `Verification Node`) with real specialist analyst roles (`Quant Specialist`, `Market & Steam Specialist`, etc.) in `AnalysisOutcomeRecord`, `executeSwarmWorkflow`, and the `/api/swarm/feedback` handler.
+Implement the two flagged improvements from `todo.md`:
+1. **Outcomes Influence Routing**: Add an accuracy dimension to `SpecialistCapabilityProfiler` (`src/swarm/loadBalancer.ts`) so bet outcomes (win/loss/push) influence routing and failover priority without conflating execution success/failure.
+2. **Persisted Analyst Ledger**: Add optional persistent backing (file-based in Node environments with debounce, plus import/export/load/save APIs) to `analystLedger` in `src/swarm/feedback.ts` so per-analyst win/loss history survives server restarts and redeploys.
 
-## Source & Scope
-- **Source:** `todo.md` ("Analyst Ledger Records Fake Roles") following commit `1b3bb72`.
-- **Target Subsystems:** `src/swarm/feedback.ts`, `src/swarm/engine/index.ts`, `src/swarm/server.ts`, and test verification suites.
-- **Constraints:** Backend only, zero external runtime dependencies added, full backward compatibility, safe fallback when `agentRoles` is empty.
+## Target Subsystems
+- `src/swarm/loadBalancer.ts` & `src/swarm/loadBalancer.test.ts`: Accuracy dimension, `recordAccuracy`, and `getCapabilityScore` weighting.
+- `src/swarm/server.ts` & `src/swarm/server.test.ts`: Wire `/api/swarm/feedback` to both `analystLedger` and `globalSpecialistProfiler`.
+- `src/swarm/feedback.ts` & `src/swarm/feedback.test.ts`: File-backed persistence for `analystLedger`.
+- `todo.md`: Document resolution of flagged items.
 
 ## Micro-Goal Breakdown
-1. **goal-1-feedback-record-agent-roles**:
-   - Update `AnalysisOutcomeRecord` in `src/swarm/feedback.ts` to include `agentRoles?: string[]`.
-   - Update `processFeedback` parameters to accept `agentRoles?: string[]` and store `agentRoles: params.agentRoles || []` on the outcome record.
+1. **goal-1-profiler-accuracy-dimension**:
+   - Add accuracy metrics (`accuracyWins`, `accuracyLosses`, `accuracyPushes`, `accuracyScore`) to `SpecialistCapabilityProfile`.
+   - Add `recordAccuracy(agentRole, outcome)` and blend accuracy into `getCapabilityScore` / `getUcb1Score`.
+   - Add unit tests verifying execution reliability vs bet accuracy scoring separation.
 
-2. **goal-2-engine-populate-analyst-roles**:
-   - Update `executeSwarmWorkflow` in `src/swarm/engine/index.ts` to extract real analyst roles from `analysts` and `settings?.agents` and pass them into `processFeedback`.
+2. **goal-2-wire-server-feedback-to-profiler**:
+   - Update `POST /api/swarm/feedback` in `src/swarm/server.ts` to call `globalSpecialistProfiler.recordAccuracy(role, outcome)`.
+   - Ensure `GET /api/swarm/metrics` surfaces capability profiles with accuracy metrics.
+   - Verify that routing prioritizes specialists with higher historical accuracy.
 
-3. **goal-3-server-analyst-ledger-real-roles**:
-   - Update `POST /api/swarm/feedback` in `src/swarm/server.ts` to extract `agentRoles` from `workflowRecord` and record outcomes in `analystLedger` for real analysts instead of fake pipeline nodes.
+3. **goal-3-persist-analyst-ledger**:
+   - Implement storage persistence on `analystLedger` in `src/swarm/feedback.ts` (`load()`, `save()`, `export()`, `import()`, `initPersistence()`).
+   - Add automated debounced file persistence in Node/Render environments with fallback in Edge/browser.
+   - Add unit tests verifying ledger hydration, saving, and persistence across simulated reboots.
 
 4. **goal-4-test-verification-and-todo-update**:
-   - Add unit/integration tests verifying real analyst role attribution in `analystLedger`.
-   - Run vitest test suites, `test-sse-server.mjs`, `tsc --noEmit` linting, dual builds (`build:client` and `build:swarm`), and update `todo.md`.
+   - Execute full test suite (`vitest`, `npm test`, `test-sse-server.mjs`, `tsc --noEmit`).
+   - Build production ESM/CJS bundles (`npm run build:swarm`, `npm run build:client`).
+   - Update `todo.md` marking flagged items fully implemented.

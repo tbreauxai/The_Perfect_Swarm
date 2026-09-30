@@ -1,26 +1,26 @@
 [
   {
-    "id": "goal-1-feedback-record-agent-roles",
-    "description": "Update AnalysisOutcomeRecord in src/swarm/feedback.ts to include agentRoles?: string[], accept agentRoles in processFeedback, and persist it on the outcome record.",
+    "id": "goal-1-profiler-accuracy-dimension",
+    "description": "Add accuracy tracking (wins, losses, pushes, accuracyScore) and recordAccuracy() to SpecialistCapabilityProfiler in src/swarm/loadBalancer.ts, blending accuracy into getCapabilityScore without conflating execution success/failure.",
     "status": "completed",
-    "verification": "AnalysisOutcomeRecord interface and processFeedback schema in src/swarm/feedback.ts accept and store agentRoles array; feedback unit tests pass."
+    "verification": "SpecialistCapabilityProfiler records accuracy separately from execution reliability; getCapabilityScore and getUcb1Score reflect win/loss records; unit tests pass."
   },
   {
-    "id": "goal-2-engine-populate-analyst-roles",
-    "description": "Update executeSwarmWorkflow in src/swarm/engine/index.ts to populate real analyst roles from configured/active agents in all processFeedback calls.",
+    "id": "goal-2-wire-server-feedback-to-profiler",
+    "description": "Wire POST /api/swarm/feedback in src/swarm/server.ts to update globalSpecialistProfiler.recordAccuracy for each real analyst role alongside analystLedger.",
     "status": "completed",
-    "verification": "processFeedback calls in engine index pass real analyst roles; feedback reports generated with real roles attached to records."
+    "verification": "POST /api/swarm/feedback updates both analystLedger and globalSpecialistProfiler; GET /api/swarm/metrics exposes accuracy and updated capability scores."
   },
   {
-    "id": "goal-3-server-analyst-ledger-real-roles",
-    "description": "Update POST /api/swarm/feedback in src/swarm/server.ts to extract agentRoles from workflowRecord and record outcomes in analystLedger for real analysts instead of fake pipeline nodes.",
+    "id": "goal-3-persist-analyst-ledger",
+    "description": "Equip analystLedger in src/swarm/feedback.ts with file-backed persistence (initPersistence, save, load, export, import) and auto-save so metrics survive server restarts.",
     "status": "completed",
-    "verification": "POST /api/swarm/feedback correctly records outcomes for workflowRecord.agentRoles in analystLedger, with safe no-op fallback when empty."
+    "verification": "analystLedger loads and saves records from/to persistent storage with debounce; unit tests verify recovery across simulated restarts."
   },
   {
     "id": "goal-4-test-verification-and-todo-update",
-    "description": "Add tests verifying real analyst role attribution in analystLedger, execute full test suite (npm test, vitest, test-sse-server), verify zero TypeScript errors, build bundles, and update todo.md.",
+    "description": "Run full test suite (npm test, vitest, test-sse-server), verify zero TypeScript lint errors, build production distribution bundles, and update todo.md.",
     "status": "completed",
-    "verification": "100% tests pass, tsc --noEmit 0 errors, build succeeds, and todo.md marked verified."
+    "verification": "100% tests pass, tsc --noEmit 0 errors, build:swarm and build:client succeed, and todo.md marked completed."
   }
 ]

@@ -1666,7 +1666,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 },
                 context,
                 effectiveDynamicPrompt,
-                "Verify whether this analysis faithfully represents the analyst reports and data, and strictly complies with all historical baselines and past lessons without hallucinations or omissions."
+                "Verify whether this analysis faithfully represents the analyst reports and data, strictly complies with all historical baselines and past lessons without hallucinations or omissions, and does the summary arbitrate analyst disagreements with deciding evidence rather than generic filler."
             );
 
             parsedManagerOutput = lifecycleResult.finalProposal;

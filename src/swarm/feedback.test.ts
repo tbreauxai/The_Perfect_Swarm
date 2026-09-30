@@ -1,12 +1,16 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import {
     PolicyOptimizer,
     ConceptDriftDetector,
     SwarmKnowledgeRepository,
     ContinuousFeedbackEngine,
     DEFAULT_TUNABLE_PARAMETERS,
-    PARAMETER_BOUNDS
-} from './feedback.js';
+    PARAMETER_BOUNDS,
+    AnalystLedger,
+    analystLedger
+} from './feedback.ts';
 
 describe('PolicyOptimizer (Evolutionary Strategies & RL Reward Tuning)', () => {
     let optimizer: PolicyOptimizer;
@@ -313,5 +317,89 @@ describe('ContinuousFeedbackEngine (Unified Feedback Loop)', () => {
         const stored = engine.getKnowledgeRepository().getOutcome(result.outcomeId);
         expect(stored).toBeDefined();
         expect(stored?.agentRoles).toEqual(expectedRoles);
+    });
+});
+
+describe('AnalystLedger (Per-Analyst Outcomes & File-Backed Persistence)', () => {
+    const testDir = path.resolve(process.cwd(), '.test-analyst-ledger');
+    const testFile = path.join(testDir, 'analyst_ledger.json');
+
+    beforeEach(() => {
+        analystLedger.clear();
+        if (fs.existsSync(testFile)) fs.unlinkSync(testFile);
+        if (fs.existsSync(testDir)) fs.rmdirSync(testDir);
+    });
+
+    afterEach(() => {
+        analystLedger.clear();
+        if (fs.existsSync(testFile)) fs.unlinkSync(testFile);
+        if (fs.existsSync(testDir)) fs.rmdirSync(testDir);
+    });
+
+    it('records win, loss, and push outcomes keyed by appId:agentRole', () => {
+        analystLedger.recordOutcome('duelodds', 'Quant Specialist', 'win');
+        analystLedger.recordOutcome('duelodds', 'Quant Specialist', 'win');
+        analystLedger.recordOutcome('duelodds', 'Quant Specialist', 'loss');
+        analystLedger.recordOutcome('duelodds', 'Market Specialist', 'push');
+
+        const metrics = analystLedger.getMetrics();
+        expect(metrics['duelodds:Quant Specialist']).toBeDefined();
+        expect(metrics['duelodds:Quant Specialist'].wins).toBe(2);
+        expect(metrics['duelodds:Quant Specialist'].losses).toBe(1);
+        expect(metrics['duelodds:Quant Specialist'].pushes).toBe(0);
+
+        expect(metrics['duelodds:Market Specialist']).toBeDefined();
+        expect(metrics['duelodds:Market Specialist'].wins).toBe(0);
+        expect(metrics['duelodds:Market Specialist'].pushes).toBe(1);
+    });
+
+    it('exports and imports ledger records correctly', () => {
+        const ledger1 = new AnalystLedger();
+        ledger1.recordOutcome('app1', 'Specialist A', 'win');
+        ledger1.recordOutcome('app1', 'Specialist B', 'loss');
+
+        const exported = ledger1.export();
+        const ledger2 = new AnalystLedger();
+        const importedCount = ledger2.import(exported);
+
+        expect(importedCount).toBe(2);
+        expect(ledger2.getRecord('app1', 'Specialist A')?.wins).toBe(1);
+        expect(ledger2.getRecord('app1', 'Specialist B')?.losses).toBe(1);
+    });
+
+    it('saves to file and restores state across simulated restart', async () => {
+        const ledger1 = new AnalystLedger({ persistPath: testFile, autoSave: false });
+        ledger1.recordOutcome('render-app', 'Injury Analyst', 'win');
+        ledger1.recordOutcome('render-app', 'Injury Analyst', 'win');
+        ledger1.recordOutcome('render-app', 'Injury Analyst', 'push');
+
+        const saved = await ledger1.saveToFile();
+        expect(saved).toBe(true);
+        expect(fs.existsSync(testFile)).toBe(true);
+
+        // Simulate server reboot with new instance loading from persistent file
+        const ledger2 = new AnalystLedger({ persistPath: testFile });
+        const loaded = await ledger2.loadFromFile();
+        expect(loaded).toBe(true);
+
+        const record = ledger2.getRecord('render-app', 'Injury Analyst');
+        expect(record).toBeDefined();
+        expect(record?.wins).toBe(2);
+        expect(record?.pushes).toBe(1);
+        expect(record?.losses).toBe(0);
+    });
+
+    it('auto-saves debounced writes when autoSave and persistPath are active', async () => {
+        const ledger = new AnalystLedger({ persistPath: testFile, autoSave: true, debounceMs: 50 });
+        ledger.recordOutcome('auto-app', 'Quant Lead', 'win');
+
+        // Verify debounced save writes to disk after timeout
+        await new Promise((r) => setTimeout(r, 120));
+        expect(fs.existsSync(testFile)).toBe(true);
+
+        const raw = fs.readFileSync(testFile, 'utf-8');
+        const parsed = JSON.parse(raw);
+        expect(parsed['auto-app:Quant Lead']).toBeDefined();
+        expect(parsed['auto-app:Quant Lead'].wins).toBe(1);
     });
 });

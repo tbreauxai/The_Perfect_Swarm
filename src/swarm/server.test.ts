@@ -103,6 +103,15 @@ describe('Swarm Server & Feedback Attribution', () => {
         expect(metricsData.analystAccuracy['duelodds:SpecialistRouter']).toBeUndefined();
         expect(metricsData.analystAccuracy['duelodds:Verification Node']).toBeUndefined();
 
+        // Verify specialistProfiles in metrics endpoint reflects outcomes-driven routing
+        expect(metricsData.specialistProfiles).toBeDefined();
+        expect(metricsData.specialistProfiles['Quant Specialist']).toBeDefined();
+        expect(metricsData.specialistProfiles['Quant Specialist'].accuracyWins).toBe(1);
+        expect(metricsData.specialistProfiles['Quant Specialist'].accuracyScore).toBe(1.0);
+        expect(metricsData.specialistProfiles['Market & Steam Specialist']).toBeDefined();
+        expect(metricsData.specialistProfiles['Market & Steam Specialist'].accuracyWins).toBe(1);
+        expect(metricsData.specialistProfiles['Market & Steam Specialist'].accuracyScore).toBe(1.0);
+
         // Verify idempotency on repeat request
         const repeatRes = await fetch(`${baseUrl}/api/swarm/feedback`, {
             method: 'POST',

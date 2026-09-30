@@ -263,7 +263,13 @@ async function runSseServerTests() {
         if (!accuracyKeys.includes('duelodds:Quant Specialist') || !accuracyKeys.includes('duelodds:Market & Steam Specialist')) {
             throw new Error(`Missing real analyst roles in analystAccuracy: ${accuracyKeys.join(', ')}`);
         }
-        console.log('✓ Real analyst roles verified in analystLedger telemetry without fake pipeline nodes.');
+        if (!metricsData2.specialistProfiles || !metricsData2.specialistProfiles['Quant Specialist']) {
+            throw new Error('Missing Quant Specialist in specialistProfiles');
+        }
+        if (metricsData2.specialistProfiles['Quant Specialist'].accuracyWins < 1) {
+            throw new Error('Quant Specialist accuracyWins was not updated in specialistProfiles');
+        }
+        console.log('✓ Real analyst roles and outcomes-driven specialist profile accuracy verified.');
 
         console.log('\n✓ ALL SWARM HTTP/SSE STREAMING SERVER TESTS PASSED SUCCESSFULLY!\n');
     } finally {
