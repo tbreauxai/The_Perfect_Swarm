@@ -134,7 +134,7 @@ describe('MemoryCortex: O(log n) Vector Indexing & Deduplication', () => {
             defaultAppId: 'indexing-test-app',
             isolatedStore: true,
             embeddingProvider: new DeterministicLocalEmbeddingProvider(),
-            qdrantUrl: 'this-is-not-a-valid-url'
+            url: 'this-is-not-a-valid-url'
         });
         expect((invalidCortex as any).isAvailable).toBe(false);
         warnSpy.mockRestore();
