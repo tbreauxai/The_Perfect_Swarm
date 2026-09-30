@@ -160,11 +160,7 @@ export async function checkProviderModelsHealth(
         apiKey
     }));
     const map = await globalModelHealthChecker.checkModelsInParallel(targets, options);
-    const result: Record<string, ModelHealthStatus> = {};
-    for (const [key, status] of map.entries()) {
-        result[key] = status;
-    }
-    return result;
+    return Object.fromEntries(map);
 }
 
 export function getModelHealth(provider: string, modelId: string): ModelHealthStatus | undefined {
