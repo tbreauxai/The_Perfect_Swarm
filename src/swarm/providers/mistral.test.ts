@@ -18,6 +18,7 @@ describe('MistralAdapter 429 and Mutex Behavior', () => {
         globalThis.fetch = vi.fn().mockResolvedValue({
             ok: false,
             status: 429,
+            headers: new Headers(),
             text: async () => JSON.stringify({ message: 'Monthly and minutely capacity reached', code: 1300 })
         } as any);
 
@@ -38,6 +39,7 @@ describe('MistralAdapter 429 and Mutex Behavior', () => {
                 return {
                     ok: false,
                     status: 429,
+                    headers: new Headers(),
                     text: async () => JSON.stringify({ message: 'Rate limit exceeded', code: 1300 })
                 };
             }
@@ -76,6 +78,7 @@ describe('MistralAdapter 429 and Mutex Behavior', () => {
         globalThis.fetch = vi.fn().mockResolvedValue({
             ok: false,
             status: 429,
+            headers: new Headers(),
             text: async () => 'Too Many Requests'
         } as any);
 
