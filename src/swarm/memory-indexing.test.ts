@@ -143,6 +143,19 @@ describe('MemoryCortex: O(log n) Vector Indexing & Deduplication', () => {
         expect(searchMetrics.lastSearchComparisons).toBeGreaterThan(0);
         expect(searchMetrics.lastSearchComparisons).toBeLessThan(100);
     });
+
+    it('handles invalid Qdrant URL by disabling vector memory', () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const invalidCortex = new MemoryCortex({
+            collectionName: 'invalid_qdrant_test',
+            defaultAppId: 'indexing-test-app',
+            isolatedStore: true,
+            embeddingProvider: new DeterministicLocalEmbeddingProvider(),
+            url: 'this-is-not-a-valid-url'
+        });
+        expect((invalidCortex as any).isAvailable).toBe(false);
+        warnSpy.mockRestore();
+    });
 });
 
 describe('SemanticBaselineCache: O(log n) Vector Search', () => {
