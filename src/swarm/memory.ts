@@ -1522,7 +1522,6 @@ export class MemoryCortex {
         try {
             await this.qdrant.deleteCollection(this.collectionName);
             this.initialized = false;
-            console.log(`[MemoryCortex] Successfully deleted collection: ${this.collectionName}`);
             return true;
         } catch (error: any) {
             console.warn(`[MemoryCortex] WipeCollection failed: ${error.message || error}`);
