@@ -218,12 +218,7 @@ export class ToolRegistry {
      * Executes all tool calls parsed from an array of requests.
      */
     async executeAllToolCalls(calls: ToolCallRequest[]): Promise<ToolExecutionResult[]> {
-        const results: ToolExecutionResult[] = [];
-        for (const call of calls) {
-            const res = await this.execute(call.tool, call.parameters);
-            results.push(res);
-        }
-        return results;
+        return Promise.all(calls.map(call => this.execute(call.tool, call.parameters)));
     }
 }
 
