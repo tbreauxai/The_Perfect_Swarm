@@ -157,12 +157,14 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
 
             if (allowedOriginsStr) {
                 const allowedOrigins = allowedOriginsStr.split(',').map((o: string) => o.trim());
-                if (reqOrigin && allowedOrigins.includes(reqOrigin)) {
-                    c.header('Access-Control-Allow-Origin', reqOrigin);
-                } else if (allowedOrigins.length > 0) {
-                    c.header('Access-Control-Allow-Origin', allowedOrigins[0]);
-                } else {
+                if (allowedOrigins.includes('*')) {
                     c.header('Access-Control-Allow-Origin', '*');
+                } else if (reqOrigin) {
+                    if (allowedOrigins.includes(reqOrigin)) {
+                        c.header('Access-Control-Allow-Origin', reqOrigin);
+                    } else {
+                        return c.text('Forbidden: Origin not allowed', 403);
+                    }
                 }
             } else {
                 c.header('Access-Control-Allow-Origin', '*');
