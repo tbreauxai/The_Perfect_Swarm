@@ -59,7 +59,7 @@ export class MistralAdapter implements ProviderAdapter {
             if (!response.ok) {
                 const errorText = await response.text();
                 if (response.status === 429) {
-                    const retryAfter = response.headers.get('retry-after');
+                    const retryAfter = response.headers?.get ? response.headers.get('retry-after') : null;
                     const retrySuffix = retryAfter ? ` (retry-after: ${retryAfter}s)` : '';
                     let detail = errorText;
                     try {
