@@ -812,7 +812,7 @@ export const analystLedger = {
   records: new Map<string, { wins: number; losses: number; pushes: number; lastUpdated: number }>(),
 
   recordOutcome(appId: string, agentRole: string, outcome: 'win' | 'loss' | 'push') {
-    const key = \\:\\;
+    const key = `${appId}:${agentRole}`;
     const record = this.records.get(key) || { wins: 0, losses: 0, pushes: 0, lastUpdated: 0 };
     
     if (outcome === 'win') record.wins += 1;
