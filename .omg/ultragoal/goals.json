@@ -1,26 +1,26 @@
 [
   {
-    "id": "goal-1-profiler-accuracy-dimension",
-    "description": "Add accuracy tracking (wins, losses, pushes, accuracyScore) and recordAccuracy() to SpecialistCapabilityProfiler in src/swarm/loadBalancer.ts, blending accuracy into getCapabilityScore without conflating execution success/failure.",
+    "id": "goal-1-observability-reward-inputs-and-components",
+    "description": "Extend 'Policy Tuned & Outcome Indexed' event in src/swarm/engine/index.ts with rewardComponents and rewardInputs, and include components in POST /api/swarm/feedback in src/swarm/server.ts.",
     "status": "completed",
-    "verification": "SpecialistCapabilityProfiler records accuracy separately from execution reliability; getCapabilityScore and getUcb1Score reflect win/loss records; unit tests pass."
+    "verification": "SSE event and POST /api/swarm/feedback response expose detailed reward components and inputs; unit tests pass."
   },
   {
-    "id": "goal-2-wire-server-feedback-to-profiler",
-    "description": "Wire POST /api/swarm/feedback in src/swarm/server.ts to update globalSpecialistProfiler.recordAccuracy for each real analyst role alongside analystLedger.",
+    "id": "goal-2-rescale-dead-penalties-in-reward",
+    "description": "Rescale durationMs denominator (3000 -> 120000) and tokensConsumed denominator (10000 -> 100000) in PolicyOptimizer.calculateReward in src/swarm/feedback.ts to eliminate constant -0.20 operational tax.",
     "status": "completed",
-    "verification": "POST /api/swarm/feedback updates both analystLedger and globalSpecialistProfiler; GET /api/swarm/metrics exposes accuracy and updated capability scores."
+    "verification": "Reward function yields higher, differentiated scores on normal 30-60s runs without dead penalty saturation; unit tests pass."
   },
   {
-    "id": "goal-3-persist-analyst-ledger",
-    "description": "Equip analystLedger in src/swarm/feedback.ts with file-backed persistence (initPersistence, save, load, export, import) and auto-save so metrics survive server restarts.",
+    "id": "goal-3-split-hard-errors-from-failovers",
+    "description": "Separate hardErrorCount from failoverCount in workflow metrics and calculateReward so graceful provider failovers do not severely degrade the accuracy score.",
     "status": "completed",
-    "verification": "analystLedger loads and saves records from/to persistent storage with debounce; unit tests verify recovery across simulated restarts."
+    "verification": "Accuracy calculation penalizes hard unrecovered errors only; failovers tracked separately without crushing composite reward; unit tests pass."
   },
   {
-    "id": "goal-4-test-verification-and-todo-update",
-    "description": "Run full test suite (npm test, vitest, test-sse-server), verify zero TypeScript lint errors, build production distribution bundles, and update todo.md.",
+    "id": "goal-4-blend-analyst-accuracy-and-system-verification",
+    "description": "Blend participating analysts' ledger win rates into workflow accuracy, run full test suite (vitest, npm test), verify tsc --noEmit, rebuild bundles, and update todo.md.",
     "status": "completed",
-    "verification": "100% tests pass, tsc --noEmit 0 errors, build:swarm and build:client succeed, and todo.md marked completed."
+    "verification": "100% tests pass, tsc --noEmit clean, dual builds succeed, and todo.md marked verified."
   }
 ]

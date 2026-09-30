@@ -15,6 +15,8 @@ export interface PerformanceMetricsSnapshot {
     qualityScore?: number; // 0.0 - 1.0
     accuracyScore?: number; // 0.0 - 1.0
     errorCount: number;
+    hardErrorCount?: number;
+    failoverCount?: number;
     anomalyCount: number;
     timestamp: number;
     metadata?: Record<string, any>;
@@ -36,6 +38,7 @@ export interface RewardSignal {
         latencyPenalty: number;
         costPenalty: number;
         savingsReward: number;
+        failoverPenalty?: number;
     };
     weights: RewardWeights;
     timestamp: number;
@@ -146,9 +149,18 @@ export class PolicyOptimizer {
 
     public calculateReward(metrics: PerformanceMetricsSnapshot): RewardSignal {
         const quality = metrics.qualityScore ?? 0.8;
-        const accuracy = metrics.accuracyScore ?? (metrics.errorCount === 0 ? 0.9 : Math.max(0.1, 1 - metrics.errorCount * 0.3));
-        const normalizedLatencyPenalty = Math.min(1.0, metrics.durationMs / 3000);
-        const normalizedCostPenalty = Math.min(1.0, metrics.tokensConsumed / 10000);
+        const failovers = metrics.failoverCount ?? 0;
+        const hardErrors = metrics.hardErrorCount !== undefined
+            ? metrics.hardErrorCount
+            : Math.max(0, (metrics.errorCount ?? 0) - failovers);
+
+        // Accuracy term uses hard errors only; failovers get a small separate penalty (-0.02 each, capped at 0.06)
+        const failoverPenalty = Math.min(0.06, failovers * 0.02);
+        const baseAccuracy = metrics.accuracyScore ?? (hardErrors === 0 ? 0.9 : Math.max(0.1, 1 - hardErrors * 0.3));
+        const accuracy = Math.max(0.1, baseAccuracy - failoverPenalty);
+
+        const normalizedLatencyPenalty = Math.min(1.0, metrics.durationMs / 120000);
+        const normalizedCostPenalty = Math.min(1.0, metrics.tokensConsumed / 100000);
         const normalizedSavingsReward = Math.min(1.0, metrics.tokenSavings / 4000);
 
         const qualityPart = quality * this.weights.quality;
@@ -168,7 +180,8 @@ export class PolicyOptimizer {
                 accuracyReward: Math.round(accuracyPart * 1000) / 1000,
                 latencyPenalty: Math.round(latencyPart * 1000) / 1000,
                 costPenalty: Math.round(costPart * 1000) / 1000,
-                savingsReward: Math.round(savingsPart * 1000) / 1000
+                savingsReward: Math.round(savingsPart * 1000) / 1000,
+                failoverPenalty: Math.round(-failoverPenalty * this.weights.accuracy * 1000) / 1000
             },
             weights: { ...this.weights },
             timestamp: Date.now()
@@ -691,6 +704,8 @@ export class ContinuousFeedbackEngine {
         qualityScore?: number;
         accuracyScore?: number;
         errorCount?: number;
+        hardErrorCount?: number;
+        failoverCount?: number;
         anomalyCount?: number;
         finalInsightSnippet?: string;
         embedding?: number[];
@@ -704,6 +719,11 @@ export class ContinuousFeedbackEngine {
         policyUpdated: boolean;
     }> {
         const appId = params.appId || 'perfect-swarm';
+        const failoverCount = params.failoverCount ?? 0;
+        const hardErrorCount = params.hardErrorCount !== undefined
+            ? params.hardErrorCount
+            : (params.errorCount !== undefined ? Math.max(0, params.errorCount - failoverCount) : 0);
+
         const metrics: PerformanceMetricsSnapshot = {
             workflowId: params.workflowId,
             task: params.task,
@@ -714,7 +734,9 @@ export class ContinuousFeedbackEngine {
             tokensConsumed: params.tokensConsumed ?? 0,
             qualityScore: params.qualityScore,
             accuracyScore: params.accuracyScore,
-            errorCount: params.errorCount ?? 0,
+            errorCount: params.errorCount ?? hardErrorCount,
+            hardErrorCount,
+            failoverCount,
             anomalyCount: params.anomalyCount ?? 0,
             timestamp: Date.now()
         };
@@ -853,6 +875,29 @@ export class AnalystLedger {
 
   public getRecord(appId: string, agentRole: string): AnalystLedgerRecord | undefined {
     return this.records.get(`${appId}:${agentRole}`);
+  }
+
+  public getAverageAccuracy(appId: string, agentRoles: string[]): { accuracy: number; totalOutcomes: number } {
+    let totalWins = 0;
+    let totalLosses = 0;
+    let totalPushes = 0;
+
+    for (const role of agentRoles) {
+      const rec = this.getRecord(appId, role);
+      if (rec) {
+        totalWins += rec.wins;
+        totalLosses += rec.losses;
+        totalPushes += rec.pushes;
+      }
+    }
+
+    const total = totalWins + totalLosses + totalPushes;
+    if (total === 0) {
+      return { accuracy: 0.5, totalOutcomes: 0 };
+    }
+
+    const accuracy = (totalWins + 0.5 * totalPushes) / total;
+    return { accuracy: Math.round(accuracy * 1000) / 1000, totalOutcomes: total };
   }
 
   public clear(): void {

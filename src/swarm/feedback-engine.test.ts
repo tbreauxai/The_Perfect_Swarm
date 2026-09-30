@@ -88,6 +88,15 @@ describe('SwarmEngine Feedback Loop & Policy Adaptation Integration', () => {
         const fullOutcome = globalFeedbackEngine.getKnowledgeRepository().getOutcome(result.feedback!.outcomeId);
         expect(fullOutcome?.agentRoles).toEqual(['Manager Node', 'Security Analyst']);
 
+        const policyEvent = result.events.find(e => e.action === 'Policy Tuned & Outcome Indexed');
+        expect(policyEvent).toBeDefined();
+        expect(policyEvent?.output.rewardComponents).toBeDefined();
+        expect(typeof policyEvent?.output.rewardComponents.qualityReward).toBe('number');
+        expect(policyEvent?.output.rewardInputs).toBeDefined();
+        expect(typeof policyEvent?.output.rewardInputs.qualityScore).toBe('number');
+        expect(typeof policyEvent?.output.rewardInputs.accuracyScore).toBe('number');
+        expect(typeof policyEvent?.output.rewardInputs.durationMs).toBe('number');
+
         const insights = globalFeedbackEngine.getKnowledgeRepository().getAggregatedInsights('engine-feedback-full-test');
         expect(insights.totalRuns).toBeGreaterThanOrEqual(1);
         expect(insights.avgReward).toBeDefined();

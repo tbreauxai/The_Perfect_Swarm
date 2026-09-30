@@ -42,6 +42,97 @@ describe('PolicyOptimizer (Evolutionary Strategies & RL Reward Tuning)', () => {
         expect(reward.components.latencyPenalty).toBeLessThanOrEqual(0);
     });
 
+    it('discriminates latency and cost across realistic operating ranges (30-60s) without saturation', () => {
+        // A 30s run (30,000ms) with 5,000 tokens consumed
+        const reward30s = optimizer.calculateReward({
+            workflowId: 'wf-30s',
+            task: 'Realistic swarm run',
+            appId: 'test-app',
+            durationMs: 30000,
+            targetTier: 'complex',
+            tokenSavings: 2000,
+            tokensConsumed: 5000,
+            qualityScore: 0.90,
+            accuracyScore: 0.95,
+            errorCount: 0,
+            anomalyCount: 0,
+            timestamp: Date.now()
+        });
+
+        // 30,000 / 120,000 = 0.25 normalized penalty -> -0.25 * 0.15 = -0.038
+        expect(reward30s.components.latencyPenalty).toBeCloseTo(-0.038, 2);
+        // Cost: 5,000 / 100,000 = 0.05 normalized penalty -> -0.05 * 0.05 = -0.003
+        expect(reward30s.components.costPenalty).toBeCloseTo(-0.003, 3);
+        // Composite reward is not capped at ~0.60; can reach ~0.70+
+        expect(reward30s.compositeReward).toBeGreaterThan(0.65);
+
+        // A 120s run hits the full -0.15 penalty
+        const reward120s = optimizer.calculateReward({
+            workflowId: 'wf-120s',
+            task: 'Slow swarm run',
+            appId: 'test-app',
+            durationMs: 120000,
+            targetTier: 'complex',
+            tokenSavings: 0,
+            tokensConsumed: 100000,
+            qualityScore: 0.90,
+            accuracyScore: 0.95,
+            errorCount: 0,
+            anomalyCount: 0,
+            timestamp: Date.now()
+        });
+        expect(reward120s.components.latencyPenalty).toBe(-0.15);
+        expect(reward120s.components.costPenalty).toBe(-0.05);
+    });
+
+    it('isolates hard errors from graceful failovers in accuracy and reward calculation', () => {
+        // Run with 2 graceful failovers and 0 hard errors
+        const failoverReward = optimizer.calculateReward({
+            workflowId: 'wf-failover',
+            task: 'Failover recovery run',
+            appId: 'test-app',
+            durationMs: 15000,
+            targetTier: 'complex',
+            tokenSavings: 1000,
+            tokensConsumed: 4000,
+            qualityScore: 0.90,
+            errorCount: 2,
+            failoverCount: 2,
+            hardErrorCount: 0,
+            anomalyCount: 0,
+            timestamp: Date.now()
+        });
+
+        // 2 failovers incur a small -0.04 penalty on 0.90 base accuracy -> accuracy = 0.86
+        // accuracyReward = 0.86 * 0.35 = ~0.301
+        expect(failoverReward.components.accuracyReward).toBeCloseTo(0.301, 2);
+        // failoverPenalty is reported in components
+        expect(failoverReward.components.failoverPenalty).toBeCloseTo(-0.014, 2);
+        // Composite reward stays high (>0.60) instead of cratering to ~0.136
+        expect(failoverReward.compositeReward).toBeGreaterThan(0.60);
+
+        // Run with 2 hard unrecovered errors and 0 failovers
+        const hardErrorReward = optimizer.calculateReward({
+            workflowId: 'wf-hard-error',
+            task: 'Hard error run',
+            appId: 'test-app',
+            durationMs: 15000,
+            targetTier: 'complex',
+            tokenSavings: 1000,
+            tokensConsumed: 4000,
+            qualityScore: 0.90,
+            errorCount: 2,
+            failoverCount: 0,
+            hardErrorCount: 2,
+            anomalyCount: 0,
+            timestamp: Date.now()
+        });
+
+        // 2 hard errors: 1 - 2*0.3 = 0.40 accuracy -> 0.40 * 0.35 = 0.140
+        expect(hardErrorReward.components.accuracyReward).toBeCloseTo(0.140, 2);
+        expect(failoverReward.compositeReward).toBeGreaterThan(hardErrorReward.compositeReward + 0.10);
+    });
+
     it('mutates parameters within strict upper and lower bounds', () => {
         const parent = { ...DEFAULT_TUNABLE_PARAMETERS };
         for (let i = 0; i < 20; i++) {
@@ -401,5 +492,30 @@ describe('AnalystLedger (Per-Analyst Outcomes & File-Backed Persistence)', () =>
         const parsed = JSON.parse(raw);
         expect(parsed['auto-app:Quant Lead']).toBeDefined();
         expect(parsed['auto-app:Quant Lead'].wins).toBe(1);
+    });
+
+    it('calculates average accuracy across participating analyst roles', () => {
+        const ledger = new AnalystLedger();
+        // Zero outcomes
+        const empty = ledger.getAverageAccuracy('app1', ['Role A', 'Role B']);
+        expect(empty.totalOutcomes).toBe(0);
+        expect(empty.accuracy).toBe(0.5);
+
+        // Record outcomes: Role A has 3 wins, 1 loss; Role B has 1 push
+        ledger.recordOutcome('app1', 'Role A', 'win');
+        ledger.recordOutcome('app1', 'Role A', 'win');
+        ledger.recordOutcome('app1', 'Role A', 'win');
+        ledger.recordOutcome('app1', 'Role A', 'loss');
+        ledger.recordOutcome('app1', 'Role B', 'push');
+
+        // Total: 3 wins (3.0), 1 loss, 1 push (0.5) = 3.5 / 5 = 0.70
+        const stats = ledger.getAverageAccuracy('app1', ['Role A', 'Role B']);
+        expect(stats.totalOutcomes).toBe(5);
+        expect(stats.accuracy).toBe(0.70);
+
+        // Only query Role A
+        const statsA = ledger.getAverageAccuracy('app1', ['Role A']);
+        expect(statsA.totalOutcomes).toBe(4);
+        expect(statsA.accuracy).toBe(0.75);
     });
 });

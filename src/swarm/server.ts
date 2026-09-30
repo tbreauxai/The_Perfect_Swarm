@@ -219,6 +219,8 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 qualityScore: workflowRecord.metrics.qualityScore,
                 accuracyScore,
                 errorCount: workflowRecord.metrics.errorCount,
+                hardErrorCount: workflowRecord.metrics.hardErrorCount,
+                failoverCount: workflowRecord.metrics.failoverCount,
                 agentRoles: (workflowRecord as any).agentRoles
             });
 
@@ -235,7 +237,14 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 (r as any).gradedAt = gradedAt || Date.now();
             }
 
-            return c.json({ ok: true, workflowId, outcome, accuracyScore, compositeReward: fbResult.reward.compositeReward });
+            return c.json({
+                ok: true,
+                workflowId,
+                outcome,
+                accuracyScore,
+                compositeReward: fbResult.reward.compositeReward,
+                components: fbResult.reward.components
+            });
         } catch (err: any) {
             console.error('[SwarmServer Feedback Error]:', err);
             return c.json({ error: err.message || 'Internal Server Error' }, 500);

@@ -88,6 +88,7 @@ import {
 import {
     globalFeedbackEngine,
     ContinuousFeedbackEngine,
+    analystLedger,
     type TunableParameters,
     type DriftAlert,
     type RewardSignal,
@@ -1915,20 +1916,38 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     let workflowFeedbackReport: SwarmFeedbackReport | undefined;
     if (feedbackEnabled) {
         try {
+            const qualityScore = workflowLifecycleResult?.computedRating ? workflowLifecycleResult.computedRating / 100 : (isSuccess ? 0.90 : 0.40);
+            const failoverCount = (context.events || []).filter(e => e.action?.toLowerCase().includes('failover')).length;
+            const hardErrorCount = isSuccess ? 0 : 1;
+            const errorCount = hardErrorCount + failoverCount;
+
+            const participatingRoles = (analysts && analysts.length > 0)
+                ? analysts.map(a => a.role).filter(Boolean)
+                : (settings?.agents || []).map((a: any) => a.role).filter(Boolean);
+
+            const baseOperationalAccuracy = isSuccess ? 0.95 : 0.30;
+            const ledgerStats = analystLedger.getAverageAccuracy(targetAppId, participatingRoles);
+            // Blend operational accuracy with empirical win rate if graded outcomes exist for participating analysts
+            const blendWeight = ledgerStats.totalOutcomes > 0 ? Math.min(0.50, ledgerStats.totalOutcomes * 0.05) : 0;
+            const accuracyScore = Math.round(((1 - blendWeight) * baseOperationalAccuracy + blendWeight * ledgerStats.accuracy) * 1000) / 1000;
+
+            const tokensConsumed = workflowTotalTokens || (metrics?.totalTasks ? metrics.totalTasks * 400 : 800);
+            const tokenSavings = workflowPromptTokensSaved;
+
             const fbResult = await globalFeedbackEngine.processFeedback({
                 workflowId: (context as any).id || `wf-${Date.now()}`,
                 task,
                 appId: targetAppId,
-                agentRoles: (analysts && analysts.length > 0)
-                    ? analysts.map(a => a.role).filter(Boolean)
-                    : (settings?.agents || []).map((a: any) => a.role).filter(Boolean),
+                agentRoles: participatingRoles,
                 durationMs: workflowDurationMs,
                 targetTier: complexity === 'instant' ? 'instant' : 'complex',
-                tokenSavings: workflowPromptTokensSaved,
-                tokensConsumed: workflowTotalTokens || (metrics?.totalTasks ? metrics.totalTasks * 400 : 800),
-                qualityScore: workflowLifecycleResult?.computedRating ? workflowLifecycleResult.computedRating / 100 : (isSuccess ? 0.90 : 0.40),
-                accuracyScore: isSuccess ? 0.95 : 0.30,
-                errorCount: isSuccess ? 0 : 1,
+                tokenSavings,
+                tokensConsumed,
+                qualityScore,
+                accuracyScore,
+                errorCount,
+                hardErrorCount,
+                failoverCount,
                 anomalyCount: (finalAnalysis?.components || []).reduce((acc: number, c: any) => {
                     if (c.type === 'InsightList' && Array.isArray(c.props?.insights)) {
                         return acc + c.props.insights.filter((ins: any) => ins.type === 'alert' || ins.type === 'warning').length;
@@ -1964,6 +1983,18 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 prompt: `Feedback processed: composite reward=${fbResult.reward.compositeReward}, drift alerts=${fbResult.driftAlerts.length}`,
                 output: {
                     reward: fbResult.reward.compositeReward,
+                    rewardComponents: fbResult.reward.components,
+                    rewardInputs: {
+                        qualityScore,
+                        accuracyScore,
+                        errorCount,
+                        hardErrorCount,
+                        failoverCount,
+                        durationMs: workflowDurationMs,
+                        tokensConsumed,
+                        tokenSavings,
+                        computedRating: workflowLifecycleResult?.computedRating ?? null
+                    },
                     policyUpdated: fbResult.policyUpdated,
                     outcomeId: fbResult.outcomeId,
                     activePolicy: fbResult.tunedParameters,
