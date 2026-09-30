@@ -274,6 +274,7 @@ export interface MemoryCortexConfig {
     defaultAppId?: string;
     embeddingProvider?: EmbeddingProvider;
     aiClient?: GoogleGenAI;
+    embeddingModel?: string;
     isolatedStore?: boolean;
     autoConsolidateThreshold?: number;
     autoConsolidationOptions?: ConsolidationOptions;
@@ -414,7 +415,7 @@ export class MemoryCortex {
         if (config.embeddingProvider) {
             this.embeddingProvider = config.embeddingProvider;
         } else if (config.aiClient) {
-            this.embeddingProvider = new GeminiEmbeddingProvider(config.aiClient);
+            this.embeddingProvider = new GeminiEmbeddingProvider(config.aiClient, config.embeddingModel || 'text-embedding-005');
         } else {
             this.embeddingProvider = new DeterministicLocalEmbeddingProvider();
         }

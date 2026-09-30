@@ -176,19 +176,21 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 memoryCortex = new MemoryCortex({
                     url: qdrantUrl,
                     apiKey: qdrantApiKey,
+                    collectionName: settings?.qdrantCollectionName,
                     aiClient: cortexAiClient,
+                    embeddingModel: settings?.qdrantEmbeddingModel,
                     defaultAppId: targetAppId,
                     persistPath,
                     autoSave
                 });
             } catch {
                 memoryCortex = persistPath
-                    ? new MemoryCortex({ defaultAppId: targetAppId, aiClient: cortexAiClient, persistPath, autoSave })
+                    ? new MemoryCortex({ defaultAppId: targetAppId, collectionName: settings?.qdrantCollectionName, aiClient: cortexAiClient, embeddingModel: settings?.qdrantEmbeddingModel, persistPath, autoSave })
                     : getOrCreateDefaultCortex(targetAppId, cortexAiClient);
             }
         } else {
             memoryCortex = persistPath
-                ? new MemoryCortex({ defaultAppId: targetAppId, aiClient: cortexAiClient, persistPath, autoSave })
+                ? new MemoryCortex({ defaultAppId: targetAppId, collectionName: settings?.qdrantCollectionName, aiClient: cortexAiClient, embeddingModel: settings?.qdrantEmbeddingModel, persistPath, autoSave })
                 : getOrCreateDefaultCortex(targetAppId, cortexAiClient);
         }
     }
