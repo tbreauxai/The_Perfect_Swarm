@@ -14,7 +14,7 @@ import { globalActionPlanCache } from './actionPlanCache.ts';
 import { DEFAULT_PROVIDER_MODELS } from './agent.ts';
 import { globalBenchmarker, initBenchmarker } from './benchmark.ts';
 import { globalFeedbackEngine, analystLedger } from './feedback.ts';
-import { globalLoadBalancer } from './agent.ts';
+import { globalLoadBalancer } from './loadBalancer.ts';
 
 export interface SwarmServerOptions {
     port?: number;
