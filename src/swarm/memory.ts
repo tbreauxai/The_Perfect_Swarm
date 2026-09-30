@@ -506,8 +506,6 @@ export class MemoryCortex {
                     },
                     on_disk_payload: true
                 }), 10000);
-
-                console.log(`[MemoryCortex] Initialized compliant Qdrant collection: ${targetCollection}`);
             }
 
             // Create compound payload indexes for multi-tenant and learning queries
