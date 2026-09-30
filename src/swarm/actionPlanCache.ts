@@ -220,15 +220,16 @@ export class ActionPlanCacheInterceptor {
         plan: ActionPlan,
         executor: (toolName: string, parameters: Record<string, any>) => Promise<TResult>
     ): Promise<Array<{ tool: string; result: any }>> {
-        const results: Array<{ tool: string; result: any }> = [];
-        for (const step of plan.toolExecutionSteps) {
-            const execRes = await executor(step.tool, step.parameters);
-            const unwrapped = (execRes && typeof execRes === 'object' && 'result' in execRes && 'success' in execRes)
-                ? (execRes as any).result
-                : execRes;
-            results.push({ tool: step.tool, result: unwrapped });
-            this.dynamicFetchesCount++;
-        }
+        const results = await Promise.all(
+            plan.toolExecutionSteps.map(async (step) => {
+                const execRes = await executor(step.tool, step.parameters);
+                const unwrapped = (execRes && typeof execRes === 'object' && 'result' in execRes && 'success' in execRes)
+                    ? (execRes as any).result
+                    : execRes;
+                this.dynamicFetchesCount++;
+                return { tool: step.tool, result: unwrapped };
+            })
+        );
         return results;
     }
 
