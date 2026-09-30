@@ -65,6 +65,7 @@ describe('SwarmEngine Feedback Loop & Policy Adaptation Integration', () => {
         const storedOutcome = globalFeedbackEngine.getKnowledgeRepository().getOutcome(result.feedback!.outcomeId);
         expect(storedOutcome).toBeDefined();
         expect(storedOutcome?.appId).toBe('engine-feedback-test');
+        expect(storedOutcome?.agentRoles).toEqual(['Manager Node', 'Security Analyst']);
     });
 
     it('logs analysis outcome and evaluates policy adaptation on full swarm workflow', async () => {
@@ -83,6 +84,9 @@ describe('SwarmEngine Feedback Loop & Policy Adaptation Integration', () => {
         expect(result.feedback?.reward).toBeDefined();
         expect(result.feedback?.reward.components.qualityReward).toBeGreaterThan(0);
         expect(result.feedback?.outcomeId).toBeDefined();
+
+        const fullOutcome = globalFeedbackEngine.getKnowledgeRepository().getOutcome(result.feedback!.outcomeId);
+        expect(fullOutcome?.agentRoles).toEqual(['Manager Node', 'Security Analyst']);
 
         const insights = globalFeedbackEngine.getKnowledgeRepository().getAggregatedInsights('engine-feedback-full-test');
         expect(insights.totalRuns).toBeGreaterThanOrEqual(1);

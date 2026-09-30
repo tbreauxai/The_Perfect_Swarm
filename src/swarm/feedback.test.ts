@@ -295,5 +295,23 @@ describe('ContinuousFeedbackEngine (Unified Feedback Loop)', () => {
         expect(stored).toBeDefined();
         expect(stored?.task).toBe('Tune Cache & Concurrency');
         expect(stored?.appId).toBe('feedback-app');
+        expect(stored?.agentRoles).toEqual([]);
+    });
+
+    it('persists agentRoles array on AnalysisOutcomeRecord when provided', async () => {
+        const engine = new ContinuousFeedbackEngine();
+        const expectedRoles = ['Quant Specialist', 'Market & Steam Specialist', 'Injury Analyst'];
+        const result = await engine.processFeedback({
+            workflowId: 'wf-roles-test-1',
+            task: 'Evaluate match handicap',
+            appId: 'duelodds',
+            durationMs: 320,
+            targetTier: 'complex',
+            agentRoles: expectedRoles
+        });
+
+        const stored = engine.getKnowledgeRepository().getOutcome(result.outcomeId);
+        expect(stored).toBeDefined();
+        expect(stored?.agentRoles).toEqual(expectedRoles);
     });
 });

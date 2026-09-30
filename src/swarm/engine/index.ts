@@ -276,6 +276,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                         workflowId: (context as any).id || `wf-${Date.now()}`,
                         task,
                         appId: targetAppId,
+                        agentRoles: (settings?.agents || []).map((a: any) => a.role).filter(Boolean),
                         durationMs: workflowDurationMs,
                         targetTier: 'instant',
                         tokenSavings: 250,
@@ -365,6 +366,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     workflowId: (context as any).id || `wf-${Date.now()}`,
                     task,
                     appId: targetAppId,
+                    agentRoles: (settings?.agents || []).map((a: any) => a.role).filter(Boolean),
                     durationMs: workflowDurationMs,
                     targetTier: 'instant',
                     tokenSavings: 250,
@@ -453,6 +455,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     workflowId: (context as any).id || `wf-${Date.now()}`,
                     task,
                     appId: targetAppId,
+                    agentRoles: (settings?.agents || []).map((a: any) => a.role).filter(Boolean),
                     durationMs: workflowDurationMs,
                     targetTier: 'instant',
                     tokenSavings: 250,
@@ -1916,6 +1919,9 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 workflowId: (context as any).id || `wf-${Date.now()}`,
                 task,
                 appId: targetAppId,
+                agentRoles: (analysts && analysts.length > 0)
+                    ? analysts.map(a => a.role).filter(Boolean)
+                    : (settings?.agents || []).map((a: any) => a.role).filter(Boolean),
                 durationMs: workflowDurationMs,
                 targetTier: complexity === 'instant' ? 'instant' : 'complex',
                 tokenSavings: workflowPromptTokensSaved,

@@ -1,32 +1,26 @@
 [
   {
-    "id": "goal-1-runtime-consensus-and-reasoning",
-    "description": "Implement runtime consensus pipeline in engine, expand universal reasoning tag sanitization in adapter.ts, fix failover loop array mutation, and align default free OpenRouter model in agent.ts.",
+    "id": "goal-1-feedback-record-agent-roles",
+    "description": "Update AnalysisOutcomeRecord in src/swarm/feedback.ts to include agentRoles?: string[], accept agentRoles in processFeedback, and persist it on the outcome record.",
     "status": "completed",
-    "verification": "consensusPipeline extracts agreement ratios and majority findings; adapter strips all reasoning tag variants; agent failover handles schema retries without mutating target chain."
+    "verification": "AnalysisOutcomeRecord interface and processFeedback schema in src/swarm/feedback.ts accept and store agentRoles array; feedback unit tests pass."
   },
   {
-    "id": "goal-2-fast-path-tools-and-action-cache",
-    "description": "Equip fast-path execution with deterministic tool calling from ToolRegistry, action plan cache interception, and guardAnalystResponse normalization.",
+    "id": "goal-2-engine-populate-analyst-roles",
+    "description": "Update executeSwarmWorkflow in src/swarm/engine/index.ts to populate real analyst roles from configured/active agents in all processFeedback calls.",
     "status": "completed",
-    "verification": "Fast-path executes arithmetic/date tools, bypasses remote calls on action plan cache hits, and outputs valid guarded schema."
+    "verification": "processFeedback calls in engine index pass real analyst roles; feedback reports generated with real roles attached to records."
   },
   {
-    "id": "goal-3-precision-routing-and-token-protection",
-    "description": "Refactor ModelRouter with word-boundary matching for complexity classification, update OpenRouter free model recommendations, and bound verification retry prompts in AnalysisLifecycle.",
+    "id": "goal-3-server-analyst-ledger-real-roles",
+    "description": "Update POST /api/swarm/feedback in src/swarm/server.ts to extract agentRoles from workflowRecord and record outcomes in analystLedger for real analysts instead of fake pipeline nodes.",
     "status": "completed",
-    "verification": "Word-boundary regexes prevent false-positive escalations; verification retries do not duplicate raw payload; router tests pass."
+    "verification": "POST /api/swarm/feedback correctly records outcomes for workflowRecord.agentRoles in analystLedger, with safe no-op fallback when empty."
   },
   {
-    "id": "goal-4-cache-interceptor-and-dedup-scaling",
-    "description": "Enforce LRU capacity limits on actionPlanCache and semanticCacheInterceptor to guarantee bounded memory footprints under long-running sweeps.",
+    "id": "goal-4-test-verification-and-todo-update",
+    "description": "Add tests verifying real analyst role attribution in analystLedger, execute full test suite (npm test, vitest, test-sse-server), verify zero TypeScript errors, build bundles, and update todo.md.",
     "status": "completed",
-    "verification": "Action plan and semantic cache enforce max entry bounds with clean eviction under high-throughput test runs."
-  },
-  {
-    "id": "goal-5-system-verification-and-benchmarking",
-    "description": "Execute full test suites (vitest, cli, server), TypeScript verification, distribution builds, benchmark execution, and update todo.md.",
-    "status": "completed",
-    "verification": "100% test pass rate, 0 type errors, clean build bundles, and benchmark demonstrates high-throughput efficiency."
+    "verification": "100% tests pass, tsc --noEmit 0 errors, build succeeds, and todo.md marked verified."
   }
 ]

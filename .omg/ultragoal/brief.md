@@ -1,37 +1,24 @@
-# Ultragoal Brief: System Audit & Full Efficiency and Intelligence Optimization (2026-09-29)
+# Ultragoal Brief: Real Analyst Role Attribution in Analyst Ledger (2026-09-30)
 
 ## Objective
-Execute a comprehensive optimization loop across all core files to maximize efficiency, intelligence, accuracy, and lightweight execution, enabling free-tier multi-agent swarms to go toe-to-toe with premium paid models.
+Fix per-analyst learning attribution across the feedback loop by replacing hardcoded pipeline node names (`SpecialistRouter`, `Manager Node`, `Verification Node`) with real specialist analyst roles (`Quant Specialist`, `Market & Steam Specialist`, etc.) in `AnalysisOutcomeRecord`, `executeSwarmWorkflow`, and the `/api/swarm/feedback` handler.
 
-## Constraints & System Boundaries
-- Zero conversational filler.
-- Preserve backward compatibility across ESM/CJS distribution bundles, CLI, and HTTP/SSE server contracts.
-- Strictly keep execution lightweight without adding heavy dependencies or introducing latency overhead.
-- Ensure 100% test pass rate across unit tests, CLI tests, server streaming tests, and zero TypeScript errors (`tsc --noEmit`).
+## Source & Scope
+- **Source:** `todo.md` ("Analyst Ledger Records Fake Roles") following commit `1b3bb72`.
+- **Target Subsystems:** `src/swarm/feedback.ts`, `src/swarm/engine/index.ts`, `src/swarm/server.ts`, and test verification suites.
+- **Constraints:** Backend only, zero external runtime dependencies added, full backward compatibility, safe fallback when `agentRoles` is empty.
 
 ## Micro-Goal Breakdown
-1. **goal-1-runtime-consensus-and-reasoning**:
-   - Extract `src/swarm/engine/consensusPipeline.ts` to compute semantic consensus, agreement ratios, and isolate dissent across specialist analysts for the Manager Node.
-   - Expand `sanitizeModelOutput` in `src/swarm/providers/adapter.ts` to universally strip all reasoning tags (`<think>`, `<thought>`, `<reasoning>`, `[THOUGHT]`).
-   - Fix array mutation bug during schema validation retries in `src/swarm/agent.ts` and set `DEFAULT_PROVIDER_MODELS.openrouter` to free model default.
+1. **goal-1-feedback-record-agent-roles**:
+   - Update `AnalysisOutcomeRecord` in `src/swarm/feedback.ts` to include `agentRoles?: string[]`.
+   - Update `processFeedback` parameters to accept `agentRoles?: string[]` and store `agentRoles: params.agentRoles || []` on the outcome record.
 
-2. **goal-2-fast-path-tools-and-action-cache**:
-   - Wire `ToolRegistry` schema injection, tool call parsing, and deterministic tool execution into `src/swarm/engine/fastPath.ts`.
-   - Add sub-5ms `actionPlanCache` lookup to fast-path before remote model invocation.
-   - Enforce resilient schema guarding via `guardAnalystResponse` in fast-path.
+2. **goal-2-engine-populate-analyst-roles**:
+   - Update `executeSwarmWorkflow` in `src/swarm/engine/index.ts` to extract real analyst roles from `analysts` and `settings?.agents` and pass them into `processFeedback`.
 
-3. **goal-3-precision-routing-and-token-protection**:
-   - Refactor `ModelRouter` in `src/swarm/router.ts` using word-boundary regex matching to eliminate false-positive complexity escalations.
-   - Align OpenRouter model recommendations with active free endpoints.
-   - Optimize verification retry prompt construction in `src/swarm/lifecycle.ts` to eliminate redundant raw data duplication and protect token ceilings.
+3. **goal-3-server-analyst-ledger-real-roles**:
+   - Update `POST /api/swarm/feedback` in `src/swarm/server.ts` to extract `agentRoles` from `workflowRecord` and record outcomes in `analystLedger` for real analysts instead of fake pipeline nodes.
 
-4. **goal-4-cache-interceptor-and-dedup-scaling**:
-   - Add LRU cache bounds and fast key eviction to `src/swarm/actionPlanCache.ts` and `src/swarm/semanticCacheInterceptor.ts`.
-   - Ensure cache operations remain bounded in memory under continuous multi-run scenarios.
-
-5. **goal-5-system-verification-and-benchmarking**:
-   - Run complete test suite (`npm test`), CLI test (`npm run test:cli`), and server test (`npm run test:server`).
-   - Run TypeScript typecheck (`npm run lint`).
-   - Build production and distribution bundles (`npm run build`).
-   - Run baseline profiler & benchmark (`node benchmark.js`).
-   - Update `todo.md` with Tier 6 audit completions.
+4. **goal-4-test-verification-and-todo-update**:
+   - Add unit/integration tests verifying real analyst role attribution in `analystLedger`.
+   - Run vitest test suites, `test-sse-server.mjs`, `tsc --noEmit` linting, dual builds (`build:client` and `build:swarm`), and update `todo.md`.

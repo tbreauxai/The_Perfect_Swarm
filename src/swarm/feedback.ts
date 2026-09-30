@@ -110,6 +110,7 @@ export interface AnalysisOutcomeRecord {
     reward: RewardSignal;
     parametersUsed: TunableParameters;
     driftAlerts: DriftAlert[];
+    agentRoles?: string[];
     timestamp: number;
 }
 
@@ -694,6 +695,7 @@ export class ContinuousFeedbackEngine {
         finalInsightSnippet?: string;
         embedding?: number[];
         inputData?: any;
+        agentRoles?: string[];
     }): Promise<{
         reward: RewardSignal;
         tunedParameters: TunableParameters;
@@ -773,6 +775,7 @@ export class ContinuousFeedbackEngine {
             reward,
             parametersUsed: updateResult.currentPolicy,
             driftAlerts: activeAlerts,
+            agentRoles: params.agentRoles || [],
             timestamp: Date.now()
         };
 

@@ -195,16 +195,17 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 return c.json({ error: 'Invalid workflowId or outcome' }, 400);
             }
 
-            const workflowRecord = globalFeedbackEngine.getKnowledgeRepository().queryOutcomes().find((o: any) => o.workflowId === workflowId);
-            if (!workflowRecord) {
+            const workflowRecords = globalFeedbackEngine.getKnowledgeRepository().queryOutcomes().filter((o: any) => o.workflowId === workflowId);
+            if (workflowRecords.length === 0) {
                 return c.json({ error: 'Workflow not found' }, 404);
             }
 
-            if ((workflowRecord as any).feedbackProcessed) {
+            if (workflowRecords.some((o: any) => o.feedbackProcessed)) {
                 // Idempotency support
                 return c.json({ ok: true, message: 'Feedback already processed', workflowId });
             }
 
+            const workflowRecord = workflowRecords[0];
             const accuracyScore = outcome === 'win' ? 1.0 : outcome === 'loss' ? 0.0 : 0.5;
 
             const fbResult = await globalFeedbackEngine.processFeedback({
@@ -217,17 +218,21 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 tokensConsumed: workflowRecord.metrics.tokensConsumed,
                 qualityScore: workflowRecord.metrics.qualityScore,
                 accuracyScore,
-                errorCount: workflowRecord.metrics.errorCount
+                errorCount: workflowRecord.metrics.errorCount,
+                agentRoles: (workflowRecord as any).agentRoles
             });
 
-            // Update per-analyst ledger
-            const roles = ['SpecialistRouter', 'Manager Node', 'Verification Node']; // Using default roles since agentRoles isn't on AnalysisOutcomeRecord by default
+            // Update per-analyst ledger with the REAL analyst roles from the workflow record
+            const targetAppId = workflowRecord.appId || appId || 'perfect-swarm';
+            const roles = ((workflowRecord as any).agentRoles || []).filter(Boolean);
             for (const role of roles) {
-                analystLedger.recordOutcome(appId, role, outcome);
+                analystLedger.recordOutcome(targetAppId, role, outcome);
             }
 
-            (workflowRecord as any).feedbackProcessed = true;
-            (workflowRecord as any).gradedAt = gradedAt || Date.now();
+            for (const r of workflowRecords) {
+                (r as any).feedbackProcessed = true;
+                (r as any).gradedAt = gradedAt || Date.now();
+            }
 
             return c.json({ ok: true, workflowId, outcome, accuracyScore, compositeReward: fbResult.reward.compositeReward });
         } catch (err: any) {
