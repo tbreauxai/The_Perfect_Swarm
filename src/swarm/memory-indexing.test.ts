@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MemoryCortex, DeterministicLocalEmbeddingProvider } from './memory.ts';
 import { SemanticBaselineCache, SemanticSimilarityEngine } from './cache.ts';
 
@@ -13,6 +13,23 @@ describe('MemoryCortex: O(log n) Vector Indexing & Deduplication', () => {
             isolatedStore: true,
             embeddingProvider: new DeterministicLocalEmbeddingProvider()
         });
+    });
+
+    it('handles invalid Qdrant URL by disabling vector memory and warning', () => {
+        const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const invalidUrlCortex = new MemoryCortex({
+            collectionName: 'test_invalid_url_cortex',
+            url: 'invalid-url',
+            defaultAppId: 'indexing-test-app',
+            isolatedStore: true,
+            embeddingProvider: new DeterministicLocalEmbeddingProvider()
+        });
+
+        expect(invalidUrlCortex.isQdrantAvailable).toBe(false);
+        expect(consoleWarnSpy).toHaveBeenCalledWith(
+            expect.stringContaining("Invalid Qdrant URL 'invalid-url', vector memory will run in disabled mode.")
+        );
+        consoleWarnSpy.mockRestore();
     });
 
     it('initializes in-memory vector index and reports O(log n) complexity metrics', () => {
