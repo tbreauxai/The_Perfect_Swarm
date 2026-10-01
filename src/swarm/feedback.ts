@@ -4,6 +4,8 @@
  * concept drift detection (Page-Hinkley test and embedding divergence), and shared knowledge repository.
  */
 
+import { QdrantLearningStore } from './learning-persistence.ts';
+
 export interface PerformanceMetricsSnapshot {
     workflowId: string;
     task: string;
@@ -546,6 +548,16 @@ export class SwarmKnowledgeRepository {
         policy: TunableParameters;
         reward: number;
     }> = [];
+    private learningStore: QdrantLearningStore | null = null;
+
+    /** Attach durable persistence (Qdrant). Writes become fire-and-forget; reads stay in-memory. */
+    public setLearningStore(store: QdrantLearningStore | null): void {
+        this.learningStore = store;
+    }
+
+    public getLearningStore(): QdrantLearningStore | null {
+        return this.learningStore;
+    }
 
     public async recordOutcome(record: AnalysisOutcomeRecord): Promise<string> {
         this.outcomes.set(record.id, record);
@@ -553,9 +565,20 @@ export class SwarmKnowledgeRepository {
         if (!this.appIndices.has(record.appId)) {
             this.appIndices.set(record.appId, []);
         }
-        this.appIndices.get(record.appId)!.push(record.id);
+        const ids = this.appIndices.get(record.appId)!;
+        if (!ids.includes(record.id)) {
+            ids.push(record.id);
+        }
 
+        this.persistOutcome(record);
         return record.id;
+    }
+
+    /** Re-persist an already-recorded outcome (e.g. after feedback mutates it). Idempotent. */
+    public persistOutcome(record: AnalysisOutcomeRecord): void {
+        if (!this.learningStore || !record) return;
+        this.learningStore.saveOutcome(record as unknown as Record<string, any>)
+            .catch((err) => console.warn('[SwarmKnowledgeRepository] Outcome persist failed:', err?.message || err));
     }
 
     public recordPolicyEvolution(generation: number, policy: TunableParameters, reward: number): void {
@@ -568,6 +591,48 @@ export class SwarmKnowledgeRepository {
         if (this.policyGenealogy.length > 200) {
             this.policyGenealogy.shift();
         }
+        if (this.learningStore) {
+            this.learningStore.savePolicyGeneration(generation, policy, reward)
+                .catch((err) => console.warn('[SwarmKnowledgeRepository] Policy persist failed:', err?.message || err));
+        }
+    }
+
+    /**
+     * Restore outcomes + policy genealogy from durable storage into the in-memory maps.
+     * Safe to call on a fresh boot; merges without duplicating existing entries.
+     * Returns the number of outcome records restored.
+     */
+    public async restoreFromLearningStore(): Promise<number> {
+        if (!this.learningStore) return 0;
+        const state = await this.learningStore.loadAll();
+        let restored = 0;
+        for (const raw of state.outcomes) {
+            if (!raw || !raw.id || this.outcomes.has(String(raw.id))) continue;
+            const record = raw as AnalysisOutcomeRecord;
+            this.outcomes.set(record.id, record);
+            if (!this.appIndices.has(record.appId)) {
+                this.appIndices.set(record.appId, []);
+            }
+            const ids = this.appIndices.get(record.appId)!;
+            if (!ids.includes(record.id)) {
+                ids.push(record.id);
+            }
+            restored++;
+        }
+        for (const p of state.policies) {
+            if (this.policyGenealogy.some((g) => g.generation === p.generation)) continue;
+            this.policyGenealogy.push({
+                timestamp: p.timestamp || Date.now(),
+                generation: p.generation,
+                policy: p.policy,
+                reward: p.reward
+            });
+        }
+        this.policyGenealogy.sort((a, b) => a.generation - b.generation);
+        while (this.policyGenealogy.length > 200) {
+            this.policyGenealogy.shift();
+        }
+        return restored;
     }
 
     public getOutcome(id: string): AnalysisOutcomeRecord | undefined {
@@ -846,11 +911,32 @@ export class AnalystLedger {
   private autoSave: boolean = false;
   private debounceMs: number = 250;
   private saveTimeout: any = null;
+  private learningStore: QdrantLearningStore | null = null;
 
   constructor(config?: { persistPath?: string; autoSave?: boolean; debounceMs?: number }) {
     if (config?.persistPath) this.persistPath = config.persistPath;
     if (config?.autoSave !== undefined) this.autoSave = config.autoSave;
     if (config?.debounceMs !== undefined) this.debounceMs = config.debounceMs;
+  }
+
+  /** Attach durable persistence (Qdrant). Writes become fire-and-forget; reads stay in-memory. */
+  public setLearningStore(store: QdrantLearningStore | null): void {
+    this.learningStore = store;
+  }
+
+  public getLearningStore(): QdrantLearningStore | null {
+    return this.learningStore;
+  }
+
+  /**
+   * Restore ledger entries from durable storage. Merges with any in-memory
+   * entries by taking the max of each counter (safe against double-restore).
+   * Returns the number of keys restored.
+   */
+  public async restoreFromLearningStore(): Promise<number> {
+    if (!this.learningStore) return 0;
+    const state = await this.learningStore.loadAll();
+    return this.import(state.ledger);
   }
 
   public recordOutcome(appId: string, agentRole: string, outcome: 'win' | 'loss' | 'push'): void {
@@ -863,6 +949,11 @@ export class AnalystLedger {
     
     record.lastUpdated = Date.now();
     this.records.set(key, record);
+
+    if (this.learningStore) {
+      this.learningStore.saveLedgerEntry(key, record as unknown as Record<string, any>)
+        .catch((err) => console.warn('[AnalystLedger] Ledger persist failed:', err?.message || err));
+    }
 
     if (this.autoSave && this.persistPath) {
       this.scheduleAutoSave();

@@ -1,4 +1,5 @@
 import type { Provider, ProviderCredential } from './types.ts';
+import { QdrantLearningStore } from './learning-persistence.ts';
 
 export type ProviderHealthStatus = 'healthy' | 'degraded' | 'cooldown';
 
@@ -711,12 +712,55 @@ export class SpecialistCapabilityProfiler {
     private defaultLatencyBaselineMs: number;
     private defaultAccuracyWeight: number;
     private totalTrials: number = 0;
+    private learningStore: QdrantLearningStore | null = null;
 
     constructor(config?: CapabilityProfilerConfig) {
         this.explorationConstant = config?.explorationConstant ?? 0.707;
         this.emaAlpha = config?.emaAlpha ?? 0.25;
         this.defaultLatencyBaselineMs = config?.defaultLatencyBaselineMs ?? 1500;
         this.defaultAccuracyWeight = config?.defaultAccuracyWeight ?? 0.30;
+    }
+
+    /** Attach durable persistence (Qdrant). Writes become fire-and-forget; reads stay in-memory. */
+    public setLearningStore(store: QdrantLearningStore | null): void {
+        this.learningStore = store;
+    }
+
+    public getLearningStore(): QdrantLearningStore | null {
+        return this.learningStore;
+    }
+
+    /**
+     * Merge persisted profiles into the in-memory map. For each role, keeps the
+     * entry with the most accredited outcomes (safe against double-restore).
+     * Returns the number of roles restored.
+     */
+    public importProfiles(profiles: Record<string, SpecialistCapabilityProfile>): number {
+        let count = 0;
+        for (const [role, incoming] of Object.entries(profiles || {})) {
+            if (!role || !incoming || typeof incoming !== 'object') continue;
+            const existing = this.profiles.get(role);
+            const incomingOutcomes = Number((incoming as any).totalAccreditedOutcomes || 0);
+            const existingOutcomes = Number(existing?.totalAccreditedOutcomes || 0);
+            if (!existing || incomingOutcomes >= existingOutcomes) {
+                this.profiles.set(role, {
+                    ...(incoming as SpecialistCapabilityProfile),
+                    domainStats: { ...((incoming as any).domainStats || {}) }
+                });
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /**
+     * Restore accuracy profiles from durable storage into the in-memory map.
+     * Safe to call on a fresh boot. Returns the number of roles restored.
+     */
+    public async restoreFromLearningStore(): Promise<number> {
+        if (!this.learningStore) return 0;
+        const state = await this.learningStore.loadAll();
+        return this.importProfiles(state.profiles as Record<string, SpecialistCapabilityProfile>);
     }
 
     private getOrCreateProfile(agentRole: string): SpecialistCapabilityProfile {
@@ -851,6 +895,11 @@ export class SpecialistCapabilityProfiler {
         const totalScore = (profile.accuracyWins * 1.0) + (profile.accuracyPushes * 0.5);
         profile.accuracyScore = Math.round((totalScore / Math.max(1, total)) * 1000) / 1000;
         profile.lastUpdated = Date.now();
+
+        if (this.learningStore) {
+            this.learningStore.saveProfile(key, profile as unknown as Record<string, any>)
+                .catch((err) => console.warn('[SpecialistCapabilityProfiler] Profile persist failed:', err?.message || err));
+        }
     }
 
     /**
