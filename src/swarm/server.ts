@@ -14,7 +14,7 @@ import { globalActionPlanCache } from './actionPlanCache.ts';
 import { DEFAULT_PROVIDER_MODELS } from './agent.ts';
 import { globalBenchmarker, initBenchmarker } from './benchmark.ts';
 import { globalFeedbackEngine, analystLedger } from './feedback.ts';
-import { globalLoadBalancer } from './loadBalancer.ts';
+import { globalLoadBalancer, globalSpecialistProfiler } from './loadBalancer.ts';
 
 export interface SwarmServerOptions {
     port?: number;
@@ -195,16 +195,17 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 return c.json({ error: 'Invalid workflowId or outcome' }, 400);
             }
 
-            const workflowRecord = globalFeedbackEngine.getKnowledgeRepository().queryOutcomes().find((o: any) => o.workflowId === workflowId);
-            if (!workflowRecord) {
+            const workflowRecords = globalFeedbackEngine.getKnowledgeRepository().queryOutcomes().filter((o: any) => o.workflowId === workflowId);
+            if (workflowRecords.length === 0) {
                 return c.json({ error: 'Workflow not found' }, 404);
             }
 
-            if ((workflowRecord as any).feedbackProcessed) {
+            if (workflowRecords.some((o: any) => o.feedbackProcessed)) {
                 // Idempotency support
                 return c.json({ ok: true, message: 'Feedback already processed', workflowId });
             }
 
+            const workflowRecord = workflowRecords[0];
             const accuracyScore = outcome === 'win' ? 1.0 : outcome === 'loss' ? 0.0 : 0.5;
 
             const fbResult = await globalFeedbackEngine.processFeedback({
@@ -217,19 +218,33 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 tokensConsumed: workflowRecord.metrics.tokensConsumed,
                 qualityScore: workflowRecord.metrics.qualityScore,
                 accuracyScore,
-                errorCount: workflowRecord.metrics.errorCount
+                errorCount: workflowRecord.metrics.errorCount,
+                hardErrorCount: workflowRecord.metrics.hardErrorCount,
+                failoverCount: workflowRecord.metrics.failoverCount,
+                agentRoles: (workflowRecord as any).agentRoles
             });
 
-            // Update per-analyst ledger
-            const roles = ['SpecialistRouter', 'Manager Node', 'Verification Node']; // Using default roles since agentRoles isn't on AnalysisOutcomeRecord by default
+            // Update per-analyst ledger and specialist profiler with REAL analyst roles from the workflow record
+            const targetAppId = workflowRecord.appId || appId || 'perfect-swarm';
+            const roles = ((workflowRecord as any).agentRoles || []).filter(Boolean);
             for (const role of roles) {
-                analystLedger.recordOutcome(appId, role, outcome);
+                analystLedger.recordOutcome(targetAppId, role, outcome);
+                globalSpecialistProfiler.recordAccuracy(role, outcome);
             }
 
-            (workflowRecord as any).feedbackProcessed = true;
-            (workflowRecord as any).gradedAt = gradedAt || Date.now();
+            for (const r of workflowRecords) {
+                (r as any).feedbackProcessed = true;
+                (r as any).gradedAt = gradedAt || Date.now();
+            }
 
-            return c.json({ ok: true, workflowId, outcome, accuracyScore, compositeReward: fbResult.reward.compositeReward });
+            return c.json({
+                ok: true,
+                workflowId,
+                outcome,
+                accuracyScore,
+                compositeReward: fbResult.reward.compositeReward,
+                components: fbResult.reward.components
+            });
         } catch (err: any) {
             console.error('[SwarmServer Feedback Error]:', err);
             return c.json({ error: err.message || 'Internal Server Error' }, 500);
@@ -248,7 +263,11 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
         globalTelemetryCollector.syncCacheMetrics(totalHits, totalMisses);
 
         const snapshot = globalTelemetryCollector.getSnapshot();
-        return c.json({ ...snapshot, analystAccuracy: analystLedger.getMetrics() });
+        return c.json({
+            ...snapshot,
+            analystAccuracy: analystLedger.getMetrics(),
+            specialistProfiles: globalSpecialistProfiler.getAllProfiles()
+        });
     });
 
     app.get('/api/swarm/config', (c) => {

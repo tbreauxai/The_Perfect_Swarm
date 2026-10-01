@@ -51,6 +51,7 @@ export function normalizeInsightType(val: unknown): 'success' | 'warning' | 'inf
  */
 export const ManagerResponseSchema = z.object({
   ui_title: z.string().describe("Dashboard Title"),
+  summary: z.string().optional().describe("Executive synthesis, 4-8 dense sentences: the bottom-line call, where analysts disagreed and whose view won with the deciding evidence, key numbers cited, and what would change the call. No generic filler."),
   components: z.array(
     z.discriminatedUnion("type", [
       z.object({

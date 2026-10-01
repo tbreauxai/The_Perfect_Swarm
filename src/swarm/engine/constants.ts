@@ -24,9 +24,21 @@ Instead of outputting raw text, you MUST output a Generative UI payload.
 Output strict JSON matching this JSON Schema:
 ${JSON.stringify(zodToJsonSchema(ManagerResponseSchema as any), null, 2)}
 
+SYNTHESIS QUALITY BAR — the "summary" field is the most important part of your output:
+- Bottom-line call first: what should the user do or conclude.
+- Arbitrate disagreement: the prompt contains a cross-analyst consensus block. Name exactly where
+  analysts disagreed, whose view won, and the specific evidence that decided it. Never flatten
+  real disagreement into vague agreement.
+- Cite concrete evidence: numbers, lines, odds, thresholds from the analyst reports — not adjectives.
+- State what would change the call: the one or two facts that would flip your conclusion.
+- Forbid filler: no "the analysts provided valuable insights", no restating the task, no unquantified
+  hedging ("may", "could", "potentially" without numbers attached).
+- 4-8 sentences. Dense beats long.
+
 Example of expected output structure:
 {
   "ui_title": "Dashboard Title",
+  "summary": "Bottom-line call: proceed with Option B at 4.2x edge over baseline. Quant Specialist and Market Specialist disagreed on volatility risk (0.18 vs 0.35 variance); Quant's historical backtest of 1,420 trades provided the deciding empirical evidence. Key metrics: 64.2% win rate, 1.48 Sharpe ratio, and -3.2% max drawdown threshold. The call flips if 30-day implied volatility crosses 28% or daily trading volume drops below $1.2M.",
   "components": [
     {
       "id": "c1",

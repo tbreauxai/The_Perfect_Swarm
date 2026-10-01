@@ -297,6 +297,9 @@ export async function executeFastPath(
                     workflowId: (context as any).id || `wf-${Date.now()}`,
                     task,
                     appId: targetAppId,
+                    agentRoles: (analysts && analysts.length > 0)
+                        ? analysts.map(a => a.role).filter(Boolean)
+                        : (settings?.agents || []).map((a: any) => a.role).filter(Boolean),
                     durationMs: workflowDurationMs,
                     targetTier: 'instant',
                     tokenSavings: workflowPromptTokensSaved,

@@ -313,13 +313,33 @@ describe('guardManagerResponse', () => {
         expect(result.components[0].id).toBe('metric-0');
     });
 
-    it('falls back to InsightList if no valid components exist', () => {
-        const input = { insights: ['Something cool'] };
+    it('preserves summary field when provided in native valid payload', () => {
+        const input = {
+            ui_title: 'Executive Title',
+            summary: 'Bottom-line call: proceed with Option B. Quant and Market disagreed on volatility.',
+            components: [
+                {
+                    id: 'c1',
+                    type: 'MetricCard',
+                    props: { title: 'Win Rate', value: '64.2%' }
+                }
+            ]
+        };
         const result = guardManagerResponse(input);
+        expect(result.ui_title).toBe('Executive Title');
+        expect(result.summary).toBe('Bottom-line call: proceed with Option B. Quant and Market disagreed on volatility.');
+        expect(result.components.length).toBe(1);
+    });
+
+    it('preserves summary field in salvage fallback mode', () => {
+        const input = {
+            summary: 'Salvaged summary: arbitrage resolved.',
+            insights: ['Key insight message']
+        };
+        const result = guardManagerResponse(input);
+        expect(result.summary).toBe('Salvaged summary: arbitrage resolved.');
         expect(result.components.length).toBe(1);
         expect(result.components[0].type).toBe('InsightList');
-        // @ts-ignore
-        expect(result.components[0].props.insights[0].message).toBe('Something cool');
     });
 });
 

@@ -46,7 +46,7 @@ export async function processTieredCache(
                     workflowId: (context as any).id || `wf-${Date.now()}`,
                     task, appId: targetAppId, durationMs: workflowDurationMs,
                     targetTier: 'instant', tokenSavings: 250, tokensConsumed: 0,
-                    qualityScore: 0.95, accuracyScore: 0.99, errorCount: 0,
+                    qualityScore: 0.95, accuracyScore: 0.99, errorCount: 0, hardErrorCount: 0, failoverCount: 0, anomalyCount: 0,
                     finalInsightSnippet: typeof lookup.value === 'string' ? lookup.value.slice(0, 150) : (lookup.value?.ui_title || 'Tiered Cache Hit'),
                     inputData: data
                 });

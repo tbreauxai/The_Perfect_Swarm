@@ -1,32 +1,26 @@
 [
   {
-    "id": "goal-1-runtime-consensus-and-reasoning",
-    "description": "Implement runtime consensus pipeline in engine, expand universal reasoning tag sanitization in adapter.ts, fix failover loop array mutation, and align default free OpenRouter model in agent.ts.",
+    "id": "goal-1-observability-reward-inputs-and-components",
+    "description": "Extend 'Policy Tuned & Outcome Indexed' event in src/swarm/engine/index.ts with rewardComponents and rewardInputs, and include components in POST /api/swarm/feedback in src/swarm/server.ts.",
     "status": "completed",
-    "verification": "consensusPipeline extracts agreement ratios and majority findings; adapter strips all reasoning tag variants; agent failover handles schema retries without mutating target chain."
+    "verification": "SSE event and POST /api/swarm/feedback response expose detailed reward components and inputs; unit tests pass."
   },
   {
-    "id": "goal-2-fast-path-tools-and-action-cache",
-    "description": "Equip fast-path execution with deterministic tool calling from ToolRegistry, action plan cache interception, and guardAnalystResponse normalization.",
+    "id": "goal-2-rescale-dead-penalties-in-reward",
+    "description": "Rescale durationMs denominator (3000 -> 120000) and tokensConsumed denominator (10000 -> 100000) in PolicyOptimizer.calculateReward in src/swarm/feedback.ts to eliminate constant -0.20 operational tax.",
     "status": "completed",
-    "verification": "Fast-path executes arithmetic/date tools, bypasses remote calls on action plan cache hits, and outputs valid guarded schema."
+    "verification": "Reward function yields higher, differentiated scores on normal 30-60s runs without dead penalty saturation; unit tests pass."
   },
   {
-    "id": "goal-3-precision-routing-and-token-protection",
-    "description": "Refactor ModelRouter with word-boundary matching for complexity classification, update OpenRouter free model recommendations, and bound verification retry prompts in AnalysisLifecycle.",
+    "id": "goal-3-split-hard-errors-from-failovers",
+    "description": "Separate hardErrorCount from failoverCount in workflow metrics and calculateReward so graceful provider failovers do not severely degrade the accuracy score.",
     "status": "completed",
-    "verification": "Word-boundary regexes prevent false-positive escalations; verification retries do not duplicate raw payload; router tests pass."
+    "verification": "Accuracy calculation penalizes hard unrecovered errors only; failovers tracked separately without crushing composite reward; unit tests pass."
   },
   {
-    "id": "goal-4-cache-interceptor-and-dedup-scaling",
-    "description": "Enforce LRU capacity limits on actionPlanCache and semanticCacheInterceptor to guarantee bounded memory footprints under long-running sweeps.",
+    "id": "goal-4-blend-analyst-accuracy-and-system-verification",
+    "description": "Blend participating analysts' ledger win rates into workflow accuracy, run full test suite (vitest, npm test), verify tsc --noEmit, rebuild bundles, and update todo.md.",
     "status": "completed",
-    "verification": "Action plan and semantic cache enforce max entry bounds with clean eviction under high-throughput test runs."
-  },
-  {
-    "id": "goal-5-system-verification-and-benchmarking",
-    "description": "Execute full test suites (vitest, cli, server), TypeScript verification, distribution builds, benchmark execution, and update todo.md.",
-    "status": "completed",
-    "verification": "100% test pass rate, 0 type errors, clean build bundles, and benchmark demonstrates high-throughput efficiency."
+    "verification": "100% tests pass, tsc --noEmit clean, dual builds succeed, and todo.md marked verified."
   }
 ]

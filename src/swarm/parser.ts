@@ -433,6 +433,10 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
         ? raw.ui_title.trim()
         : defaultTitle;
 
+    const summary = typeof raw.summary === 'string' && raw.summary.trim().length > 0
+        ? raw.summary.trim()
+        : undefined;
+
     const components: ManagerResponse['components'] = [];
 
     // If components array exists and has valid elements, salvage them
@@ -496,6 +500,7 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
 
     return {
         ui_title: title,
+        ...(summary ? { summary } : {}),
         components
     };
 }

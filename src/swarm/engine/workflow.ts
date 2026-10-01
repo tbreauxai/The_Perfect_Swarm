@@ -1,6 +1,4 @@
 import { sanitizeApiKey, validateProviderKey, resolveProvider } from "./utils.ts";
-import { resolveAgents } from "./workflow/agentResolution.ts";
-import { processTieredCache } from "./workflow/caching.ts";
 import { ANALYST_SYSTEM_INSTRUCTION, MANAGER_SYSTEM_INSTRUCTION } from "./constants.ts";
 import { getOrCreateDefaultCortex } from "./cortex.ts";
 import type { SwarmWorkflowParams, SwarmWorkflowResult, SwarmFeedbackReport } from "./types.ts";
@@ -9,11 +7,10 @@ import { executeFastPath } from "./fastPath.ts";
 import { checkSubComputationCache, checkTieredCacheLookup, checkSemanticCacheMatch } from "./cachingPipeline.ts";
 import { runDataProfilingPipeline } from "./profilingPipeline.ts";
 import { publishInteragentCoordination, arbitrateAndPropagateCoordination } from "./coordinationPipeline.ts";
-import { extractAnalystConsensus, renderPromptConsensusBlock } from "./consensusPipeline.ts";
-import { GoogleGenAI } from "@google/genai";
-import { Agent } from "../agent.ts";
-import { MemoryCortex } from "../memory.ts";
-import type { AnalystConsensusDigest } from "./consensusPipeline.ts";
+import { extractAnalystConsensus, renderPromptConsensusBlock, type AnalystConsensusDigest } from "./consensusPipeline.ts";
+import { GoogleGenAI } from '@google/genai';
+import { Agent } from '../agent.ts';
+import { MemoryCortex } from '../memory.ts';
 import { SwarmContext } from '../context.ts';
 import type { SwarmEvent, ProviderCredential, Provider, LearnedMemoryEvent, AgentRunConfig, SwarmEngineSettings, AgentConfig } from '../types.ts';
 import { profileData, createTokenChunks, SwarmTracer, globalMetricsCollector, SwarmMetricsCollector, globalUnifiedProfiler, type SwarmBaselineReport, type UnifiedSwarmBaselineReport } from '../profiler.ts';
@@ -84,6 +81,7 @@ import {
 import {
     globalFeedbackEngine,
     ContinuousFeedbackEngine,
+    analystLedger,
     type TunableParameters,
     type DriftAlert,
     type RewardSignal,
@@ -172,19 +170,21 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 memoryCortex = new MemoryCortex({
                     url: qdrantUrl,
                     apiKey: qdrantApiKey,
+                    collectionName: settings?.qdrantCollectionName,
                     aiClient: cortexAiClient,
+                    embeddingModel: settings?.qdrantEmbeddingModel,
                     defaultAppId: targetAppId,
                     persistPath,
                     autoSave
                 });
             } catch {
                 memoryCortex = persistPath
-                    ? new MemoryCortex({ defaultAppId: targetAppId, aiClient: cortexAiClient, persistPath, autoSave })
+                    ? new MemoryCortex({ defaultAppId: targetAppId, collectionName: settings?.qdrantCollectionName, aiClient: cortexAiClient, embeddingModel: settings?.qdrantEmbeddingModel, persistPath, autoSave })
                     : getOrCreateDefaultCortex(targetAppId, cortexAiClient);
             }
         } else {
             memoryCortex = persistPath
-                ? new MemoryCortex({ defaultAppId: targetAppId, aiClient: cortexAiClient, persistPath, autoSave })
+                ? new MemoryCortex({ defaultAppId: targetAppId, collectionName: settings?.qdrantCollectionName, aiClient: cortexAiClient, embeddingModel: settings?.qdrantEmbeddingModel, persistPath, autoSave })
                 : getOrCreateDefaultCortex(targetAppId, cortexAiClient);
         }
     }
@@ -229,8 +229,96 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     const cacheQuery = `${task}\n${data || ''}`.trim();
 
     if (tieredCacheEnabled && !forceFullSwarm && !bypassCache) {
-        const cacheResult = await processTieredCache(cacheQuery, task, data || "", context, targetAppId, workflowStartTime, settings, params.onStage);
-        if (cacheResult) return cacheResult;
+        const lookup = checkTieredCacheLookup({
+            query: cacheQuery,
+            task,
+            similarityThreshold: settings?.tieredCacheSettings?.l2SimilarityThreshold,
+            context
+        });
+        if (lookup.found && lookup.value) {
+            params.onStage?.({
+                stage: 'completed',
+                task
+            });
+
+            const workflowDurationMs = Date.now() - workflowStartTime;
+            globalMetricsCollector.recordTaskExecution({
+                success: true,
+                durationMs: workflowDurationMs,
+                agentRole: 'Tiered Cache Engine'
+            });
+            const metrics = globalMetricsCollector.getBaselineReport();
+
+            const profilingEnabled = settings?.profilingSettings?.enabled !== false;
+            if (profilingEnabled) {
+                globalUnifiedProfiler.recordWorkflowRun({
+                    durationMs: workflowDurationMs,
+                    cache: {
+                        l1Hits: lookup.tier === 'L1' ? 1 : 0,
+                        l2Hits: lookup.tier === 'L2' ? 1 : 0,
+                        l3Hits: lookup.tier === 'L3' ? 1 : 0,
+                        savedTokens: 250
+                    }
+                });
+            }
+
+            const feedbackEnabled = settings?.feedbackSettings?.enabled !== false;
+            let cacheHitFeedbackReport: SwarmFeedbackReport | undefined;
+            if (feedbackEnabled) {
+                try {
+                    const fbResult = await globalFeedbackEngine.processFeedback({
+                        workflowId: (context as any).id || `wf-${Date.now()}`,
+                        task,
+                        appId: targetAppId,
+                        agentRoles: (settings?.agents || []).map((a: any) => a.role).filter(Boolean),
+                        durationMs: workflowDurationMs,
+                        targetTier: 'instant',
+                        tokenSavings: 250,
+                        tokensConsumed: 0,
+                        qualityScore: 0.95,
+                        accuracyScore: 0.99,
+                        errorCount: 0,
+                        finalInsightSnippet: typeof lookup.value === 'string' ? lookup.value.slice(0, 150) : (lookup.value?.ui_title || 'Tiered Cache Hit'),
+                        inputData: data
+                    });
+                    cacheHitFeedbackReport = {
+                        reward: fbResult.reward,
+                        tunedParameters: fbResult.tunedParameters,
+                        driftAlerts: fbResult.driftAlerts,
+                        outcomeId: fbResult.outcomeId,
+                        policyUpdated: fbResult.policyUpdated
+                    };
+                } catch (fbErr: any) {
+                    console.warn('[TieredCache] Feedback processing failed:', fbErr);
+                }
+            }
+
+            return {
+                workflowId: (context as any).id,
+                events: context.events,
+                finalAnalysis: lookup.value,
+                metrics,
+                tieredCache: {
+                    hit: true,
+                    tier: lookup.tier,
+                    similarity: lookup.similarity,
+                    latencyMs: lookup.latencyMs,
+                    metrics: globalTieredCache.getMetrics()
+                },
+                unifiedBaselines: profilingEnabled ? globalUnifiedProfiler.getUnifiedBaselineReport() : undefined,
+                feedback: cacheHitFeedbackReport,
+                coordination: {
+                    knowledgeGraphVersion: globalKnowledgeGraph.getVersion(),
+                    totalNodes: globalKnowledgeGraph.getStats().totalNodes,
+                    totalEdges: globalKnowledgeGraph.getStats().totalEdges,
+                    hypothesesCount: globalHypothesisLayer.getHypotheses().length,
+                    validatedHypothesesCount: globalHypothesisLayer.getHypotheses('validated').length,
+                    agentLearningRates: Object.fromEntries(
+                        globalLearningRateManager.getAllStates().map(s => [s.agentId, s.learningRate])
+                    )
+                }
+            };
+        }
     }
 
     const cachedAnalysis = (forceFullSwarm || tieredCacheEnabled || bypassCache) ? null : globalPayloadCache.get(cacheKey);
@@ -272,6 +360,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     workflowId: (context as any).id || `wf-${Date.now()}`,
                     task,
                     appId: targetAppId,
+                    agentRoles: (settings?.agents || []).map((a: any) => a.role).filter(Boolean),
                     durationMs: workflowDurationMs,
                     targetTier: 'instant',
                     tokenSavings: 250,
@@ -360,6 +449,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     workflowId: (context as any).id || `wf-${Date.now()}`,
                     task,
                     appId: targetAppId,
+                    agentRoles: (settings?.agents || []).map((a: any) => a.role).filter(Boolean),
                     durationMs: workflowDurationMs,
                     targetTier: 'instant',
                     tokenSavings: 250,
@@ -432,7 +522,85 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     }
 
     // 1. Resolve Manager, Analysts, and Critic (applying variant agent overrides if defined)
-    const { managerAgent, analysts, dedicatedCriticAgent } = resolveAgents(activeVariant, settings, defaultAi);
+    const rawAgents = (activeVariant?.agents && activeVariant.agents.length > 0)
+        ? activeVariant.agents
+        : (settings?.agents || []);
+    let managerConfig = rawAgents.find((a: AgentConfig) => a.id === 'manager' || a.role === 'Manager Node');
+    const dedicatedCriticConfig = rawAgents.find((a: AgentConfig) => a.id === 'critic' || a.role?.toLowerCase().includes('critic') || a.role?.toLowerCase().includes('verifier')) || settings?.critic;
+    const analystConfigs = rawAgents.filter((a: AgentConfig) => a.id !== 'manager' && a.provider !== 'none');
+
+    const hasUserGemini = !!settings?.geminiApiKey;
+    if (!managerConfig) {
+        const defaultProvider = hasUserGemini || safeEnv.GEMINI_API_KEY ? 'gemini' : 'openrouter';
+        managerConfig = {
+            id: 'manager',
+            role: 'Manager Node',
+            provider: defaultProvider,
+            model: ''
+        };
+    }
+    const availableFallbacks: ProviderCredential[] = [];
+    if (!settings?.disableFallback) {
+        for (const p of ALL_PROVIDERS) {
+            const { key, client } = resolveProvider(p, settings, defaultAi);
+            if (key) {
+                const userConfiguredAgent = rawAgents.find((a: AgentConfig) => a.provider === p && a.model);
+                const fallbackModel = userConfiguredAgent?.model || '';
+                if (fallbackModel && fallbackModel.trim().length > 0) {
+                    availableFallbacks.push({
+                        provider: p,
+                        apiKey: key,
+                        modelName: fallbackModel,
+                        aiClient: client
+                    });
+                }
+            }
+        }
+    }
+
+    const { key: mKey, client: mClient } = resolveProvider(managerConfig.provider, settings, defaultAi);
+    const finalMKey = managerConfig.apiKey ? sanitizeApiKey(managerConfig.apiKey) : mKey;
+    validateProviderKey(managerConfig.provider, finalMKey, managerConfig.role || 'Manager Node');
+    const managerModel = managerConfig.model || '';
+    const managerFallbacks = availableFallbacks.filter(f => f.provider !== managerConfig.provider);
+    const managerAgent = new Agent('Manager Node', managerModel, managerConfig.provider, finalMKey, mClient, managerFallbacks);
+    managerAgent.id = managerConfig.id || managerConfig.role || 'manager';
+    managerAgent.maxTokens = managerConfig.maxTokens;
+
+    const analysts: Agent[] = [];
+    for (const ac of analystConfigs) {
+        const { key: aKey, client: aClient } = resolveProvider(ac.provider, settings, defaultAi);
+        const finalAKey = ac.apiKey ? sanitizeApiKey(ac.apiKey) : aKey;
+        if (finalAKey || ac.provider === 'simulated' || ac.provider === 'mock' || ac.provider === 'custom-mock') {
+            const aModel = ac.model || '';
+            const aFallbacks = (ac as any).disableFallback || (ac as any).strictProvider
+                ? []
+                : availableFallbacks.filter(f => f.provider !== ac.provider);
+            const analyst = new Agent(ac.role || 'Analyst', aModel, ac.provider, finalAKey, aClient, aFallbacks);
+            analyst.id = ac.id || ac.role;
+            analyst.maxTokens = ac.maxTokens;
+            analysts.push(analyst);
+        } else {
+            console.warn(`Skipping ${ac.role}: missing API key for ${ac.provider}`);
+        }
+    }
+
+    let dedicatedCriticAgent: Agent | null = null;
+    if (dedicatedCriticConfig) {
+        const { key: cKey, client: cClient } = resolveProvider(dedicatedCriticConfig.provider, settings, defaultAi);
+        const finalCKey = dedicatedCriticConfig.apiKey ? sanitizeApiKey(dedicatedCriticConfig.apiKey) : cKey;
+        if (finalCKey || dedicatedCriticConfig.provider === 'simulated' || dedicatedCriticConfig.provider === 'mock' || dedicatedCriticConfig.provider === 'custom-mock') {
+            const cModel = dedicatedCriticConfig.model || '';
+            const cFallbacks = availableFallbacks.filter(f => f.provider !== dedicatedCriticConfig.provider);
+            dedicatedCriticAgent = new Agent(dedicatedCriticConfig.role || 'Verification Critic', cModel, dedicatedCriticConfig.provider, finalCKey, cClient, cFallbacks);
+            dedicatedCriticAgent.id = dedicatedCriticConfig.id || dedicatedCriticConfig.role || 'critic';
+            dedicatedCriticAgent.maxTokens = dedicatedCriticConfig.maxTokens;
+        }
+    }
+
+    if (analysts.length === 0) {
+        throw new Error('No active Analysts found. Please configure at least one Analyst agent in settings and ensure its API key is provided.');
+    }
 
     const fastPathDecision = ModelRouter.evaluateFastPath(task, data || "", deepAnalysisRequested, forceFullSwarm);
 
@@ -446,7 +614,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             fastPath: fastPathDecision,
             deepAnalysis: deepAnalysisRequested,
             forceFullSwarm,
-            manager: { provider: managerAgent.provider, model: managerAgent.modelName },
+            manager: { provider: managerConfig.provider, model: managerModel },
             analysts: analysts.map(a => ({ role: a.role, provider: a.provider, model: a.modelName }))
         },
         durationMs: 0
@@ -1492,7 +1660,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 },
                 context,
                 effectiveDynamicPrompt,
-                "Verify whether this analysis faithfully represents the analyst reports and data, and strictly complies with all historical baselines and past lessons without hallucinations or omissions."
+                "Verify whether this analysis faithfully represents the analyst reports and data, strictly complies with all historical baselines and past lessons without hallucinations or omissions, and does the summary arbitrate analyst disagreements with deciding evidence rather than generic filler."
             );
 
             parsedManagerOutput = lifecycleResult.finalProposal;
@@ -1741,17 +1909,38 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     let workflowFeedbackReport: SwarmFeedbackReport | undefined;
     if (feedbackEnabled) {
         try {
+            const qualityScore = workflowLifecycleResult?.computedRating ? workflowLifecycleResult.computedRating / 100 : (isSuccess ? 0.90 : 0.40);
+            const failoverCount = (context.events || []).filter(e => e.action?.toLowerCase().includes('failover')).length;
+            const hardErrorCount = isSuccess ? 0 : 1;
+            const errorCount = hardErrorCount + failoverCount;
+
+            const participatingRoles = (analysts && analysts.length > 0)
+                ? analysts.map(a => a.role).filter(Boolean)
+                : (settings?.agents || []).map((a: any) => a.role).filter(Boolean);
+
+            const baseOperationalAccuracy = isSuccess ? 0.95 : 0.30;
+            const ledgerStats = analystLedger.getAverageAccuracy(targetAppId, participatingRoles);
+            // Blend operational accuracy with empirical win rate if graded outcomes exist for participating analysts
+            const blendWeight = ledgerStats.totalOutcomes > 0 ? Math.min(0.50, ledgerStats.totalOutcomes * 0.05) : 0;
+            const accuracyScore = Math.round(((1 - blendWeight) * baseOperationalAccuracy + blendWeight * ledgerStats.accuracy) * 1000) / 1000;
+
+            const tokensConsumed = workflowTotalTokens || (metrics?.totalTasks ? metrics.totalTasks * 400 : 800);
+            const tokenSavings = workflowPromptTokensSaved;
+
             const fbResult = await globalFeedbackEngine.processFeedback({
                 workflowId: (context as any).id || `wf-${Date.now()}`,
                 task,
                 appId: targetAppId,
+                agentRoles: participatingRoles,
                 durationMs: workflowDurationMs,
                 targetTier: complexity === 'instant' ? 'instant' : 'complex',
-                tokenSavings: workflowPromptTokensSaved,
-                tokensConsumed: workflowTotalTokens || (metrics?.totalTasks ? metrics.totalTasks * 400 : 800),
-                qualityScore: workflowLifecycleResult?.computedRating ? workflowLifecycleResult.computedRating / 100 : (isSuccess ? 0.90 : 0.40),
-                accuracyScore: isSuccess ? 0.95 : 0.30,
-                errorCount: isSuccess ? 0 : 1,
+                tokenSavings,
+                tokensConsumed,
+                qualityScore,
+                accuracyScore,
+                errorCount,
+                hardErrorCount,
+                failoverCount,
                 anomalyCount: (finalAnalysis?.components || []).reduce((acc: number, c: any) => {
                     if (c.type === 'InsightList' && Array.isArray(c.props?.insights)) {
                         return acc + c.props.insights.filter((ins: any) => ins.type === 'alert' || ins.type === 'warning').length;
@@ -1787,6 +1976,18 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 prompt: `Feedback processed: composite reward=${fbResult.reward.compositeReward}, drift alerts=${fbResult.driftAlerts.length}`,
                 output: {
                     reward: fbResult.reward.compositeReward,
+                    rewardComponents: fbResult.reward.components,
+                    rewardInputs: {
+                        qualityScore,
+                        accuracyScore,
+                        errorCount,
+                        hardErrorCount,
+                        failoverCount,
+                        durationMs: workflowDurationMs,
+                        tokensConsumed,
+                        tokenSavings,
+                        computedRating: workflowLifecycleResult?.computedRating ?? null
+                    },
                     policyUpdated: fbResult.policyUpdated,
                     outcomeId: fbResult.outcomeId,
                     activePolicy: fbResult.tunedParameters,

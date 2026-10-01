@@ -206,7 +206,20 @@ async function runSseServerTests() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 task: 'Synthesize cluster metrics',
-                data: 'status=ready'
+                data: 'status=ready',
+                defaultAi: {
+                    provider: 'test-mock-server',
+                    model: 'mock-1',
+                    apiKey: 'mock-key'
+                },
+                settings: {
+                    appId: 'duelodds',
+                    agents: [
+                        { id: 'manager', role: 'Synthesis Coordinator', provider: 'test-mock-server', model: 'mock-1', apiKey: 'mock-key' },
+                        { id: 'quant', role: 'Quant Specialist', provider: 'test-mock-server', model: 'mock-1', apiKey: 'mock-key' },
+                        { id: 'steam', role: 'Market & Steam Specialist', provider: 'test-mock-server', model: 'mock-1', apiKey: 'mock-key' }
+                    ]
+                }
             })
         });
         if (analyzeRes.status !== 200) throw new Error(`Analyze expected 200, got ${analyzeRes.status}`);
@@ -224,6 +237,42 @@ async function runSseServerTests() {
             throw new Error(`Expected failureCount >= 1 due to 400 response, got ${metricsData.failureCount}`);
         }
         console.log('✓ Telemetry metrics accurately count non-2xx HTTP responses as failures.');
+
+        // Step G: Feedback attribution to real analyst roles in analystLedger
+        console.log('\n[Test 7] POST /api/swarm/feedback (Real Analyst Role Attribution)');
+        const workflowId = analyzeData.workflowId || analyzeData.finalAnalysis?.workflowId;
+        const feedbackRes = await fetch(`${baseUrl}/api/swarm/feedback`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                workflowId,
+                outcome: 'win'
+            })
+        });
+        if (feedbackRes.status !== 200) throw new Error(`Feedback expected 200, got ${feedbackRes.status}`);
+        const feedbackJson = await feedbackRes.json();
+        console.log('✓ Feedback response received:', feedbackJson);
+        if (!feedbackJson.components || typeof feedbackJson.components.qualityReward !== 'number') {
+            throw new Error('Feedback response missing components reward breakdown');
+        }
+
+        const metricsRes2 = await fetch(`${baseUrl}/api/swarm/metrics`);
+        const metricsData2 = await metricsRes2.json();
+        const accuracyKeys = Object.keys(metricsData2.analystAccuracy || {});
+        console.log('✓ Telemetry analystAccuracy keys:', accuracyKeys);
+        if (accuracyKeys.some(k => k.includes('SpecialistRouter') || k.includes('Manager Node') || k.includes('Verification Node'))) {
+            throw new Error(`Found fake pipeline node in analystAccuracy: ${accuracyKeys.join(', ')}`);
+        }
+        if (!accuracyKeys.includes('duelodds:Quant Specialist') || !accuracyKeys.includes('duelodds:Market & Steam Specialist')) {
+            throw new Error(`Missing real analyst roles in analystAccuracy: ${accuracyKeys.join(', ')}`);
+        }
+        if (!metricsData2.specialistProfiles || !metricsData2.specialistProfiles['Quant Specialist']) {
+            throw new Error('Missing Quant Specialist in specialistProfiles');
+        }
+        if (metricsData2.specialistProfiles['Quant Specialist'].accuracyWins < 1) {
+            throw new Error('Quant Specialist accuracyWins was not updated in specialistProfiles');
+        }
+        console.log('✓ Real analyst roles and outcomes-driven specialist profile accuracy verified.');
 
         console.log('\n✓ ALL SWARM HTTP/SSE STREAMING SERVER TESTS PASSED SUCCESSFULLY!\n');
     } finally {
