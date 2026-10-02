@@ -3,13 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect, useRef } from 'react';
+import React, { useState } from 'react';
 import { Loader2, BrainCircuit, FileText, Activity, AlertCircle, Settings, Square } from 'lucide-react';
-import { SettingsModal, AppSettings } from './components/SettingsModal';
-import { SwarmEventTimeline, SwarmTimelineEvent } from './components/SwarmEventTimeline';
+import { SettingsModal } from './components/SettingsModal';
+import { SwarmEventTimeline } from './components/SwarmEventTimeline';
 import { AnalysisViewer } from './components/AnalysisViewer';
-import { formatActionableError } from './swarm/types';
-import React from 'react';
+import { useSwarmSettings } from './hooks/useSwarmSettings';
+import { useSwarmExecution } from './hooks/useSwarmExecution';
+
 const CortexDiagnosticsViewer = React.lazy(() => import('./components/CortexDiagnosticsViewer').then(module => ({ default: module.CortexDiagnosticsViewer })));
 const OptimizationRunner = React.lazy(() => import('./components/optimization/OptimizationRunner').then(module => ({ default: module.OptimizationRunner })));
 
@@ -17,275 +18,31 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'trace' | 'optimization'>('trace');
   const [task, setTask] = useState('');
   const [data, setData] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [events, setEvents] = useState<SwarmTimelineEvent[]>([]);
-  const [finalAnalysis, setFinalAnalysis] = useState<any>(null);
-  const [progressiveStage, setProgressiveStage] = useState<{
-    stage: string;
-    digests?: Record<string, any>;
-    metrics?: any;
-  } | null>(null);
-  const [error, setError] = useState('');
-  const abortControllerRef = useRef<AbortController | null>(null);
-  const eventBufferRef = useRef<SwarmTimelineEvent[]>([]);
-  const rafIdRef = useRef<number | null>(null);
 
-  const flushEventBuffer = () => {
-    if (eventBufferRef.current.length > 0) {
-      const buffered = [...eventBufferRef.current];
-      eventBufferRef.current = [];
-      setEvents(prev => [...prev, ...buffered]);
-    }
-    if (rafIdRef.current !== null) {
-      cancelAnimationFrame(rafIdRef.current);
-      rafIdRef.current = null;
-    }
-  };
+  const {
+    settings,
+    updateSetting,
+    updateAgent,
+    applyModelToSettings,
+    showSettings,
+    setShowSettings,
+    envStatus
+  } = useSwarmSettings();
 
-  const cancelSwarm = () => {
-    flushEventBuffer();
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
-  };
+  const {
+    loading,
+    events,
+    finalAnalysis,
+    progressiveStage,
+    error,
+    expandedEvents,
+    toggleEvent,
+    runSwarm,
+    cancelSwarm
+  } = useSwarmExecution();
 
-  // Settings & Env State
-  const [showSettings, setShowSettings] = useState(false);
-  const [envStatus, setEnvStatus] = useState<any>({});
-
-  useEffect(() => {
-    fetch('/api/config/status')
-      .then(res => res.text())
-      .then(text => {
-        try {
-          setEnvStatus(JSON.parse(text));
-        } catch (e) {
-          console.error('Config status parse error:', text);
-        }
-      })
-      .catch(console.error);
-  }, []);
-
-  const [settings, setSettings] = useState<AppSettings>({
-    geminiApiKey: '',
-    openRouterApiKey: '',
-    groqApiKey: '',
-    mistralApiKey: '',
-    qdrantUrl: '',
-    qdrantApiKey: '',
-    githubToken: '',
-    appId: 'perfect-swarm',
-    disableFallback: false,
-    forceFullSwarm: false,
-    agents: [
-      { id: 'manager', role: 'Manager Node', provider: 'gemini', model: 'gemini-3.5-flash' },
-      { id: 'a1', role: 'Analyst 1', provider: 'gemini', model: 'gemini-3.5-flash' },
-      { id: 'a2', role: 'Analyst 2', provider: 'gemini', model: 'gemini-3.5-flash-lite' },
-      { id: 'a3', role: 'Analyst 3', provider: 'gemini', model: 'gemini-3.5-flash-lite' },
-      { id: 'a4', role: 'Analyst 4', provider: 'mistral', model: 'mistral-small-latest' },
-      { id: 'critic', role: 'Verification Critic', provider: 'gemini', model: 'gemini-3.5-flash-lite' }
-    ]
-  });
-
-  // Load settings on mount with automatic migration for fallback settings
-  useEffect(() => {
-    const saved = localStorage.getItem('swarm_settings');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        let modified = false;
-
-        // Auto-enable fallback if previously defaulted to disabled
-        if (parsed.disableFallback === true && !localStorage.getItem('swarm_disable_fallback_explicit')) {
-          parsed.disableFallback = false;
-          modified = true;
-        }
-
-        // Auto-populate Verification Critic agent if missing from legacy settings
-        if (Array.isArray(parsed.agents) && !parsed.agents.some((a: any) => a.id === 'critic' || a.role === 'Verification Critic')) {
-          parsed.agents.push({ id: 'critic', role: 'Verification Critic', provider: 'gemini', model: 'gemini-3.5-flash-lite' });
-          modified = true;
-        }
-
-        if (modified) {
-          localStorage.setItem('swarm_settings', JSON.stringify(parsed));
-        }
-
-        setSettings(prev => ({ ...prev, ...parsed }));
-      } catch (e) {
-        console.error('Failed to parse settings', e);
-      }
-    }
-  }, []);
-
-  const sanitizeSettingsForStorage = (stg: AppSettings): Partial<AppSettings> => {
-    if (!stg.ephemeralKeys) return stg;
-    return {
-      ...stg,
-      geminiApiKey: '',
-      openRouterApiKey: '',
-      groqApiKey: '',
-      mistralApiKey: '',
-      qdrantApiKey: '',
-      githubToken: '',
-      agents: stg.agents.map(a => ({ ...a, apiKey: '' }))
-    };
-  };
-
-  const updateSetting = (key: keyof AppSettings, value: any) => {
-    if (key === 'disableFallback') {
-      localStorage.setItem('swarm_disable_fallback_explicit', 'true');
-    }
-    const newSettings = { ...settings, [key]: value };
-    setSettings(newSettings);
-    localStorage.setItem('swarm_settings', JSON.stringify(sanitizeSettingsForStorage(newSettings)));
-  };
-
-  const updateAgent = (id: string, field: string, value: string) => {
-    setSettings(prev => {
-      const newSettings = {
-        ...prev,
-        agents: prev.agents.map(a => a.id === id ? { ...a, [field]: value } : a)
-      };
-      localStorage.setItem('swarm_settings', JSON.stringify(sanitizeSettingsForStorage(newSettings)));
-      return newSettings;
-    });
-  };
-
-  // State to track expanded sections
-  const [expandedEvents, setExpandedEvents] = useState<Record<string, boolean>>({});
-
-  const toggleEvent = (id: string) => {
-    setExpandedEvents(prev => ({ ...prev, [id]: !prev[id] }));
-  };
-
-  const runSwarm = async () => {
-    if (!task) {
-      setError('Please provide a task.');
-      return;
-    }
-
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-
-    setLoading(true);
-    setError('');
-    eventBufferRef.current = [];
-    if (rafIdRef.current !== null) {
-      cancelAnimationFrame(rafIdRef.current);
-      rafIdRef.current = null;
-    }
-    setEvents([]);
-    setFinalAnalysis(null);
-    setProgressiveStage(null);
-
-    let safeData = data;
-    if (safeData.length > 500000) {
-      safeData = safeData.substring(0, 500000) + "\n...[TRUNCATED TO 500KB FOR NETWORK/MEMORY SAFETY]...";
-    }
-
-    try {
-      const response = await fetch('/api/swarm/stream', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ task, data: safeData, settings }),
-        signal: controller.signal
-      });
-
-      if (!response.ok) {
-        let errorMsg = 'Failed to execute swarm.';
-        const errorText = await response.text();
-        try {
-          const errorData = JSON.parse(errorText);
-          errorMsg = errorData.error || errorMsg;
-        } catch (e) {
-          errorMsg = `Server Error (${response.status}): ${errorText.substring(0, 100)}...`;
-        }
-        throw new Error(errorMsg);
-      }
-
-      if (!response.body) {
-        throw new Error('No response stream returned by server.');
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n\n');
-        buffer = lines.pop() || '';
-
-        for (const block of lines) {
-          if (!block.trim() || block.startsWith(':')) continue;
-
-          let eventType = 'message';
-          let dataStr = '';
-
-          for (const line of block.split('\n')) {
-            if (line.startsWith('event:')) {
-              eventType = line.replace('event:', '').trim();
-            } else if (line.startsWith('data:')) {
-              dataStr = line.replace('data:', '').trim();
-            }
-          }
-
-          if (!dataStr) continue;
-
-          try {
-            const parsedData = JSON.parse(dataStr);
-            if (eventType === 'swarm_event') {
-              const truncatedEvent = parsedData && typeof parsedData === 'object' && typeof parsedData.prompt === 'string'
-                ? { ...parsedData, prompt: parsedData.prompt.slice(0, 800) }
-                : parsedData;
-              eventBufferRef.current.push(truncatedEvent);
-              if (rafIdRef.current === null) {
-                rafIdRef.current = requestAnimationFrame(() => {
-                  flushEventBuffer();
-                });
-              }
-            } else if (eventType === 'swarm_stage') {
-              flushEventBuffer();
-              setProgressiveStage(parsedData);
-            } else if (eventType === 'swarm_complete') {
-              flushEventBuffer();
-              setProgressiveStage(null);
-              if (parsedData.finalAnalysis) {
-                setFinalAnalysis(parsedData.finalAnalysis);
-              }
-              if (parsedData.events && Array.isArray(parsedData.events)) {
-                const truncatedEvents = parsedData.events.map((e: any) =>
-                  e && typeof e === 'object' && typeof e.prompt === 'string'
-                    ? { ...e, prompt: e.prompt.slice(0, 800) }
-                    : e
-                );
-                setEvents(truncatedEvents);
-              }
-            } else if (eventType === 'swarm_error') {
-              flushEventBuffer();
-              setError(formatActionableError(parsedData.error || 'Swarm execution error'));
-            }
-          } catch (err) {
-            console.warn('Error parsing SSE block:', err, block);
-          }
-        }
-      }
-    } catch (err: any) {
-      if (err.name === 'AbortError') {
-        setError('Analysis cancelled by user.');
-      } else {
-        setError(formatActionableError(err.message || 'An unexpected error occurred during execution.'));
-      }
-    } finally {
-      flushEventBuffer();
-      setLoading(false);
-      abortControllerRef.current = null;
-    }
+  const handleRunSwarm = () => {
+    runSwarm(task, data, settings);
   };
 
   return (
@@ -368,7 +125,7 @@ export default function App() {
                   </div>
                 ) : (
                   <button
-                    onClick={runSwarm}
+                    onClick={handleRunSwarm}
                     className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 rounded-xl transition-colors flex items-center justify-center gap-2"
                   >
                     Run Swarm
@@ -490,18 +247,7 @@ export default function App() {
                  task={task}
                  data={data}
                  settings={settings}
-                 onApplyModelToSettings={(role, provider, model) => {
-                   setSettings(prev => {
-                     const updated = {
-                       ...prev,
-                       agents: prev.agents.map(a =>
-                         a.role === role ? { ...a, provider, model } : a
-                       )
-                     };
-                     localStorage.setItem('swarm_settings', JSON.stringify(updated));
-                     return updated;
-                   });
-                 }}
+                 onApplyModelToSettings={applyModelToSettings}
                />
              </React.Suspense>
             </div>
