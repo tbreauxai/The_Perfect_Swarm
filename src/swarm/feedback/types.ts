@@ -38,6 +38,22 @@ export interface RewardSignal {
     timestamp: number;
 }
 
+export interface GradedOutcomeObservation {
+    metrics: PerformanceMetricsSnapshot;
+    outcome: 'win' | 'loss' | 'push' | number; // 'win'=1.0, 'loss'=0.0, 'push'=0.5, or continuous target [0, 1]
+    weight?: number; // Sample weighting, default 1.0
+}
+
+export interface CalibrationResult {
+    optimalWeights: RewardWeights;
+    initialCorrelation: number;
+    calibratedCorrelation: number;
+    initialMse: number;
+    calibratedMse: number;
+    sampleSize: number;
+    applied: boolean;
+}
+
 export interface TunableParameters {
     cacheL1MaxEntries: number;
     cacheSemanticThreshold: number;

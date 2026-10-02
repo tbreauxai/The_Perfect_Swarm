@@ -299,6 +299,46 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
         }
     });
 
+    app.post('/api/swarm/calibrate', async (c) => {
+        try {
+            const body = await c.req.json().catch(() => ({}));
+            const { appId, observations, iterations = 400, autoApply = true, minSamples = 2 } = body;
+
+            let result;
+            if (Array.isArray(observations) && observations.length > 0) {
+                result = globalFeedbackEngine.calibrateRewardWeights(observations, { iterations, autoApply });
+            } else {
+                result = globalFeedbackEngine.calibrateFromKnowledgeRepository({ appId, minSamples, iterations, autoApply });
+                if (!result) {
+                    return c.json({
+                        ok: false,
+                        error: `Insufficient graded samples in knowledge repository (minimum required: ${minSamples})`,
+                        currentWeights: globalFeedbackEngine.getRewardWeights()
+                    }, 400);
+                }
+            }
+
+            return c.json({
+                ok: true,
+                ...result,
+                currentWeights: globalFeedbackEngine.getRewardWeights()
+            });
+        } catch (err: any) {
+            console.error('[SwarmServer Calibrate Error]:', err);
+            return c.json({ error: err.message || 'Internal Server Error' }, 500);
+        }
+    });
+
+    app.get('/api/swarm/calibrate', (c) => {
+        const appId = c.req.query('appId');
+        const allOutcomes = globalFeedbackEngine.getKnowledgeRepository().queryOutcomes({ appId, limit: 1000 });
+        const gradedCount = allOutcomes.filter((o: any) => o.feedbackProcessed).length;
+        return c.json({
+            currentWeights: globalFeedbackEngine.getRewardWeights(),
+            totalGradedOutcomes: gradedCount
+        });
+    });
+
     app.get('/api/swarm/metrics', (c) => {
         // Sync cache metrics from cache layers
         const payloadStats = globalPayloadCache.getStats();

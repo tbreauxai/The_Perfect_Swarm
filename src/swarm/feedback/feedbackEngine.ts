@@ -1,4 +1,13 @@
-import type { PerformanceMetricsSnapshot, RewardSignal, RewardWeights, TunableParameters, DriftAlert, AnalysisOutcomeRecord } from './types.ts';
+import type {
+    PerformanceMetricsSnapshot,
+    RewardSignal,
+    RewardWeights,
+    TunableParameters,
+    DriftAlert,
+    AnalysisOutcomeRecord,
+    GradedOutcomeObservation,
+    CalibrationResult
+} from './types.ts';
 import { PolicyOptimizer } from './policyOptimizer.ts';
 import { ConceptDriftDetector } from './conceptDriftDetector.ts';
 import { SwarmKnowledgeRepository } from './knowledgeRepository.ts';
@@ -154,6 +163,45 @@ export class ContinuousFeedbackEngine {
 
     public getKnowledgeRepository(): SwarmKnowledgeRepository {
         return this.repository;
+    }
+
+    public getRewardWeights(): RewardWeights {
+        return this.policyOptimizer.getWeights();
+    }
+
+    public setRewardWeights(weights: Partial<RewardWeights>): void {
+        this.policyOptimizer.setWeights(weights);
+    }
+
+    public calibrateRewardWeights(
+        observations: GradedOutcomeObservation[],
+        options?: { iterations?: number; autoApply?: boolean }
+    ): CalibrationResult {
+        return this.policyOptimizer.calibrateRewardWeights(observations, options);
+    }
+
+    public calibrateFromKnowledgeRepository(options?: {
+        appId?: string;
+        minSamples?: number;
+        iterations?: number;
+        autoApply?: boolean;
+    }): CalibrationResult | null {
+        const minSamples = options?.minSamples ?? 5;
+        const allOutcomes = this.repository.queryOutcomes({ appId: options?.appId, limit: 1000 });
+        const graded = allOutcomes.filter((o: any) => o.feedbackProcessed && o.metrics?.accuracyScore !== undefined);
+        if (graded.length < minSamples) {
+            return null;
+        }
+
+        const observations: GradedOutcomeObservation[] = graded.map((o) => ({
+            metrics: o.metrics,
+            outcome: o.metrics.accuracyScore!
+        }));
+
+        return this.policyOptimizer.calibrateRewardWeights(observations, {
+            iterations: options?.iterations,
+            autoApply: options?.autoApply
+        });
     }
 
     public reset(): void {

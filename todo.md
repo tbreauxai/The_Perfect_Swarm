@@ -117,8 +117,16 @@ score in every UI label — not a quality score.
    - Empirical analyst ledger win rate (`analystLedger.getAverageAccuracy`) blended with operational accuracy in workflow execution (`src/swarm/engine/index.ts`).
    - 47 vitest test files (535/535 tests pass), `npm test` 100% pass, `tsc --noEmit` 0 errors, and dual production ESM/CJS bundles successfully generated.
 
-## Out of scope
+## Phase 1: Reward Weight Calibration & Graded Outcome Correlation [COMPLETED]
 
-Retraining/reweighting the five weights (0.35/0.35/0.15/0.05/0.10) against graded outcomes — that's
-Phase 1 of the test plan (reward/outcome correlation on 20–30 historical picks), and it needs the
-observability from fix #1 first.
+1. **Outcome Correlation Engine**:
+   - Implemented `PolicyOptimizer.computeCorrelation` to calculate Pearson correlation coefficient ($r$) and MSE between normalized composite reward outputs ($[-1, 1] \to [0, 1]$) and empirical win/loss/push outcomes.
+2. **Convex Weight Optimization**:
+   - Implemented `PolicyOptimizer.calibrateRewardWeights` with bounded stochastic optimization across operating ranges (quality: 0.10–0.60, accuracy: 0.15–0.65, latency: 0.02–0.35, cost: 0.01–0.20, savings: 0.02–0.25) summing to 1.0.
+   - Objective function maximizes $r_{xy} - 0.5 \times \text{MSE}$ and dynamically updates internal weights with `autoApply`.
+3. **Repository Integration**:
+   - Added `ContinuousFeedbackEngine.calibrateFromKnowledgeRepository` to auto-harvest feedback-processed historical outcomes and calibrate weights without manual data extraction.
+4. **API Endpoints**:
+   - Exposed `POST /api/swarm/calibrate` and `GET /api/swarm/calibrate` in `src/swarm/server.ts` supporting both direct observation payloads and automated knowledge repository harvesting.
+5. **Automated Verification**:
+   - 48 vitest test files (545/545 tests pass), `tsc --noEmit` 0 errors, `npm test` 100% pass, and dual ESM/CJS production builds pass.

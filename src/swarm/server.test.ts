@@ -152,4 +152,69 @@ describe('Swarm Server & Feedback Attribution', () => {
         expect(fbData.ok).toBe(true);
         expect(fbData.accuracyScore).toBe(0.0);
     });
+
+    it('calibrates reward weights via POST and queries status via GET /api/swarm/calibrate', async () => {
+        // Query GET /api/swarm/calibrate
+        const getRes = await fetch(`${baseUrl}/api/swarm/calibrate?appId=test-app`);
+        expect(getRes.status).toBe(200);
+        const getData = await getRes.json();
+        expect(getData.currentWeights).toBeDefined();
+        expect(getData.currentWeights.quality).toBeDefined();
+
+        // Send observations to calibrate
+        const observations = [
+            {
+                metrics: {
+                    workflowId: 'wf-cal-1',
+                    task: 'Win task',
+                    appId: 'test-app',
+                    durationMs: 15000,
+                    targetTier: 'complex',
+                    tokenSavings: 2000,
+                    tokensConsumed: 4000,
+                    qualityScore: 0.95,
+                    accuracyScore: 0.98,
+                    errorCount: 0,
+                    anomalyCount: 0,
+                    timestamp: Date.now()
+                },
+                outcome: 'win'
+            },
+            {
+                metrics: {
+                    workflowId: 'wf-cal-2',
+                    task: 'Loss task',
+                    appId: 'test-app',
+                    durationMs: 70000,
+                    targetTier: 'complex',
+                    tokenSavings: 0,
+                    tokensConsumed: 25000,
+                    qualityScore: 0.35,
+                    accuracyScore: 0.20,
+                    errorCount: 2,
+                    anomalyCount: 1,
+                    timestamp: Date.now()
+                },
+                outcome: 'loss'
+            }
+        ];
+
+        const postRes = await fetch(`${baseUrl}/api/swarm/calibrate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                appId: 'test-app',
+                observations,
+                iterations: 100,
+                autoApply: true
+            })
+        });
+
+        expect(postRes.status).toBe(200);
+        const postData = await postRes.json();
+        expect(postData.ok).toBe(true);
+        expect(postData.sampleSize).toBe(2);
+        expect(postData.optimalWeights).toBeDefined();
+        expect(postData.currentWeights).toBeDefined();
+    });
 });

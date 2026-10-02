@@ -519,3 +519,199 @@ describe('AnalystLedger (Per-Analyst Outcomes & File-Backed Persistence)', () =>
         expect(statsA.accuracy).toBe(0.75);
     });
 });
+
+describe('Reward Weights Calibration & Outcome Correlation (Phase 1)', () => {
+    it('manages reward weights with getWeights and setWeights', () => {
+        const optimizer = new PolicyOptimizer();
+        const initial = optimizer.getWeights();
+        expect(initial.quality).toBe(0.35);
+        expect(initial.accuracy).toBe(0.35);
+        expect(initial.latency).toBe(0.15);
+        expect(initial.cost).toBe(0.05);
+        expect(initial.tokenSavings).toBe(0.10);
+
+        optimizer.setWeights({ accuracy: 0.45, latency: 0.10 });
+        const updated = optimizer.getWeights();
+        expect(updated.accuracy).toBe(0.45);
+        expect(updated.latency).toBe(0.10);
+        expect(updated.quality).toBe(0.35);
+    });
+
+    it('computes Pearson correlation and MSE between composite rewards and graded outcomes', () => {
+        const optimizer = new PolicyOptimizer();
+
+        const observations = [
+            // Strong runs -> Wins
+            {
+                metrics: {
+                    workflowId: 'wf-1',
+                    task: 'pick 1',
+                    appId: 'test',
+                    durationMs: 12000,
+                    targetTier: 'complex' as const,
+                    tokenSavings: 2000,
+                    tokensConsumed: 4000,
+                    qualityScore: 0.95,
+                    accuracyScore: 0.95,
+                    errorCount: 0,
+                    anomalyCount: 0,
+                    timestamp: Date.now()
+                },
+                outcome: 'win' as const
+            },
+            {
+                metrics: {
+                    workflowId: 'wf-2',
+                    task: 'pick 2',
+                    appId: 'test',
+                    durationMs: 15000,
+                    targetTier: 'complex' as const,
+                    tokenSavings: 1800,
+                    tokensConsumed: 5000,
+                    qualityScore: 0.90,
+                    accuracyScore: 0.90,
+                    errorCount: 0,
+                    anomalyCount: 0,
+                    timestamp: Date.now()
+                },
+                outcome: 'win' as const
+            },
+            // Weak runs -> Losses
+            {
+                metrics: {
+                    workflowId: 'wf-3',
+                    task: 'pick 3',
+                    appId: 'test',
+                    durationMs: 65000,
+                    targetTier: 'complex' as const,
+                    tokenSavings: 200,
+                    tokensConsumed: 25000,
+                    qualityScore: 0.40,
+                    accuracyScore: 0.30,
+                    errorCount: 2,
+                    anomalyCount: 1,
+                    timestamp: Date.now()
+                },
+                outcome: 'loss' as const
+            },
+            {
+                metrics: {
+                    workflowId: 'wf-4',
+                    task: 'pick 4',
+                    appId: 'test',
+                    durationMs: 80000,
+                    targetTier: 'complex' as const,
+                    tokenSavings: 0,
+                    tokensConsumed: 30000,
+                    qualityScore: 0.35,
+                    accuracyScore: 0.20,
+                    errorCount: 3,
+                    anomalyCount: 2,
+                    timestamp: Date.now()
+                },
+                outcome: 'loss' as const
+            }
+        ];
+
+        const { correlation, mse } = optimizer.computeCorrelation(observations);
+        expect(correlation).toBeGreaterThan(0.70);
+        expect(mse).toBeLessThan(0.20);
+    });
+
+    it('calibrates reward weights to optimize correlation and minimize MSE across historical outcomes', () => {
+        const optimizer = new PolicyOptimizer();
+
+        // 10 historical graded picks with varying performance
+        const historicalPicks = [
+            // Strong picks (wins)
+            { durationMs: 14000, tokens: 3500, quality: 0.92, accuracy: 0.98, outcome: 'win' as const },
+            { durationMs: 18000, tokens: 4200, quality: 0.88, accuracy: 0.95, outcome: 'win' as const },
+            { durationMs: 11000, tokens: 2900, quality: 0.96, accuracy: 0.99, outcome: 'win' as const },
+            { durationMs: 22000, tokens: 6000, quality: 0.85, accuracy: 0.90, outcome: 'win' as const },
+            { durationMs: 16000, tokens: 4000, quality: 0.90, accuracy: 0.92, outcome: 'win' as const },
+            // Moderate pick (push)
+            { durationMs: 35000, tokens: 9000, quality: 0.70, accuracy: 0.65, outcome: 'push' as const },
+            // Weak picks (losses)
+            { durationMs: 55000, tokens: 18000, quality: 0.45, accuracy: 0.40, outcome: 'loss' as const },
+            { durationMs: 70000, tokens: 25000, quality: 0.35, accuracy: 0.25, outcome: 'loss' as const },
+            { durationMs: 60000, tokens: 22000, quality: 0.40, accuracy: 0.30, outcome: 'loss' as const },
+            { durationMs: 85000, tokens: 32000, quality: 0.30, accuracy: 0.15, outcome: 'loss' as const }
+        ].map((p, idx) => ({
+            metrics: {
+                workflowId: `wf-pick-${idx + 1}`,
+                task: `Historical pick analysis ${idx + 1}`,
+                appId: 'duelodds',
+                durationMs: p.durationMs,
+                targetTier: 'complex' as const,
+                tokenSavings: Math.max(0, 10000 - p.tokens),
+                tokensConsumed: p.tokens,
+                qualityScore: p.quality,
+                accuracyScore: p.accuracy,
+                errorCount: p.outcome === 'loss' ? 1 : 0,
+                anomalyCount: 0,
+                timestamp: Date.now() - (10 - idx) * 3600000
+            },
+            outcome: p.outcome
+        }));
+
+        const result = optimizer.calibrateRewardWeights(historicalPicks, { iterations: 500, autoApply: true });
+
+        expect(result.sampleSize).toBe(10);
+        expect(result.calibratedCorrelation).toBeGreaterThanOrEqual(result.initialCorrelation);
+        expect(result.calibratedMse).toBeLessThanOrEqual(result.initialMse + 0.05);
+
+        // Verify calibrated weights remain valid probability distribution (sum ≈ 1.0)
+        const totalWeight =
+            result.optimalWeights.quality +
+            result.optimalWeights.accuracy +
+            result.optimalWeights.latency +
+            result.optimalWeights.cost +
+            result.optimalWeights.tokenSavings;
+        expect(totalWeight).toBeCloseTo(1.0, 1);
+        expect(result.optimalWeights.accuracy).toBeGreaterThan(0.10);
+    });
+
+    it('integrates calibration with ContinuousFeedbackEngine and knowledge repository', async () => {
+        const engine = new ContinuousFeedbackEngine();
+
+        // 1. Process 3 workflows
+        for (let i = 1; i <= 3; i++) {
+            await engine.processFeedback({
+                workflowId: `repo-wf-${i}`,
+                task: `Market prediction task ${i}`,
+                appId: 'test-repo-app',
+                durationMs: 15000 * i,
+                targetTier: 'complex',
+                qualityScore: 0.9 - (i * 0.15),
+                accuracyScore: 0.95 - (i * 0.20),
+                tokenSavings: 1500,
+                tokensConsumed: 4000 * i
+            });
+        }
+
+        // 2. Mark them as feedback processed (graded outcomes)
+        const outcomes = engine.getKnowledgeRepository().queryOutcomes({ appId: 'test-repo-app' });
+        expect(outcomes.length).toBe(3);
+
+        for (let i = 0; i < outcomes.length; i++) {
+            (outcomes[i] as any).feedbackProcessed = true;
+            outcomes[i].metrics.accuracyScore = i === 0 ? 1.0 : (i === 1 ? 0.5 : 0.0);
+        }
+
+        // 3. Calibrate directly from knowledge repository
+        const calibration = engine.calibrateFromKnowledgeRepository({
+            appId: 'test-repo-app',
+            minSamples: 2,
+            iterations: 200,
+            autoApply: true
+        });
+
+        expect(calibration).not.toBeNull();
+        expect(calibration!.sampleSize).toBe(3);
+        expect(calibration!.applied).toBeDefined();
+
+        const weights = engine.getRewardWeights();
+        expect(weights.accuracy).toBeGreaterThan(0);
+        expect(weights.quality).toBeGreaterThan(0);
+    });
+});
