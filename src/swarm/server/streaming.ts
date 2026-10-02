@@ -1,0 +1,57 @@
+import type { Context } from 'hono';
+import { streamSSE } from 'hono/streaming';
+import { executeSwarmWorkflow, type SwarmWorkflowParams } from '../engine/index.ts';
+import type { SwarmEvent } from '../types.ts';
+
+/**
+ * Handles Server-Sent Events (SSE) streaming for swarm execution using Hono.
+ * Edge-compatible (Cloudflare Workers, Deno, Bun, Node.js).
+ */
+export async function handleSwarmSse(
+    c: Context,
+    params: SwarmWorkflowParams
+) {
+    return streamSSE(c, async (stream) => {
+        const sendEvent = async (eventType: string, data: any) => {
+            try {
+                await stream.writeSSE({
+                    event: eventType,
+                    data: JSON.stringify(data),
+                });
+            } catch (err) {
+                console.error(`[SSE Write Error]:`, err);
+            }
+        };
+
+        try {
+            const result = await executeSwarmWorkflow({
+                ...params,
+                onEvent: async (event: SwarmEvent) => {
+                    await sendEvent('swarm_event', event);
+                    if (params.onEvent) {
+                        params.onEvent(event);
+                    }
+                },
+                onStage: async (stagePayload) => {
+                    await sendEvent('swarm_stage', stagePayload);
+                    if (params.onStage) {
+                        params.onStage(stagePayload);
+                    }
+                },
+                onPartialResult: async (partialResult) => {
+                    await sendEvent('swarm_partial', partialResult);
+                    if (params.onPartialResult) {
+                        params.onPartialResult(partialResult);
+                    }
+                }
+            });
+
+            await sendEvent('swarm_complete', {
+                ...result,
+                workflowId: result.workflowId
+            });
+        } catch (err: any) {
+            await sendEvent('swarm_error', { error: err.message || String(err) });
+        }
+    });
+}
