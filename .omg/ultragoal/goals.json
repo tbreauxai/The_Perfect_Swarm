@@ -1,26 +1,26 @@
 [
   {
-    "id": "goal-1-observability-reward-inputs-and-components",
-    "description": "Extend 'Policy Tuned & Outcome Indexed' event in src/swarm/engine/index.ts with rewardComponents and rewardInputs, and include components in POST /api/swarm/feedback in src/swarm/server.ts.",
+    "id": "goal-1-modularize-engine-monolith",
+    "description": "Extract clusterPipeline.ts, synthesisPipeline.ts, verificationPipeline.ts, and learningPipeline.ts from src/swarm/engine/index.ts, reducing index.ts to an orchestrator under 400 lines while maintaining identical exports and behavior.",
     "status": "completed",
-    "verification": "SSE event and POST /api/swarm/feedback response expose detailed reward components and inputs; unit tests pass."
+    "verification": "src/swarm/engine/index.ts reduced from 2,129 to 380 lines; clusterPipeline, synthesisPipeline, verificationPipeline, and learningPipeline extracted cleanly; 100% tsc --noEmit pass and SSE server tests pass."
   },
   {
-    "id": "goal-2-rescale-dead-penalties-in-reward",
-    "description": "Rescale durationMs denominator (3000 -> 120000) and tokensConsumed denominator (10000 -> 100000) in PolicyOptimizer.calculateReward in src/swarm/feedback.ts to eliminate constant -0.20 operational tax.",
+    "id": "goal-2-modularize-memory-and-embeddings",
+    "description": "Decompose src/swarm/memory.ts (1,676 lines) into src/swarm/memory/ submodules (embeddings.ts, tokenizer.ts, cortex.ts, types.ts), keeping memory.ts as a backward-compatible re-export barrel.",
     "status": "completed",
-    "verification": "Reward function yields higher, differentiated scores on normal 30-60s runs without dead penalty saturation; unit tests pass."
+    "verification": "src/swarm/memory.ts decomposed into src/swarm/memory/ (embeddings.ts, tokenizer.ts, cortex.ts, types.ts); memory.ts is a 6-line facade; 33 memory/vector tests, CLI tests, and tsc --noEmit pass."
   },
   {
-    "id": "goal-3-split-hard-errors-from-failovers",
-    "description": "Separate hardErrorCount from failoverCount in workflow metrics and calculateReward so graceful provider failovers do not severely degrade the accuracy score.",
+    "id": "goal-3-modularize-load-balancer-and-feedback",
+    "description": "Decompose src/swarm/loadBalancer.ts (1,109 lines) and src/swarm/feedback.ts (962 lines) into focused submodules with backward-compatible facades and preserved singletons.",
     "status": "completed",
-    "verification": "Accuracy calculation penalizes hard unrecovered errors only; failovers tracked separately without crushing composite reward; unit tests pass."
+    "verification": "src/swarm/loadBalancer.ts (6 lines) and src/swarm/feedback.ts (6 lines) converted to clean facades; 5 focused submodules each; 48/48 unit tests, SSE server tests, and tsc --noEmit pass."
   },
   {
-    "id": "goal-4-blend-analyst-accuracy-and-system-verification",
-    "description": "Blend participating analysts' ledger win rates into workflow accuracy, run full test suite (vitest, npm test), verify tsc --noEmit, rebuild bundles, and update todo.md.",
+    "id": "goal-4-modularize-optimization-runner-ui-and-verify",
+    "description": "Modularize src/components/optimization/OptimizationRunner.tsx (1,571 lines), run full test suite (Vitest 535+ tests, npm test, tsc --noEmit), and rebuild production bundles.",
     "status": "completed",
-    "verification": "100% tests pass, tsc --noEmit clean, dual builds succeed, and todo.md marked verified."
+    "verification": "OptimizationRunner.tsx modularized into optimizationCaches.ts and optimizationScoring.ts; 100% Vitest pass (540/540 tests), npm test pass (portable, simulation, dist ESM/CJS, CLI, SSE server), tsc --noEmit clean, dual builds (build:swarm & build:client) succeed."
   }
 ]
