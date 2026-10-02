@@ -9,3 +9,5 @@
 - ~~[x] **Track: Bug - Qdrant Cortex Hang**~~ *Link: [./archive/bug_qdrant_hang/index.md](./archive/bug_qdrant_hang/index.md)*
 
 - ~~[x] **Track: Full Codebase Error Audit & Remediation**~~ *Link: [./archive/codebase_error_audit_20260915/index.md](./archive/codebase_error_audit_20260915/index.md)*
+
+- ~~[x] **Track: Full Application Modularization**~~ *Link: [./archive/app_modularization_20261002/index.md](./archive/app_modularization_20261002/index.md)*
