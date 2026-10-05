@@ -63,32 +63,62 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
         if (cb) cb();
     };
 
+    // Apply security headers to every response
+    app.use('*', async (c, next) => {
+        c.header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://the-perfect-swarm.onrender.com https://duelodds.pages.dev; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
+        c.header('X-Frame-Options', 'DENY');
+        c.header('X-Content-Type-Options', 'nosniff');
+        c.header('Referrer-Policy', 'no-referrer');
+        await next();
+    });
+
+    const DEFAULT_ALLOWED_ORIGINS = [
+        'https://the-perfect-swarm.onrender.com',
+        'https://duelodds.pages.dev',
+        'http://localhost:3000',
+        'http://127.0.0.1:3000'
+    ];
+
+    const getAllowedOrigins = (allowedOriginsStr?: string): Set<string> => {
+        const origins = new Set<string>(DEFAULT_ALLOWED_ORIGINS);
+        if (allowedOriginsStr) {
+            for (const item of allowedOriginsStr.split(',')) {
+                const trimmed = item.trim();
+                if (trimmed && trimmed !== '*') {
+                    origins.add(trimmed);
+                }
+            }
+        }
+        return origins;
+    };
+
     if (options.cors !== false) {
         app.use('*', async (c, next) => {
             const env = Object.assign({}, typeof process !== 'undefined' ? process.env : {}, (c.env as Record<string, any>) || {}) as Record<string, any>;
-            const allowedOriginsStr = env.CORS_ALLOWED_ORIGINS;
+            const allowedOrigins = getAllowedOrigins(env.CORS_ALLOWED_ORIGINS);
             const reqOrigin = c.req.header('origin');
+            const isOriginAllowed = reqOrigin ? allowedOrigins.has(reqOrigin) : false;
 
-            if (allowedOriginsStr) {
-                const allowedOrigins = allowedOriginsStr.split(',').map((o: string) => o.trim());
-                if (allowedOrigins.includes('*')) {
-                    c.header('Access-Control-Allow-Origin', '*');
-                } else if (reqOrigin) {
-                    if (allowedOrigins.includes(reqOrigin)) {
-                        c.header('Access-Control-Allow-Origin', reqOrigin);
-                    } else {
-                        return c.text('Forbidden: Origin not allowed', 403);
-                    }
-                }
-            } else {
-                c.header('Access-Control-Allow-Origin', '*');
-            }
-
-            c.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-            c.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
             if (c.req.method === 'OPTIONS') {
+                if (reqOrigin && !isOriginAllowed) {
+                    return c.text('Forbidden: Origin not allowed', 403);
+                }
+                if (isOriginAllowed) {
+                    c.header('Access-Control-Allow-Origin', reqOrigin!);
+                    c.header('Vary', 'Origin');
+                }
+                c.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+                c.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-provider-key');
                 return c.body(null, 204);
             }
+
+            if (isOriginAllowed) {
+                c.header('Access-Control-Allow-Origin', reqOrigin!);
+                c.header('Vary', 'Origin');
+                c.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+                c.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-provider-key');
+            }
+
             await next();
         });
     }
@@ -398,6 +428,10 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
             console.error(`[SwarmServer Models Error]:`, err);
             return c.json({ error: err.message || 'Internal Server Error' }, 500);
         }
+    });
+
+    app.all('/api/*', (c) => {
+        return c.json({ error: 'Not found' }, 404);
     });
 
     return app;
