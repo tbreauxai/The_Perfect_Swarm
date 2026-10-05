@@ -118,16 +118,14 @@ export async function runLearningPipeline(p: LearningPipelineParams): Promise<Le
     }
 
     if (memoryCortex && finalAnalysis && !finalAnalysis.ui_title?.toLowerCase().includes("error")) {
-        const qualityRating = workflowLifecycleResult
-            ? workflowLifecycleResult.computedRating
-            : (complexity === 'instant' ? 0.90 : 0.85);
+        const qualityRating = workflowLifecycleResult?.computedRating;
         const verified = workflowLifecycleResult ? workflowLifecycleResult.success : false;
         const feedback = workflowLifecycleResult?.criticFeedback;
-        const isFact = verified || qualityRating >= 0.8;
+        const isFact = verified;
         const writeOriginApp = (params as any).originApp || (params as any).callerAppId || targetAppId;
         const domain = normalizeDomain(settings?.domain || (params as any).domain, task);
         const entityIds = extractEntityIds(task, (params as any).entityIds || settings?.entityIds);
-        const content = `Task: ${task}\nResult: ${finalAnalysis.ui_title || 'Analysis complete'}`;
+        const content = `Task: ${task}\nFeedback: ${feedback || 'None'}\nResult: ${finalAnalysis.ui_title || 'Analysis complete'}`;
         const workflowId = (context as any).id || (params as any).workflowId;
         const meta = {
             workflowId,
@@ -188,7 +186,7 @@ export async function runLearningPipeline(p: LearningPipelineParams): Promise<Le
     if (activeExperiment && activeVariant && settings?.experimentSettings?.autoRecordMetrics !== false) {
         const isError = !isSuccess;
         const rlaifScore = workflowLifecycleResult?.computedRating 
-            ? (workflowLifecycleResult.computedRating / 100) 
+            ? (workflowLifecycleResult.computedRating)
             : (complexity === 'instant' ? 0.90 : 0.85);
         const tokensTotal = workflowTotalTokens || (metrics?.totalTasks ? metrics.totalTasks * 500 : 1000);
 
@@ -312,7 +310,7 @@ export async function runLearningPipeline(p: LearningPipelineParams): Promise<Le
     let workflowFeedbackReport: SwarmFeedbackReport | undefined;
     if (feedbackEnabled) {
         try {
-            const qualityScore = workflowLifecycleResult?.computedRating ? workflowLifecycleResult.computedRating / 100 : (isSuccess ? 0.90 : 0.40);
+            const qualityScore = workflowLifecycleResult?.computedRating ? workflowLifecycleResult.computedRating : (isSuccess ? 0.90 : 0.40);
             const failoverCount = (context.events || []).filter(e => e.action?.toLowerCase().includes('failover')).length;
             const hardErrorCount = isSuccess ? 0 : 1;
             const errorCount = hardErrorCount + failoverCount;
@@ -414,7 +412,7 @@ export async function runLearningPipeline(p: LearningPipelineParams): Promise<Le
 
     if (coordinationEnabled) {
         const extrinsic = workflowLifecycleResult?.computedRating
-            ? workflowLifecycleResult.computedRating / 100
+            ? workflowLifecycleResult.computedRating
             : (isSuccess ? 0.90 : 0.35);
 
         if (coordinationSettings?.rewardShaping !== false) {

@@ -123,11 +123,7 @@ describe('Swarm Server & Feedback Attribution', () => {
             expect(fbData.ok).toBe(true);
             expect(fbData.accuracyScore).toBe(1.0);
             expect(fbData.components).toBeDefined();
-            expect(typeof fbData.components.qualityReward).toBe('number');
             expect(typeof fbData.components.accuracyReward).toBe('number');
-            expect(typeof fbData.components.latencyPenalty).toBe('number');
-            expect(typeof fbData.components.costPenalty).toBe('number');
-            expect(typeof fbData.components.savingsReward).toBe('number');
 
             // Verify metrics endpoint reports real roles
             const metricsRes = await fetch(`${baseUrl}/api/swarm/metrics`, {

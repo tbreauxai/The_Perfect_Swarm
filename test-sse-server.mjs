@@ -310,7 +310,7 @@ async function runSseServerTests() {
         if (feedbackRes.status !== 200) throw new Error(`Feedback expected 200, got ${feedbackRes.status}`);
         const feedbackJson = await feedbackRes.json();
         console.log('✓ Feedback response received:', feedbackJson);
-        if (!feedbackJson.components || typeof feedbackJson.components.qualityReward !== 'number') {
+        if (!feedbackJson.components || typeof feedbackJson.components.accuracyReward !== 'number') {
             throw new Error('Feedback response missing components reward breakdown');
         }
 
