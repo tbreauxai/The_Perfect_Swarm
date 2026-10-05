@@ -6,11 +6,15 @@ import type { SwarmDomain, MemoryType } from './tags.ts';
 export * from './tags.ts';
 
 export interface MemoryMetadata {
+    workflowId?: string;
     originApp?: string;
     appId?: string;
     domain?: SwarmDomain | string;
     memoryType?: MemoryType;
     entityIds?: string[];
+    outcome?: 'win' | 'loss' | 'push';
+    gradedAt?: string;
+    feedbackProcessed?: boolean;
     agentRole?: string;
     sessionId?: string;
     qualityRating?: number; // 0.0 to 1.0
@@ -145,6 +149,12 @@ export interface MemoryCortexDiagnostics {
     fallbackStoreSize: number;
     storageByDomain: Record<string, number>;
     storageByRole: Record<string, number>;
+    gradedCount?: number;
+    ungradedCount?: number;
+    gradedWins?: number;
+    gradedLosses?: number;
+    gradedPushes?: number;
+    headlineAccuracy?: number | null;
     latencyStats?: {
         mean: number;
         p95: number;

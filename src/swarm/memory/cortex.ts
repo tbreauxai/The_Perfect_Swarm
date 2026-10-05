@@ -260,6 +260,7 @@ export class MemoryCortex {
                 this.ensurePayloadIndex(targetCollection, "domain", "keyword"),
                 this.ensurePayloadIndex(targetCollection, "memoryType", "keyword"),
                 this.ensurePayloadIndex(targetCollection, "entityIds", "keyword"),
+                this.ensurePayloadIndex(targetCollection, "workflowId", "keyword"),
                 this.ensurePayloadIndex(targetCollection, "appId", "keyword"),
                 this.ensurePayloadIndex(targetCollection, "targetApps", "keyword"),
                 this.ensurePayloadIndex(targetCollection, "agentRole", "keyword"),
@@ -934,6 +935,110 @@ export class MemoryCortex {
 
     async wipeApp(appId: string): Promise<boolean> {
         return this.wipeCollection(appId);
+    }
+
+    /**
+     * Updates the stored judgment that produced a workflow with the graded outcome.
+     * Maps win -> 1.0, push -> 0.5, loss -> 0.0.
+     * Sets memoryType to 'fact', verified to (score >= 0.8), stores outcome, gradedAt, feedbackProcessed: true.
+     * Second grade for the same workflowId is idempotent (no-op).
+     */
+    async gradeMemoryByWorkflowId(options: {
+        workflowId: string;
+        originApp: string;
+        outcome: 'win' | 'loss' | 'push';
+        gradedAt?: string | number;
+    }): Promise<{ found: boolean; alreadyProcessed: boolean; point?: any; updatedScore?: number }> {
+        await this.initialize();
+        const targetWorkflowId = options.workflowId.trim();
+        const targetOriginApp = options.originApp.trim();
+        const outcomeScore = options.outcome === 'win' ? 1.0 : options.outcome === 'loss' ? 0.0 : 0.5;
+        const nowIso = typeof options.gradedAt === 'string'
+            ? options.gradedAt
+            : (typeof options.gradedAt === 'number' ? new Date(options.gradedAt).toISOString() : new Date().toISOString());
+
+        let matchedPoint: any = null;
+        let isAlreadyProcessed = false;
+
+        // 1. Fallback / in-memory store lookup
+        for (const pt of this.fallbackStore) {
+            const itemWorkflowId = pt.payload.workflowId;
+            const itemOriginApp = pt.payload.originApp || pt.payload.appId;
+            if (itemWorkflowId === targetWorkflowId && itemOriginApp === targetOriginApp) {
+                matchedPoint = pt;
+                if (pt.payload.feedbackProcessed === true) {
+                    isAlreadyProcessed = true;
+                } else {
+                    pt.payload.qualityRating = outcomeScore;
+                    pt.payload.memoryType = 'fact';
+                    pt.payload.outcome = options.outcome;
+                    pt.payload.gradedAt = nowIso;
+                    pt.payload.feedbackProcessed = true;
+                    pt.payload.verified = outcomeScore >= 0.8;
+                }
+                break;
+            }
+        }
+
+        // 2. Qdrant store lookup & update
+        if (this.qdrant && this.isAvailable) {
+            try {
+                const scrollRes = await this.withTimeout((this.qdrant as any).scroll(this.collectionName, {
+                    limit: 1,
+                    filter: {
+                        must: [
+                            { key: "workflowId", match: { value: targetWorkflowId } },
+                            {
+                                should: [
+                                    { key: "originApp", match: { value: targetOriginApp } },
+                                    { key: "appId", match: { value: targetOriginApp } }
+                                ]
+                            }
+                        ]
+                    },
+                    with_payload: true,
+                    with_vector: false
+                }));
+
+                const points = (scrollRes as any)?.points || [];
+                if (points.length > 0) {
+                    const qPoint = points[0];
+                    matchedPoint = matchedPoint || qPoint;
+                    const qPayload = qPoint.payload || {};
+                    if (qPayload.feedbackProcessed === true) {
+                        isAlreadyProcessed = true;
+                    } else {
+                        await this.withTimeout(this.qdrant.setPayload(this.collectionName, {
+                            wait: true,
+                            points: [qPoint.id],
+                            payload: {
+                                qualityRating: outcomeScore,
+                                memoryType: 'fact',
+                                outcome: options.outcome,
+                                gradedAt: nowIso,
+                                feedbackProcessed: true,
+                                verified: outcomeScore >= 0.8
+                            }
+                        }));
+                    }
+                }
+            } catch (err: any) {
+                console.warn(`[MemoryCortex] Qdrant gradeMemoryByWorkflowId error:`, err);
+            }
+        }
+
+        if (!matchedPoint) {
+            return { found: false, alreadyProcessed: false };
+        }
+
+        await this.savePersistFileIfConfigured();
+
+        return {
+            found: true,
+            alreadyProcessed: isAlreadyProcessed,
+            point: matchedPoint.payload || matchedPoint,
+            updatedScore: outcomeScore
+        };
     }
 
     async getDiagnostics(appIdFilter?: string): Promise<MemoryCortexDiagnostics> {

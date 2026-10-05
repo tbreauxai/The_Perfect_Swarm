@@ -208,20 +208,50 @@ export function rankAndFilterCandidates(
     }
 
     scored.sort((a, b) => {
-        if (a.weight === b.weight) {
+        // At the same blend weight (e.g. both same-app 1.0 or both sibling 0.45):
+        if (Math.abs(a.weight - b.weight) < 1e-4) {
+            // 1. Facts outrank judgments at the same weight.
+            // Graded outcomes are facts, so placeholder 0.85 judgments do NOT outrank a graded loss.
             if (a.memoryType !== b.memoryType) {
                 return a.memoryType === 'fact' ? -1 : 1;
             }
-            return b.finalScore - a.finalScore;
+
+            // 2. For the same domain and entity (or between graded outcomes), retrieval uses the outcome score:
+            // win (1.0) ranks above push (0.5), which ranks above loss (0.0).
+            const sameDomain = a.payload.domain === b.payload.domain;
+            const sharedEntity = (a.payload.entityIds || []).some((id: string) => (b.payload.entityIds || []).includes(id)) ||
+                (queryEntities.length > 0 &&
+                    (a.payload.entityIds || []).some((id: string) => queryEntities.includes(id)) &&
+                    (b.payload.entityIds || []).some((id: string) => queryEntities.includes(id)));
+
+            if (sameDomain && (sharedEntity || (a.payload.outcome && b.payload.outcome))) {
+                const aRating = typeof a.payload.qualityRating === 'number' ? a.payload.qualityRating : 0.5;
+                const bRating = typeof b.payload.qualityRating === 'number' ? b.payload.qualityRating : 0.5;
+                if (Math.abs(bRating - aRating) > 1e-4) {
+                    return bRating - aRating;
+                }
+            }
+
+            // 3. Otherwise rank by vector similarity / finalScore
+            const diff = b.finalScore - a.finalScore;
+            if (Math.abs(diff) > 1e-6) {
+                return diff;
+            }
+            return b.vectorScore - a.vectorScore;
         }
 
+        // When blend weights differ (e.g. same-app 1.0 vs sibling 0.45):
+        // 1. Sibling weight 0.45 scales finalScore (vectorScore * weight), so same-app outranks sibling for similar relevance.
         const diff = b.finalScore - a.finalScore;
-        if (Math.abs(diff) > 1e-6) {
+        if (Math.abs(diff) > 1e-4) {
             return diff;
         }
+
+        // 2. Fact outranks judgment if finalScores are tied across apps
         if (a.memoryType !== b.memoryType) {
             return a.memoryType === 'fact' ? -1 : 1;
         }
+
         return b.vectorScore - a.vectorScore;
     });
 
