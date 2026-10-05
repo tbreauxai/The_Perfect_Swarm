@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { getAppToken, setAppToken } from '../services/appAuthHeaders';
 import { Settings, X, Database } from 'lucide-react';
 import { AgentConfigurator, AgentConfig } from './AgentConfigurator';
 
@@ -44,6 +45,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     initialTab = 'keys'
 }) => {
     const [activeTab, setActiveTab] = useState<'keys' | 'swarm'>(initialTab);
+    const [appToken, setAppTokenValue] = useState(getAppToken);
 
     if (!isOpen) return null;
 
@@ -197,6 +199,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                         placeholder="perfect-swarm (or external app ID)"
                                         className="w-full px-3 py-2 rounded-lg border border-neutral-300 focus:border-indigo-500 outline-none text-sm"
                                     />
+                                </div>
+                                <div>
+                                    <div className="flex items-center justify-between mb-1">
+                                        <label className="block text-sm font-medium text-neutral-700">App token</label>
+                                        <span className="text-xs text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-200">Caller auth</span>
+                                    </div>
+                                    <input
+                                        type="password"
+                                        value={appToken}
+                                        onChange={(e) => {
+                                            setAppTokenValue(e.target.value);
+                                            setAppToken(e.target.value);
+                                        }}
+                                        placeholder="Bearer token for this dashboard"
+                                        className="w-full px-3 py-2 rounded-lg border border-neutral-300 focus:border-indigo-500 outline-none text-sm"
+                                    />
+                                    <p className="text-xs text-neutral-500 mt-1">Identifies this dashboard to the swarm. Stored locally and not sent as a provider key.</p>
                                 </div>
                             </div>
                         </div>

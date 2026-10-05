@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react';
 import type { SwarmTimelineEvent } from '../components/SwarmEventTimeline';
 import type { AppSettings } from '../components/SettingsModal';
+import { authHeaders } from '../services/appAuthHeaders';
 import { formatActionableError } from '../swarm/types';
 
 export function useSwarmExecution() {
@@ -71,7 +72,7 @@ export function useSwarmExecution() {
     try {
       const response = await fetch('/api/swarm/stream', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ task, data: safeData, settings }),
         signal: controller.signal
       });

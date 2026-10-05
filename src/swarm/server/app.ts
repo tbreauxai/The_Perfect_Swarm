@@ -14,6 +14,7 @@ import { restoreLearningState } from './learningState.ts';
 import { handleSwarmSse } from './streaming.ts';
 import { fetchProviderModels } from './modelsProvider.ts';
 import { buildCortexDiagnostics } from './cortexDiagnostics.ts';
+import { createAppAuthMiddleware } from './appAuth.ts';
 
 /**
  * Creates a standalone, zero-external-dependency Hono app for headless swarm deployments.
@@ -91,6 +92,10 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
             await next();
         });
     }
+
+    // Caller token identifies the app. It does not restrict sibling memory reads.
+    // /api/health stays open for the keep-awake ping.
+    app.use('*', createAppAuthMiddleware());
 
     // Apply telemetry middleware to track request latency across all endpoints
     app.use('*', createTelemetryMiddleware());

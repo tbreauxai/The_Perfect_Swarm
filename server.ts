@@ -8,6 +8,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createSwarmServer } from './src/swarm/server.ts';
+import { createAppAuthMiddleware } from './src/swarm/server/appAuth.ts';
 import { getOrCreateDefaultCortex } from './src/swarm/engine/cortex.ts';
 
 dotenv.config();
@@ -32,6 +33,8 @@ async function startServer() {
 
   // 2. Create the main wrapper app
   const app = new Hono();
+
+  app.use('*', createAppAuthMiddleware());
 
   app.get('/api/config/status', (c) => {
     return c.json({

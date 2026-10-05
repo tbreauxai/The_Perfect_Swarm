@@ -2,6 +2,7 @@
  * Client-side provider service for querying available models.
  */
 
+import { authHeaders } from './appAuthHeaders';
 import {
     globalModelHealthChecker,
     TwoTierModelHealthChecker,
@@ -102,7 +103,7 @@ export async function fetchAvailableModels(provider: string, apiKey?: string): P
             case 'gemini':
             case 'mistral':
             case 'github': {
-                const headers: Record<string, string> = {};
+                const headers = authHeaders();
                 if (apiKey) {
                     headers['x-provider-key'] = apiKey;
                 }
