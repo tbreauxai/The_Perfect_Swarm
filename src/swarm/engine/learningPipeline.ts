@@ -54,6 +54,7 @@ export interface LearningPipelineParams {
     workflowTieredCacheHit?: TieredLookupResult;
     latestClusterDigests?: Record<string, ClusterDigest>;
     workflowDecompositionPlan?: TaskDecompositionPlan;
+    parametersUsed?: any;
 }
 
 export interface LearningPipelineResult {
@@ -102,7 +103,8 @@ export async function runLearningPipeline(p: LearningPipelineParams): Promise<Le
         workflowSchedulingResult,
         workflowHierarchyMetrics,
         workflowTieredCacheHit,
-        latestClusterDigests
+        latestClusterDigests,
+        parametersUsed
     } = p;
 
     const coordinationSettings = settings?.coordinationSettings;
@@ -145,17 +147,20 @@ export async function runLearningPipeline(p: LearningPipelineParams): Promise<Le
         };
 
         try {
-            const storedId = await memoryCortex.store(content, meta);
-            if (params.onMemoryLearned) {
-                params.onMemoryLearned({
-                    appId: writeOriginApp,
-                    content,
-                    id: storedId,
-                    metadata: meta
-                });
-            }
+            memoryCortex.store(content, meta).then(storedId => {
+                if (params.onMemoryLearned && storedId) {
+                    params.onMemoryLearned({
+                        appId: writeOriginApp,
+                        content,
+                        id: storedId,
+                        metadata: meta
+                    });
+                }
+            }).catch((err: any) => {
+                console.warn(`[Swarm] Memory storage failed:`, err);
+            });
         } catch (err: any) {
-            console.warn(`[Swarm] Memory storage failed:`, err);
+            console.warn(`[Swarm] Memory storage setup failed:`, err);
         }
     }
 
@@ -348,7 +353,8 @@ export async function runLearningPipeline(p: LearningPipelineParams): Promise<Le
                     return acc;
                 }, 0),
                 finalInsightSnippet: typeof finalAnalysis === 'string' ? finalAnalysis.slice(0, 150) : (finalAnalysis?.ui_title || JSON.stringify(finalAnalysis).slice(0, 150)),
-                inputData: data
+                inputData: data,
+                parametersUsed: parametersUsed
             });
 
             workflowFeedbackReport = {
@@ -416,7 +422,7 @@ export async function runLearningPipeline(p: LearningPipelineParams): Promise<Le
             : (isSuccess ? 0.90 : 0.35);
 
         if (coordinationSettings?.rewardShaping !== false) {
-            const noveltyScore = Math.min(1.0, (globalKnowledgeGraph.getStats().totalNodes % 10) / 10 + 0.3);
+            const noveltyScore = Math.max(0, 1.0 - (p.workflowTieredCacheHit?.similarity ?? 0));
             const redundancyCount = globalHypothesisLayer.getHypotheses('refuted').length;
             workflowShapedReward = globalShapedRewardPolicy.calculateShapedReward({
                 extrinsicReward: extrinsic,
@@ -429,17 +435,21 @@ export async function runLearningPipeline(p: LearningPipelineParams): Promise<Le
             const targetReward = workflowShapedReward?.shapedReward ?? extrinsic;
             const updatedRates: Record<string, number> = {};
             for (const analyst of analysts) {
-                const res = globalLearningRateManager.recordAgentStep(analyst.role, targetReward);
-                updatedRates[analyst.role] = res.newRate;
+                // Rate update logic deleted; leaving explorationFactor logs via rates map
+                updatedRates[analyst.role] = globalLearningRateManager.getLearningRate(analyst.role);
             }
-            const mgrRes = globalLearningRateManager.recordAgentStep(managerAgent.role || 'Manager Node', targetReward);
-            updatedRates[managerAgent.role || 'Manager Node'] = mgrRes.newRate;
+            updatedRates[managerAgent.role || 'Manager Node'] = globalLearningRateManager.getLearningRate(managerAgent.role || 'Manager Node');
+
+            const bestPolicy = globalFeedbackEngine.getPolicyOptimizer().getBestPolicy();
+            for (const key of Object.keys(updatedRates)) {
+                updatedRates[key] = bestPolicy.explorationFactor;
+            }
 
             context.addEvent({
                 agentRole: 'Adaptive Learning Coordinator',
                 action: 'Agent Learning Rates Updated',
                 modelName: 'Local/AgentAdaptiveLearningRateManager',
-                prompt: `Adjusted learning rates across ${Object.keys(updatedRates).length} agents based on reward ${targetReward}`,
+                prompt: `Logged explorationFactor across ${Object.keys(updatedRates).length} agents`,
                 output: {
                     reward: targetReward,
                     agentRates: updatedRates

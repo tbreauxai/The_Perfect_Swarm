@@ -30,6 +30,12 @@ export class SwarmKnowledgeRepository {
         const ids = this.appIndices.get(record.appId)!;
         if (!ids.includes(record.id)) {
             ids.push(record.id);
+            if (ids.length > 500) {
+                const oldestId = ids.shift();
+                if (oldestId) {
+                    this.outcomes.delete(oldestId);
+                }
+            }
         }
 
         this.persistOutcome(record);

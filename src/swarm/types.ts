@@ -84,6 +84,7 @@ export interface SwarmEngineSettings {
 
 export interface SwarmOptimizationSettings {
     enabled?: boolean;
+    compressionTargetReductionRatio?: number;
     workerPoolConcurrency?: number;
     enableEarlyExit?: boolean;
     confidenceThreshold?: number;

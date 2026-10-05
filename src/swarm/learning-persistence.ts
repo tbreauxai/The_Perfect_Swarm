@@ -121,7 +121,7 @@ export class QdrantLearningStore {
         try {
             await withTimeout(
                 this.client.upsert(this.collection, {
-                    wait: true,
+                    wait: false,
                     points: [{ id, vector: dummyVector(), payload }]
                 }),
                 QDRANT_TIMEOUT_MS,
