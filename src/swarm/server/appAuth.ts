@@ -61,7 +61,10 @@ export function readAuthEnv(env: Record<string, any> | undefined): { tokens: Map
 
 export function createAppAuthMiddleware() {
     return async (c: any, next: any) => {
-        if (c.req.method === 'OPTIONS' || c.req.path === '/api/health') return next();
+        const path = c.req.path || '/';
+        // Only API routes are authenticated. The dashboard HTML must load
+        // before the browser can attach the token from localStorage.
+        if (c.req.method === 'OPTIONS' || path === '/api/health' || !path.startsWith('/api/')) return next();
         const env = Object.assign({}, typeof process !== 'undefined' ? process.env : {}, c.env || {});
         const { tokens, required } = readAuthEnv(env);
         if (!required) return next();
