@@ -118,8 +118,8 @@ describe('MemoryCortex: O(log n) Vector Indexing & Deduplication', () => {
     });
 
     it('consolidation does not delete a verified fact', async () => {
-        const idFact = await cortex.store('A verified truth', { qualityRating: 0.10, memoryType: 'fact', verified: true, timestamp: Date.now() - 1000000000 });
-        const idJunk = await cortex.store('An unverified judgment', { qualityRating: 0.10, memoryType: 'judgment', verified: false, timestamp: Date.now() - 1000000000 });
+        const idFact = await cortex.store('A verified truth', { qualityRating: 0.10, memoryType: 'fact', verified: true, timestamp: (Date.now() - 1000000000).toString() });
+        const idJunk = await cortex.store('An unverified judgment', { qualityRating: 0.10, memoryType: 'judgment', verified: false, timestamp: (Date.now() - 1000000000).toString() });
 
         const consolidation = await cortex.consolidateMemories({ minRating: 0.50, pruneLowQuality: true, maxAgeDays: 0 });
 
