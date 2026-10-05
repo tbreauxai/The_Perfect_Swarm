@@ -148,6 +148,64 @@ describe('PolicyOptimizer (Evolutionary Strategies & RL Reward Tuning)', () => {
         }
     });
 
+    it('a policy value set on run N is the value used on run N+1, or mutations no longer happen', () => {
+        const baselineReward = optimizer.calculateReward({
+            workflowId: 'wf-base',
+            task: 'T1',
+            appId: 'test-app',
+            durationMs: 1000,
+            targetTier: 'instant',
+            tokenSavings: 0,
+            tokensConsumed: 1000,
+            errorCount: 0,
+            anomalyCount: 0,
+            timestamp: Date.now()
+        });
+
+        optimizer.updateWithFeedback(baselineReward, optimizer.getCurrentPolicy());
+
+        const proposed1 = optimizer.proposeNextParameters();
+        const betterReward = optimizer.calculateReward({
+            workflowId: 'wf-better',
+            task: 'T2',
+            appId: 'test-app',
+            durationMs: 500,
+            targetTier: 'instant',
+            tokenSavings: 500,
+            tokensConsumed: 800,
+            errorCount: 0,
+            anomalyCount: 0,
+            timestamp: Date.now()
+        });
+
+        // Using exactly proposed policy
+        const res1 = optimizer.updateWithFeedback(betterReward, proposed1, proposed1);
+        expect(res1.updated).toBe(true);
+        expect(optimizer.getBestPolicy()).toEqual(proposed1);
+
+        const proposed2 = optimizer.proposeNextParameters();
+        const evenBetterReward = optimizer.calculateReward({
+            workflowId: 'wf-even-better',
+            task: 'T3',
+            appId: 'test-app',
+            durationMs: 200,
+            targetTier: 'instant',
+            tokenSavings: 600,
+            tokensConsumed: 400,
+            errorCount: 0,
+            anomalyCount: 0,
+            timestamp: Date.now()
+        });
+
+        // Passing a different used policy prevents mutations from updating
+        const wrongUsedParams = optimizer.getCurrentPolicy();
+        wrongUsedParams.schedulerMaxConcurrency = 999;
+
+        const res2 = optimizer.updateWithFeedback(evenBetterReward, wrongUsedParams, proposed2);
+        expect(res2.updated).toBe(false);
+        expect(optimizer.getBestPolicy()).toEqual(proposed1);
+    });
+
     it('adapts policy when proposed parameters achieve higher reward', () => {
         const baselineReward = optimizer.calculateReward({
             workflowId: 'wf-base',
@@ -163,7 +221,7 @@ describe('PolicyOptimizer (Evolutionary Strategies & RL Reward Tuning)', () => {
             anomalyCount: 1,
             timestamp: Date.now()
         });
-        optimizer.updateWithFeedback(baselineReward);
+        optimizer.updateWithFeedback(baselineReward, optimizer.getCurrentPolicy());
 
         const superiorParams = {
             ...DEFAULT_TUNABLE_PARAMETERS,
@@ -186,7 +244,7 @@ describe('PolicyOptimizer (Evolutionary Strategies & RL Reward Tuning)', () => {
             timestamp: Date.now()
         });
 
-        const res = optimizer.updateWithFeedback(superiorReward, superiorParams);
+        const res = optimizer.updateWithFeedback(superiorReward, superiorParams, superiorParams);
         expect(res.updated).toBe(true);
         expect(res.currentPolicy.cacheL1MaxEntries).toBe(300);
         expect(res.currentPolicy.schedulerMaxConcurrency).toBe(8);

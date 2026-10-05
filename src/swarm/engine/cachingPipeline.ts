@@ -180,7 +180,8 @@ export async function resolveEarlyCacheHit(p: EarlyCacheResolutionParams): Promi
                         accuracyScore: 0.99,
                         errorCount: 0,
                         finalInsightSnippet: typeof lookup.value === 'string' ? lookup.value.slice(0, 150) : (lookup.value?.ui_title || 'Tiered Cache Hit'),
-                        inputData: data
+                        inputData: data,
+                        parametersUsed: globalFeedbackEngine.getPolicyOptimizer().getBestPolicy()
                     });
                     cacheHitFeedbackReport = {
                         reward: fbResult.reward,
@@ -271,7 +272,8 @@ export async function resolveEarlyCacheHit(p: EarlyCacheResolutionParams): Promi
                     accuracyScore: 0.99,
                     errorCount: 0,
                     finalInsightSnippet: typeof cachedAnalysis === 'string' ? cachedAnalysis.slice(0, 150) : (cachedAnalysis?.ui_title || 'Payload Cache Hit'),
-                    inputData: data
+                    inputData: data,
+                    parametersUsed: globalFeedbackEngine.getPolicyOptimizer().getBestPolicy()
                 });
                 payloadCacheFeedbackReport = {
                     reward: fbResult.reward,
@@ -358,7 +360,8 @@ export async function resolveEarlyCacheHit(p: EarlyCacheResolutionParams): Promi
                     accuracyScore: 0.98,
                     errorCount: 0,
                     finalInsightSnippet: typeof semanticMatch.entry.payload === 'string' ? semanticMatch.entry.payload.slice(0, 150) : (semanticMatch.entry.payload?.ui_title || 'Semantic Cache Hit'),
-                    inputData: data
+                    inputData: data,
+                    parametersUsed: globalFeedbackEngine.getPolicyOptimizer().getBestPolicy()
                 });
                 semanticCacheFeedbackReport = {
                     reward: fbResult.reward,

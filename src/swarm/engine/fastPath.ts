@@ -316,7 +316,8 @@ export async function executeFastPath(
                     accuracyScore: 0.98,
                     errorCount: 0,
                     finalInsightSnippet: typeof finalAnalysis === 'string' ? finalAnalysis.slice(0, 150) : (finalAnalysis?.ui_title || JSON.stringify(finalAnalysis).slice(0, 150)),
-                    inputData: data
+                    inputData: data,
+                    parametersUsed: globalFeedbackEngine.getPolicyOptimizer().getBestPolicy()
                 });
                 fastPathFeedbackReport = {
                     reward: fbResult.reward,

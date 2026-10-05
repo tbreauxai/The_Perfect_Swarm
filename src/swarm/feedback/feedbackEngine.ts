@@ -52,6 +52,7 @@ export class ContinuousFeedbackEngine {
         embedding?: number[];
         inputData?: any;
         agentRoles?: string[];
+        parametersUsed?: TunableParameters;
     }): Promise<{
         reward: RewardSignal;
         tunedParameters: TunableParameters;
@@ -120,7 +121,8 @@ export class ContinuousFeedbackEngine {
 
         // 3. Propose & Update Policy
         const proposed = this.policyOptimizer.proposeNextParameters();
-        const updateResult = this.policyOptimizer.updateWithFeedback(reward, proposed);
+        const parametersUsed = params.parametersUsed || this.policyOptimizer.getCurrentPolicy();
+        const updateResult = this.policyOptimizer.updateWithFeedback(reward, parametersUsed, proposed);
 
         if (updateResult.updated) {
             this.repository.recordPolicyEvolution(updateResult.generation, updateResult.currentPolicy, reward.compositeReward);

@@ -1,4 +1,11 @@
-import type { QdrantClient } from '@qdrant/js-client-rest';
+cat << 'INNER_EOF' > modify_consolidation.py
+import sys
+
+def modify():
+    with open("src/swarm/memory/consolidation.ts", "r") as f:
+        content = f.read()
+
+    replace = """import type { QdrantClient } from '@qdrant/js-client-rest';
 import type { VectorIndex } from '../vectorIndex.ts';
 import type { StoredMemoryPoint, ConsolidationOptions, ConsolidationResult } from './types.ts';
 
@@ -18,8 +25,6 @@ export async function executeMemoryConsolidation(
     ctx: ConsolidationContext,
     options?: ConsolidationOptions
 ): Promise<ConsolidationResult> {
-    const minRating = options?.minRating ?? 0.40;
-    const pruneLowQuality = options?.pruneLowQuality ?? false;
     const appId = options?.appId;
     const maxAgeDays = options?.maxAgeDays;
 
@@ -32,15 +37,6 @@ export async function executeMemoryConsolidation(
     const processPoint = (ptId: string, payload: any, now: number) => {
         inspected++;
         let shouldPrune = false;
-
-        // Retain pruneLowQuality fallback logic strictly to pass existing legacy tests.
-        // We do not prune SOLELY on quality rating in typical production code now per the instructions,
-        // but tests explicitly test this flag.
-        if (pruneLowQuality && (payload.qualityRating ?? 0) < minRating) {
-            if (!payload.verified) {
-                shouldPrune = true;
-            }
-        }
 
         // Age out unverified judgments
         if (maxAgeDays !== undefined && payload.timestamp) {
@@ -157,3 +153,12 @@ export async function executeMemoryConsolidation(
         prunedIds
     };
 }
+"""
+
+    with open("src/swarm/memory/consolidation.ts", "w") as f:
+        f.write(replace)
+    print("Success consolidation")
+
+modify()
+INNER_EOF
+python3 modify_consolidation.py
