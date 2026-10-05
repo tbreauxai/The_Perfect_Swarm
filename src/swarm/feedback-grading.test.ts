@@ -337,4 +337,131 @@ describe('Fix 5 Learning Loop: Point Grading, Score Retrieval & Diagnostics', ()
         // Headline accuracy = 1 / 2 = 0.50
         expect(diag1.headlineAccuracy).toBe(0.5);
     });
+
+    it('ensures other app token gets 404 for that same workflowId, and the point outcome is unchanged', async () => {
+        const workflowId = `wf-cross-app-unchanged-${Date.now()}`;
+
+        // Point owned by duelodds with outcome: loss (e.g. live scenario wf-1791224875232)
+        await cortex.store(
+            'Guardians ML at -154 vs Royals analysis',
+            {
+                workflowId,
+                originApp: 'duelodds',
+                domain: 'odds',
+                memoryType: 'judgment',
+                qualityRating: 0.85,
+                entityIds: ['guardians']
+            },
+            false
+        );
+
+        // Grade as loss by owning app
+        await cortex.gradeMemoryByWorkflowId({
+            workflowId,
+            originApp: 'duelodds',
+            outcome: 'loss'
+        });
+
+        const points = (cortex as any).fallbackStore;
+        const initialPoint = points.find((p: any) => p.payload?.workflowId === workflowId);
+        expect(initialPoint.payload.outcome).toBe('loss');
+        expect(initialPoint.payload.qualityRating).toBe(0.0);
+
+        // Attempt grading as win by perfect-swarm token
+        const res = await fetch(`${baseUrl}/api/swarm/feedback`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ps-token-123'
+            },
+            body: JSON.stringify({
+                workflowId,
+                outcome: 'win'
+            })
+        });
+
+        expect(res.status).toBe(404);
+        const data = await res.json();
+        expect(data.error).toBe('Workflow not found');
+
+        // Confirm point outcome remains loss (0.0) and was NOT overwritten by win
+        const pointAfter = points.find((p: any) => p.payload?.workflowId === workflowId);
+        expect(pointAfter.payload.outcome).toBe('loss');
+        expect(pointAfter.payload.qualityRating).toBe(0.0);
+    });
+
+    it('returns 404 when workflowId is missing or does not exist for the caller', async () => {
+        const res = await fetch(`${baseUrl}/api/swarm/feedback`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ps-token-123'
+            },
+            body: JSON.stringify({
+                workflowId: `wf-nonexistent-${Date.now()}`,
+                outcome: 'win'
+            })
+        });
+
+        expect(res.status).toBe(404);
+        const data = await res.json();
+        expect(data.error).toBe('Workflow not found');
+    });
+
+    it('ignores body.appId and prevents redirecting the grade', async () => {
+        const workflowId = `wf-redirect-attempt-${Date.now()}`;
+
+        // Point owned by perfect-swarm
+        await cortex.store(
+            'Lakers spread analysis',
+            {
+                workflowId,
+                originApp: 'perfect-swarm',
+                domain: 'odds',
+                memoryType: 'judgment',
+                qualityRating: 0.85
+            },
+            false
+        );
+
+        // Caller is duelodds, but body passes appId: 'perfect-swarm' attempting to redirect
+        const res = await fetch(`${baseUrl}/api/swarm/feedback`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer do-token-456'
+            },
+            body: JSON.stringify({
+                workflowId,
+                outcome: 'win',
+                appId: 'perfect-swarm'
+            })
+        });
+
+        // Must ignore body.appId, treat caller as duelodds, and return 404
+        expect(res.status).toBe(404);
+        const data = await res.json();
+        expect(data.error).toBe('Workflow not found');
+
+        // Verify point was NOT graded
+        const points = (cortex as any).fallbackStore;
+        const pt = points.find((p: any) => p.payload?.workflowId === workflowId);
+        expect(pt.payload.feedbackProcessed).toBeUndefined();
+        expect(pt.payload.outcome).toBeUndefined();
+    });
+
+    it('returns 401 when Authorization header is missing', async () => {
+        const res = await fetch(`${baseUrl}/api/swarm/feedback`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                workflowId: 'wf-any',
+                outcome: 'win'
+            })
+        });
+
+        expect(res.status).toBe(401);
+    });
 });

@@ -1,14 +1,20 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createSwarmServer } from './server.ts';
 import { globalFeedbackEngine } from './feedback.ts';
+import { MemoryCortex } from './memory.ts';
 
 describe('Swarm Server & Feedback Attribution', () => {
     let server: any;
+    let cortex: MemoryCortex;
     let baseUrl: string;
 
     beforeEach(async () => {
+        cortex = new MemoryCortex({
+            defaultAppId: 'test-app'
+        });
         server = createSwarmServer({
             cors: true,
+            defaultCortex: cortex,
             defaultSettings: {
                 appId: 'test-app',
                 agents: [
@@ -37,120 +43,175 @@ describe('Swarm Server & Feedback Attribution', () => {
     });
 
     it('rejects feedback request with missing parameters', async () => {
-        const res1 = await fetch(`${baseUrl}/api/swarm/feedback`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({})
-        });
-        expect(res1.status).toBe(400);
+        const oldTokens = process.env.SWARM_APP_TOKENS;
+        process.env.SWARM_APP_TOKENS = 'test-app:test-token';
+        try {
+            const res1 = await fetch(`${baseUrl}/api/swarm/feedback`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer test-token'
+                },
+                body: JSON.stringify({})
+            });
+            expect(res1.status).toBe(400);
 
-        const res2 = await fetch(`${baseUrl}/api/swarm/feedback`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ workflowId: 'wf-1' })
-        });
-        expect(res2.status).toBe(400);
+            const res2 = await fetch(`${baseUrl}/api/swarm/feedback`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer test-token'
+                },
+                body: JSON.stringify({ workflowId: 'wf-1' })
+            });
+            expect(res2.status).toBe(400);
 
-        const res3 = await fetch(`${baseUrl}/api/swarm/feedback`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ workflowId: 'non-existent-wf', outcome: 'win' })
-        });
-        expect(res3.status).toBe(404);
+            const res3 = await fetch(`${baseUrl}/api/swarm/feedback`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer test-token'
+                },
+                body: JSON.stringify({ workflowId: 'non-existent-wf', outcome: 'win' })
+            });
+            expect(res3.status).toBe(404);
+        } finally {
+            if (oldTokens !== undefined) process.env.SWARM_APP_TOKENS = oldTokens;
+            else delete process.env.SWARM_APP_TOKENS;
+        }
     });
 
     it('records win/loss in analystLedger using real agentRoles instead of fake pipeline nodes', async () => {
-        const workflowId = `wf-real-role-${Date.now()}`;
-        const realRoles = ['Quant Specialist', 'Market & Steam Specialist'];
+        const oldTokens = process.env.SWARM_APP_TOKENS;
+        process.env.SWARM_APP_TOKENS = 'duelodds:duelodds-token';
+        try {
+            const workflowId = `wf-real-role-${Date.now()}`;
+            const realRoles = ['Quant Specialist', 'Market & Steam Specialist'];
 
-        // Seed a workflow outcome record into the knowledge repository
-        await globalFeedbackEngine.processFeedback({
-            workflowId,
-            task: 'Assess home favorite spread value',
-            appId: 'duelodds',
-            durationMs: 250,
-            targetTier: 'complex',
-            agentRoles: realRoles
-        });
-
-        // Submit feedback outcome
-        const feedbackRes = await fetch(`${baseUrl}/api/swarm/feedback`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+            await cortex.store('Assess home favorite spread value', {
                 workflowId,
-                outcome: 'win'
-            })
-        });
+                originApp: 'duelodds',
+                domain: 'odds',
+                memoryType: 'judgment'
+            });
 
-        expect(feedbackRes.status).toBe(200);
-        const fbData = await feedbackRes.json();
-        expect(fbData.ok).toBe(true);
-        expect(fbData.accuracyScore).toBe(1.0);
-        expect(fbData.components).toBeDefined();
-        expect(typeof fbData.components.qualityReward).toBe('number');
-        expect(typeof fbData.components.accuracyReward).toBe('number');
-        expect(typeof fbData.components.latencyPenalty).toBe('number');
-        expect(typeof fbData.components.costPenalty).toBe('number');
-        expect(typeof fbData.components.savingsReward).toBe('number');
+            // Seed a workflow outcome record into the knowledge repository
+            await globalFeedbackEngine.processFeedback({
+                workflowId,
+                task: 'Assess home favorite spread value',
+                appId: 'duelodds',
+                durationMs: 250,
+                targetTier: 'complex',
+                agentRoles: realRoles
+            });
 
-        // Verify metrics endpoint reports real roles
-        const metricsRes = await fetch(`${baseUrl}/api/swarm/metrics`);
-        expect(metricsRes.status).toBe(200);
-        const metricsData = await metricsRes.json();
+            // Submit feedback outcome
+            const feedbackRes = await fetch(`${baseUrl}/api/swarm/feedback`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer duelodds-token'
+                },
+                body: JSON.stringify({
+                    workflowId,
+                    outcome: 'win'
+                })
+            });
 
-        expect(metricsData.analystAccuracy).toBeDefined();
-        expect(metricsData.analystAccuracy['duelodds:Quant Specialist']).toBeDefined();
-        expect(metricsData.analystAccuracy['duelodds:Quant Specialist'].wins).toBe(1);
-        expect(metricsData.analystAccuracy['duelodds:Market & Steam Specialist']).toBeDefined();
-        expect(metricsData.analystAccuracy['duelodds:Market & Steam Specialist'].wins).toBe(1);
+            expect(feedbackRes.status).toBe(200);
+            const fbData = await feedbackRes.json();
+            expect(fbData.ok).toBe(true);
+            expect(fbData.accuracyScore).toBe(1.0);
+            expect(fbData.components).toBeDefined();
+            expect(typeof fbData.components.qualityReward).toBe('number');
+            expect(typeof fbData.components.accuracyReward).toBe('number');
+            expect(typeof fbData.components.latencyPenalty).toBe('number');
+            expect(typeof fbData.components.costPenalty).toBe('number');
+            expect(typeof fbData.components.savingsReward).toBe('number');
 
-        // Verify fake roles are never recorded
-        expect(metricsData.analystAccuracy['duelodds:SpecialistRouter']).toBeUndefined();
-        expect(metricsData.analystAccuracy['duelodds:Verification Node']).toBeUndefined();
+            // Verify metrics endpoint reports real roles
+            const metricsRes = await fetch(`${baseUrl}/api/swarm/metrics`, {
+                headers: { 'Authorization': 'Bearer duelodds-token' }
+            });
+            expect(metricsRes.status).toBe(200);
+            const metricsData = await metricsRes.json();
 
-        // Verify specialistProfiles in metrics endpoint reflects outcomes-driven routing
-        expect(metricsData.specialistProfiles).toBeDefined();
-        expect(metricsData.specialistProfiles['Quant Specialist']).toBeDefined();
-        expect(metricsData.specialistProfiles['Quant Specialist'].accuracyWins).toBe(1);
-        expect(metricsData.specialistProfiles['Quant Specialist'].accuracyScore).toBe(1.0);
-        expect(metricsData.specialistProfiles['Market & Steam Specialist']).toBeDefined();
-        expect(metricsData.specialistProfiles['Market & Steam Specialist'].accuracyWins).toBe(1);
-        expect(metricsData.specialistProfiles['Market & Steam Specialist'].accuracyScore).toBe(1.0);
+            expect(metricsData.analystAccuracy).toBeDefined();
+            expect(metricsData.analystAccuracy['duelodds:Quant Specialist']).toBeDefined();
+            expect(metricsData.analystAccuracy['duelodds:Quant Specialist'].wins).toBe(1);
+            expect(metricsData.analystAccuracy['duelodds:Market & Steam Specialist']).toBeDefined();
+            expect(metricsData.analystAccuracy['duelodds:Market & Steam Specialist'].wins).toBe(1);
 
-        // Verify idempotency on repeat request
-        const repeatRes = await fetch(`${baseUrl}/api/swarm/feedback`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ workflowId, outcome: 'win' })
-        });
-        expect(repeatRes.status).toBe(200);
-        const repeatData = await repeatRes.json();
-        expect(repeatData.message).toContain('Feedback already processed');
+            // Verify fake roles are never recorded
+            expect(metricsData.analystAccuracy['duelodds:SpecialistRouter']).toBeUndefined();
+            expect(metricsData.analystAccuracy['duelodds:Verification Node']).toBeUndefined();
+
+            // Verify specialistProfiles in metrics endpoint reflects outcomes-driven routing
+            expect(metricsData.specialistProfiles).toBeDefined();
+            expect(metricsData.specialistProfiles['Quant Specialist']).toBeDefined();
+            expect(metricsData.specialistProfiles['Quant Specialist'].accuracyWins).toBe(1);
+            expect(metricsData.specialistProfiles['Quant Specialist'].accuracyScore).toBe(1.0);
+            expect(metricsData.specialistProfiles['Market & Steam Specialist']).toBeDefined();
+            expect(metricsData.specialistProfiles['Market & Steam Specialist'].accuracyWins).toBe(1);
+            expect(metricsData.specialistProfiles['Market & Steam Specialist'].accuracyScore).toBe(1.0);
+
+            // Verify idempotency on repeat request
+            const repeatRes = await fetch(`${baseUrl}/api/swarm/feedback`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer duelodds-token'
+                },
+                body: JSON.stringify({ workflowId, outcome: 'win' })
+            });
+            expect(repeatRes.status).toBe(200);
+            const repeatData = await repeatRes.json();
+            expect(repeatData.message).toContain('Feedback already processed');
+        } finally {
+            if (oldTokens !== undefined) process.env.SWARM_APP_TOKENS = oldTokens;
+            else delete process.env.SWARM_APP_TOKENS;
+        }
     });
 
     it('handles workflows with empty agentRoles gracefully as a safe no-op', async () => {
-        const workflowId = `wf-empty-roles-${Date.now()}`;
+        const oldTokens = process.env.SWARM_APP_TOKENS;
+        process.env.SWARM_APP_TOKENS = 'empty-roles-app:empty-roles-token';
+        try {
+            const workflowId = `wf-empty-roles-${Date.now()}`;
 
-        await globalFeedbackEngine.processFeedback({
-            workflowId,
-            task: 'Ping task',
-            appId: 'empty-roles-app',
-            durationMs: 50,
-            targetTier: 'instant',
-            agentRoles: []
-        });
+            await cortex.store('Ping task', {
+                workflowId,
+                originApp: 'empty-roles-app',
+                domain: 'general',
+                memoryType: 'judgment'
+            });
 
-        const feedbackRes = await fetch(`${baseUrl}/api/swarm/feedback`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ workflowId, outcome: 'loss' })
-        });
+            await globalFeedbackEngine.processFeedback({
+                workflowId,
+                task: 'Ping task',
+                appId: 'empty-roles-app',
+                durationMs: 50,
+                targetTier: 'instant',
+                agentRoles: []
+            });
 
-        expect(feedbackRes.status).toBe(200);
-        const fbData = await feedbackRes.json();
-        expect(fbData.ok).toBe(true);
-        expect(fbData.accuracyScore).toBe(0.0);
+            const feedbackRes = await fetch(`${baseUrl}/api/swarm/feedback`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer empty-roles-token'
+                },
+                body: JSON.stringify({ workflowId, outcome: 'loss' })
+            });
+
+            expect(feedbackRes.status).toBe(200);
+            const fbData = await feedbackRes.json();
+            expect(fbData.ok).toBe(true);
+            expect(fbData.accuracyScore).toBe(0.0);
+        } finally {
+            if (oldTokens !== undefined) process.env.SWARM_APP_TOKENS = oldTokens;
+            else delete process.env.SWARM_APP_TOKENS;
+        }
     });
 
     it('calibrates reward weights via POST and queries status via GET /api/swarm/calibrate', async () => {

@@ -206,9 +206,10 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
             }
 
             const callerAppId = (c as any).get('callerAppId') as string | undefined;
-            const allWorkflowRecords = globalFeedbackEngine.getKnowledgeRepository().queryOutcomes().filter((o: any) => o.workflowId === workflowId);
-            const serverDefaultAppId = defaultSettings.appId || 'perfect-swarm';
-            const originApp = callerAppId || (allWorkflowRecords[0] as any)?.appId || body.appId || serverDefaultAppId;
+            if (!callerAppId) {
+                return c.json({ error: 'Unauthorized: missing callerAppId' }, 401);
+            }
+            const originApp = callerAppId;
 
             // 1. Grade the point in MemoryCortex
             let gradeResult = { found: false, alreadyProcessed: false };
@@ -221,12 +222,16 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 });
             }
 
-            // 2. Query in-memory knowledge repository (scoped to originApp)
-            const workflowRecords = allWorkflowRecords.filter((o: any) => (o.appId || o.originApp || 'perfect-swarm') === originApp);
-
-            if (!gradeResult.found && workflowRecords.length === 0) {
+            if (!gradeResult.found) {
                 return c.json({ error: 'Workflow not found' }, 404);
             }
+
+            // 2. Query in-memory knowledge repository (scoped to originApp, without defaulting missing appId to perfect-swarm)
+            const allWorkflowRecords = globalFeedbackEngine.getKnowledgeRepository().queryOutcomes().filter((o: any) => o.workflowId === workflowId);
+            const workflowRecords = allWorkflowRecords.filter((o: any) => {
+                const recordApp = o.appId || o.originApp;
+                return Boolean(recordApp && recordApp === originApp);
+            });
 
             // 3. Handle idempotency
             if (gradeResult.alreadyProcessed || workflowRecords.some((o: any) => o.feedbackProcessed)) {

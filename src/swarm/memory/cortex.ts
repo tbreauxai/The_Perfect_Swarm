@@ -1003,23 +1003,26 @@ export class MemoryCortex {
                 const points = (scrollRes as any)?.points || [];
                 if (points.length > 0) {
                     const qPoint = points[0];
-                    matchedPoint = matchedPoint || qPoint;
                     const qPayload = qPoint.payload || {};
-                    if (qPayload.feedbackProcessed === true) {
-                        isAlreadyProcessed = true;
-                    } else {
-                        await this.withTimeout(this.qdrant.setPayload(this.collectionName, {
-                            wait: true,
-                            points: [qPoint.id],
-                            payload: {
-                                qualityRating: outcomeScore,
-                                memoryType: 'fact',
-                                outcome: options.outcome,
-                                gradedAt: nowIso,
-                                feedbackProcessed: true,
-                                verified: outcomeScore >= 0.8
-                            }
-                        }));
+                    const pointApp = qPayload.originApp || qPayload.appId;
+                    if (pointApp === targetOriginApp) {
+                        matchedPoint = matchedPoint || qPoint;
+                        if (qPayload.feedbackProcessed === true) {
+                            isAlreadyProcessed = true;
+                        } else {
+                            await this.withTimeout(this.qdrant.setPayload(this.collectionName, {
+                                wait: true,
+                                points: [qPoint.id],
+                                payload: {
+                                    qualityRating: outcomeScore,
+                                    memoryType: 'fact',
+                                    outcome: options.outcome,
+                                    gradedAt: nowIso,
+                                    feedbackProcessed: true,
+                                    verified: outcomeScore >= 0.8
+                                }
+                            }));
+                        }
                     }
                 }
             } catch (err: any) {

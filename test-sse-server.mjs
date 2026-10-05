@@ -250,9 +250,13 @@ async function runSseServerTests() {
 
         // Step E: Direct JSON endpoint POST /api/swarm/analyze
         console.log('\n[Test 5] POST /api/swarm/analyze (Standard JSON)');
+        process.env.SWARM_APP_TOKENS = 'duelodds:test-token-7';
         const analyzeRes = await fetch(`${baseUrl}/api/swarm/analyze`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer test-token-7'
+            },
             body: JSON.stringify({
                 task: 'Synthesize cluster metrics',
                 data: 'status=ready',
@@ -278,7 +282,9 @@ async function runSseServerTests() {
 
         // Step F: Verify telemetry metrics accurately reflect failures
         console.log('\n[Test 6] GET /api/swarm/metrics (Accuracy Verification)');
-        const metricsRes = await fetch(`${baseUrl}/api/swarm/metrics`);
+        const metricsRes = await fetch(`${baseUrl}/api/swarm/metrics`, {
+            headers: { 'Authorization': 'Bearer test-token-7' }
+        });
         if (metricsRes.status !== 200) throw new Error(`Metrics expected 200, got ${metricsRes.status}`);
         const metricsData = await metricsRes.json();
         console.log('✓ Telemetry metrics received:', { totalRequests: metricsData.totalRequests, failureCount: metricsData.failureCount });
@@ -292,7 +298,10 @@ async function runSseServerTests() {
         const workflowId = analyzeData.workflowId || analyzeData.finalAnalysis?.workflowId;
         const feedbackRes = await fetch(`${baseUrl}/api/swarm/feedback`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer test-token-7'
+            },
             body: JSON.stringify({
                 workflowId,
                 outcome: 'win'
@@ -305,7 +314,9 @@ async function runSseServerTests() {
             throw new Error('Feedback response missing components reward breakdown');
         }
 
-        const metricsRes2 = await fetch(`${baseUrl}/api/swarm/metrics`);
+        const metricsRes2 = await fetch(`${baseUrl}/api/swarm/metrics`, {
+            headers: { 'Authorization': 'Bearer test-token-7' }
+        });
         const metricsData2 = await metricsRes2.json();
         const accuracyKeys = Object.keys(metricsData2.analystAccuracy || {});
         console.log('✓ Telemetry analystAccuracy keys:', accuracyKeys);
@@ -325,6 +336,7 @@ async function runSseServerTests() {
 
         console.log('\n✓ ALL SWARM HTTP/SSE STREAMING SERVER TESTS PASSED SUCCESSFULLY!\n');
     } finally {
+        delete process.env.SWARM_APP_TOKENS;
         server.close();
     }
 }
