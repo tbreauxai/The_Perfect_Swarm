@@ -246,24 +246,9 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
 
             if (workflowRecords.length > 0) {
                 const workflowRecord = workflowRecords[0];
-                const fbResult = await globalFeedbackEngine.processFeedback({
-                    workflowId,
-                    task: workflowRecord.task,
-                    appId: originApp,
-                    durationMs: workflowRecord.metrics?.durationMs || 0,
-                    targetTier: workflowRecord.metrics?.targetTier || 'instant',
-                    tokenSavings: workflowRecord.metrics?.tokenSavings || 0,
-                    tokensConsumed: workflowRecord.metrics?.tokensConsumed || 100,
-                    qualityScore: workflowRecord.metrics?.qualityScore || 0.85,
-                    accuracyScore,
-                    errorCount: workflowRecord.metrics?.errorCount || 0,
-                    hardErrorCount: workflowRecord.metrics?.hardErrorCount || 0,
-                    failoverCount: workflowRecord.metrics?.failoverCount || 0,
-                    agentRoles: (workflowRecord as any).agentRoles
-                });
 
-                compositeReward = fbResult.reward?.compositeReward;
-                components = fbResult.reward?.components;
+                compositeReward = accuracyScore;
+                components = { accuracyReward: accuracyScore };
 
                 const roles = ((workflowRecord as any).agentRoles || []).filter(Boolean);
                 for (const role of roles) {
@@ -274,6 +259,11 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 for (const r of workflowRecords) {
                     (r as any).feedbackProcessed = true;
                     (r as any).gradedAt = gradedAt || Date.now();
+                    if (!(r as any).metrics) {
+                        (r as any).metrics = {};
+                    }
+                    (r as any).metrics.accuracyScore = accuracyScore;
+                    (r as any).outcome = outcome;
                     globalFeedbackEngine.getKnowledgeRepository().persistOutcome(r as any);
                 }
             }
