@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Database, Server, Folder, Shield, Activity, RefreshCw, Zap, Cpu, Settings, Coins } from 'lucide-react';
+import { authHeaders } from '../services/appAuthHeaders';
 
 interface RoleRecommendation {
   role: string;
@@ -46,14 +47,14 @@ export function CortexDiagnosticsViewer() {
     try {
       // Fetch cortex diagnostics
       const url = selectedApp === 'global' ? '/api/swarm/cortex/diagnostics' : `/api/swarm/cortex/diagnostics?appId=${encodeURIComponent(selectedApp)}`;
-      const res = await fetch(url);
+      const res = await fetch(url, { headers: authHeaders() });
       if (!res.ok) {
         throw new Error(`Failed to fetch: ${res.statusText}`);
       }
       const data = await res.json();
 
       // Fetch speed/latency & cost diagnostics via telemetry
-      const metricsRes = await fetch('/api/swarm/metrics');
+      const metricsRes = await fetch('/api/swarm/metrics', { headers: authHeaders() });
       let telemetryData: any = {};
       if (metricsRes.ok) {
         telemetryData = await metricsRes.json();

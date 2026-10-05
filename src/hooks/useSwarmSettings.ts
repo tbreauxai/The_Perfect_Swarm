@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react';
 import type { AppSettings } from '../components/SettingsModal';
+import { authHeaders } from '../services/appAuthHeaders';
 
 export function useSwarmSettings() {
   const [showSettings, setShowSettings] = useState(false);
   const [envStatus, setEnvStatus] = useState<any>({});
 
   useEffect(() => {
-    fetch('/api/config/status')
+    fetch('/api/config/status', { headers: authHeaders() })
       .then(res => res.text())
       .then(text => {
         try {

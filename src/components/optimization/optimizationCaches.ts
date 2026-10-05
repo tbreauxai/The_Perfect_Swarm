@@ -1,5 +1,6 @@
 import { checkProviderModelsHealth } from '../../services/providerService';
 import { getApiKeyForProvider } from '../AgentConfigurator';
+import { authHeaders } from '../../services/appAuthHeaders';
 
 export interface ProviderBackoffState {
     consecutive429: number;
@@ -207,7 +208,7 @@ export async function fetchAnalyze(body: any, timeoutMs: number): Promise<Respon
 
         promise = fetch('/api/swarm/analyze', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: authHeaders({ 'Content-Type': 'application/json' }),
             body: serializedBody,
             signal: controller.signal
         }).finally(() => {
