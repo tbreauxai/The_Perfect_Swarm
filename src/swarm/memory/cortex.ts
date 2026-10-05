@@ -32,7 +32,13 @@ import {
     type SparseVector,
     type EmbeddingProvider,
     type MemoryCortexDiagnostics,
-    type MemoryCortexConfig
+    type MemoryCortexConfig,
+    normalizeDomain,
+    normalizeMemoryType,
+    extractEntityIds,
+    normalizeMemoryPayload,
+    computeBlendWeight,
+    rankAndFilterCandidates
 } from './types.ts';
 
 export class MemoryCortex {
@@ -250,7 +256,10 @@ export class MemoryCortex {
 
             // Create compound payload indexes for multi-tenant and learning queries
             await Promise.all([
+                this.ensurePayloadIndex(targetCollection, "originApp", "keyword"),
                 this.ensurePayloadIndex(targetCollection, "domain", "keyword"),
+                this.ensurePayloadIndex(targetCollection, "memoryType", "keyword"),
+                this.ensurePayloadIndex(targetCollection, "entityIds", "keyword"),
                 this.ensurePayloadIndex(targetCollection, "appId", "keyword"),
                 this.ensurePayloadIndex(targetCollection, "targetApps", "keyword"),
                 this.ensurePayloadIndex(targetCollection, "agentRole", "keyword"),
@@ -335,9 +344,28 @@ export class MemoryCortex {
      */
     async store(content: string, metadata: MemoryMetadata, deduplicate: boolean = true): Promise<string | null> {
         await this.initialize();
-        const appId = metadata.appId || this.defaultAppId;
+        const originApp = metadata.originApp || metadata.appId || this.defaultAppId;
+        const appId = originApp;
+        const domain = metadata.domain ? normalizeDomain(metadata.domain, content) : 'general';
+        const memoryType = normalizeMemoryType(metadata.memoryType, metadata);
+        const entityIds = extractEntityIds(content, metadata.entityIds);
         const now = new Date().toISOString();
         let storedId: string | null = null;
+
+        const pointPayload = {
+            content,
+            frequency: 1,
+            qualityRating: metadata.qualityRating ?? 0.5,
+            verified: memoryType === 'fact',
+            timestamp: now,
+            lastSeen: now,
+            ...metadata,
+            originApp,
+            appId,
+            domain,
+            memoryType,
+            entityIds
+        };
 
         if (this.qdrant && this.isAvailable) {
             try {
@@ -351,7 +379,7 @@ export class MemoryCortex {
                         limit: 1,
                         score_threshold: 0.92,
                         filter: {
-                            must: [{ key: "appId", match: { value: appId } }]
+                            must: [{ key: "appId", match: { value: originApp } }]
                         },
                         with_payload: true
                     }));
@@ -371,7 +399,12 @@ export class MemoryCortex {
                                 frequency: newFreq,
                                 lastSeen: now,
                                 qualityRating: mergedRating,
-                                verified: metadata.verified ?? existingPayload.verified
+                                verified: metadata.verified ?? existingPayload.verified,
+                                originApp,
+                                appId,
+                                domain,
+                                memoryType,
+                                entityIds
                             }
                         }));
 
@@ -390,16 +423,7 @@ export class MemoryCortex {
                                     dense: denseVector,
                                     sparse: sparseVector
                                 },
-                                payload: {
-                                    content,
-                                    appId,
-                                    frequency: 1,
-                                    qualityRating: metadata.qualityRating ?? 0.5,
-                                    verified: metadata.verified ?? false,
-                                    timestamp: now,
-                                    lastSeen: now,
-                                    ...metadata
-                                }
+                                payload: pointPayload
                             }
                         ]
                     }));
@@ -421,7 +445,7 @@ export class MemoryCortex {
                     const match = this.vectorIndex.findMostSimilar(
                         denseVector,
                         0.92,
-                        (item) => item.data.payload.appId === appId
+                        (item) => (item.data.payload.originApp || item.data.payload.appId) === originApp
                     );
 
                     if (match) {
@@ -434,6 +458,11 @@ export class MemoryCortex {
                         if (metadata.verified !== undefined) {
                             existing.payload.verified = metadata.verified;
                         }
+                        existing.payload.originApp = originApp;
+                        existing.payload.appId = appId;
+                        existing.payload.domain = domain;
+                        existing.payload.memoryType = memoryType;
+                        existing.payload.entityIds = entityIds;
                         storedId = existing.id;
                     }
                 }
@@ -444,16 +473,7 @@ export class MemoryCortex {
                         id,
                         denseVector,
                         sparseVector,
-                        payload: {
-                            content,
-                            appId,
-                            frequency: 1,
-                            qualityRating: metadata.qualityRating ?? 0.5,
-                            verified: metadata.verified ?? false,
-                            timestamp: now,
-                            lastSeen: now,
-                            ...metadata
-                        }
+                        payload: pointPayload
                     };
                     this.fallbackStore.push(newPoint);
                     this.vectorIndex.insert(id, denseVector, newPoint);
@@ -491,6 +511,11 @@ export class MemoryCortex {
                         const denseVector = await this.safeEmbed(memory.content);
                         const sparseVector = SparseTokenizer.encode(memory.content);
                         const id = crypto.randomUUID();
+                        const originApp = memory.metadata.originApp || memory.metadata.appId || this.defaultAppId;
+                        const appId = originApp;
+                        const domain = memory.metadata.domain ? normalizeDomain(memory.metadata.domain, memory.content) : 'general';
+                        const memoryType = normalizeMemoryType(memory.metadata.memoryType, memory.metadata);
+                        const entityIds = extractEntityIds(memory.content, memory.metadata.entityIds);
 
                         return {
                             id,
@@ -500,13 +525,17 @@ export class MemoryCortex {
                             },
                             payload: {
                                 content: memory.content,
-                                appId: memory.metadata.appId || this.defaultAppId,
                                 frequency: 1,
                                 qualityRating: memory.metadata.qualityRating ?? 0.5,
-                                verified: memory.metadata.verified ?? false,
+                                verified: memoryType === 'fact',
                                 timestamp: now,
                                 lastSeen: now,
-                                ...memory.metadata
+                                ...memory.metadata,
+                                originApp,
+                                appId,
+                                domain,
+                                memoryType,
+                                entityIds
                             }
                         };
                     })
@@ -612,7 +641,10 @@ export class MemoryCortex {
         }
 
         // Check Semantic Cache Interceptor first (> 0.96 threshold)
-        const cachedMatch = this.semanticCache.lookup<any[]>(queryDense, options.appId);
+        const readerApp = options.appId || options.originApp || this.defaultAppId;
+        const requestedDomain = options.domain ? normalizeDomain(options.domain) : undefined;
+        const cacheNamespace = requestedDomain ? `${readerApp}:${requestedDomain}` : readerApp;
+        const cachedMatch = this.semanticCache.lookup<any[]>(queryDense, cacheNamespace);
         if (cachedMatch.hit && cachedMatch.payload) {
             return cachedMatch.payload;
         }
@@ -624,18 +656,13 @@ export class MemoryCortex {
                 const sparseVector = SparseTokenizer.encode(query);
 
                 const filterMust: any[] = [];
-                if (options.appId) {
-                    if (options.includeShared) {
-                        filterMust.push({
-                            should: [
-                                { key: "appId", match: { value: options.appId } },
-                                { key: "appId", match: { value: "global" } },
-                                { key: "appId", match: { value: "shared" } }
-                            ]
-                        });
-                    } else {
-                        filterMust.push({ key: "appId", match: { value: options.appId } });
-                    }
+                if (options.includeShared === false) {
+                    filterMust.push({
+                        should: [
+                            { key: "originApp", match: { value: readerApp } },
+                            { key: "appId", match: { value: readerApp } }
+                        ]
+                    });
                 }
                 if (options.targetApps) {
                     const targets = Array.isArray(options.targetApps) ? options.targetApps : [options.targetApps];
@@ -647,8 +674,8 @@ export class MemoryCortex {
                         });
                     }
                 }
-                if (options.domain) {
-                    filterMust.push({ key: "domain", match: { value: options.domain } });
+                if (requestedDomain) {
+                    filterMust.push({ key: "domain", match: { value: requestedDomain } });
                 }
                 if (options.agentRole) {
                     filterMust.push({ key: "agentRole", match: { value: options.agentRole } });
@@ -661,21 +688,21 @@ export class MemoryCortex {
                 }
 
                 const filter = filterMust.length > 0 ? { must: filterMust } : undefined;
-                const searchLimit = options.limit || 3;
+                const searchLimit = Math.max(options.limit || 3, 5) * 4;
 
                 const qdrantRes = await this.withTimeout(this.qdrant.query(this.collectionName, {
                     prefetch: [
                         {
                             query: queryDense,
                             using: "dense",
-                            limit: searchLimit * 2,
+                            limit: searchLimit,
                             filter,
                             params: { hnsw_ef: 64 }
                         },
                         {
                             query: sparseVector,
                             using: "sparse",
-                            limit: searchLimit * 2,
+                            limit: searchLimit,
                             filter
                         }
                     ],
@@ -686,50 +713,49 @@ export class MemoryCortex {
                     with_payload: true
                 }));
 
-                results = qdrantRes.points.map(r => r.payload).filter(Boolean);
+                const qdrantCandidates = (qdrantRes.points || []).map(r => ({
+                    id: String(r.id),
+                    payload: r.payload,
+                    vectorScore: r.score ?? 1.0
+                }));
+
+                results = rankAndFilterCandidates(qdrantCandidates, options, query, this.defaultAppId);
             } catch (err: any) {
                 console.warn(`[MemoryCortex] Hybrid retrieval error: ${err.message || err}. Falling back to in-memory search.`);
-                results = await this.retrieveFromFallbackWithVector(queryDense, options);
+                results = await this.retrieveFromFallbackWithVector(queryDense, options, query);
             }
         } else {
-            results = await this.retrieveFromFallbackWithVector(queryDense, options);
+            results = await this.retrieveFromFallbackWithVector(queryDense, options, query);
         }
 
         // Store result in semantic cache for future queries (> 0.96 similarity)
         if (results.length > 0) {
-            this.semanticCache.set(queryDense, results, options.appId);
+            this.semanticCache.set(queryDense, results, cacheNamespace);
         }
 
         return results;
     }
 
-    private async retrieveFromFallbackWithVector(queryDense: number[], options: RetrievalOptions): Promise<any[]> {
+    private async retrieveFromFallbackWithVector(queryDense: number[], options: RetrievalOptions, query: string): Promise<any[]> {
         if (this.fallbackStore.length === 0) return [];
+        const readerApp = options.appId || options.originApp || this.defaultAppId;
+        const requestedDomain = options.domain ? normalizeDomain(options.domain) : undefined;
 
         const filterPredicate = (pt: StoredMemoryPoint) => {
-            if (options.appId) {
-                if (options.includeShared) {
-                    if (pt.payload.appId !== options.appId && pt.payload.appId !== 'global' && pt.payload.appId !== 'shared') {
-                        return false;
-                    }
-                } else if (pt.payload.appId !== options.appId) {
-                    return false;
-                }
+            if (options.includeShared === false) {
+                const itemApp = pt.payload.originApp || pt.payload.appId;
+                if (itemApp !== readerApp) return false;
             }
-            if (options.targetApps) {
-                const targets = Array.isArray(options.targetApps) ? options.targetApps : [options.targetApps];
-                const ptTargetApps = Array.isArray(pt.payload.targetApps) ? pt.payload.targetApps : (pt.payload.targetApps ? [pt.payload.targetApps] : []);
-                const matchFound = targets.some(t => ptTargetApps.includes(t) || pt.payload.appId === t);
-                if (!matchFound) return false;
+            if (requestedDomain) {
+                const itemDomain = normalizeDomain(pt.payload.domain);
+                if (itemDomain !== requestedDomain) return false;
             }
-            if (options.domain && pt.payload.domain !== options.domain) return false;
             if (options.agentRole && pt.payload.agentRole !== options.agentRole) return false;
             if (options.minRating !== undefined && (pt.payload.qualityRating ?? 0) < options.minRating) return false;
-            if (options.verifiedOnly && !pt.payload.verified) return false;
+            if (options.verifiedOnly && pt.payload.verified !== true && pt.payload.memoryType !== 'fact') return false;
             return true;
         };
 
-        // Sub-linear O(log n) candidate retrieval from vector index
         const searchK = Math.min(this.vectorIndex.size, Math.max((options.limit || 3) * 3, 15));
         const indexHits = this.vectorIndex.search(queryDense, {
             k: searchK,
@@ -737,23 +763,21 @@ export class MemoryCortex {
         });
 
         let candidates: StoredMemoryPoint[];
-        const denseRankMap = new Map<string, number>();
-
         if (indexHits.length > 0) {
             candidates = indexHits.map(h => h.data);
-            indexHits.forEach((hit, idx) => denseRankMap.set(hit.id, idx));
         } else {
             candidates = this.fallbackStore.filter(filterPredicate);
-            if (candidates.length === 0) return [];
-            const denseRanked = [...candidates].map(candidate => ({
-                candidate,
-                score: this.cosineSimilarity(queryDense, candidate.denseVector)
-            })).sort((a, b) => b.score - a.score);
-            denseRanked.forEach((item, idx) => denseRankMap.set(item.candidate.id, idx));
         }
 
-        const limit = options.limit || 3;
-        return candidates.slice(0, limit).map(item => item.payload);
+        if (candidates.length === 0) return [];
+
+        const scoredCandidates = candidates.map(pt => ({
+            id: pt.id,
+            payload: pt.payload,
+            vectorScore: this.cosineSimilarity(queryDense, pt.denseVector)
+        }));
+
+        return rankAndFilterCandidates(scoredCandidates, options, query, this.defaultAppId);
     }
 
     /**
@@ -841,8 +865,48 @@ export class MemoryCortex {
 
     /**
      * Wipes the collection and in-memory store.
+     * If appId is provided, only memories matching that originApp are wiped.
      */
-    async wipeCollection(): Promise<boolean> {
+    async wipeCollection(appId?: string): Promise<boolean> {
+        if (appId) {
+            const targetApp = appId.trim();
+            const remaining: StoredMemoryPoint[] = [];
+            const deletedIds: string[] = [];
+
+            for (const pt of this.fallbackStore) {
+                const itemApp = pt.payload.originApp || pt.payload.appId;
+                if (itemApp === targetApp) {
+                    deletedIds.push(pt.id);
+                } else {
+                    remaining.push(pt);
+                }
+            }
+
+            this.fallbackStore.length = 0;
+            this.fallbackStore.push(...remaining);
+            for (const id of deletedIds) {
+                this.vectorIndex.delete(id);
+            }
+
+            if (this.qdrant && this.isAvailable && typeof (this.qdrant as any).delete === 'function') {
+                try {
+                    await this.withTimeout((this.qdrant as any).delete(this.collectionName, {
+                        filter: {
+                            should: [
+                                { key: "originApp", match: { value: targetApp } },
+                                { key: "appId", match: { value: targetApp } }
+                            ]
+                        }
+                    }));
+                } catch (err: any) {
+                    console.warn(`[MemoryCortex] Qdrant wipe for ${targetApp} failed:`, err);
+                }
+            }
+
+            await this.savePersistFileIfConfigured();
+            return true;
+        }
+
         this.fallbackStore.length = 0;
         this.vectorIndex.clear();
         this.storesSinceConsolidation = 0;
@@ -866,6 +930,10 @@ export class MemoryCortex {
             console.warn(`[MemoryCortex] WipeCollection failed: ${error.message || error}`);
             return false;
         }
+    }
+
+    async wipeApp(appId: string): Promise<boolean> {
+        return this.wipeCollection(appId);
     }
 
     async getDiagnostics(appIdFilter?: string): Promise<MemoryCortexDiagnostics> {

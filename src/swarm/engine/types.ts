@@ -23,6 +23,9 @@ export interface SwarmStagePayload {
 export interface SwarmWorkflowParams {
     task: string;
     data?: string;
+    originApp?: string;
+    callerAppId?: string;
+    domain?: string;
     settings?: SwarmEngineSettings;
     defaultAi?: GoogleGenAI;
     enableDeepAnalysis?: boolean;

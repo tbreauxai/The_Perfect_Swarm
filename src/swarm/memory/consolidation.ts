@@ -31,7 +31,8 @@ export async function executeMemoryConsolidation(
         const now = Date.now();
         const remaining: StoredMemoryPoint[] = [];
         for (const pt of ctx.fallbackStore) {
-            if (appId && pt.payload.appId !== appId) {
+            const itemApp = pt.payload.originApp || pt.payload.appId;
+            if (appId && itemApp !== appId) {
                 remaining.push(pt);
                 continue;
             }
@@ -64,7 +65,14 @@ export async function executeMemoryConsolidation(
         try {
             if (typeof (ctx.qdrant as any).scroll === 'function') {
                 const scrollFilter: any[] = [];
-                if (appId) scrollFilter.push({ key: "appId", match: { value: appId } });
+                if (appId) {
+                    scrollFilter.push({
+                        should: [
+                            { key: "originApp", match: { value: appId } },
+                            { key: "appId", match: { value: appId } }
+                        ]
+                    });
+                }
                 const scrollRes = await (ctx.qdrant as any).scroll(ctx.collectionName, {
                     filter: scrollFilter.length > 0 ? { must: scrollFilter } : undefined,
                     limit: 1000,

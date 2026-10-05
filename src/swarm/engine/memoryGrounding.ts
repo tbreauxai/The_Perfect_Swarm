@@ -87,9 +87,12 @@ export async function resolveMemoryGrounding(p: MemoryGroundingParams): Promise<
                     prompt: `Retrieving historical baseline constraints (appId='${targetAppId}', includeShared=${includeShared})...`
                 });
 
+                const readDomain = (p as any).domain || (p as any).settings?.domain;
+                const explicitEntities = (p as any).entityIds || (p as any).settings?.entityIds;
+
                 const [retrieved, exemplars] = bypassCache ? [[], ""] : await Promise.all([
-                    memoryCortex.retrieve(task, { appId: targetAppId, includeShared }, 3).catch(() => []),
-                    memoryCortex.retrieveExemplars(task, { appId: targetAppId, includeShared, limit: 2, minRating: 0.7 }).catch(() => "")
+                    memoryCortex.retrieve(task, { appId: targetAppId, domain: readDomain, entityIds: explicitEntities, includeShared }, 3).catch(() => []),
+                    memoryCortex.retrieveExemplars(task, { appId: targetAppId, domain: readDomain, entityIds: explicitEntities, includeShared, limit: 2, minRating: 0.7 }).catch(() => "")
                 ]);
 
                 historicalContext = retrieved.length > 0

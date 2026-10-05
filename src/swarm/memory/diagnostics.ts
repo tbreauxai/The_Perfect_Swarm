@@ -39,7 +39,7 @@ export async function collectCortexDiagnostics(
                     
                     for (const pt of (scrollResAll.points || [])) {
                         const payload = (pt.payload || {}) as Record<string, any>;
-                        const itemAppId = payload.appId || ctx.defaultAppId;
+                        const itemAppId = payload.originApp || payload.appId || ctx.defaultAppId;
                         apps.add(itemAppId);
 
                         // Apply filter for stats
@@ -58,7 +58,7 @@ export async function collectCortexDiagnostics(
                 }
             } else {
                 for (const pt of ctx.fallbackStore) {
-                    const itemAppId = pt.payload.appId || ctx.defaultAppId;
+                    const itemAppId = pt.payload.originApp || pt.payload.appId || ctx.defaultAppId;
                     apps.add(itemAppId);
 
                     if (!appIdFilter || appIdFilter === 'global' || itemAppId === appIdFilter) {
@@ -79,7 +79,7 @@ export async function collectCortexDiagnostics(
     // If qdrant failed or we are using fallback only
     if (pointCount === 0 && ctx.fallbackStore.length > 0) {
         for (const pt of ctx.fallbackStore) {
-            const itemAppId = pt.payload.appId || ctx.defaultAppId;
+            const itemAppId = pt.payload.originApp || pt.payload.appId || ctx.defaultAppId;
             apps.add(itemAppId);
 
             if (!appIdFilter || appIdFilter === 'global' || itemAppId === appIdFilter) {

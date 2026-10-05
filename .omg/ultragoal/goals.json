@@ -1,38 +1,32 @@
 [
   {
-    "id": "goal-1-server-sanitize-secrets",
-    "description": "Server deletes provider/Qdrant secrets from body settings and each agent; server env secrets win.",
+    "id": "goal-1-types-and-tag-normalization",
+    "description": "Extend MemoryMetadata and RetrievalOptions with originApp, domain, memoryType, entityIds; provide tag normalizers with fallback for missing tags.",
     "status": "completed",
-    "verification": "Unit test verifying body settings and agent secret keys are deleted while preserving role, provider, model, and appId."
+    "verification": "Types compile cleanly and normalizer correctly maps legacy points to originApp=payload.appId, domain=general, memoryType=judgment, entityIds=[]."
   },
   {
-    "id": "goal-2-server-models-secrets-and-cors",
-    "description": "Model listing ignores x-provider-key; remove x-provider-key from Access-Control-Allow-Headers and providerService.ts.",
+    "id": "goal-2-server-origin-app-and-write-tagging",
+    "description": "Enforce server derives originApp from authenticated caller or server default, ignoring client body appId. Tag all points on write with originApp, appId=originApp, domain, memoryType, entityIds.",
     "status": "completed",
-    "verification": "CORS headers do not contain x-provider-key and /api/swarm/models uses only server env secrets."
+    "verification": "Server endpoint writes point with originApp matching token caller even if client body supplies a different appId."
   },
   {
-    "id": "goal-3-remove-direct-browser-provider-calls",
-    "description": "Remove direct browser fetches to external provider endpoints; health checks route via /api/swarm/models and /api/health.",
+    "id": "goal-3-blended-retrieval-policy",
+    "description": "Implement blended retrieval ranking (weight 1.0 same app/domain, 0.45 different app/same domain/shared entity, 0 excluded; facts outrank judgments at same weight).",
     "status": "completed",
-    "verification": "Zero occurrences of external provider URLs in client health checking; tests pass."
+    "verification": "Retrieval unit tests verify weight 1.0, 0.45, 0 exclusions, and fact-over-judgment ranking."
   },
   {
-    "id": "goal-4-ephemeral-default-and-storage-cleanup",
-    "description": "Default ephemeralKeys to true; strip legacy provider keys from localStorage on load; App token stored in swarm_app_token only.",
+    "id": "goal-4-namespaced-deletes-and-consolidation",
+    "description": "Enforce namespaced wipe and consolidation filtering on originApp so one app's wipe never touches sibling app data.",
     "status": "completed",
-    "verification": "useSwarmSettings initializes with ephemeralKeys: true and sanitizes persisted localStorage keys."
+    "verification": "Wiping duelodds preserves all fantasy points in both fallback store and Qdrant."
   },
   {
-    "id": "goal-5-remove-settings-modal-key-inputs",
-    "description": "Remove provider and Qdrant key inputs from SettingsModal.tsx while keeping App namespace, App token, and status badges.",
+    "id": "goal-5-comprehensive-tests",
+    "description": "Add comprehensive test suite for all 4 prompt test cases and run full test suites, tsc, and build.",
     "status": "completed",
-    "verification": "SettingsModal renders without provider key inputs; App token and appId inputs remain operational."
-  },
-  {
-    "id": "goal-6-tests-and-full-suite-verification",
-    "description": "Add comprehensive automated tests for fix 3 and verify full test suite, tsc, and production builds.",
-    "status": "completed",
-    "verification": "All Vitest suites pass, tsc --noEmit succeeds with 0 errors, and npm test passes 100%."
+    "verification": "All Vitest test suites, SSE server tests, and CLI tests pass 100%."
   }
 ]
