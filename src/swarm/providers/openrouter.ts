@@ -19,6 +19,7 @@ export class OpenRouterAdapter implements ProviderAdapter {
         const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 30000; // 30s default: fail fast on free-tier stalls instead of hanging for 2 minutes
         const effectiveModel = options.modelName;
 
+        const startTime = Date.now();
         let response: Response;
         try {
             response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -59,6 +60,7 @@ export class OpenRouterAdapter implements ProviderAdapter {
         }
 
         const data = await response.json();
-        return parseStandardResponse(data, this.providerName, options, isJson, effectiveModel);
+        const durationMs = Date.now() - startTime;
+        return parseStandardResponse(data, this.providerName, options, isJson, effectiveModel, durationMs);
     }
 }

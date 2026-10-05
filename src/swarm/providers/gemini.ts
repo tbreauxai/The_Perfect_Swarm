@@ -36,6 +36,7 @@ export class GeminiAdapter implements ProviderAdapter {
         });
 
         let response: any;
+        const startTime = Date.now();
         try {
             response = await Promise.race([
                 client.models.generateContent({
@@ -62,6 +63,9 @@ export class GeminiAdapter implements ProviderAdapter {
         } finally {
             clearTimeout(timeoutId);
         }
+
+        const durationMs = Date.now() - startTime;
+        globalTelemetryCollector.recordModelLatency(durationMs);
 
         const rawText = response.text || '';
 

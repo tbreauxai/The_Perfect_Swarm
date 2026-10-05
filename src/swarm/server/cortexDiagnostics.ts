@@ -12,7 +12,7 @@ export async function buildCortexDiagnostics(cortex: MemoryCortex, appId?: strin
     const bestModels = globalBenchmarker.getBestModels();
     const telemetry = globalTelemetryCollector.getSnapshot();
 
-    diagnostics.latencyStats = telemetry.overallLatency;
+    diagnostics.latencyStats = telemetry.modelMs;
     diagnostics.cacheHitRatio = telemetry.cacheHitRatio;
     diagnostics.roleRecommendations = [];
 

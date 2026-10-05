@@ -89,10 +89,15 @@ export function parseStandardResponse(
     providerName: string,
     options: ProviderCallOptions,
     isJson: boolean,
-    effectiveModel?: string
+    effectiveModel?: string,
+    durationMs?: number
 ): string {
     const rawContent = data?.choices?.[0]?.message?.content || '';
     const modelToRecord = effectiveModel || options.modelName;
+
+    if (durationMs !== undefined) {
+        globalTelemetryCollector.recordModelLatency(durationMs);
+    }
 
     // Record token usage
     const tokens = extractTokenUsage(data, providerName);

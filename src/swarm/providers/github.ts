@@ -24,6 +24,7 @@ export class GitHubAdapter implements ProviderAdapter {
             bodyParams.response_format = { type: 'json_object' };
         }
 
+        const startTime = Date.now();
         let response: Response;
         try {
             response = await fetch('https://models.github.ai/inference/chat/completions', {
@@ -57,6 +58,7 @@ export class GitHubAdapter implements ProviderAdapter {
         }
 
         const data = await response.json();
-        return parseStandardResponse(data, this.providerName, options, isJson);
+        const durationMs = Date.now() - startTime;
+        return parseStandardResponse(data, this.providerName, options, isJson, undefined, durationMs);
     }
 }

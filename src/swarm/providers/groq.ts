@@ -14,6 +14,7 @@ export class GroqAdapter implements ProviderAdapter {
         const isJson = options.config?.responseMimeType === 'application/json';
         const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 30000; // 30s default: fail fast on free-tier stalls instead of hanging for 2 minutes
 
+        const startTime = Date.now();
         let response: Response;
         try {
             response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -52,6 +53,7 @@ export class GroqAdapter implements ProviderAdapter {
         }
 
         const data = await response.json();
-        return parseStandardResponse(data, this.providerName, options, isJson);
+        const durationMs = Date.now() - startTime;
+        return parseStandardResponse(data, this.providerName, options, isJson, undefined, durationMs);
     }
 }

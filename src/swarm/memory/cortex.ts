@@ -8,6 +8,7 @@ import { GeminiEmbeddingProvider, DeterministicLocalEmbeddingProvider } from './
 import { cosineSimilarity, sparseDotProduct } from './vectorMath.ts';
 import { collectCortexDiagnostics } from './diagnostics.ts';
 import { executeMemoryConsolidation } from './consolidation.ts';
+import { globalTelemetryCollector } from '../telemetry.ts';
 import {
     exportMemoriesSnapshot,
     saveMemoriesToFile,
@@ -617,6 +618,7 @@ export class MemoryCortex {
         optionsOrDomain?: string | RetrievalOptions,
         limit: number = 3
     ): Promise<any[]> {
+        const startTime = Date.now();
         await this.initialize();
         let options: RetrievalOptions = {};
         if (typeof optionsOrDomain === 'string') {
@@ -733,6 +735,9 @@ export class MemoryCortex {
         if (results.length > 0) {
             this.semanticCache.set(queryDense, results, cacheNamespace);
         }
+
+        const durationMs = Date.now() - startTime;
+        globalTelemetryCollector.recordRetrievalLatency(durationMs);
 
         return results;
     }
