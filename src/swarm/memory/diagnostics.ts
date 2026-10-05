@@ -18,9 +18,36 @@ export async function collectCortexDiagnostics(
     appIdFilter?: string
 ): Promise<MemoryCortexDiagnostics> {
     let pointCount = 0;
+    let gradedCount = 0;
+    let ungradedCount = 0;
+    let gradedWins = 0;
+    let gradedLosses = 0;
+    let gradedPushes = 0;
     const apps = new Set<string>();
     const storageByDomain: Record<string, number> = {};
     const storageByRole: Record<string, number> = {};
+
+    const processPoint = (payload: Record<string, any>) => {
+        pointCount++;
+        const domain = payload.domain || 'general';
+        const role = payload.agentRole || 'unknown';
+        storageByDomain[domain] = (storageByDomain[domain] || 0) + 1;
+        storageByRole[role] = (storageByRole[role] || 0) + 1;
+
+        const isGraded = payload.feedbackProcessed === true || payload.outcome !== undefined || payload.gradedAt !== undefined;
+        if (isGraded) {
+            gradedCount++;
+            if (payload.outcome === 'win' || payload.qualityRating === 1.0) {
+                gradedWins++;
+            } else if (payload.outcome === 'loss' || payload.qualityRating === 0.0) {
+                gradedLosses++;
+            } else if (payload.outcome === 'push' || payload.qualityRating === 0.5) {
+                gradedPushes++;
+            }
+        } else {
+            ungradedCount++;
+        }
+    };
 
     if (ctx.qdrant && ctx.isAvailable) {
         try {
@@ -44,11 +71,7 @@ export async function collectCortexDiagnostics(
 
                         // Apply filter for stats
                         if (!appIdFilter || appIdFilter === 'global' || itemAppId === appIdFilter) {
-                            pointCount++;
-                            const domain = payload.domain || 'general';
-                            const role = payload.agentRole || 'unknown';
-                            storageByDomain[domain] = (storageByDomain[domain] || 0) + 1;
-                            storageByRole[role] = (storageByRole[role] || 0) + 1;
+                            processPoint(payload);
                         }
                     }
                     
@@ -62,17 +85,18 @@ export async function collectCortexDiagnostics(
                     apps.add(itemAppId);
 
                     if (!appIdFilter || appIdFilter === 'global' || itemAppId === appIdFilter) {
-                        pointCount++;
-                        const domain = pt.payload.domain || 'general';
-                        const role = pt.payload.agentRole || 'unknown';
-                        storageByDomain[domain] = (storageByDomain[domain] || 0) + 1;
-                        storageByRole[role] = (storageByRole[role] || 0) + 1;
+                        processPoint(pt.payload);
                     }
                 }
             }
         } catch {
             console.warn("[MemoryCortex] getDiagnostics qdrant error, falling back to in-memory stats.");
-            pointCount = 0; // reset to let fallback take over below if needed
+            pointCount = 0;
+            gradedCount = 0;
+            ungradedCount = 0;
+            gradedWins = 0;
+            gradedLosses = 0;
+            gradedPushes = 0;
         }
     }
 
@@ -83,14 +107,12 @@ export async function collectCortexDiagnostics(
             apps.add(itemAppId);
 
             if (!appIdFilter || appIdFilter === 'global' || itemAppId === appIdFilter) {
-                pointCount++;
-                const domain = pt.payload.domain || 'general';
-                const role = pt.payload.agentRole || 'unknown';
-                storageByDomain[domain] = (storageByDomain[domain] || 0) + 1;
-                storageByRole[role] = (storageByRole[role] || 0) + 1;
+                processPoint(pt.payload);
             }
         }
     }
+
+    const headlineAccuracy = gradedCount > 0 ? (gradedWins / gradedCount) : null;
 
     return {
         qdrantAvailable: ctx.isAvailable,
@@ -100,6 +122,12 @@ export async function collectCortexDiagnostics(
         apps: Array.from(apps),
         fallbackStoreSize: ctx.fallbackStore.length,
         storageByDomain,
-        storageByRole
+        storageByRole,
+        gradedCount,
+        ungradedCount,
+        gradedWins,
+        gradedLosses,
+        gradedPushes,
+        headlineAccuracy
     };
 }

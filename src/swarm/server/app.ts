@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { createAdaptorServer, type ServerType } from '@hono/node-server';
-import { executeSwarmWorkflow, type SwarmWorkflowParams } from '../engine/index.ts';
+import { executeSwarmWorkflow, getOrCreateDefaultCortex, type SwarmWorkflowParams } from '../engine/index.ts';
 import { globalTelemetryCollector, createTelemetryMiddleware } from '../telemetry.ts';
 import { globalPayloadCache, globalSemanticCache } from '../cache.ts';
 import { globalTieredCache } from '../tieredCache.ts';
@@ -86,7 +86,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
     const app = new Hono() as SwarmServerApp;
     const defaultSettings = options.defaultSettings || {};
     const defaultAi = options.defaultAi;
-    const defaultCortex = options.defaultCortex;
+    const defaultCortex = options.defaultCortex || getOrCreateDefaultCortex(defaultSettings.appId || 'perfect-swarm', defaultAi);
     let nodeServer: ServerType | null = null;
 
     if (typeof process !== 'undefined' && process.env) {
@@ -199,51 +199,78 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
     app.post('/api/swarm/feedback', async (c) => {
         try {
             const body = await c.req.json().catch(() => ({}));
-            const { workflowId, outcome, gradedAt, appId = 'perfect-swarm' } = body;
+            const { workflowId, outcome, gradedAt } = body;
 
             if (!workflowId || !['win', 'loss', 'push'].includes(outcome)) {
                 return c.json({ error: 'Invalid workflowId or outcome' }, 400);
             }
 
-            const workflowRecords = globalFeedbackEngine.getKnowledgeRepository().queryOutcomes().filter((o: any) => o.workflowId === workflowId);
-            if (workflowRecords.length === 0) {
+            const callerAppId = (c as any).get('callerAppId') as string | undefined;
+            const allWorkflowRecords = globalFeedbackEngine.getKnowledgeRepository().queryOutcomes().filter((o: any) => o.workflowId === workflowId);
+            const serverDefaultAppId = defaultSettings.appId || 'perfect-swarm';
+            const originApp = callerAppId || (allWorkflowRecords[0] as any)?.appId || body.appId || serverDefaultAppId;
+
+            // 1. Grade the point in MemoryCortex
+            let gradeResult = { found: false, alreadyProcessed: false };
+            if (defaultCortex) {
+                gradeResult = await defaultCortex.gradeMemoryByWorkflowId({
+                    workflowId,
+                    originApp,
+                    outcome,
+                    gradedAt
+                });
+            }
+
+            // 2. Query in-memory knowledge repository (scoped to originApp)
+            const workflowRecords = allWorkflowRecords.filter((o: any) => (o.appId || o.originApp || 'perfect-swarm') === originApp);
+
+            if (!gradeResult.found && workflowRecords.length === 0) {
                 return c.json({ error: 'Workflow not found' }, 404);
             }
 
-            if (workflowRecords.some((o: any) => o.feedbackProcessed)) {
-                return c.json({ ok: true, message: 'Feedback already processed', workflowId });
+            // 3. Handle idempotency
+            if (gradeResult.alreadyProcessed || workflowRecords.some((o: any) => o.feedbackProcessed)) {
+                return c.json({ ok: true, message: 'Feedback already processed', workflowId, alreadyProcessed: true });
             }
 
-            const workflowRecord = workflowRecords[0];
             const accuracyScore = outcome === 'win' ? 1.0 : outcome === 'loss' ? 0.0 : 0.5;
 
-            const fbResult = await globalFeedbackEngine.processFeedback({
-                workflowId,
-                task: workflowRecord.task,
-                appId: workflowRecord.appId,
-                durationMs: workflowRecord.metrics.durationMs,
-                targetTier: workflowRecord.metrics.targetTier,
-                tokenSavings: workflowRecord.metrics.tokenSavings,
-                tokensConsumed: workflowRecord.metrics.tokensConsumed,
-                qualityScore: workflowRecord.metrics.qualityScore,
-                accuracyScore,
-                errorCount: workflowRecord.metrics.errorCount,
-                hardErrorCount: workflowRecord.metrics.hardErrorCount,
-                failoverCount: workflowRecord.metrics.failoverCount,
-                agentRoles: (workflowRecord as any).agentRoles
-            });
+            // 4. Update in-memory feedback engine & profiler if workflow record exists
+            let compositeReward: number | undefined = undefined;
+            let components: any = undefined;
 
-            const targetAppId = workflowRecord.appId || appId || 'perfect-swarm';
-            const roles = ((workflowRecord as any).agentRoles || []).filter(Boolean);
-            for (const role of roles) {
-                analystLedger.recordOutcome(targetAppId, role, outcome);
-                globalSpecialistProfiler.recordAccuracy(role, outcome);
-            }
+            if (workflowRecords.length > 0) {
+                const workflowRecord = workflowRecords[0];
+                const fbResult = await globalFeedbackEngine.processFeedback({
+                    workflowId,
+                    task: workflowRecord.task,
+                    appId: originApp,
+                    durationMs: workflowRecord.metrics?.durationMs || 0,
+                    targetTier: workflowRecord.metrics?.targetTier || 'instant',
+                    tokenSavings: workflowRecord.metrics?.tokenSavings || 0,
+                    tokensConsumed: workflowRecord.metrics?.tokensConsumed || 100,
+                    qualityScore: workflowRecord.metrics?.qualityScore || 0.85,
+                    accuracyScore,
+                    errorCount: workflowRecord.metrics?.errorCount || 0,
+                    hardErrorCount: workflowRecord.metrics?.hardErrorCount || 0,
+                    failoverCount: workflowRecord.metrics?.failoverCount || 0,
+                    agentRoles: (workflowRecord as any).agentRoles
+                });
 
-            for (const r of workflowRecords) {
-                (r as any).feedbackProcessed = true;
-                (r as any).gradedAt = gradedAt || Date.now();
-                globalFeedbackEngine.getKnowledgeRepository().persistOutcome(r as any);
+                compositeReward = fbResult.reward?.compositeReward;
+                components = fbResult.reward?.components;
+
+                const roles = ((workflowRecord as any).agentRoles || []).filter(Boolean);
+                for (const role of roles) {
+                    analystLedger.recordOutcome(originApp, role, outcome);
+                    globalSpecialistProfiler.recordAccuracy(role, outcome);
+                }
+
+                for (const r of workflowRecords) {
+                    (r as any).feedbackProcessed = true;
+                    (r as any).gradedAt = gradedAt || Date.now();
+                    globalFeedbackEngine.getKnowledgeRepository().persistOutcome(r as any);
+                }
             }
 
             return c.json({
@@ -251,8 +278,8 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 workflowId,
                 outcome,
                 accuracyScore,
-                compositeReward: fbResult.reward.compositeReward,
-                components: fbResult.reward.components
+                compositeReward: compositeReward ?? accuracyScore,
+                components: components ?? { accuracyReward: accuracyScore }
             });
         } catch (err: any) {
             console.error('[SwarmServer Feedback Error]:', err);

@@ -209,7 +209,9 @@ export async function executeFastPath(
                 const writeOriginApp = (params as any).originApp || (params as any).callerAppId || targetAppId;
                 const domain = normalizeDomain(settings?.domain || (params as any).domain, task);
                 const entityIds = extractEntityIds(task, (params as any).entityIds || settings?.entityIds);
+                const workflowId = (context as any).id || (params as any).workflowId;
                 const meta = {
+                    workflowId,
                     originApp: writeOriginApp,
                     appId: writeOriginApp,
                     domain,
@@ -329,6 +331,7 @@ export async function executeFastPath(
         }
 
         return {
+            workflowId: (context as any).id,
             events: context.events,
             finalAnalysis,
             metrics,

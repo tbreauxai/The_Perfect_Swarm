@@ -128,7 +128,9 @@ export async function runLearningPipeline(p: LearningPipelineParams): Promise<Le
         const domain = normalizeDomain(settings?.domain || (params as any).domain, task);
         const entityIds = extractEntityIds(task, (params as any).entityIds || settings?.entityIds);
         const content = `Task: ${task}\nResult: ${finalAnalysis.ui_title || 'Analysis complete'}`;
+        const workflowId = (context as any).id || (params as any).workflowId;
         const meta = {
+            workflowId,
             originApp: writeOriginApp,
             appId: writeOriginApp,
             domain,
