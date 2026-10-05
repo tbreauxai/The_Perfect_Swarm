@@ -11,10 +11,20 @@ export interface TelemetrySnapshot {
     promptTokens: number;
     completionTokens: number;
     estimatedCostUsd: number;
-    overallLatency: {
-        mean: number;
-        p95: number;
-        p99: number;
+    modelMs: {
+        mean: number | null;
+        p95: number | null;
+        p99: number | null;
+    };
+    retrievalMs: {
+        mean: number | null;
+        p95: number | null;
+        p99: number | null;
+    };
+    endToEndMs: {
+        mean: number | null;
+        p95: number | null;
+        p99: number | null;
     };
     cacheHitRatio: number;
     errorRate: number;
@@ -54,6 +64,8 @@ export class TelemetryMetricsCollector {
     
     // Sliding window for request latencies (last 500 requests)
     private requestLatencies: RequestLatencySample[] = [];
+    private modelLatencies: RequestLatencySample[] = [];
+    private retrievalLatencies: RequestLatencySample[] = [];
     
     // Request counters
     private totalRequests: number = 0;
@@ -109,6 +121,32 @@ export class TelemetryMetricsCollector {
         // Maintain sliding window of last 500 requests
         if (this.requestLatencies.length > SLIDING_WINDOW_SIZE) {
             this.requestLatencies.shift();
+        }
+    }
+
+    public recordModelLatency(durationMs: number, success: boolean = true): void {
+        const sample: RequestLatencySample = {
+            timestamp: Date.now(),
+            durationMs: Math.max(0, Math.round(durationMs)),
+            success,
+            path: 'model'
+        };
+        this.modelLatencies.push(sample);
+        if (this.modelLatencies.length > SLIDING_WINDOW_SIZE) {
+            this.modelLatencies.shift();
+        }
+    }
+
+    public recordRetrievalLatency(durationMs: number, success: boolean = true): void {
+        const sample: RequestLatencySample = {
+            timestamp: Date.now(),
+            durationMs: Math.max(0, Math.round(durationMs)),
+            success,
+            path: 'retrieval'
+        };
+        this.retrievalLatencies.push(sample);
+        if (this.retrievalLatencies.length > SLIDING_WINDOW_SIZE) {
+            this.retrievalLatencies.shift();
         }
     }
 
@@ -175,12 +213,12 @@ export class TelemetryMetricsCollector {
     /**
      * Calculates latency percentiles from sliding window
      */
-    private calculateLatencyPercentiles(): { mean: number; p95: number; p99: number } {
-        if (this.requestLatencies.length === 0) {
-            return { mean: 0, p95: 0, p99: 0 };
+    private calculateLatencyPercentiles(samples: RequestLatencySample[]): { mean: number | null; p95: number | null; p99: number | null } {
+        if (samples.length === 0) {
+            return { mean: null, p95: null, p99: null };
         }
 
-        const durations = this.requestLatencies.map(s => s.durationMs).sort((a, b) => a - b);
+        const durations = samples.map(s => s.durationMs).sort((a, b) => a - b);
         const count = durations.length;
         const sum = durations.reduce((acc, v) => acc + v, 0);
         const mean = sum / count;
@@ -201,7 +239,9 @@ export class TelemetryMetricsCollector {
      * Gets the current telemetry snapshot matching the required schema
      */
     public getSnapshot(): TelemetrySnapshot {
-        const latency = this.calculateLatencyPercentiles();
+        const modelMs = this.calculateLatencyPercentiles(this.modelLatencies);
+        const retrievalMs = this.calculateLatencyPercentiles(this.retrievalLatencies);
+        const endToEndMs = this.calculateLatencyPercentiles(this.requestLatencies);
         const errorRate = this.totalRequests > 0 
             ? Number((this.failureCount / this.totalRequests).toFixed(4))
             : 0;
@@ -214,7 +254,9 @@ export class TelemetryMetricsCollector {
             promptTokens: this.totalPromptTokens,
             completionTokens: this.totalCompletionTokens,
             estimatedCostUsd: Number(this.estimatedCostUsd.toFixed(6)),
-            overallLatency: latency,
+            modelMs,
+            retrievalMs,
+            endToEndMs,
             cacheHitRatio: this.getCacheHitRatio(),
             errorRate
         };
@@ -225,6 +267,8 @@ export class TelemetryMetricsCollector {
      */
     public reset(): void {
         this.requestLatencies = [];
+        this.modelLatencies = [];
+        this.retrievalLatencies = [];
         this.totalRequests = 0;
         this.successCount = 0;
         this.failureCount = 0;
@@ -258,6 +302,16 @@ export function createTelemetryMiddleware(collector: TelemetryMetricsCollector =
         
         try {
             await next();
+
+            if (path.includes('/api/health') ||
+                path.includes('/api/config/status') ||
+                path.includes('/api/swarm/metrics') ||
+                path.includes('/api/swarm/cortex/diagnostics') ||
+                path.includes('/api/swarm/models') ||
+                path === '/') {
+                return;
+            }
+
             const durationMs = Date.now() - startTime;
             const status = c.res?.status ?? (c.error ? 500 : 200);
             const success = status >= 200 && status < 300;
@@ -267,6 +321,15 @@ export function createTelemetryMiddleware(collector: TelemetryMetricsCollector =
                 path
             });
         } catch (err) {
+            if (path.includes('/api/health') ||
+                path.includes('/api/config/status') ||
+                path.includes('/api/swarm/metrics') ||
+                path.includes('/api/swarm/cortex/diagnostics') ||
+                path.includes('/api/swarm/models') ||
+                path === '/') {
+                throw err;
+            }
+
             const durationMs = Date.now() - startTime;
             collector.recordRequest({
                 durationMs,

@@ -32,6 +32,7 @@ export class MistralAdapter implements ProviderAdapter {
 
             const isJson = options.config?.responseMimeType === 'application/json';
 
+            const startTime = Date.now();
             let response: Response;
             try {
                 response = await fetch('https://api.mistral.ai/v1/chat/completions', {
@@ -84,7 +85,8 @@ export class MistralAdapter implements ProviderAdapter {
 
             const data = await response.json();
             isSuccess = true;
-            return parseStandardResponse(data, this.providerName, options, isJson);
+            const durationMs = Date.now() - startTime;
+            return parseStandardResponse(data, this.providerName, options, isJson, undefined, durationMs);
         } finally {
             if (isSuccess) {
                 setTimeout(releaseMutex!, 31000);

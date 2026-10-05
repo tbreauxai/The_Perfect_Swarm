@@ -23,6 +23,21 @@ describe('TelemetryMetricsCollector & Middleware', () => {
         expect(snapshot.successCount).toBe(1);
         expect(snapshot.failureCount).toBe(0);
         expect(snapshot.errorRate).toBe(0);
+        expect(snapshot.endToEndMs.mean).not.toBeNull();
+    });
+
+    it('does not record /api/health in endToEndMs or totalRequests', async () => {
+        const middleware = createTelemetryMiddleware(collector);
+        const mockContext = {
+            req: { path: '/api/health' },
+            res: { status: 200 }
+        };
+
+        await middleware(mockContext, async () => {});
+
+        const snapshot = collector.getSnapshot();
+        expect(snapshot.totalRequests).toBe(0);
+        expect(snapshot.endToEndMs.mean).toBeNull();
     });
 
     it('records non-2xx responses (400, 404, 500) as failures', async () => {
