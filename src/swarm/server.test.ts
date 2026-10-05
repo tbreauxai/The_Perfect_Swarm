@@ -217,4 +217,61 @@ describe('Swarm Server & Feedback Attribution', () => {
         expect(postData.optimalWeights).toBeDefined();
         expect(postData.currentWeights).toBeDefined();
     });
+
+    it('rejects disallowed origins with 403 on preflight and omits allow-origin header on requests', async () => {
+        // Disallowed preflight
+        const optionsRes = await fetch(`${baseUrl}/api/swarm/stream`, {
+            method: 'OPTIONS',
+            headers: { 'Origin': 'https://evil.example' }
+        });
+        expect(optionsRes.status).toBe(403);
+        expect(await optionsRes.text()).toContain('Forbidden: Origin not allowed');
+
+        // Disallowed actual request
+        const getRes = await fetch(`${baseUrl}/api/health`, {
+            headers: { 'Origin': 'https://evil.example' }
+        });
+        expect(getRes.status).toBe(200);
+        expect(getRes.headers.get('access-control-allow-origin')).toBeNull();
+    });
+
+    it('echoes allowed origin with Vary: Origin and returns 204 on preflight', async () => {
+        // Allowed preflight
+        const optionsRes = await fetch(`${baseUrl}/api/swarm/stream`, {
+            method: 'OPTIONS',
+            headers: { 'Origin': 'https://duelodds.pages.dev' }
+        });
+        expect(optionsRes.status).toBe(204);
+        expect(optionsRes.headers.get('access-control-allow-origin')).toBe('https://duelodds.pages.dev');
+        expect(optionsRes.headers.get('vary')).toBe('Origin');
+        expect(optionsRes.headers.get('access-control-allow-methods')).toBe('GET, POST, OPTIONS');
+        expect(optionsRes.headers.get('access-control-allow-headers')).toContain('x-provider-key');
+
+        // Allowed actual request
+        const getRes = await fetch(`${baseUrl}/api/health`, {
+            headers: { 'Origin': 'https://duelodds.pages.dev' }
+        });
+        expect(getRes.status).toBe(200);
+        expect(getRes.headers.get('access-control-allow-origin')).toBe('https://duelodds.pages.dev');
+        expect(getRes.headers.get('vary')).toBe('Origin');
+    });
+
+    it('attaches security headers to responses', async () => {
+        const res = await fetch(`${baseUrl}/api/health`);
+        expect(res.status).toBe(200);
+        expect(res.headers.get('x-frame-options')).toBe('DENY');
+        expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+        expect(res.headers.get('referrer-policy')).toBe('no-referrer');
+        expect(res.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+        expect(res.headers.get('content-security-policy')).toContain("connect-src 'self' https://the-perfect-swarm.onrender.com https://duelodds.pages.dev");
+    });
+
+    it('returns JSON 404 for unknown /api/* endpoints', async () => {
+        const res = await fetch(`${baseUrl}/api/does-not-exist`);
+        expect(res.status).toBe(404);
+        expect(res.headers.get('content-type')).toContain('application/json');
+        const data = await res.json();
+        expect(data).toEqual({ error: 'Not found' });
+    });
 });
+

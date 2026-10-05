@@ -16,15 +16,13 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-async function startServer() {
-  const port = Number(process.env.PORT) || 3000;
-  
-  const defaultAi = new GoogleGenAI({
+export function createMainApp(options: { defaultAi?: any; defaultCortex?: any } = {}) {
+  const defaultAi = options.defaultAi || new GoogleGenAI({
     apiKey: process.env.GEMINI_API_KEY || 'MISSING_KEY'
   });
 
   // 1. Create the Edge-compatible Swarm API
-  const defaultCortex = getOrCreateDefaultCortex('perfect-swarm', defaultAi);
+  const defaultCortex = options.defaultCortex || getOrCreateDefaultCortex('perfect-swarm', defaultAi);
   const swarmApi = createSwarmServer({
       defaultAi,
       defaultCortex,
@@ -33,6 +31,15 @@ async function startServer() {
 
   // 2. Create the main wrapper app
   const app = new Hono();
+
+  // Apply security headers to every response (including static files & HTML)
+  app.use('*', async (c, next) => {
+    c.header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://the-perfect-swarm.onrender.com https://duelodds.pages.dev; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
+    c.header('X-Frame-Options', 'DENY');
+    c.header('X-Content-Type-Options', 'nosniff');
+    c.header('Referrer-Policy', 'no-referrer');
+    await next();
+  });
 
   app.use('*', createAppAuthMiddleware());
 
@@ -50,11 +57,29 @@ async function startServer() {
   // Mount the Swarm API
   app.route('/', swarmApi);
 
+  // Return JSON 404 for any unmatched /api/* requests so they never fall back to index.html
+  app.all('/api/*', (c) => {
+    return c.json({ error: 'Not found' }, 404);
+  });
+
   // Global Error handling
   app.onError((err, c) => {
     console.error('Global Error:', err);
     return c.json({ error: err.message || 'Internal Server Error' }, 500);
   });
+
+  return app;
+}
+
+async function startServer() {
+  const port = Number(process.env.PORT) || 3000;
+  
+  const defaultAi = new GoogleGenAI({
+    apiKey: process.env.GEMINI_API_KEY || 'MISSING_KEY'
+  });
+  const defaultCortex = getOrCreateDefaultCortex('perfect-swarm', defaultAi);
+
+  const app = createMainApp({ defaultAi, defaultCortex });
 
   // 3. Setup Vite & Node HTTP Server
   const honoListener = getRequestListener(app.fetch);
@@ -96,4 +121,6 @@ async function startServer() {
   }
 }
 
-startServer();
+if (process.argv[1] && (process.argv[1].endsWith('server.ts') || process.argv[1].endsWith('server.js'))) {
+  startServer();
+}

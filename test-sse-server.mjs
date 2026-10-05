@@ -64,14 +64,60 @@ async function runSseServerTests() {
         console.log('✓ Health response:', healthData);
         if (healthData.status !== 'ok') throw new Error('Health check payload invalid');
 
-        // Step B: CORS preflight
-        console.log('\n[Test 2] OPTIONS /api/swarm/stream (CORS preflight)');
-        const optionsRes = await fetch(`${baseUrl}/api/swarm/stream`, { method: 'OPTIONS' });
-        if (optionsRes.status !== 204) throw new Error(`OPTIONS expected 204, got ${optionsRes.status}`);
-        if (optionsRes.headers.get('access-control-allow-origin') !== '*') {
-            throw new Error('CORS header missing in OPTIONS response');
+        // Step B: CORS preflight & Security Headers
+        console.log('\n[Test 2] OPTIONS & GET /api/swarm/stream (Strict CORS & Security Headers)');
+        // 2a. Preflight with allowed origin
+        const allowedOptionsRes = await fetch(`${baseUrl}/api/swarm/stream`, {
+            method: 'OPTIONS',
+            headers: { 'Origin': 'https://duelodds.pages.dev' }
+        });
+        if (allowedOptionsRes.status !== 204) throw new Error(`OPTIONS allowed origin expected 204, got ${allowedOptionsRes.status}`);
+        if (allowedOptionsRes.headers.get('access-control-allow-origin') !== 'https://duelodds.pages.dev') {
+            throw new Error(`Expected echoed origin https://duelodds.pages.dev, got ${allowedOptionsRes.headers.get('access-control-allow-origin')}`);
         }
-        console.log('✓ CORS preflight accepted with 204');
+        if (allowedOptionsRes.headers.get('vary') !== 'Origin') {
+            throw new Error(`Expected Vary: Origin, got ${allowedOptionsRes.headers.get('vary')}`);
+        }
+        if (!allowedOptionsRes.headers.get('access-control-allow-headers')?.includes('x-provider-key')) {
+            throw new Error(`Expected access-control-allow-headers to include x-provider-key`);
+        }
+
+        // 2b. Preflight with disallowed origin -> 403
+        const evilOptionsRes = await fetch(`${baseUrl}/api/swarm/stream`, {
+            method: 'OPTIONS',
+            headers: { 'Origin': 'https://evil.example' }
+        });
+        if (evilOptionsRes.status !== 403) throw new Error(`OPTIONS evil origin expected 403, got ${evilOptionsRes.status}`);
+
+        // 2c. Actual request with disallowed origin -> no allow-origin header
+        const evilGetRes = await fetch(`${baseUrl}/api/health`, {
+            headers: { 'Origin': 'https://evil.example' }
+        });
+        if (evilGetRes.headers.get('access-control-allow-origin')) {
+            throw new Error(`Expected no access-control-allow-origin for disallowed origin, got ${evilGetRes.headers.get('access-control-allow-origin')}`);
+        }
+
+        // 2d. Security headers verification
+        if (evilGetRes.headers.get('x-frame-options') !== 'DENY') {
+            throw new Error(`Expected X-Frame-Options: DENY, got ${evilGetRes.headers.get('x-frame-options')}`);
+        }
+        if (evilGetRes.headers.get('x-content-type-options') !== 'nosniff') {
+            throw new Error(`Expected X-Content-Type-Options: nosniff, got ${evilGetRes.headers.get('x-content-type-options')}`);
+        }
+        if (evilGetRes.headers.get('referrer-policy') !== 'no-referrer') {
+            throw new Error(`Expected Referrer-Policy: no-referrer, got ${evilGetRes.headers.get('referrer-policy')}`);
+        }
+        if (!evilGetRes.headers.get('content-security-policy')?.includes("frame-ancestors 'none'")) {
+            throw new Error(`Expected CSP header on response`);
+        }
+
+        // 2e. Unknown API path returns 404 JSON, not HTML
+        const notFoundRes = await fetch(`${baseUrl}/api/does-not-exist`);
+        if (notFoundRes.status !== 404) throw new Error(`Expected 404 for unknown API path, got ${notFoundRes.status}`);
+        const notFoundJson = await notFoundRes.json();
+        if (notFoundJson.error !== 'Not found') throw new Error(`Expected { error: 'Not found' }, got ${JSON.stringify(notFoundJson)}`);
+
+        console.log('✓ Strict CORS, Security Headers, and API 404 JSON verified.');
 
         // Step C: Validation error for missing task
         console.log('\n[Test 3] POST /api/swarm/stream with missing task');
