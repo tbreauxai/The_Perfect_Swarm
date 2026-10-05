@@ -8,6 +8,14 @@ import { globalActionPlanCache } from '../actionPlanCache.ts';
 import { DEFAULT_PROVIDER_MODELS } from '../agent.ts';
 import { initBenchmarker } from '../benchmark.ts';
 import { globalFeedbackEngine, analystLedger } from '../feedback.ts';
+import {
+  outcomeToScore,
+  recordProbabilityObservation,
+  hydrateFromOutcomeRecords,
+  prependCalibrationToData,
+  fitCalibration,
+  observationsForApp
+} from '../feedback/probabilityCalibration.ts';
 import { globalSpecialistProfiler } from '../loadBalancer.ts';
 import type { SwarmServerOptions, SwarmServerApp } from './types.ts';
 import { restoreLearningState } from './learningState.ts';
@@ -199,7 +207,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
     app.post('/api/swarm/feedback', async (c) => {
         try {
             const body = await c.req.json().catch(() => ({}));
-            const { workflowId, outcome, gradedAt } = body;
+            const { workflowId, outcome, gradedAt, predictedProbability, sportKey, market } = body;
 
             if (!workflowId || !['win', 'loss', 'push'].includes(outcome)) {
                 return c.json({ error: 'Invalid workflowId or outcome' }, 400);
@@ -239,6 +247,19 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
             }
 
             const accuracyScore = outcome === 'win' ? 1.0 : outcome === 'loss' ? 0.0 : 0.5;
+            const score = outcomeToScore(outcome);
+            const statedProbability = Number(predictedProbability);
+            if (score != null && Number.isFinite(statedProbability) && statedProbability > 0 && statedProbability < 1) {
+                recordProbabilityObservation({
+                    workflowId,
+                    appId: originApp,
+                    predictedProbability: statedProbability,
+                    outcome: score,
+                    sportKey: typeof sportKey === 'string' ? sportKey : undefined,
+                    market: typeof market === 'string' ? market : undefined,
+                    gradedAt: typeof gradedAt === 'string' ? gradedAt : new Date().toISOString()
+                });
+            }
 
             // 4. Update in-memory feedback engine & profiler if workflow record exists
             let compositeReward: number | undefined = undefined;
@@ -264,6 +285,9 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                     }
                     (r as any).metrics.accuracyScore = accuracyScore;
                     (r as any).outcome = outcome;
+                    if (Number.isFinite(statedProbability)) (r as any).predictedProbability = statedProbability;
+                    if (sportKey) (r as any).sportKey = sportKey;
+                    if (market) (r as any).market = market;
                     globalFeedbackEngine.getKnowledgeRepository().persistOutcome(r as any);
                 }
             }
@@ -274,7 +298,8 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 outcome,
                 accuracyScore,
                 compositeReward: compositeReward ?? accuracyScore,
-                components: components ?? { accuracyReward: accuracyScore }
+                components: components ?? { accuracyReward: accuracyScore },
+                calibration: fitCalibration(observationsForApp(originApp))
             });
         } catch (err: any) {
             console.error('[SwarmServer Feedback Error]:', err);
@@ -391,10 +416,11 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                         return cleanAgent;
                     });
                 }
+                hydrateFromOutcomeRecords(originApp, globalFeedbackEngine.getKnowledgeRepository().queryOutcomes({ appId: originApp, limit: 500 }) as any);
 
                 params = {
                     task: body.task,
-                    data: body.data,
+                    data: prependCalibrationToData(body.data, originApp),
                     originApp,
                     callerAppId,
                     domain: body.domain || body.settings?.domain,
@@ -416,9 +442,10 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 const data = url.searchParams.get('data') || '';
                 const appId = url.searchParams.get('appId') || defaultSettings.appId || 'default';
                 const domain = url.searchParams.get('domain') || undefined;
+                hydrateFromOutcomeRecords(originApp, globalFeedbackEngine.getKnowledgeRepository().queryOutcomes({ appId: originApp, limit: 500 }) as any);
                 params = {
                     task,
-                    data,
+                    data: prependCalibrationToData(data, originApp),
                     originApp,
                     callerAppId,
                     domain,
@@ -476,11 +503,13 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 });
             }
 
+            hydrateFromOutcomeRecords(originApp, globalFeedbackEngine.getKnowledgeRepository().queryOutcomes({ appId: originApp, limit: 500 }) as any);
+
             let result: any;
             try {
                 result = await executeSwarmWorkflow({
                     task: body.task,
-                    data: body.data,
+                    data: prependCalibrationToData(body.data, originApp),
                     originApp,
                     callerAppId,
                     domain: body.domain || body.settings?.domain,
