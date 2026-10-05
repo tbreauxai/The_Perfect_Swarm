@@ -104,9 +104,6 @@ export async function fetchAvailableModels(provider: string, apiKey?: string): P
             case 'mistral':
             case 'github': {
                 const headers = authHeaders();
-                if (apiKey) {
-                    headers['x-provider-key'] = apiKey;
-                }
                 const res = await fetch(`/api/swarm/models?provider=${provider}`, { headers });
                 if (!res.ok) {
                     const err = await res.json().catch(() => ({}));
@@ -135,8 +132,8 @@ export async function checkProviderModelsHealth(
 ): Promise<Record<string, ModelHealthStatus>> {
     if (!models || models.length === 0) return {};
     
-    // If no API key is present on the frontend, mark models as unchecked with null latency
-    if (!apiKey && provider !== 'simulated' && provider !== 'openrouter') {
+    // For legacy callers explicitly passing an empty string apiKey
+    if (apiKey === '' && provider !== 'simulated' && provider !== 'openrouter') {
         const mockHealth: Record<string, ModelHealthStatus> = {};
         for (const m of models) {
             mockHealth[`${provider.toLowerCase().trim()}:${m.id.trim()}`] = {
@@ -157,8 +154,7 @@ export async function checkProviderModelsHealth(
 
     const targets: ModelTarget[] = models.map(m => ({
         provider,
-        modelId: m.id,
-        apiKey
+        modelId: m.id
     }));
     const map = await globalModelHealthChecker.checkModelsInParallel(targets, options);
     return Object.fromEntries(map);

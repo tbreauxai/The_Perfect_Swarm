@@ -113,7 +113,8 @@ export function resolveSwarmAgents(
     for (const ac of analystConfigs) {
         const { key: aKey, client: aClient } = resolveProvider(ac.provider, settings, defaultAi);
         const finalAKey = ac.apiKey ? sanitizeApiKey(ac.apiKey) : aKey;
-        if (finalAKey || ac.provider === 'simulated' || ac.provider === 'mock' || ac.provider === 'custom-mock') {
+        const isMock = ac.provider === 'simulated' || ac.provider === 'mock' || ac.provider === 'custom-mock' || ac.provider.includes('mock') || ac.provider.includes('simulated');
+        if (finalAKey || isMock) {
             const aModel = ac.model || '';
             const aFallbacks = (ac as any).disableFallback || (ac as any).strictProvider
                 ? []
@@ -131,7 +132,8 @@ export function resolveSwarmAgents(
     if (dedicatedCriticConfig) {
         const { key: cKey, client: cClient } = resolveProvider(dedicatedCriticConfig.provider, settings, defaultAi);
         const finalCKey = dedicatedCriticConfig.apiKey ? sanitizeApiKey(dedicatedCriticConfig.apiKey) : cKey;
-        if (finalCKey || dedicatedCriticConfig.provider === 'simulated' || dedicatedCriticConfig.provider === 'mock' || dedicatedCriticConfig.provider === 'custom-mock') {
+        const isCriticMock = dedicatedCriticConfig.provider === 'simulated' || dedicatedCriticConfig.provider === 'mock' || dedicatedCriticConfig.provider === 'custom-mock' || dedicatedCriticConfig.provider.includes('mock') || dedicatedCriticConfig.provider.includes('simulated');
+        if (finalCKey || isCriticMock) {
             const cModel = dedicatedCriticConfig.model || '';
             const cFallbacks = availableFallbacks.filter(f => f.provider !== dedicatedCriticConfig.provider);
             dedicatedCriticAgent = new Agent(dedicatedCriticConfig.role || 'Verification Critic', cModel, dedicatedCriticConfig.provider, finalCKey, cClient, cFallbacks);

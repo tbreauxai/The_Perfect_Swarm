@@ -245,7 +245,8 @@ describe('Swarm Server & Feedback Attribution', () => {
         expect(optionsRes.headers.get('access-control-allow-origin')).toBe('https://duelodds.pages.dev');
         expect(optionsRes.headers.get('vary')).toBe('Origin');
         expect(optionsRes.headers.get('access-control-allow-methods')).toBe('GET, POST, OPTIONS');
-        expect(optionsRes.headers.get('access-control-allow-headers')).toContain('x-provider-key');
+        expect(optionsRes.headers.get('access-control-allow-headers')).toContain('Authorization');
+        expect(optionsRes.headers.get('access-control-allow-headers')).not.toContain('x-provider-key');
 
         // Allowed actual request
         const getRes = await fetch(`${baseUrl}/api/health`, {
@@ -272,6 +273,91 @@ describe('Swarm Server & Feedback Attribution', () => {
         expect(res.headers.get('content-type')).toContain('application/json');
         const data = await res.json();
         expect(data).toEqual({ error: 'Not found' });
+    });
+
+    it('server ignores client provider secrets in body settings and agents while server env values win', async () => {
+        const { sanitizeClientSettings } = await import('./server/app.ts');
+        const clientBodySettings = {
+            geminiApiKey: 'client-gemini-leak',
+            openRouterApiKey: 'client-openrouter-leak',
+            groqApiKey: 'client-groq-leak',
+            mistralApiKey: 'client-mistral-leak',
+            githubToken: 'client-gh-leak',
+            qdrantUrl: 'https://evil.qdrant.tech',
+            qdrantApiKey: 'evil-qdrant-key',
+            apiKey: 'evil-api-key',
+            appId: 'my-custom-app',
+            forceFullSwarm: true,
+            agents: [
+                {
+                    id: 'agent-1',
+                    role: 'Lead Analyst',
+                    provider: 'groq',
+                    model: 'llama-3.3-70b',
+                    apiKey: 'agent-secret-leak',
+                    groqApiKey: 'agent-groq-leak'
+                }
+            ],
+            critic: {
+                role: 'Verification Critic',
+                provider: 'gemini',
+                model: 'gemini-3.5-flash-lite',
+                apiKey: 'critic-secret-leak'
+            }
+        };
+
+        const edgeSettings = {
+            geminiApiKey: 'server-secret-gemini',
+            groqApiKey: 'server-secret-groq',
+            qdrantUrl: 'https://server.qdrant.tech',
+            qdrantApiKey: 'server-qdrant-key'
+        };
+
+        const defaultSettings = {
+            appId: 'default-app'
+        };
+
+        const sanitized = sanitizeClientSettings(clientBodySettings, edgeSettings, defaultSettings);
+
+        // Client secrets must be deleted or overwritten by server env
+        expect(sanitized.geminiApiKey).toBe('server-secret-gemini');
+        expect(sanitized.groqApiKey).toBe('server-secret-groq');
+        expect(sanitized.qdrantUrl).toBe('https://server.qdrant.tech');
+        expect(sanitized.qdrantApiKey).toBe('server-qdrant-key');
+        expect(sanitized.openRouterApiKey).toBeUndefined();
+        expect(sanitized.mistralApiKey).toBeUndefined();
+        expect(sanitized.githubToken).toBeUndefined();
+        expect(sanitized.apiKey).toBeUndefined();
+
+        // Non-secret fields must be preserved
+        expect(sanitized.appId).toBe('my-custom-app');
+        expect(sanitized.forceFullSwarm).toBe(true);
+
+        // Agent configuration must preserve role, provider, model and delete secrets
+        expect(sanitized.agents[0].id).toBe('agent-1');
+        expect(sanitized.agents[0].role).toBe('Lead Analyst');
+        expect(sanitized.agents[0].provider).toBe('groq');
+        expect(sanitized.agents[0].model).toBe('llama-3.3-70b');
+        expect(sanitized.agents[0].apiKey).toBeUndefined();
+        expect(sanitized.agents[0].groqApiKey).toBeUndefined();
+
+        // Critic configuration must preserve role, provider, model and delete secrets
+        expect(sanitized.critic.role).toBe('Verification Critic');
+        expect(sanitized.critic.provider).toBe('gemini');
+        expect(sanitized.critic.model).toBe('gemini-3.5-flash-lite');
+        expect(sanitized.critic.apiKey).toBeUndefined();
+    });
+
+    it('ignores x-provider-key on /api/swarm/models', async () => {
+        const res = await fetch(`${baseUrl}/api/swarm/models?provider=simulated`, {
+            headers: {
+                'x-provider-key': 'attacker-key'
+            }
+        });
+        expect(res.status).toBe(200);
+        const data = await res.json();
+        expect(Array.isArray(data)).toBe(true);
+        expect(data[0].id).toBe('simulated-swarm-v1');
     });
 });
 

@@ -224,163 +224,53 @@ export class TwoTierModelHealthChecker {
     }
 
     /**
-     * Default Tier 1 check: lightweight HEAD or metadata endpoint.
+     * Default Tier 1 check: existing backend health path.
      */
     private async defaultTier1Check(
-        provider: string,
-        modelId: string,
-        apiKey?: string,
+        _provider: string,
+        _modelId: string,
+        _apiKey?: string,
         signal?: AbortSignal
     ): Promise<boolean> {
         try {
-            switch (provider) {
-                case 'openrouter': {
-                    const res = await fetch('https://openrouter.ai/api/v1/models', {
-                        method: 'HEAD',
-                        signal
-                    });
-                    return res.ok || res.status === 405 || res.status === 200;
-                }
-                case 'groq': {
-                    if (!apiKey) return false;
-                    const res = await fetch(`https://api.groq.com/openai/v1/models/${encodeURIComponent(modelId)}`, {
-                        method: 'HEAD',
-                        headers: { 'Authorization': `Bearer ${apiKey}` },
-                        signal
-                    });
-                    return res.ok || res.status === 200 || res.status === 405;
-                }
-                case 'gemini': {
-                    if (!apiKey) return false;
-                    const cleanModel = modelId.replace('models/', '');
-                    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(cleanModel)}?key=${apiKey}`, {
-                        method: 'GET',
-                        signal
-                    });
-                    return res.ok;
-                }
-                case 'mistral': {
-                    if (!apiKey) return false;
-                    const res = await fetch(`https://api.mistral.ai/v1/models/${encodeURIComponent(modelId)}`, {
-                        method: 'GET',
-                        headers: { 'Authorization': `Bearer ${apiKey}` },
-                        signal
-                    });
-                    return res.ok;
-                }
-                case 'github': {
-                    if (!apiKey) return false;
-                    const res = await fetch('https://models.inference.ai.azure.com/models', {
-                        method: 'HEAD',
-                        headers: { 'Authorization': `Bearer ${apiKey}` },
-                        signal
-                    });
-                    return res.ok || res.status === 405 || res.status === 200;
-                }
-                default:
-                    return true;
-            }
+            const res = await fetch('/api/health', {
+                method: 'GET',
+                signal
+            });
+            return res.ok;
         } catch {
             return false;
         }
     }
 
     /**
-     * Default Tier 2 check: minimal inference ping.
+     * Default Tier 2 check: backend provider model listing via /api/swarm/models.
      */
     private async defaultTier2Check(
         provider: string,
         modelId: string,
-        apiKey?: string,
+        _apiKey?: string,
         signal?: AbortSignal
     ): Promise<boolean> {
         try {
-            switch (provider) {
-                case 'openrouter': {
-                    if (!apiKey) return true; // Can't ping inference without key, treat Tier 1 as sufficient
-                    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-                        method: 'POST',
-                        headers: {
-                            'Authorization': `Bearer ${apiKey}`,
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            model: modelId,
-                            messages: [{ role: 'user', content: 'ping' }],
-                            max_tokens: 1
-                        }),
-                        signal
-                    });
-                    return res.ok;
-                }
-                case 'groq': {
-                    if (!apiKey) return false;
-                    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-                        method: 'POST',
-                        headers: {
-                            'Authorization': `Bearer ${apiKey}`,
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            model: modelId,
-                            messages: [{ role: 'user', content: 'ping' }],
-                            max_tokens: 1
-                        }),
-                        signal
-                    });
-                    return res.ok;
-                }
-                case 'gemini': {
-                    if (!apiKey) return false;
-                    const cleanModel = modelId.replace('models/', '');
-                    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(cleanModel)}:generateContent?key=${apiKey}`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            contents: [{ parts: [{ text: 'ping' }] }],
-                            generationConfig: { maxOutputTokens: 1 }
-                        }),
-                        signal
-                    });
-                    return res.ok;
-                }
-                case 'mistral': {
-                    if (!apiKey) return false;
-                    const res = await fetch('https://api.mistral.ai/v1/chat/completions', {
-                        method: 'POST',
-                        headers: {
-                            'Authorization': `Bearer ${apiKey}`,
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            model: modelId,
-                            messages: [{ role: 'user', content: 'ping' }],
-                            max_tokens: 1
-                        }),
-                        signal
-                    });
-                    return res.ok;
-                }
-                case 'github': {
-                    if (!apiKey) return false;
-                    const res = await fetch('https://models.inference.ai.azure.com/chat/completions', {
-                        method: 'POST',
-                        headers: {
-                            'Authorization': `Bearer ${apiKey}`,
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            model: modelId,
-                            messages: [{ role: 'user', content: 'ping' }],
-                            max_tokens: 1
-                        }),
-                        signal
-                    });
-                    return res.ok;
-                }
-                default:
-                    return true;
+            const headers: Record<string, string> = {};
+            if (typeof localStorage !== 'undefined') {
+                const token = localStorage.getItem('swarm_app_token');
+                if (token) headers['Authorization'] = `Bearer ${token}`;
             }
+            const res = await fetch(`/api/swarm/models?provider=${encodeURIComponent(provider)}`, {
+                method: 'GET',
+                headers,
+                signal
+            });
+            if (!res.ok) return false;
+            const data = await res.json().catch(() => []);
+            if (!Array.isArray(data)) return false;
+            if (modelId) {
+                const cleanModel = modelId.replace('models/', '');
+                return data.some((m: any) => m.id === modelId || m.id === cleanModel);
+            }
+            return data.length > 0;
         } catch {
             return false;
         }
