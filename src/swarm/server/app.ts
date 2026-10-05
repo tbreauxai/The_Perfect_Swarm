@@ -351,6 +351,10 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 qdrantApiKey: env.QDRANT_API_KEY
             };
 
+            const callerAppId = (c as any).get('callerAppId') as string | undefined;
+            const serverDefaultAppId = defaultSettings.appId || 'perfect-swarm';
+            const originApp = callerAppId || serverDefaultAppId;
+
             if (c.req.method === 'POST') {
                 const body = await c.req.json().catch(() => ({}));
                 const sanitizedSettings = sanitizeClientSettings(body.settings, edgeSettings, defaultSettings);
@@ -369,6 +373,9 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 params = {
                     task: body.task,
                     data: body.data,
+                    originApp,
+                    callerAppId,
+                    domain: body.domain || body.settings?.domain,
                     settings: sanitizedSettings,
                     defaultAi: body.defaultAi || defaultAi,
                     cortex: body.cortex || body.memoryCortex || defaultCortex,
@@ -386,10 +393,14 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 const task = url.searchParams.get('task') || '';
                 const data = url.searchParams.get('data') || '';
                 const appId = url.searchParams.get('appId') || defaultSettings.appId || 'default';
+                const domain = url.searchParams.get('domain') || undefined;
                 params = {
                     task,
                     data,
-                    settings: sanitizeClientSettings({ appId }, edgeSettings, defaultSettings),
+                    originApp,
+                    callerAppId,
+                    domain,
+                    settings: sanitizeClientSettings({ appId, domain }, edgeSettings, defaultSettings),
                     defaultAi,
                     cortex: defaultCortex
                 };
@@ -414,6 +425,10 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
             if (!body.task) {
                 return c.json({ error: 'Missing required parameter: task' }, 400);
             }
+
+            const callerAppId = (c as any).get('callerAppId') as string | undefined;
+            const serverDefaultAppId = defaultSettings.appId || 'perfect-swarm';
+            const originApp = callerAppId || serverDefaultAppId;
 
             const env = Object.assign({}, typeof process !== 'undefined' ? process.env : {}, c.env || {}) as Record<string, any>;
             const edgeSettings = {
@@ -444,6 +459,9 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 result = await executeSwarmWorkflow({
                     task: body.task,
                     data: body.data,
+                    originApp,
+                    callerAppId,
+                    domain: body.domain || body.settings?.domain,
                     settings: sanitizedSettings,
                     defaultAi: body.defaultAi || defaultAi,
                     cortex: body.cortex || body.memoryCortex || defaultCortex,

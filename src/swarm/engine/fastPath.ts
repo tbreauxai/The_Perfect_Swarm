@@ -11,7 +11,7 @@ import { globalKnowledgeGraph } from '../knowledgeGraph.ts';
 import { globalHypothesisLayer, globalLearningRateManager } from '../coordination.ts';
 import type { SwarmWorkflowResult, SwarmWorkflowParams } from './types.ts';
 import { ANALYST_SYSTEM_INSTRUCTION } from './constants.ts';
-import { MemoryCortex } from '../memory.ts';
+import { MemoryCortex, normalizeDomain, extractEntityIds } from '../memory.ts';
 import { ToolRegistry, globalToolRegistry } from '../tools/index.ts';
 import { guardAnalystResponse } from '../parser.ts';
 
@@ -206,12 +206,18 @@ export async function executeFastPath(
             globalSemanticCache.set(task, finalAnalysis, { data, configVersion: agentConfigVersion });
             if (memoryCortex) {
                 const content = `Task: ${task}\nResult: ${finalAnalysis.ui_title || 'Fast analysis complete'}`;
+                const writeOriginApp = (params as any).originApp || (params as any).callerAppId || targetAppId;
+                const domain = normalizeDomain(settings?.domain || (params as any).domain, task);
+                const entityIds = extractEntityIds(task, (params as any).entityIds || settings?.entityIds);
                 const meta = {
-                    domain: 'analysis',
+                    originApp: writeOriginApp,
+                    appId: writeOriginApp,
+                    domain,
+                    memoryType: 'judgment' as const,
+                    entityIds,
                     agentRole: fastAnalyst.role,
                     complexity: 'instant' as const,
-                    verified: true,
-                    appId: targetAppId,
+                    verified: false,
                     qualityRating: 0.90,
                     feedback: 'Fast-path short-circuit: validated instant-tier heuristic',
                     attempts: 1,
@@ -221,7 +227,7 @@ export async function executeFastPath(
                 try {
                     const storedId = await memoryCortex.store(content, meta);
                     if (params.onMemoryLearned) {
-                        params.onMemoryLearned({ appId: targetAppId, content, id: storedId, metadata: meta });
+                        params.onMemoryLearned({ appId: writeOriginApp, content, id: storedId, metadata: meta });
                     }
                 } catch (err: any) {
                     console.warn(`[Fast-Path] Memory storage failed:`, err);

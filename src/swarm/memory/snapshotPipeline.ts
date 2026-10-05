@@ -229,11 +229,13 @@ export async function importMemoriesSnapshot(
             continue;
         }
 
+        const effectiveApp = targetAppId || rawMeta.originApp || rawMeta.appId || ctx.defaultAppId;
         const metadata: MemoryMetadata = {
             domain: rawMeta.domain || 'general',
             agentRole: rawMeta.agentRole || 'Analyst',
             ...rawMeta,
-            appId: targetAppId || rawMeta.appId || ctx.defaultAppId,
+            originApp: effectiveApp,
+            appId: effectiveApp,
             qualityRating,
             verified: rawMeta.verified ?? (qualityRating >= 0.8)
         };

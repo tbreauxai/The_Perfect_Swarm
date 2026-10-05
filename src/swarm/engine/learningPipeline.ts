@@ -3,7 +3,7 @@ import type { SwarmContext } from '../context.ts';
 import type { SwarmWorkflowParams, SwarmFeedbackReport } from './types.ts';
 import type { SwarmEngineSettings } from '../types.ts';
 import type { AgentVariantConfig, AgentExperiment, ExecutionMetrics, ExperimentDecision } from '../experiment.ts';
-import type { MemoryCortex } from '../memory.ts';
+import { type MemoryCortex, normalizeDomain, extractEntityIds } from '../memory.ts';
 import type { TaskComplexity } from '../router.ts';
 import { globalPayloadCache, globalSemanticCache } from '../cache.ts';
 import { globalMetricsCollector, globalUnifiedProfiler, type SwarmBaselineReport } from '../profiler.ts';
@@ -123,13 +123,20 @@ export async function runLearningPipeline(p: LearningPipelineParams): Promise<Le
             : (complexity === 'instant' ? 0.90 : 0.85);
         const verified = workflowLifecycleResult ? workflowLifecycleResult.success : false;
         const feedback = workflowLifecycleResult?.criticFeedback;
+        const isFact = verified || qualityRating >= 0.8;
+        const writeOriginApp = (params as any).originApp || (params as any).callerAppId || targetAppId;
+        const domain = normalizeDomain(settings?.domain || (params as any).domain, task);
+        const entityIds = extractEntityIds(task, (params as any).entityIds || settings?.entityIds);
         const content = `Task: ${task}\nResult: ${finalAnalysis.ui_title || 'Analysis complete'}`;
         const meta = {
-            domain: 'analysis',
+            originApp: writeOriginApp,
+            appId: writeOriginApp,
+            domain,
+            memoryType: isFact ? ('fact' as const) : ('judgment' as const),
+            entityIds,
             agentRole: 'Manager Node',
             complexity,
-            verified,
-            appId: targetAppId,
+            verified: isFact,
             qualityRating,
             feedback,
             attempts: workflowLifecycleResult?.attempts || 1,
@@ -141,7 +148,7 @@ export async function runLearningPipeline(p: LearningPipelineParams): Promise<Le
             const storedId = await memoryCortex.store(content, meta);
             if (params.onMemoryLearned) {
                 params.onMemoryLearned({
-                    appId: targetAppId,
+                    appId: writeOriginApp,
                     content,
                     id: storedId,
                     metadata: meta

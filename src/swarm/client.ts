@@ -306,7 +306,7 @@ export class SwarmClient {
      */
     get memory() {
         return {
-            store: (content: string, metadata?: MemoryMetadata) => this.cortex.store(content, { appId: this.appId, ...metadata }),
+            store: (content: string, metadata?: MemoryMetadata) => this.cortex.store(content, { originApp: this.appId, appId: this.appId, ...metadata }),
             retrieve: (query: string, options?: RetrievalOptions) => this.cortex.retrieve(query, { appId: this.appId, ...options }),
             retrieveExemplars: (task: string, options?: RetrievalOptions) => this.cortex.retrieveExemplars(task, { appId: this.appId, ...options }),
             exportSnapshot: (options?: ExportMemoriesOptions) => options?.format === 'json' ? this.cortex.exportJson({ appId: this.appId, ...options }) : (options?.format === 'jsonl' ? this.cortex.exportJsonl({ appId: this.appId, ...options }) : this.cortex.exportMemories({ appId: this.appId, ...options })),
@@ -316,6 +316,7 @@ export class SwarmClient {
             saveToFile: (filePath?: string) => this.cortex.saveToFile(filePath),
             loadFromFile: (filePath?: string, options?: ImportMemoriesOptions) => this.cortex.loadFromFile(filePath, { targetAppId: this.appId, ...options }),
             consolidate: () => this.cortex.consolidateMemories({ appId: this.appId }),
+            wipe: () => this.cortex.wipeCollection(this.appId),
             lookupActionPlan: (query: string) => this.cortex.lookupActionPlan(query, this.appId),
             getActionPlanCacheStats: () => this.cortex.getActionPlanCacheStats()
         };

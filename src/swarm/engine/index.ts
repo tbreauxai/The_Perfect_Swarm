@@ -158,8 +158,9 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 bypassCache,
                 qdrantUrl,
                 toolRegistry,
-                context
-            });
+                context,
+                domain: (params as any).domain || settings?.domain
+            } as any);
 
             // Step 4: Run Cluster Pipeline
             const clusterResult = await runClusterPipeline({

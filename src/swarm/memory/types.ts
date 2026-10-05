@@ -1,10 +1,16 @@
 import type { GoogleGenAI } from '@google/genai';
 import type { SemanticCacheInterceptorConfig } from '../semanticCacheInterceptor.ts';
 import type { ActionPlanCacheInterceptor, ActionPlanCacheConfig } from '../actionPlanCache.ts';
+import type { SwarmDomain, MemoryType } from './tags.ts';
+
+export * from './tags.ts';
 
 export interface MemoryMetadata {
+    originApp?: string;
     appId?: string;
-    domain?: string;
+    domain?: SwarmDomain | string;
+    memoryType?: MemoryType;
+    entityIds?: string[];
     agentRole?: string;
     sessionId?: string;
     qualityRating?: number; // 0.0 to 1.0
@@ -30,8 +36,11 @@ export const RRF_PRESETS: Record<RrfProfile, RrfWeights> = {
 
 export interface RetrievalOptions {
     appId?: string;
+    originApp?: string;
     targetApps?: string | string[];
     domain?: string;
+    entityIds?: string[];
+    entityId?: string;
     limit?: number;
     minRating?: number;
     verifiedOnly?: boolean;
