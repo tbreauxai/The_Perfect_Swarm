@@ -78,8 +78,11 @@ async function runSseServerTests() {
         if (allowedOptionsRes.headers.get('vary') !== 'Origin') {
             throw new Error(`Expected Vary: Origin, got ${allowedOptionsRes.headers.get('vary')}`);
         }
-        if (!allowedOptionsRes.headers.get('access-control-allow-headers')?.includes('x-provider-key')) {
-            throw new Error(`Expected access-control-allow-headers to include x-provider-key`);
+        if (!allowedOptionsRes.headers.get('access-control-allow-headers')?.includes('Authorization')) {
+            throw new Error(`Expected access-control-allow-headers to include Authorization`);
+        }
+        if (allowedOptionsRes.headers.get('access-control-allow-headers')?.includes('x-provider-key')) {
+            throw new Error(`Expected access-control-allow-headers to exclude x-provider-key`);
         }
 
         // 2b. Preflight with disallowed origin -> 403

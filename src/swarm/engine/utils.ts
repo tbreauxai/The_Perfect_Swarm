@@ -20,7 +20,8 @@ export function sanitizeApiKey(k: string | undefined | null): string {
  * Validates provider-specific key conventions and throws descriptive errors.
  */
 export function validateProviderKey(provider: Provider, key: string, role: string = 'Agent'): void {
-    if (provider === 'simulated' || provider === 'mock' || provider === 'custom-mock') {
+    const p = String(provider || '').toLowerCase();
+    if (p === 'simulated' || p === 'mock' || p === 'custom-mock' || p.includes('mock') || p.includes('simulated')) {
         return;
     }
 

@@ -1,26 +1,38 @@
 [
   {
-    "id": "goal-1-modularize-engine-monolith",
-    "description": "Extract clusterPipeline.ts, synthesisPipeline.ts, verificationPipeline.ts, and learningPipeline.ts from src/swarm/engine/index.ts, reducing index.ts to an orchestrator under 400 lines while maintaining identical exports and behavior.",
+    "id": "goal-1-server-sanitize-secrets",
+    "description": "Server deletes provider/Qdrant secrets from body settings and each agent; server env secrets win.",
     "status": "completed",
-    "verification": "src/swarm/engine/index.ts reduced from 2,129 to 380 lines; clusterPipeline, synthesisPipeline, verificationPipeline, and learningPipeline extracted cleanly; 100% tsc --noEmit pass and SSE server tests pass."
+    "verification": "Unit test verifying body settings and agent secret keys are deleted while preserving role, provider, model, and appId."
   },
   {
-    "id": "goal-2-modularize-memory-and-embeddings",
-    "description": "Decompose src/swarm/memory.ts (1,676 lines) into src/swarm/memory/ submodules (embeddings.ts, tokenizer.ts, cortex.ts, types.ts), keeping memory.ts as a backward-compatible re-export barrel.",
+    "id": "goal-2-server-models-secrets-and-cors",
+    "description": "Model listing ignores x-provider-key; remove x-provider-key from Access-Control-Allow-Headers and providerService.ts.",
     "status": "completed",
-    "verification": "src/swarm/memory.ts decomposed into src/swarm/memory/ (embeddings.ts, tokenizer.ts, cortex.ts, types.ts); memory.ts is a 6-line facade; 33 memory/vector tests, CLI tests, and tsc --noEmit pass."
+    "verification": "CORS headers do not contain x-provider-key and /api/swarm/models uses only server env secrets."
   },
   {
-    "id": "goal-3-modularize-load-balancer-and-feedback",
-    "description": "Decompose src/swarm/loadBalancer.ts (1,109 lines) and src/swarm/feedback.ts (962 lines) into focused submodules with backward-compatible facades and preserved singletons.",
+    "id": "goal-3-remove-direct-browser-provider-calls",
+    "description": "Remove direct browser fetches to external provider endpoints; health checks route via /api/swarm/models and /api/health.",
     "status": "completed",
-    "verification": "src/swarm/loadBalancer.ts (6 lines) and src/swarm/feedback.ts (6 lines) converted to clean facades; 5 focused submodules each; 48/48 unit tests, SSE server tests, and tsc --noEmit pass."
+    "verification": "Zero occurrences of external provider URLs in client health checking; tests pass."
   },
   {
-    "id": "goal-4-modularize-optimization-runner-ui-and-verify",
-    "description": "Modularize src/components/optimization/OptimizationRunner.tsx (1,571 lines), run full test suite (Vitest 535+ tests, npm test, tsc --noEmit), and rebuild production bundles.",
+    "id": "goal-4-ephemeral-default-and-storage-cleanup",
+    "description": "Default ephemeralKeys to true; strip legacy provider keys from localStorage on load; App token stored in swarm_app_token only.",
     "status": "completed",
-    "verification": "OptimizationRunner.tsx modularized into optimizationCaches.ts and optimizationScoring.ts; 100% Vitest pass (540/540 tests), npm test pass (portable, simulation, dist ESM/CJS, CLI, SSE server), tsc --noEmit clean, dual builds (build:swarm & build:client) succeed."
+    "verification": "useSwarmSettings initializes with ephemeralKeys: true and sanitizes persisted localStorage keys."
+  },
+  {
+    "id": "goal-5-remove-settings-modal-key-inputs",
+    "description": "Remove provider and Qdrant key inputs from SettingsModal.tsx while keeping App namespace, App token, and status badges.",
+    "status": "completed",
+    "verification": "SettingsModal renders without provider key inputs; App token and appId inputs remain operational."
+  },
+  {
+    "id": "goal-6-tests-and-full-suite-verification",
+    "description": "Add comprehensive automated tests for fix 3 and verify full test suite, tsc, and production builds.",
+    "status": "completed",
+    "verification": "All Vitest suites pass, tsc --noEmit succeeds with 0 errors, and npm test passes 100%."
   }
 ]

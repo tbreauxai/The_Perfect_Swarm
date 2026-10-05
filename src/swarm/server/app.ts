@@ -16,6 +16,68 @@ import { fetchProviderModels } from './modelsProvider.ts';
 import { buildCortexDiagnostics } from './cortexDiagnostics.ts';
 import { createAppAuthMiddleware } from './appAuth.ts';
 
+export const FORBIDDEN_CLIENT_SECRET_KEYS = [
+    'geminiApiKey',
+    'openRouterApiKey',
+    'groqApiKey',
+    'mistralApiKey',
+    'githubToken',
+    'qdrantUrl',
+    'qdrantApiKey',
+    'apiKey'
+] as const;
+
+export function sanitizeClientSettings(
+    rawSettings: any,
+    edgeSettings: Record<string, any> = {},
+    defaultSettings: Record<string, any> = {}
+): Record<string, any> {
+    const forbidden = new Set<string>(FORBIDDEN_CLIENT_SECRET_KEYS);
+    const cleanSettings: Record<string, any> = {};
+
+    if (rawSettings && typeof rawSettings === 'object') {
+        for (const [key, value] of Object.entries(rawSettings)) {
+            if (!forbidden.has(key) && value !== "" && value !== null && value !== undefined) {
+                cleanSettings[key] = value;
+            }
+        }
+    }
+
+    const sanitizeAgent = (agent: any) => {
+        if (!agent || typeof agent !== 'object') return agent;
+        const cleanAgent: Record<string, any> = {};
+        for (const [k, v] of Object.entries(agent)) {
+            if (!forbidden.has(k)) {
+                cleanAgent[k] = v;
+            }
+        }
+        return cleanAgent;
+    };
+
+    if (Array.isArray(cleanSettings.agents)) {
+        cleanSettings.agents = cleanSettings.agents.map(sanitizeAgent);
+    }
+    if (cleanSettings.critic && typeof cleanSettings.critic === 'object') {
+        cleanSettings.critic = sanitizeAgent(cleanSettings.critic);
+    }
+
+    const merged = {
+        ...defaultSettings,
+        ...cleanSettings,
+        ...edgeSettings
+    };
+
+    for (const key of FORBIDDEN_CLIENT_SECRET_KEYS) {
+        if (edgeSettings[key] !== undefined && edgeSettings[key] !== '') {
+            merged[key] = edgeSettings[key];
+        } else {
+            delete merged[key];
+        }
+    }
+
+    return merged;
+}
+
 /**
  * Creates a standalone, zero-external-dependency Hono app for headless swarm deployments.
  * Supports both Edge runtimes (Cloudflare Pages/Workers) and Node.js (`server.listen()`).
@@ -108,7 +170,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                     c.header('Vary', 'Origin');
                 }
                 c.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-                c.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-provider-key');
+                c.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
                 return c.body(null, 204);
             }
 
@@ -116,7 +178,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 c.header('Access-Control-Allow-Origin', reqOrigin!);
                 c.header('Vary', 'Origin');
                 c.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-                c.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-provider-key');
+                c.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
             }
 
             await next();
@@ -291,13 +353,23 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
 
             if (c.req.method === 'POST') {
                 const body = await c.req.json().catch(() => ({}));
-                const cleanBodySettings = Object.fromEntries(
-                    Object.entries(body.settings || {}).filter(([_, v]) => v !== "" && v !== null && v !== undefined)
-                );
+                const sanitizedSettings = sanitizeClientSettings(body.settings, edgeSettings, defaultSettings);
+                if (Array.isArray(body.agents)) {
+                    const forbidden = new Set<string>(FORBIDDEN_CLIENT_SECRET_KEYS);
+                    sanitizedSettings.agents = body.agents.map((agent: any) => {
+                        if (!agent || typeof agent !== 'object') return agent;
+                        const cleanAgent: Record<string, any> = {};
+                        for (const [k, v] of Object.entries(agent)) {
+                            if (!forbidden.has(k)) cleanAgent[k] = v;
+                        }
+                        return cleanAgent;
+                    });
+                }
+
                 params = {
                     task: body.task,
                     data: body.data,
-                    settings: { ...edgeSettings, ...defaultSettings, ...cleanBodySettings },
+                    settings: sanitizedSettings,
                     defaultAi: body.defaultAi || defaultAi,
                     cortex: body.cortex || body.memoryCortex || defaultCortex,
                     memoryCortex: body.memoryCortex || body.cortex || defaultCortex,
@@ -317,7 +389,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 params = {
                     task,
                     data,
-                    settings: { ...edgeSettings, ...defaultSettings, appId },
+                    settings: sanitizeClientSettings({ appId }, edgeSettings, defaultSettings),
                     defaultAi,
                     cortex: defaultCortex
                 };
@@ -354,16 +426,25 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 qdrantApiKey: env.QDRANT_API_KEY
             };
 
-            const cleanBodySettings = Object.fromEntries(
-                Object.entries(body.settings || {}).filter(([_, v]) => v !== "" && v !== null && v !== undefined)
-            );
+            const sanitizedSettings = sanitizeClientSettings(body.settings, edgeSettings, defaultSettings);
+            if (Array.isArray(body.agents)) {
+                const forbidden = new Set<string>(FORBIDDEN_CLIENT_SECRET_KEYS);
+                sanitizedSettings.agents = body.agents.map((agent: any) => {
+                    if (!agent || typeof agent !== 'object') return agent;
+                    const cleanAgent: Record<string, any> = {};
+                    for (const [k, v] of Object.entries(agent)) {
+                        if (!forbidden.has(k)) cleanAgent[k] = v;
+                    }
+                    return cleanAgent;
+                });
+            }
 
             let result: any;
             try {
                 result = await executeSwarmWorkflow({
                     task: body.task,
                     data: body.data,
-                    settings: { ...edgeSettings, ...defaultSettings, ...cleanBodySettings },
+                    settings: sanitizedSettings,
                     defaultAi: body.defaultAi || defaultAi,
                     cortex: body.cortex || body.memoryCortex || defaultCortex,
                     memoryCortex: body.memoryCortex || body.cortex || defaultCortex,
@@ -421,8 +502,8 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
             }
 
             const env = Object.assign({}, typeof process !== 'undefined' ? process.env : {}, c.env || {}) as Record<string, any>;
-            const clientKey = c.req.header('x-provider-key');
-            const models = await fetchProviderModels(provider, clientKey, env);
+            // Model listing uses server secrets only; ignore x-provider-key
+            const models = await fetchProviderModels(provider, undefined, env);
             return c.json(models);
         } catch (err: any) {
             console.error(`[SwarmServer Models Error]:`, err);
