@@ -231,6 +231,14 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
             }
 
             if (!gradeResult.found) {
+                const foreignPoint = Array.isArray((defaultCortex as any)?.fallbackStore)
+                    && (defaultCortex as any).fallbackStore.some((pt: any) => {
+                        const pointApp = pt?.payload?.originApp || pt?.payload?.appId;
+                        return pt?.payload?.workflowId === workflowId && pointApp && pointApp !== originApp;
+                    });
+                if (foreignPoint) {
+                    return c.json({ error: 'Workflow not found' }, 404);
+                }
                 const accuracyScore = outcome === 'win' ? 1.0 : outcome === 'loss' ? 0.0 : 0.5;
                 const score = outcomeToScore(outcome);
                 const statedProbability = Number(predictedProbability);

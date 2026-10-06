@@ -390,7 +390,8 @@ describe('Fix 5 Learning Loop: Point Grading, Score Retrieval & Diagnostics', ()
         expect(pointAfter.payload.qualityRating).toBe(0.0);
     });
 
-    it('returns 404 when workflowId is missing or does not exist for the caller', async () => {
+    it('records an authenticated grade when the workflow is gone, without touching another app', async () => {
+        const workflowId = `wf-nonexistent-${Date.now()}`;
         const res = await fetch(`${baseUrl}/api/swarm/feedback`, {
             method: 'POST',
             headers: {
@@ -398,14 +399,17 @@ describe('Fix 5 Learning Loop: Point Grading, Score Retrieval & Diagnostics', ()
                 'Authorization': 'Bearer ps-token-123'
             },
             body: JSON.stringify({
-                workflowId: `wf-nonexistent-${Date.now()}`,
-                outcome: 'win'
+                workflowId,
+                outcome: 'win',
+                predictedProbability: 0.62
             })
         });
 
-        expect(res.status).toBe(404);
+        expect(res.status).toBe(200);
         const data = await res.json();
-        expect(data.error).toBe('Workflow not found');
+        expect(data.ok).toBe(true);
+        expect(data.recordedWithoutWorkflow).toBe(true);
+        expect(data.workflowId).toBe(workflowId);
     });
 
     it('ignores body.appId and prevents redirecting the grade', async () => {
