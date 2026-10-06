@@ -172,15 +172,10 @@ export function calibrationBriefForApp(appId: string): string {
   return formatCalibrationBrief(fitCalibration(observationsForApp(appId)), appId);
 }
 
-export function prependCalibrationToData(data: unknown, appId: string): unknown {
+export function prependCalibrationToData(data: unknown, appId: string): string {
   const brief = calibrationBriefForApp(appId);
   const section = `=== SWARM EMPIRICAL WIN CALIBRATION ===\n${brief}`;
-  if (typeof data === 'string') {
-    if (data.includes('=== SWARM EMPIRICAL WIN CALIBRATION ===')) return data;
-    return `${section}\n\n${data}`;
-  }
-  if (data && typeof data === 'object') {
-    return { ...(data as Record<string, unknown>), swarmCalibrationBrief: brief };
-  }
-  return section;
+  const text = typeof data === 'string' ? data : data == null ? '' : JSON.stringify(data);
+  if (text.includes('=== SWARM EMPIRICAL WIN CALIBRATION ===')) return text;
+  return text ? `${section}\n\n${text}` : section;
 }
