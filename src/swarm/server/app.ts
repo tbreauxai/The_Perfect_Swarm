@@ -231,7 +231,78 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
             }
 
             if (!gradeResult.found) {
-                return c.json({ error: 'Workflow not found' }, 404);
+                const foreignPoint = Array.isArray((defaultCortex as any)?.fallbackStore)
+                    && (defaultCortex as any).fallbackStore.some((pt: any) => {
+                        const pointApp = pt?.payload?.originApp || pt?.payload?.appId;
+                        return pt?.payload?.workflowId === workflowId && pointApp && pointApp !== originApp;
+                    });
+                if (foreignPoint) {
+                    return c.json({ error: 'Workflow not found' }, 404);
+                }
+                const accuracyScore = outcome === 'win' ? 1.0 : outcome === 'loss' ? 0.0 : 0.5;
+                const score = outcomeToScore(outcome);
+                const statedProbability = Number(predictedProbability);
+                const already = globalFeedbackEngine.getKnowledgeRepository()
+                    .queryOutcomes({ appId: originApp })
+                    .find((o: any) => o.workflowId === workflowId && o.feedbackProcessed);
+                if (already) {
+                    return c.json({ ok: true, message: 'Feedback already processed', workflowId, alreadyProcessed: true });
+                }
+                if (score != null && Number.isFinite(statedProbability) && statedProbability > 0 && statedProbability < 1) {
+                    recordProbabilityObservation({
+                        workflowId,
+                        appId: originApp,
+                        predictedProbability: statedProbability,
+                        outcome: score,
+                        sportKey: typeof sportKey === 'string' ? sportKey : undefined,
+                        market: typeof market === 'string' ? market : undefined,
+                        gradedAt: typeof gradedAt === 'string' ? gradedAt : new Date().toISOString()
+                    });
+                }
+                const policy = globalFeedbackEngine.getPolicyOptimizer().getCurrentPolicy();
+                await globalFeedbackEngine.getKnowledgeRepository().recordOutcome({
+                    id: `grade-${originApp}-${workflowId}`,
+                    workflowId,
+                    task: typeof body.pickName === 'string' ? body.pickName : 'Settled pick',
+                    appId: originApp,
+                    finalInsightSnippet: `${body.pickName || workflowId} ${outcome}`,
+                    metrics: {
+                        workflowId,
+                        task: typeof body.pickName === 'string' ? body.pickName : 'Settled pick',
+                        appId: originApp,
+                        durationMs: 0,
+                        targetTier: 'instant',
+                        tokenSavings: 0,
+                        tokensConsumed: 0,
+                        accuracyScore,
+                        errorCount: 0,
+                        hardErrorCount: 0,
+                        failoverCount: 0,
+                        anomalyCount: 0,
+                        timestamp: Date.now()
+                    },
+                    reward: { compositeReward: accuracyScore, components: { accuracyReward: accuracyScore } } as any,
+                    parametersUsed: policy,
+                    driftAlerts: [],
+                    agentRoles: ['DuelOdds Grader'],
+                    timestamp: Date.now(),
+                    feedbackProcessed: true,
+                    outcome,
+                    predictedProbability: Number.isFinite(statedProbability) ? statedProbability : undefined,
+                    sportKey,
+                    market,
+                    gradedAt: gradedAt || new Date().toISOString()
+                } as any);
+                analystLedger.recordOutcome(originApp, 'DuelOdds Grader', outcome);
+                globalSpecialistProfiler.recordAccuracy('DuelOdds Grader', outcome);
+                return c.json({
+                    ok: true,
+                    recordedWithoutWorkflow: true,
+                    workflowId,
+                    outcome,
+                    accuracyScore,
+                    calibration: fitCalibration(observationsForApp(originApp))
+                });
             }
 
             // 2. Query in-memory knowledge repository (scoped to originApp, without defaulting missing appId to perfect-swarm)
