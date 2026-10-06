@@ -127,7 +127,10 @@ describe('Swarm Server & Feedback Attribution', () => {
                 },
                 body: JSON.stringify({ workflowId: 'non-existent-wf', outcome: 'win' })
             });
-            expect(res3.status).toBe(404);
+            expect(res3.status).toBe(200);
+            const missing = await res3.json();
+            expect(missing.recordedWithoutWorkflow).toBe(true);
+            expect(missing.workflowId).toBe('non-existent-wf');
         } finally {
             if (oldTokens !== undefined) process.env.SWARM_APP_TOKENS = oldTokens;
             else delete process.env.SWARM_APP_TOKENS;
