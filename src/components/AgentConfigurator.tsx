@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
     fetchAvailableModels,
     checkProviderModelsHealth,
@@ -42,38 +42,64 @@ export const AgentConfigurator: React.FC<AgentConfiguratorProps> = ({
     const [healthStatusByModel, setHealthStatusByModel] = useState<Record<string, ModelHealthStatus>>({});
     const [checkingHealth, setCheckingHealth] = useState<Record<string, boolean>>({});
     const [onlyHealthyFilter, setOnlyHealthyFilter] = useState<boolean>(false);
+    const [authRequiredProviders, setAuthRequiredProviders] = useState<Record<string, boolean>>({});
+
+    const requestedProvidersRef = useRef<Set<string>>(new Set());
+    const warnedProvidersRef = useRef<Set<string>>(new Set());
+
+    const uniqueProviders = Array.from(new Set<string>((agents || []).map(a => a.provider).filter(p => p !== 'none')));
+    const providersKey = uniqueProviders.sort().join(',');
 
     useEffect(() => {
-        const uniqueProviders = Array.from(new Set<string>((agents || []).map(a => a.provider).filter(p => p !== 'none')));
-        
-        uniqueProviders.forEach(provider => {
-            if (!modelsByProvider[provider] && !loadingProviders[provider]) {
-                const apiKey = getApiKeyForProvider(settings, provider);
-                setLoadingProviders(prev => ({ ...prev, [provider]: true }));
-                fetchAvailableModels(provider, apiKey)
-                    .then(models => {
-                        setModelsByProvider(prev => ({ ...prev, [provider]: models }));
-                        setLoadingProviders(prev => ({ ...prev, [provider]: false }));
+        let isMounted = true;
+        const providers = Array.from(new Set<string>((agents || []).map(a => a.provider).filter(p => p !== 'none')));
 
-                        // Trigger parallel async 2-tier health check (cached for 5-10 min)
-                        setCheckingHealth(prev => ({ ...prev, [provider]: true }));
-                        checkProviderModelsHealth(provider, models, apiKey, { skipTier2: true })
-                            .then(healthMap => {
-                                setHealthStatusByModel(prev => ({ ...prev, ...healthMap }));
-                                setCheckingHealth(prev => ({ ...prev, [provider]: false }));
-                            })
-                            .catch(() => {
-                                setCheckingHealth(prev => ({ ...prev, [provider]: false }));
-                            });
-                    })
-                    .catch(err => {
-                        console.error(`Failed to load models for ${provider}`, err);
-                        setModelsByProvider(prev => ({ ...prev, [provider]: [] }));
-                        setLoadingProviders(prev => ({ ...prev, [provider]: false }));
-                    });
+        providers.forEach(provider => {
+            if (requestedProvidersRef.current.has(provider)) {
+                return;
             }
+            requestedProvidersRef.current.add(provider);
+
+            const apiKey = getApiKeyForProvider(settings, provider);
+            setLoadingProviders(prev => ({ ...prev, [provider]: true }));
+
+            fetchAvailableModels(provider, apiKey)
+                .then(models => {
+                    if (!isMounted) return;
+                    setModelsByProvider(prev => ({ ...prev, [provider]: models }));
+                    setLoadingProviders(prev => ({ ...prev, [provider]: false }));
+
+                    // Trigger parallel async 2-tier health check (cached for 5-10 min)
+                    setCheckingHealth(prev => ({ ...prev, [provider]: true }));
+                    checkProviderModelsHealth(provider, models, apiKey, { skipTier2: true })
+                        .then(healthMap => {
+                            if (!isMounted) return;
+                            setHealthStatusByModel(prev => ({ ...prev, ...healthMap }));
+                            setCheckingHealth(prev => ({ ...prev, [provider]: false }));
+                        })
+                        .catch(() => {
+                            if (!isMounted) return;
+                            setCheckingHealth(prev => ({ ...prev, [provider]: false }));
+                        });
+                })
+                .catch(err => {
+                    if (!isMounted) return;
+                    if (!warnedProvidersRef.current.has(provider)) {
+                        warnedProvidersRef.current.add(provider);
+                        console.warn(`Failed to load models for ${provider}:`, err);
+                    }
+                    if (err?.kind === 'app-auth' || err?.status === 401 || (err?.message && /app token|unauthorized/i.test(err.message))) {
+                        setAuthRequiredProviders(prev => ({ ...prev, [provider]: true }));
+                    }
+                    setModelsByProvider(prev => ({ ...prev, [provider]: [] }));
+                    setLoadingProviders(prev => ({ ...prev, [provider]: false }));
+                });
         });
-    }, [agents, settings, modelsByProvider, loadingProviders]);
+
+        return () => {
+            isMounted = false;
+        };
+    }, [providersKey, settings]);
 
     const getModelKey = (provider: string, modelId: string): string => {
         return `${provider.toLowerCase().trim()}:${modelId.trim()}`;
@@ -264,13 +290,18 @@ export const AgentConfigurator: React.FC<AgentConfiguratorProps> = ({
 
                                     </div>
                                     ) : (
-                                        <input
-                                            type="text"
-                                            value={agent.model}
-                                            onChange={e => onUpdateAgent(agent.id, 'model', e.target.value)}
-                                            className="w-full px-3 py-2 rounded-lg border border-neutral-300 outline-none text-sm font-mono focus:border-indigo-500"
-                                            placeholder={isKeyRequired ? "Model ID (API Key required to load list)" : "Model ID"}
-                                        />
+                                        <div className="space-y-1">
+                                            <input
+                                                type="text"
+                                                value={agent.model}
+                                                onChange={e => onUpdateAgent(agent.id, 'model', e.target.value)}
+                                                className="w-full px-3 py-2 rounded-lg border border-neutral-300 outline-none text-sm font-mono focus:border-indigo-500"
+                                                placeholder={authRequiredProviders[agent.provider] ? "Model ID (Add an app token to load the model list)" : (isKeyRequired ? "Model ID (API Key required to load list)" : "Model ID")}
+                                            />
+                                            {authRequiredProviders[agent.provider] && (
+                                                <p className="text-[11px] text-amber-600">Add an app token to load the model list</p>
+                                            )}
+                                        </div>
                                     )
                                 ) : (
                                     <input

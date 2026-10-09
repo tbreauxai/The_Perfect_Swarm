@@ -12,7 +12,26 @@ export async function handleSwarmSse(
     params: SwarmWorkflowParams
 ) {
     return streamSSE(c, async (stream) => {
+        let isClosed = false;
+        stream.onAbort(() => {
+            isClosed = true;
+        });
+
+        // Periodic keepalive heartbeat comment (15s) below client idle timeout
+        const heartbeatInterval = setInterval(async () => {
+            if (isClosed || stream.aborted || stream.closed) {
+                clearInterval(heartbeatInterval);
+                return;
+            }
+            try {
+                await stream.write(':keepalive\n\n');
+            } catch {
+                clearInterval(heartbeatInterval);
+            }
+        }, 15000);
+
         const sendEvent = async (eventType: string, data: any) => {
+            if (isClosed || stream.aborted || stream.closed) return;
             try {
                 await stream.writeSSE({
                     event: eventType,
@@ -52,6 +71,8 @@ export async function handleSwarmSse(
             });
         } catch (err: any) {
             await sendEvent('swarm_error', { error: err.message || String(err) });
+        } finally {
+            clearInterval(heartbeatInterval);
         }
     });
 }

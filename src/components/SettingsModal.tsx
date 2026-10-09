@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { getAppToken, setAppToken } from '../services/appAuthHeaders';
-import { Settings, X, Database } from 'lucide-react';
+import { Settings, X, Database, Eye, EyeOff } from 'lucide-react';
 import { AgentConfigurator, AgentConfig } from './AgentConfigurator';
 
 export interface AppSettings {
@@ -24,14 +24,15 @@ interface SettingsModalProps {
     settings: AppSettings;
     onUpdateSetting: (key: keyof AppSettings, value: any) => void;
     onUpdateAgent: (id: string, field: string, value: string) => void;
-    envStatus: {
+    envStatus?: {
         hasGeminiKey?: boolean;
         hasOpenRouterKey?: boolean;
         hasGroqKey?: boolean;
         hasMistralKey?: boolean;
         hasQdrantUrl?: boolean;
         hasQdrantKey?: boolean;
-    };
+        authRequired?: boolean;
+    } | null;
     initialTab?: 'keys' | 'swarm';
 }
 
@@ -44,8 +45,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     envStatus,
     initialTab = 'keys'
 }) => {
+    const safeEnvStatus = envStatus || {};
     const [activeTab, setActiveTab] = useState<'keys' | 'swarm'>(initialTab);
     const [appToken, setAppTokenValue] = useState(getAppToken);
+    const [showToken, setShowToken] = useState(false);
+    const [savedNotice, setSavedNotice] = useState(false);
 
     if (!isOpen) return null;
 
@@ -94,7 +98,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                 <div className="grid grid-cols-2 gap-2 pt-2">
                                     <div className="p-2.5 bg-white rounded-lg border border-neutral-200 flex items-center justify-between">
                                         <span className="text-xs font-medium text-neutral-700">Gemini</span>
-                                        {envStatus.hasGeminiKey ? (
+                                        {safeEnvStatus.hasGeminiKey ? (
                                             <span className="text-[11px] text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 font-medium">✅ Loaded</span>
                                         ) : (
                                             <span className="text-[11px] text-neutral-400 bg-neutral-100 px-2 py-0.5 rounded-full border border-neutral-200">Not Set</span>
@@ -102,7 +106,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                     </div>
                                     <div className="p-2.5 bg-white rounded-lg border border-neutral-200 flex items-center justify-between">
                                         <span className="text-xs font-medium text-neutral-700">Groq</span>
-                                        {envStatus.hasGroqKey ? (
+                                        {safeEnvStatus.hasGroqKey ? (
                                             <span className="text-[11px] text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 font-medium">✅ Loaded</span>
                                         ) : (
                                             <span className="text-[11px] text-neutral-400 bg-neutral-100 px-2 py-0.5 rounded-full border border-neutral-200">Not Set</span>
@@ -110,7 +114,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                     </div>
                                     <div className="p-2.5 bg-white rounded-lg border border-neutral-200 flex items-center justify-between">
                                         <span className="text-xs font-medium text-neutral-700">OpenRouter</span>
-                                        {envStatus.hasOpenRouterKey ? (
+                                        {safeEnvStatus.hasOpenRouterKey ? (
                                             <span className="text-[11px] text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 font-medium">✅ Loaded</span>
                                         ) : (
                                             <span className="text-[11px] text-neutral-400 bg-neutral-100 px-2 py-0.5 rounded-full border border-neutral-200">Not Set</span>
@@ -118,7 +122,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                     </div>
                                     <div className="p-2.5 bg-white rounded-lg border border-neutral-200 flex items-center justify-between">
                                         <span className="text-xs font-medium text-neutral-700">Mistral</span>
-                                        {envStatus.hasMistralKey ? (
+                                        {safeEnvStatus.hasMistralKey ? (
                                             <span className="text-[11px] text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 font-medium">✅ Loaded</span>
                                         ) : (
                                             <span className="text-[11px] text-neutral-400 bg-neutral-100 px-2 py-0.5 rounded-full border border-neutral-200">Not Set</span>
@@ -128,7 +132,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                         <span className="text-xs font-medium text-neutral-700 flex items-center gap-1.5">
                                             <Database className="w-3.5 h-3.5 text-neutral-400" /> Qdrant Vector DB
                                         </span>
-                                        {envStatus.hasQdrantUrl && envStatus.hasQdrantKey ? (
+                                        {safeEnvStatus.hasQdrantUrl && safeEnvStatus.hasQdrantKey ? (
                                             <span className="text-[11px] text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 font-medium">✅ Loaded</span>
                                         ) : (
                                             <span className="text-[11px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">In-Memory (No Secrets)</span>
@@ -156,16 +160,48 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                         <label className="block text-sm font-medium text-neutral-700">App token</label>
                                         <span className="text-xs text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-200">Caller auth</span>
                                     </div>
-                                    <input
-                                        type="password"
-                                        value={appToken}
-                                        onChange={(e) => {
-                                            setAppTokenValue(e.target.value);
-                                            setAppToken(e.target.value);
-                                        }}
-                                        placeholder="Bearer token for this dashboard"
-                                        className="w-full px-3 py-2 rounded-lg border border-neutral-300 focus:border-indigo-500 outline-none text-sm"
-                                    />
+                                    <div className="flex gap-2 items-center">
+                                        <div className="relative flex-1">
+                                            <input
+                                                type={showToken ? "text" : "password"}
+                                                value={appToken}
+                                                onChange={(e) => setAppTokenValue(e.target.value)}
+                                                placeholder="Bearer token for this dashboard"
+                                                className="w-full px-3 py-2 pr-9 rounded-lg border border-neutral-300 focus:border-indigo-500 outline-none text-sm font-mono"
+                                            />
+                                            <button
+                                                type="button"
+                                                onClick={() => setShowToken(!showToken)}
+                                                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-neutral-600 p-0.5"
+                                                title={showToken ? "Hide token" : "Show token"}
+                                            >
+                                                {showToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                                            </button>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                const trimmed = appToken.trim();
+                                                setAppToken(trimmed);
+                                                setAppTokenValue(trimmed);
+                                                setSavedNotice(true);
+                                                setTimeout(() => setSavedNotice(false), 2000);
+                                            }}
+                                            className="px-3 py-2 text-xs font-medium bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg border border-indigo-200 transition"
+                                        >
+                                            {savedNotice ? 'Saved!' : 'Save'}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setAppToken('');
+                                                setAppTokenValue('');
+                                            }}
+                                            className="px-3 py-2 text-xs font-medium bg-neutral-100 hover:bg-neutral-200 text-neutral-600 rounded-lg border border-neutral-200 transition"
+                                        >
+                                            Clear
+                                        </button>
+                                    </div>
                                     <p className="text-xs text-neutral-500 mt-1">Identifies this dashboard to the swarm. Stored in swarm_app_token and not sent as a provider key.</p>
                                 </div>
                             </div>

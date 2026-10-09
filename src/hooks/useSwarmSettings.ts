@@ -110,15 +110,21 @@ export function useSwarmSettings() {
 
   useEffect(() => {
     fetch('/api/config/status', { headers: authHeaders() })
-      .then(res => res.text())
-      .then(text => {
-        try {
-          setEnvStatus(JSON.parse(text));
-        } catch (e) {
-          console.error('Config status parse error:', text);
+      .then(async res => {
+        if (!res.ok) {
+          setEnvStatus({ authRequired: true });
+          return;
+        }
+        const data = await res.json().catch(() => null);
+        if (data) {
+          setEnvStatus(data);
+        } else {
+          setEnvStatus({ authRequired: true });
         }
       })
-      .catch(console.error);
+      .catch(() => {
+        setEnvStatus({ authRequired: true });
+      });
   }, []);
 
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SWARM_SETTINGS);

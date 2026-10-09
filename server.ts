@@ -6,8 +6,10 @@ import { Hono } from 'hono';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import path from 'path';
+import fs from 'node:fs';
 import { fileURLToPath } from 'url';
 import { createSwarmServer } from './src/swarm/server.ts';
+import { createCorsMiddleware } from './src/swarm/server/cors.ts';
 import { createAppAuthMiddleware } from './src/swarm/server/appAuth.ts';
 import { getOrCreateDefaultCortex } from './src/swarm/engine/cortex.ts';
 
@@ -34,12 +36,15 @@ export function createMainApp(options: { defaultAi?: any; defaultCortex?: any } 
 
   // Apply security headers to every response (including static files & HTML)
   app.use('*', async (c, next) => {
-    c.header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://the-perfect-swarm.onrender.com https://duelodds.pages.dev; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
+    c.header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://the-perfect-swarm.onrender.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
     c.header('X-Frame-Options', 'DENY');
     c.header('X-Content-Type-Options', 'nosniff');
     c.header('Referrer-Policy', 'no-referrer');
     await next();
   });
+
+  // Mount CORS ahead of auth so 401/404/413/500 carry ACAO
+  app.use('*', createCorsMiddleware());
 
   app.use('*', createAppAuthMiddleware());
 
@@ -68,7 +73,42 @@ export function createMainApp(options: { defaultAi?: any; defaultCortex?: any } 
     return c.json({ error: err.message || 'Internal Server Error' }, 500);
   });
 
+  if (options.serveStatic) {
+    mountStaticHandlers(app);
+  }
+
   return app;
+}
+
+export function mountStaticHandlers(app: Hono, distDir = './dist') {
+  if ((app as any).__staticHandlersMounted) return;
+  (app as any).__staticHandlersMounted = true;
+
+  const distStatic = serveStatic({ root: distDir });
+
+  // Keep /assets/*
+  app.use('/assets/*', serveStatic({ root: distDir }));
+
+  // Serve root static files from dist with correct content types
+  app.use('*', async (c, next) => {
+    const reqPath = c.req.path;
+    if (reqPath !== '/' && reqPath !== '/index.html' && !reqPath.startsWith('/api/')) {
+      const target = path.join(process.cwd(), distDir, reqPath);
+      if (fs.existsSync(target) && fs.statSync(target).isFile()) {
+        return distStatic(c, next);
+      }
+    }
+    await next();
+  });
+
+  // Shell fallback: GET/HEAD only for / and /index.html
+  app.get('/', serveStatic({ root: distDir, path: 'index.html' }));
+  app.get('/index.html', serveStatic({ root: distDir, path: 'index.html' }));
+
+  // Other non-API non-asset paths return 404 HTML
+  app.get('*', (c) => {
+    return c.html('<!DOCTYPE html><html><head><title>404 Not Found</title></head><body><h1>404 Not Found</h1></body></html>', 404);
+  });
 }
 
 async function startServer() {
@@ -79,12 +119,13 @@ async function startServer() {
   });
   const defaultCortex = getOrCreateDefaultCortex('perfect-swarm', defaultAi);
 
-  const app = createMainApp({ defaultAi, defaultCortex });
+  const isProd = process.env.NODE_ENV === "production";
+  const app = createMainApp({ defaultAi, defaultCortex, serveStatic: isProd });
 
   // 3. Setup Vite & Node HTTP Server
   const honoListener = getRequestListener(app.fetch);
 
-  if (process.env.NODE_ENV !== "production") {
+  if (!isProd) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -108,11 +149,7 @@ async function startServer() {
     });
 
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    
-    // Serve static files via Hono in production
-    app.use('/assets/*', serveStatic({ root: './dist' }));
-    app.use('/*', serveStatic({ root: './dist', path: 'index.html' }));
+    mountStaticHandlers(app);
 
     const server = createNodeServer(honoListener);
     server.listen(port, "0.0.0.0", () => {

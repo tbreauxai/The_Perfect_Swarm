@@ -1,38 +1,56 @@
 [
   {
-    "id": "goal-1-swarm-workflowid-payload-and-indexing",
-    "description": "Store workflowId on Qdrant/in-memory payloads when memories/judgments are stored and register Qdrant payload index for workflowId.",
+    "id": "goal-1-phase-1-shared-error-helper-and-token-ui",
+    "description": "Phase 1: Implement shared parseHttpError helper in src/services/httpError.ts, refine formatActionableError in src/swarm/types.ts, and add masked app token input with save/clear in SettingsModal keys tab.",
     "status": "completed",
-    "verification": "cortex.initialize() registers workflowId index; store() and storeBatch() preserve workflowId on point payloads."
+    "verification": "parseHttpError parses JSON/HTML/status safely without HTML leaks; formatActionableError distinguishes provider errors from app-auth 401; SettingsModal manages app token in localStorage."
   },
   {
-    "id": "goal-2-swarm-cortex-point-grading",
-    "description": "Implement gradeMemoryByWorkflowId in MemoryCortex to update point qualityRating (win 1.0, push 0.5, loss 0.0), memoryType=fact, outcome, gradedAt, feedbackProcessed: true with idempotency.",
+    "id": "goal-2-phase-2-run-path-resilience-and-sse-heartbeat",
+    "description": "Phase 2 (Issues 1+4): Implement runSwarm in-flight guard, AbortController connect/idle timeouts, parseHttpError integration, SSE heartbeat in streaming.ts, Run Swarm disabled button, and double-click/hang tests.",
     "status": "completed",
-    "verification": "Cortex point is updated to fact with exact outcome score; repeated call is a no-op."
+    "verification": "Rapid double-clicks dispatch only 1 POST; hung 401 or network disconnect times out safely without permanent loading spinner; SSE keepalive sends heartbeat comments; all useSwarmExecution tests pass."
   },
   {
-    "id": "goal-3-swarm-feedback-route-and-app-auth",
-    "description": "Enforce callerAppId on /api/swarm/feedback; grade point directly in Cortex when in-memory ledger is empty; return 404 only when point is not found for caller originApp.",
+    "id": "goal-3-phase-3-diagnostics-viewer-and-settings-status",
+    "description": "Phase 3 (Issue 2): Refactor CortexDiagnosticsViewer to use parseHttpError, display calm app-auth state instead of red card on 401, pause polling after 401 until token changes, and guard envStatus in useSwarmSettings.",
     "status": "completed",
-    "verification": "POST /api/swarm/feedback succeeds without in-memory ledger; cross-app grading returns 404."
+    "verification": "Unauthenticated dashboard load shows calm token prompt without 30s 401 polling storms; valid token resumes polling; env status handles 401/failures gracefully."
   },
   {
-    "id": "goal-4-swarm-retrieval-scoring-and-diagnostics",
-    "description": "Incorporate graded scores in retrieval ranking (win > loss, graded points outrank placeholder 0.85 judgments, same-app > sibling); update diagnostics with separate graded counts and headline accuracy = wins/total graded.",
+    "id": "goal-4-phase-4-provider-models-spinner-and-configurator",
+    "description": "Phase 4 (Issue 5): Add body timeout & parseHttpError to fetchAvailableModels in providerService.ts, optimize AgentConfigurator useEffect deps and deduplication, and add app-auth fallback text input.",
     "status": "completed",
-    "verification": "Retrieval ranks graded win over loss and graded points over placeholder; diagnostics reports accuracy correctly."
+    "verification": "401 during model fetch resolves promptly without hanging spinners; AgentConfigurator does not re-fetch infinitely; manual model text input available when token is missing."
   },
   {
-    "id": "goal-5-duelodds-workflowid-and-feedback-posting",
-    "description": "In DuelOdds, persist returned workflowId on AI recommendations; post win/loss/push to /api/swarm/feedback on bet settlement with swarm auth token; ignore non-swarm bets.",
+    "id": "goal-5-phase-5-input-size-limits-and-bodylimit-guard",
+    "description": "Phase 5 (Issue 3): Remove silent 500k cut in useSwarmExecution.ts, add client char caps (500k data, 20k task) with live counters in App.tsx, and enforce 2MB bodyLimit on /api/swarm/stream & /api/swarm/analyze returning 413 JSON.",
     "status": "completed",
-    "verification": "Settled AI bets post exactly one feedback payload with workflowId and gradedAt; non-swarm bets skipped."
+    "verification": "Over-limit text in UI blocks Run Swarm with explicit counter message; backend rejects payloads >2MB with 413 JSON; bodies <=1.5MB accepted."
   },
   {
-    "id": "goal-6-swarm-and-duelodds-tests-and-prs",
-    "description": "Write and run comprehensive tests for all 5 test scenarios across Swarm and DuelOdds; open PR to main in both repos.",
+    "id": "goal-6-phase-6-static-routing-and-soft-200-prevention",
+    "description": "Phase 6 (Issue 6): Add public/robots.txt, configure production server.ts static handlers with correct MIME types, and restrict SPA shell fallback to GET/HEAD / and /index.html returning 404 HTML for unmatched routes.",
     "status": "completed",
-    "verification": "All unit/integration tests pass in both repos; PRs opened on GitHub."
+    "verification": "GET /robots.txt returns text/plain 200; GET /nope returns 404 HTML; POST / returns 404/405; /api/* returns 404 JSON; /api/health returns 200."
+  },
+  {
+    "id": "goal-7-phase-7-csp-cleanup-and-prod-fallback-warnings",
+    "description": "Phase 7 (Extras): Remove duelodds.pages.dev from CSP connect-src in server.ts and app.ts, and add loud production startup warnings in cortex.ts and learningState.ts when running on in-memory vector store.",
+    "status": "completed",
+    "verification": "CSP connect-src cleaned up without altering CORS allowlist; NODE_ENV=production triggers clear warning logs when Qdrant is unavailable."
+  },
+  {
+    "id": "goal-8-phase-8-cors-before-auth-and-feedback-dedup",
+    "description": "Phase 8 (Swarm CORS Before Auth): Extract createCorsMiddleware, mount before createAppAuthMiddleware in server.ts, skip duplicate CORS/auth in app.ts, deduplicate /api/swarm/feedback, and add cors.test.ts.",
+    "status": "completed",
+    "verification": "POST /api/swarm/feedback from allowed origin without token returns 401 with Access-Control-Allow-Origin header; disallowed origin gets no ACAO; duplicate feedback returns 200 {duplicate:true}."
+  },
+  {
+    "id": "goal-9-phase-9-full-verification-and-regression-gate",
+    "description": "Phase 9: Run complete test suite and execute end-to-end verification checklist against punchlist requirements.",
+    "status": "completed",
+    "verification": "All test suites pass (npm test, vitest, portable, simulation, server, cli, cors); all verification criteria from punchlist verified."
   }
 ]

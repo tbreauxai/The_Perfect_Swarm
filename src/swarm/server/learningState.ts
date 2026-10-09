@@ -21,7 +21,12 @@ export async function restoreLearningState(store?: QdrantLearningStore): Promise
         const s = store || new QdrantLearningStore();
         const ready = await s.whenReady();
         if (!ready) {
-            console.warn('[SwarmServer] Learning persistence disabled (no Qdrant) — learning state is in-memory only and will not survive redeploys.');
+            const isProd = typeof process !== 'undefined' && process.env?.NODE_ENV === 'production';
+            if (isProd) {
+                console.warn('[SwarmServer] [WARNING: PRODUCTION RUNNING ON IN-MEMORY FALLBACK] Learning persistence disabled (no Qdrant) — learning state is in-memory only and will not survive redeploys!');
+            } else {
+                console.warn('[SwarmServer] Learning persistence disabled (no Qdrant) — learning state is in-memory only and will not survive redeploys.');
+            }
             return empty;
         }
         const repo = globalFeedbackEngine.getKnowledgeRepository();

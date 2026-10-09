@@ -41,7 +41,23 @@ export default function App() {
     cancelSwarm
   } = useSwarmExecution();
 
+  const MAX_DATA_CHARS = 500000;
+  const MAX_TASK_CHARS = 20000;
+
+  const isDataOverLimit = data.length > MAX_DATA_CHARS;
+  const isTaskOverLimit = task.length > MAX_TASK_CHARS;
+  const isOverLimit = isDataOverLimit || isTaskOverLimit;
+
+  const overLimitMessage = isDataOverLimit && isTaskOverLimit
+    ? `Raw Data exceeds ${MAX_DATA_CHARS.toLocaleString()} characters and Objective exceeds ${MAX_TASK_CHARS.toLocaleString()} characters.`
+    : isDataOverLimit
+    ? `Raw Data exceeds maximum allowed size (${MAX_DATA_CHARS.toLocaleString()} characters).`
+    : isTaskOverLimit
+    ? `Objective exceeds maximum allowed size (${MAX_TASK_CHARS.toLocaleString()} characters).`
+    : '';
+
   const handleRunSwarm = () => {
+    if (isOverLimit) return;
     runSwarm(task, data, settings);
   };
 
@@ -80,11 +96,20 @@ export default function App() {
 
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-neutral-700 mb-1">
-                    Raw Data
-                  </label>
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="block text-sm font-medium text-neutral-700">
+                      Raw Data
+                    </label>
+                    <span className={`text-xs ${isDataOverLimit ? 'text-red-600 font-semibold' : 'text-neutral-500'}`}>
+                      {`${data.length.toLocaleString()} / ${MAX_DATA_CHARS.toLocaleString()}`}
+                    </span>
+                  </div>
                   <textarea
-                    className="w-full h-48 px-4 py-3 rounded-xl border border-neutral-300 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 transition-colors outline-none resize-none font-mono text-sm"
+                    className={`w-full h-48 px-4 py-3 rounded-xl border transition-colors outline-none resize-none font-mono text-sm ${
+                      isDataOverLimit
+                        ? 'border-red-400 focus:border-red-500 focus:ring-2 focus:ring-red-200'
+                        : 'border-neutral-300 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200'
+                    }`}
                     placeholder="Paste your raw data here (logs, text, CSV, etc.)..."
                     value={data}
                     onChange={(e) => setData(e.target.value)}
@@ -92,17 +117,33 @@ export default function App() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-neutral-700 mb-1">
-                    Objective / Task
-                  </label>
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="block text-sm font-medium text-neutral-700">
+                      Objective / Task
+                    </label>
+                    <span className={`text-xs ${isTaskOverLimit ? 'text-red-600 font-semibold' : 'text-neutral-500'}`}>
+                      {`${task.length.toLocaleString()} / ${MAX_TASK_CHARS.toLocaleString()}`}
+                    </span>
+                  </div>
                   <input
                     type="text"
-                    className="w-full px-4 py-3 rounded-xl border border-neutral-300 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 transition-colors outline-none"
+                    className={`w-full px-4 py-3 rounded-xl border transition-colors outline-none ${
+                      isTaskOverLimit
+                        ? 'border-red-400 focus:border-red-500 focus:ring-2 focus:ring-red-200'
+                        : 'border-neutral-300 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200'
+                    }`}
                     placeholder="e.g., Extract sentiments."
                     value={task}
                     onChange={(e) => setTask(e.target.value)}
                   />
                 </div>
+
+                {isOverLimit && (
+                  <div className="p-4 bg-red-50 text-red-700 rounded-xl border border-red-100 text-sm flex gap-2">
+                    <AlertCircle className="w-5 h-5 flex-shrink-0" />
+                    <span>{overLimitMessage}</span>
+                  </div>
+                )}
 
                 {loading ? (
                   <div className="flex gap-2">
@@ -126,7 +167,9 @@ export default function App() {
                 ) : (
                   <button
                     onClick={handleRunSwarm}
-                    className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 rounded-xl transition-colors flex items-center justify-center gap-2"
+                    disabled={loading || isOverLimit}
+                    type="button"
+                    className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium py-3 rounded-xl transition-colors flex items-center justify-center gap-2"
                   >
                     Run Swarm
                   </button>

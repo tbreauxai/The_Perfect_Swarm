@@ -61,6 +61,7 @@ export function readAuthEnv(env: Record<string, any> | undefined): { tokens: Map
 
 export function createAppAuthMiddleware() {
     return async (c: any, next: any) => {
+        if (c.get && c.get('callerAppId')) return next();
         const path = c.req.path || '/';
         // Only API routes are authenticated. The dashboard HTML must load
         // before the browser can attach the token from localStorage.

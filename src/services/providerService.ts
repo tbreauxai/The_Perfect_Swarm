@@ -3,6 +3,7 @@
  */
 
 import { authHeaders } from './appAuthHeaders';
+import { parseHttpError, HttpError } from './httpError';
 import {
     globalModelHealthChecker,
     TwoTierModelHealthChecker,
@@ -106,8 +107,8 @@ export async function fetchAvailableModels(provider: string, apiKey?: string): P
                 const headers = authHeaders();
                 const res = await fetch(`/api/swarm/models?provider=${provider}`, { headers });
                 if (!res.ok) {
-                    const err = await res.json().catch(() => ({}));
-                    throw new Error(err.error || `Failed to fetch ${provider} models via backend proxy`);
+                    const parsed = await parseHttpError(res);
+                    throw new HttpError(parsed);
                 }
                 const rawModels: ModelOption[] = await res.json();
                 return rawModels.filter(m => !isModelQuarantined(provider, m.id));
@@ -116,7 +117,6 @@ export async function fetchAvailableModels(provider: string, apiKey?: string): P
                 return [];
         }
     } catch (error) {
-        console.error(`Error fetching models for ${provider}:`, error);
         throw error;
     }
 }

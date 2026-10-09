@@ -276,7 +276,12 @@ export class MemoryCortex {
             }
             return true;
         } catch (error: any) {
-            console.warn(`[MemoryCortex] Initialization failed for ${targetCollection}: ${error.message || error}. Falling back to ephemeral in-memory vector store.`);
+            const isProd = typeof process !== 'undefined' && process.env?.NODE_ENV === 'production';
+            if (isProd) {
+                console.warn(`[MemoryCortex] [WARNING: PRODUCTION RUNNING ON IN-MEMORY FALLBACK] Qdrant initialization failed for collection "${targetCollection}": ${error.message || error}. Learning state and memories will NOT persist across restarts/redeploys!`);
+            } else {
+                console.warn(`[MemoryCortex] Initialization failed for ${targetCollection}: ${error.message || error}. Falling back to ephemeral in-memory vector store.`);
+            }
             this.isAvailable = false;
             this.initialized = true;
             this.initializedCollections.add(targetCollection);

@@ -205,7 +205,10 @@ export function formatActionableError(rawError: unknown): string {
     if (!rawError) return 'An unexpected error occurred during execution.';
     const errStr = typeof rawError === 'string' ? rawError : (rawError as any).message || String(rawError);
 
-    if (/\b401\b|unauthorized|invalid[_\s]api[_\s]key|api[_\s]key[_\s]not[_\s]configured/i.test(errStr)) {
+    if (
+        /invalid[_\s]api[_\s]key|api[_\s]key[_\s]not[_\s]configured/i.test(errStr) ||
+        (/\b(?:401|unauthorized)\b/i.test(errStr) && /\b(?:api[_\s]?key|invalid[_\s]?key|provider)\b/i.test(errStr))
+    ) {
         return 'API key invalid — check Settings → API keys';
     }
     if (/\b429\b|rate[_\s]limit|quota[_\s]exceeded|too[_\s]many[_\s]requests/i.test(errStr)) {

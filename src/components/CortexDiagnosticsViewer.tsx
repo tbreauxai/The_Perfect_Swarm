@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Database, Server, Folder, Shield, Activity, RefreshCw, Zap, Cpu, Settings, Coins } from 'lucide-react';
+import { Database, Server, Folder, Shield, Activity, RefreshCw, Zap, Cpu, Settings, Coins, Key } from 'lucide-react';
 import { authHeaders } from '../services/appAuthHeaders';
+import { parseHttpError } from '../services/httpError';
 
 interface RoleRecommendation {
   role: string;
@@ -39,6 +40,7 @@ export function CortexDiagnosticsViewer() {
   const [diagnostics, setDiagnostics] = useState<CortexDiagnostics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isAuthError, setIsAuthError] = useState(false);
   const [selectedApp, setSelectedApp] = useState<string>('global');
 
   const fetchDiagnostics = async () => {
@@ -49,15 +51,20 @@ export function CortexDiagnosticsViewer() {
       const url = selectedApp === 'global' ? '/api/swarm/cortex/diagnostics' : `/api/swarm/cortex/diagnostics?appId=${encodeURIComponent(selectedApp)}`;
       const res = await fetch(url, { headers: authHeaders() });
       if (!res.ok) {
-        throw new Error(`Failed to fetch: ${res.statusText}`);
+        const parsed = await parseHttpError(res);
+        if (parsed.kind === 'app-auth') {
+          setIsAuthError(true);
+        }
+        throw new Error(parsed.message);
       }
+      setIsAuthError(false);
       const data = await res.json();
 
       // Fetch speed/latency & cost diagnostics via telemetry
       const metricsRes = await fetch('/api/swarm/metrics', { headers: authHeaders() });
       let telemetryData: any = {};
       if (metricsRes.ok) {
-        telemetryData = await metricsRes.json();
+        telemetryData = await metricsRes.json().catch(() => ({}));
       }
 
       setDiagnostics({
@@ -78,6 +85,23 @@ export function CortexDiagnosticsViewer() {
       setLoading(false);
     }
   };
+
+  // Listen for app token updates to resume polling after 401
+  useEffect(() => {
+    const handleTokenChange = () => {
+      setIsAuthError(false);
+      fetchDiagnostics();
+    };
+
+    window.addEventListener('swarm_token_changed', handleTokenChange);
+    window.addEventListener('storage', handleTokenChange);
+
+    return () => {
+      window.removeEventListener('swarm_token_changed', handleTokenChange);
+      window.removeEventListener('storage', handleTokenChange);
+    };
+  }, [selectedApp]);
+
   useEffect(() => {
     fetchDiagnostics();
 
@@ -85,7 +109,9 @@ export function CortexDiagnosticsViewer() {
 
     const startPolling = () => {
       if (interval) clearInterval(interval);
-      interval = setInterval(fetchDiagnostics, 30000); // refresh every 30s
+      if (!isAuthError) {
+        interval = setInterval(fetchDiagnostics, 30000); // refresh every 30s
+      }
     };
 
     const stopPolling = () => {
@@ -95,20 +121,22 @@ export function CortexDiagnosticsViewer() {
     const handleVisibilityChange = () => {
       if (document.hidden) {
         stopPolling();
-      } else {
+      } else if (!isAuthError) {
         fetchDiagnostics();
         startPolling();
       }
     };
 
-    startPolling();
+    if (!isAuthError) {
+      startPolling();
+    }
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       stopPolling();
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [selectedApp]);
+  }, [selectedApp, isAuthError]);
 
 
   if (loading && !diagnostics) {
@@ -120,13 +148,41 @@ export function CortexDiagnosticsViewer() {
   }
 
   if (error && !diagnostics) {
+    if (isAuthError) {
+      return (
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200 text-neutral-700 flex flex-col gap-2">
+          <div className="font-semibold flex items-center gap-2 text-neutral-800">
+            <Key className="w-5 h-5 text-indigo-600" /> App Token Required
+          </div>
+          <div className="text-sm text-neutral-500">
+            Cortex diagnostics require dashboard authentication. Add an app token in Settings → API Keys to view real-time diagnostics and memory metrics.
+          </div>
+          <button
+            onClick={() => {
+              setIsAuthError(false);
+              fetchDiagnostics();
+            }}
+            className="self-start mt-2 text-sm bg-neutral-100 hover:bg-neutral-200 text-neutral-700 px-3 py-1.5 rounded-lg transition"
+          >
+            Retry
+          </button>
+        </div>
+      );
+    }
+
     return (
       <div className="bg-white p-6 rounded-2xl shadow-sm border border-red-200 text-red-600 flex flex-col gap-2">
         <div className="font-semibold flex items-center gap-2">
           <Activity className="w-5 h-5" /> Cortex Diagnostics Error
         </div>
         <div className="text-sm">{error}</div>
-        <button onClick={fetchDiagnostics} className="self-start mt-2 text-sm bg-red-50 px-3 py-1.5 rounded hover:bg-red-100 transition">
+        <button
+          onClick={() => {
+            setIsAuthError(false);
+            fetchDiagnostics();
+          }}
+          className="self-start mt-2 text-sm bg-red-50 px-3 py-1.5 rounded hover:bg-red-100 transition"
+        >
           Retry
         </button>
       </div>

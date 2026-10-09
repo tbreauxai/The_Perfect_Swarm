@@ -1,0 +1,78 @@
+# IDE PUNCH-LIST — The Perfect Swarm (tbreauxai/The_Perfect_Swarm @ 5d1bc0f)
+# Source: audit_runbook_perfect_swarm.md Architecture Plan. Format: file | Function | Action | Logic. Work sections top to bottom.
+# Sections: 1) Live-app issues  2) Swarm feedback CORS (swarm half — ship before DuelOdds half)
+
+################################################################################
+# The Perfect Swarm punch-list (tbreauxai/The_Perfect_Swarm @ 5d1bc0f) — source: audit_runbook_perfect_swarm.md "Architecture Plan" > Perfect Swarm section
+# Execute in order. Ship Phase 2 (Issues 1+4) as one change. [BLOCKED] = waits on Tyler's policy/infra decision.
+
+## Phase 1 — Step 0 shared error helper
+file:src/services/httpError.ts | Function: parseHttpError(res) | Action: Add | Logic: read body once with timeout; parse JSON .error; never return HTML body; map 401->app-auth, 403+HTML->blocked (message: remove semicolon/SQL-like text e.g. "; drop table" and retry), 413->too-large, 429->rate-limit, 5xx->server, else json error or "HTTP <status>"; never use statusText; return {status, kind, message}
+file:src/swarm/types.ts | Function: formatActionableError (L204-226, regex L208) | Action: Modify | Logic: only map to "API key invalid" for provider swarm_error payloads, not app-auth 401; grep callers and confirm messages
+file:src/components/SettingsModal.tsx | Function: keys tab | Action: Add | Logic: app token input wired to setAppToken (src/services/appAuthHeaders.ts L11-18), masked, with save/clear
+
+## Phase 2 — Issues 1 + 4 together (run path)
+file:src/hooks/useSwarmExecution.ts | Function: runSwarm in-flight guard (L47-56) | Action: Modify | Logic: useRef run id/boolean checked+set before any await; return early if a run is active
+file:src/hooks/useSwarmExecution.ts | Function: runSwarm AbortController setup (L53-54) | Action: Modify | Logic: abort existing controller before creating new; combine with connect timer (~30s to headers) cleared once streaming starts
+file:src/hooks/useSwarmExecution.ts | Function: runSwarm non-OK branch (L80-89) | Action: Modify | Logic: use parseHttpError, throw its message (no raw HTML at L87)
+file:src/hooks/useSwarmExecution.ts | Function: stream reader loop (L126-156) | Action: Modify | Logic: idle timeout reset on every chunk (generous N s); handle or explicitly ignore swarm_partial events
+file:src/hooks/useSwarmExecution.ts | Function: abort/catch handling (L163-164) | Action: Modify | Logic: show timeout message distinct from user cancel
+file:src/hooks/useSwarmExecution.ts | Function: finally (L168-172) | Action: Modify | Logic: reset loading/refs only if this run id is still current
+file:src/swarm/server/streaming.ts | Function: SSE stream writer | Action: Modify | Logic: send periodic heartbeat comment if none exists, interval below client idle timeout
+file:src/App.tsx | Function: Run Swarm button (L126-133) | Action: Modify | Logic: add disabled={loading} and type="button"
+file:src/hooks/useSwarmExecution.test.ts | Function: hang + double-click tests | Action: Add | Logic: mock 401 with never-resolving body asserts loading false + error shown; rapid double call sends one POST
+# Before merging: review archive track fix_swarm_hang_analyzing_forever_20260914 so its fix is preserved
+
+## Phase 3 — Issue 2 (diagnostics + settings status)
+file:src/components/CortexDiagnosticsViewer.tsx | Function: fetch error (L51-53) | Action: Modify | Logic: use parseHttpError instead of res.statusText; app-auth shows calm "add an app token" state, not red card (L122-134)
+file:src/components/CortexDiagnosticsViewer.tsx | Function: polling (L86-89) + visibility refetch (L95-102) | Action: Modify | Logic: stop after 401; resume when app token changes
+file:src/components/CortexDiagnosticsViewer.tsx | Function: metrics fetch (L57-61) | Action: Modify | Logic: check res.ok via helper; never parse error body as data
+file:src/hooks/useSwarmSettings.ts | Function: env status fetch (L111-122) | Action: Modify | Logic: check res.ok before setEnvStatus; on failure set null or {authRequired:true}; confirm SettingsModal (App.tsx:266) handles null
+file:src/swarm/server/appAuth.ts | Function: createAppAuthMiddleware skip list (L67) | Action: Modify | Logic: [BLOCKED: Tyler decides public status] skip /api/config/status, endpoint returns booleans only (authRequired); update appAuth tests; verify both mounts (server.ts:44, app.ts:198)
+file:src/hooks/useSwarmExecution.ts | Function: runSwarm pre-flight | Action: Add | Logic: [BLOCKED: depends on public status endpoint] if no app token and authRequired, block run with app-auth message, no request
+
+## Phase 4 — Issue 5 (models spinner)
+file:src/services/providerService.ts | Function: fetchAvailableModels (L106-111) | Action: Modify | Logic: use parseHttpError with body-read timeout so 401 can't stay pending; grep other callers (checkProviderModelsHealth L60)
+file:src/services/providerService.ts | Function: fetchAvailableModels log (L119) | Action: Delete | Logic: remove console.error; caller logs
+file:src/components/AgentConfigurator.tsx | Function: model-loading useEffect (L46-76) | Action: Modify | Logic: drop own state from deps; track requested providers in useRef Set keyed on unique provider list; cleanup flag to ignore stale results; single warning per provider (L70)
+file:src/components/AgentConfigurator.tsx | Function: model text-input fallback (L266-273) | Action: Modify | Logic: on app-auth show fallback input + hint "Add an app token to load the model list"
+file:src/components/AgentConfigurator.test.tsx | Function: effect tests | Action: Modify | Logic: update for new effect; also update SettingsModal.test.tsx; check archive track fix_settings_agent_tab_crash_20260913
+
+## Phase 5 — Issue 3 (input size / 403)
+file:src/hooks/useSwarmExecution.ts | Function: input truncation (L67-70) | Action: Delete | Logic: remove silent 500k cut
+file:src/App.tsx | Function: data textarea (L86-91) + task input (L98-104) | Action: Modify | Logic: data cap 500k chars, task cap 20k chars; live char counter on each; block Run with message when over limit
+file:src/swarm/server/app.ts | Function: /api/swarm/stream + /api/swarm/analyze routes (~L458, ~L541) | Action: Modify | Logic: Hono bodyLimit maxSize 2 MB (2*1024*1024) on both routes, return 413 JSON {error}
+# [BLOCKED: Tyler picks] Cloudflare edge (Render's front) 403s on semicolon + SQL DDL (e.g. '; drop table'). Friendly message already covered by parseHttpError 403->blocked. Custom domain in Tyler's zone + skip rule (Architect's pick) needs DuelOdds swarm URL, CORS/CSP, Render domain updates. No code until decided
+
+## Phase 6 — Issue 6 (soft 200)
+file:public/robots.txt | Function: n/a (static) | Action: Add | Logic: plain-text robots, allow /; optional sitemap.xml listing /
+file:server.ts | Function: static handlers (L114-115) | Action: Modify | Logic: keep /assets/*; serve root static files from dist with correct content types
+file:server.ts | Function: shell fallback (L115) | Action: Modify | Logic: app.get (GET/HEAD) not app.use; serve shell only for / and /index.html; other non-API non-asset paths return 404 HTML; leave /api/* JSON 404s (L61-63) and dev branch (L88-102)
+
+## Phase 7 — extras
+file:server.ts | Function: CSP connect-src (L37) | Action: Modify | Logic: optional: remove duelodds.pages.dev from connect-src only
+file:src/swarm/server/app.ts | Function: CSP connect-src (L138) | Action: Modify | Logic: optional: same removal; do NOT touch CORS allowlist (L145-150)
+file:src/swarm/memory/cortex.ts | Function: Qdrant fallback (L279) | Action: Modify | Logic: loud startup warning in production when in-memory fallback is active
+file:src/swarm/server/learningState.ts | Function: fallback init (L20-25) | Action: Modify | Logic: same production warning; keep qdrantAvailable in diagnostics
+# [BLOCKED: Tyler infra] provision persistent Qdrant and set QDRANT_URL + key on Render (config, not code)
+
+## Verify
+- no token -> Run Swarm shows app-auth message in <30s, button re-enables
+- 5 rapid clicks -> 1 POST
+- anonymous load -> diagnostics shows calm token state, no 30s 401 polling
+- XSS/SQL input -> "blocked by firewall" text, no HTML; over-limit input -> blocked with counter; server returns 413 JSON; 1.5 MB body accepted, 2.1 MB rejected
+- GET /nope -> 404; POST / -> 404/405; /robots.txt -> text/plain; /api/health still 200
+
+################################################################################
+# Swarm feedback CORS / 401 — Perfect Swarm half (@ 5d1bc0f). Ship this BEFORE the DuelOdds half (ide_punchlist_duelodds.txt).
+
+## A — The Perfect Swarm repo: CORS before auth
+file:src/swarm/server/cors.ts | Function: createCorsMiddleware | Action: Add | Logic: move CORS logic from app.ts L165-193 here; allowlist DEFAULT_ALLOWED_ORIGINS (app.ts L145-150) + CORS_ALLOWED_ORIGINS env; set ACAO only for allowed origins
+file:server.ts | Function: createMainApp (before auth at L44) | Action: Modify | Logic: mount createCorsMiddleware ahead of createAppAuthMiddleware so 401/404/413/500 carry ACAO; keep security headers order (L36-42)
+file:src/swarm/server/app.ts | Function: createSwarmServer CORS (L165-193) | Action: Modify | Logic: use shared createCorsMiddleware; skip if already applied by outer app to avoid duplicate headers
+file:src/swarm/server/app.ts | Function: inner auth mount (L198) | Action: Modify | Logic: no-op when callerAppId already set by outer auth; keep active for Pages variant functions/api/[[path]].ts
+file:src/swarm/server/app.ts | Function: /api/swarm/feedback handler | Action: Modify | Logic: ignore duplicate (callerAppId, workflowId, pickId) submissions; return 200 {duplicate:true}
+file:src/swarm/server/cors.test.ts | Function: CORS-on-error tests | Action: Add | Logic: allowed origin POST no token -> 401 with ACAO; disallowed origin -> no ACAO; OPTIONS -> 204
+
+## Verify
+- swarm: POST /api/swarm/feedback from duelodds origin, no token -> 401 with ACAO

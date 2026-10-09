@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { createAdaptorServer, type ServerType } from '@hono/node-server';
 import { executeSwarmWorkflow, getOrCreateDefaultCortex, type SwarmWorkflowParams } from '../engine/index.ts';
 import { globalTelemetryCollector, createTelemetryMiddleware } from '../telemetry.ts';
@@ -23,6 +24,7 @@ import { handleSwarmSse } from './streaming.ts';
 import { fetchProviderModels } from './modelsProvider.ts';
 import { buildCortexDiagnostics } from './cortexDiagnostics.ts';
 import { createAppAuthMiddleware } from './appAuth.ts';
+import { createCorsMiddleware } from './cors.ts';
 
 export const FORBIDDEN_CLIENT_SECRET_KEYS = [
     'geminiApiKey',
@@ -135,67 +137,23 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
 
     // Apply security headers to every response
     app.use('*', async (c, next) => {
-        c.header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://the-perfect-swarm.onrender.com https://duelodds.pages.dev; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
+        c.header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://the-perfect-swarm.onrender.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
         c.header('X-Frame-Options', 'DENY');
         c.header('X-Content-Type-Options', 'nosniff');
         c.header('Referrer-Policy', 'no-referrer');
         await next();
     });
 
-    const DEFAULT_ALLOWED_ORIGINS = [
-        'https://the-perfect-swarm.onrender.com',
-        'https://duelodds.pages.dev',
-        'http://localhost:3000',
-        'http://127.0.0.1:3000'
-    ];
-
-    const getAllowedOrigins = (allowedOriginsStr?: string): Set<string> => {
-        const origins = new Set<string>(DEFAULT_ALLOWED_ORIGINS);
-        if (allowedOriginsStr) {
-            for (const item of allowedOriginsStr.split(',')) {
-                const trimmed = item.trim();
-                if (trimmed && trimmed !== '*') {
-                    origins.add(trimmed);
-                }
-            }
-        }
-        return origins;
-    };
-
     if (options.cors !== false) {
-        app.use('*', async (c, next) => {
-            const env = Object.assign({}, typeof process !== 'undefined' ? process.env : {}, (c.env as Record<string, any>) || {}) as Record<string, any>;
-            const allowedOrigins = getAllowedOrigins(env.CORS_ALLOWED_ORIGINS);
-            const reqOrigin = c.req.header('origin');
-            const isOriginAllowed = reqOrigin ? allowedOrigins.has(reqOrigin) : false;
-
-            if (c.req.method === 'OPTIONS') {
-                if (reqOrigin && !isOriginAllowed) {
-                    return c.text('Forbidden: Origin not allowed', 403);
-                }
-                if (isOriginAllowed) {
-                    c.header('Access-Control-Allow-Origin', reqOrigin!);
-                    c.header('Vary', 'Origin');
-                }
-                c.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-                c.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-                return c.body(null, 204);
-            }
-
-            if (isOriginAllowed) {
-                c.header('Access-Control-Allow-Origin', reqOrigin!);
-                c.header('Vary', 'Origin');
-                c.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-                c.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-            }
-
-            await next();
-        });
+        app.use('*', createCorsMiddleware());
     }
 
     // Caller token identifies the app. It does not restrict sibling memory reads.
     // /api/health stays open for the keep-awake ping.
-    app.use('*', createAppAuthMiddleware());
+    app.use('*', async (c, next) => {
+        if ((c as any).get('callerAppId')) return next();
+        return createAppAuthMiddleware()(c, next);
+    });
 
     // Apply telemetry middleware to track request latency across all endpoints
     app.use('*', createTelemetryMiddleware());
@@ -203,6 +161,9 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
     app.get('/api/health', (c) => {
         return c.json({ status: 'ok', edge: true });
     });
+
+    const processedFeedbackSubmissions = new Set<string>();
+    const MAX_PROCESSED_FEEDBACK = 10000;
 
     app.post('/api/swarm/feedback', async (c) => {
         try {
@@ -218,6 +179,20 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 return c.json({ error: 'Unauthorized: missing callerAppId' }, 401);
             }
             const originApp = callerAppId;
+            const pickId = body.pickId || body.pick_id;
+
+            // Deduplicate (callerAppId, workflowId, pickId) submissions
+            if (pickId) {
+                const dedupKey = `${callerAppId}:${workflowId}:${pickId}`;
+                if (processedFeedbackSubmissions.has(dedupKey)) {
+                    return c.json({ ok: true, duplicate: true, message: 'Feedback already processed', workflowId, pickId }, 200);
+                }
+                if (processedFeedbackSubmissions.size >= MAX_PROCESSED_FEEDBACK) {
+                    const oldest = processedFeedbackSubmissions.values().next().value;
+                    if (oldest) processedFeedbackSubmissions.delete(oldest);
+                }
+                processedFeedbackSubmissions.add(dedupKey);
+            }
 
             // 1. Grade the point in MemoryCortex
             let gradeResult = { found: false, alreadyProcessed: false };
@@ -246,7 +221,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                     .queryOutcomes({ appId: originApp })
                     .find((o: any) => o.workflowId === workflowId && o.feedbackProcessed);
                 if (already) {
-                    return c.json({ ok: true, message: 'Feedback already processed', workflowId, alreadyProcessed: true });
+                    return c.json({ ok: true, duplicate: true, message: 'Feedback already processed', workflowId, alreadyProcessed: true });
                 }
                 if (score != null && Number.isFinite(statedProbability) && statedProbability > 0 && statedProbability < 1) {
                     recordProbabilityObservation({
@@ -314,7 +289,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
 
             // 3. Handle idempotency
             if (gradeResult.alreadyProcessed || workflowRecords.some((o: any) => o.feedbackProcessed)) {
-                return c.json({ ok: true, message: 'Feedback already processed', workflowId, alreadyProcessed: true });
+                return c.json({ ok: true, duplicate: true, message: 'Feedback already processed', workflowId, alreadyProcessed: true });
             }
 
             const accuracyScore = outcome === 'win' ? 1.0 : outcome === 'loss' ? 0.0 : 0.5;
@@ -455,7 +430,12 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
         }
     });
 
-    app.all('/api/swarm/stream', async (c) => {
+    const swarmBodyLimit = bodyLimit({
+        maxSize: 2 * 1024 * 1024,
+        onError: (c) => c.json({ error: 'Payload Too Large' }, 413)
+    });
+
+    app.all('/api/swarm/stream', swarmBodyLimit, async (c) => {
         let params: SwarmWorkflowParams;
         try {
             const env = Object.assign({}, typeof process !== 'undefined' ? process.env : {}, c.env || {}) as Record<string, any>;
@@ -539,7 +519,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
         }
     });
 
-    app.post('/api/swarm/analyze', async (c) => {
+    app.post('/api/swarm/analyze', swarmBodyLimit, async (c) => {
         try {
             const body = await c.req.json().catch(() => ({}));
             if (!body.task) {

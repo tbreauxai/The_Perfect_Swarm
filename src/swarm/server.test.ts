@@ -377,7 +377,7 @@ describe('Swarm Server & Feedback Attribution', () => {
         expect(res.headers.get('x-content-type-options')).toBe('nosniff');
         expect(res.headers.get('referrer-policy')).toBe('no-referrer');
         expect(res.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
-        expect(res.headers.get('content-security-policy')).toContain("connect-src 'self' https://the-perfect-swarm.onrender.com https://duelodds.pages.dev");
+        expect(res.headers.get('content-security-policy')).toContain("connect-src 'self' https://the-perfect-swarm.onrender.com");
     });
 
     it('returns JSON 404 for unknown /api/* endpoints', async () => {
@@ -471,6 +471,34 @@ describe('Swarm Server & Feedback Attribution', () => {
         const data = await res.json();
         expect(Array.isArray(data)).toBe(true);
         expect(data[0].id).toBe('simulated-swarm-v1');
+    });
+
+    it('rejects payload > 2MB on /api/swarm/stream with 413 JSON', async () => {
+        const largeString = 'a'.repeat(2.1 * 1024 * 1024);
+        const res = await fetch(`${baseUrl}/api/swarm/stream`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ task: 'Analyze big data', data: largeString })
+        });
+        expect(res.status).toBe(413);
+        const data = await res.json();
+        expect(data).toEqual({ error: 'Payload Too Large' });
+    });
+
+    it('rejects payload > 2MB on /api/swarm/analyze with 413 JSON', async () => {
+        const largeString = 'a'.repeat(2.1 * 1024 * 1024);
+        const res = await fetch(`${baseUrl}/api/swarm/analyze`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ task: 'Analyze big data', data: largeString })
+        });
+        expect(res.status).toBe(413);
+        const data = await res.json();
+        expect(data).toEqual({ error: 'Payload Too Large' });
     });
 });
 

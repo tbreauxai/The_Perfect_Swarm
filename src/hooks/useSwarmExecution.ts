@@ -2,6 +2,7 @@ import { useState, useRef } from 'react';
 import type { SwarmTimelineEvent } from '../components/SwarmEventTimeline';
 import type { AppSettings } from '../components/SettingsModal';
 import { authHeaders } from '../services/appAuthHeaders';
+import { parseHttpError } from '../services/httpError';
 import { formatActionableError } from '../swarm/types';
 
 export function useSwarmExecution() {
@@ -19,6 +20,8 @@ export function useSwarmExecution() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const eventBufferRef = useRef<SwarmTimelineEvent[]>([]);
   const rafIdRef = useRef<number | null>(null);
+  const isRunningRef = useRef<boolean>(false);
+  const activeRunIdRef = useRef<number>(0);
 
   const flushEventBuffer = () => {
     if (eventBufferRef.current.length > 0) {
@@ -38,6 +41,8 @@ export function useSwarmExecution() {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
+    isRunningRef.current = false;
+    setLoading(false);
   };
 
   const toggleEvent = (id: string) => {
@@ -45,9 +50,23 @@ export function useSwarmExecution() {
   };
 
   const runSwarm = async (task: string, data: string, settings: AppSettings) => {
+    // 1. In-flight guard: check and set boolean before ANY await
+    if (isRunningRef.current) {
+      return;
+    }
+
     if (!task) {
       setError('Please provide a task.');
       return;
+    }
+
+    isRunningRef.current = true;
+    const currentRunId = ++activeRunIdRef.current;
+
+    // 2. AbortController setup: abort existing controller before creating new
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
     }
 
     const controller = new AbortController();
@@ -64,29 +83,45 @@ export function useSwarmExecution() {
     setFinalAnalysis(null);
     setProgressiveStage(null);
 
-    let safeData = data;
-    if (safeData.length > 500000) {
-      safeData = safeData.substring(0, 500000) + "\n...[TRUNCATED TO 500KB FOR NETWORK/MEMORY SAFETY]...";
-    }
+    let abortReason: 'connect-timeout' | 'idle-timeout' | 'user' | null = null;
+    let connectTimer: any = null;
+    let idleTimer: any = null;
+
+    const clearTimers = () => {
+      if (connectTimer) {
+        clearTimeout(connectTimer);
+        connectTimer = null;
+      }
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+      }
+    };
+
+    // Connect timer: ~30s to response headers
+    connectTimer = setTimeout(() => {
+      abortReason = 'connect-timeout';
+      controller.abort();
+    }, 30000);
 
     try {
       const response = await fetch('/api/swarm/stream', {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ task, data: safeData, settings }),
+        body: JSON.stringify({ task, data, settings }),
         signal: controller.signal
       });
 
+      // Headers arrived, clear connect timer
+      if (connectTimer) {
+        clearTimeout(connectTimer);
+        connectTimer = null;
+      }
+
+      // 3. Non-OK branch: parseHttpError, throw its message (no raw HTML)
       if (!response.ok) {
-        let errorMsg = 'Failed to execute swarm.';
-        const errorText = await response.text();
-        try {
-          const errorData = JSON.parse(errorText);
-          errorMsg = errorData.error || errorMsg;
-        } catch {
-          errorMsg = `Server Error (${response.status}): ${errorText.substring(0, 100)}...`;
-        }
-        throw new Error(errorMsg);
+        const parsed = await parseHttpError(response);
+        throw new Error(parsed.message);
       }
 
       if (!response.body) {
@@ -97,9 +132,22 @@ export function useSwarmExecution() {
       const decoder = new TextDecoder();
       let buffer = '';
 
+      // 4. Stream reader loop: idle timeout reset on every chunk (generous 45s)
+      const resetIdleTimeout = () => {
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => {
+          abortReason = 'idle-timeout';
+          controller.abort();
+        }, 45000);
+      };
+
+      resetIdleTimeout();
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+
+        resetIdleTimeout();
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n\n');
@@ -136,6 +184,9 @@ export function useSwarmExecution() {
             } else if (eventType === 'swarm_stage') {
               flushEventBuffer();
               setProgressiveStage(parsedData);
+            } else if (eventType === 'swarm_partial') {
+              // Explicitly ignore or consume swarm_partial events
+              flushEventBuffer();
             } else if (eventType === 'swarm_complete') {
               flushEventBuffer();
               setProgressiveStage(null);
@@ -160,15 +211,29 @@ export function useSwarmExecution() {
         }
       }
     } catch (err: any) {
-      if (err.name === 'AbortError') {
-        setError('Analysis cancelled by user.');
+      // 5. Abort/catch handling: show timeout message distinct from user cancel
+      if (err.name === 'AbortError' || controller.signal.aborted) {
+        if (abortReason === 'connect-timeout') {
+          setError('Connection timed out waiting for server response (30s).');
+        } else if (abortReason === 'idle-timeout') {
+          setError('Stream timed out waiting for swarm response (idle timeout).');
+        } else {
+          setError('Analysis cancelled by user.');
+        }
       } else {
         setError(formatActionableError(err.message || 'An unexpected error occurred during execution.'));
       }
     } finally {
+      clearTimers();
       flushEventBuffer();
-      setLoading(false);
-      abortControllerRef.current = null;
+      // 6. Reset loading/refs only if this run id is still current
+      if (activeRunIdRef.current === currentRunId) {
+        isRunningRef.current = false;
+        setLoading(false);
+        if (abortControllerRef.current === controller) {
+          abortControllerRef.current = null;
+        }
+      }
     }
   };
 

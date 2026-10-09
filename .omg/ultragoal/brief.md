@@ -1,41 +1,26 @@
-# Ultragoal Brief: Fix 5 - Continuous Learning Loop
+# Ultragoal Brief: Full IDE Punchlist Implementation (The Perfect Swarm)
 
 ## Objective
-Implement Fix 5 (the learning loop) in `tbreauxai/The_Perfect_Swarm` and `tbreauxai/DuelOdds`.
-A graded win, loss, or push updates the stored judgment that produced it in the shared cortex, and subsequent retrievals use that score. Grades persist across process restarts.
+Implement all phases of `ide_punchlist_perfect_swarm.txt` in `tbreauxai/The_Perfect_Swarm` systematically, one phase at a time:
+1. Phase 1 — Step 0 shared error helper & app token UI
+2. Phase 2 — Issues 1 + 4 together (run path in-flight guard, AbortController, connect/idle timeouts, SSE heartbeat)
+3. Phase 3 — Issue 2 (diagnostics viewer error handling, calm app-auth state, polling pauses, env status resilience)
+4. Phase 4 — Issue 5 (models spinner body timeout, agent configurator effect deps & fallback text input)
+5. Phase 5 — Issue 3 (input size client limits & counters, server bodyLimit 2MB 413 guard, firewall 403 handling)
+6. Phase 6 — Issue 6 (soft 200 prevention, robots.txt, static asset MIME handling, strict shell fallback 404s)
+7. Phase 7 — Extras (CSP connect-src cleanup, production in-memory fallback warnings)
+8. Swarm feedback CORS before auth (CORS middleware ahead of auth, inner auth bypass, feedback duplicate deduplication, tests)
+9. Full Verification & Regression Gate
 
 ## Constraints & Boundaries
-- Single shared Qdrant collection (`pwa_swarm_dev_cortex_v2`): do NOT split the cortex.
-- Do NOT change caller auth, CORS, or provider-key handling.
-- Do NOT commit secrets (.env, API keys, tokens).
-- Maintain 100% test passing across all existing suites.
-- Open a PR in each repository targeting `main`.
-
-## Swarm Architecture
-1. **Payload & Indexing**: Store `workflowId` on memory payloads in Qdrant and in-memory fallback store. Register a keyword payload index for `workflowId`.
-2. **Persistent Feedback Grading**:
-   - `/api/swarm/feedback` resolves point by `workflowId` and `originApp` (derived from authenticated caller token, ignoring client body `appId`).
-   - If in-memory record in `knowledgeRepository` is missing (after restart), grade point directly in Cortex.
-   - Outcome ratings: win = 1.0, push = 0.5, loss = 0.0.
-   - Point payload update: `qualityRating` set to outcome score, `memoryType = 'fact'`, `outcome`, `gradedAt`, `feedbackProcessed: true`.
-   - Idempotent: second grade for same `workflowId` returns success without modifying score.
-   - Return 404 only when no point has that `workflowId` for that `originApp`.
-3. **Retrieval Scoring**:
-   - Retrieval uses the graded score (`qualityRating`).
-   - For same domain and entity: win (1.0) ranks above push (0.5), which ranks above loss (0.0).
-   - Ungraded placeholder (0.85/0.90) must not outrank a graded loss (empirical facts/graded outcomes take precedence, or graded points reflect empirical feedback).
-   - Same-app weight (1.0) outranks sibling weight (0.45).
-4. **Diagnostics**:
-   - Separate graded points from ungraded judgments.
-   - Headline accuracy = (graded wins) / (graded outcomes), or `null` when none graded.
-   - Do not display 0.85 placeholder as if it were a performance result.
-
-## DuelOdds Architecture
-1. **WorkflowId Persistence**:
-   - Persist returned `workflowId` on every AI recommendation produced by the swarm.
-   - If response has no `workflowId`, log and do not invent one.
-2. **Settled Bet Feedback Posting**:
-   - Every settled AI bet with a `workflowId` posts `win`, `loss`, or `push` to `https://the-perfect-swarm.onrender.com/api/swarm/feedback` with caller token.
-   - Include `workflowId`, `outcome`, `gradedAt`.
-   - Treat 200 and already-processed response as success; log 404s.
-   - Do NOT post bets that never came from the swarm.
+- **Order of Execution**: Top to bottom as specified in `ide_punchlist_perfect_swarm.txt`.
+- **Phase 2 Bundling**: Issues 1 + 4 must ship together as one change on the run path.
+- **CORS Priority**: Ship Swarm repo CORS before auth ahead of DuelOdds repo changes.
+- **Preserve Archive Fixes**:
+  - `fix_swarm_hang_analyzing_forever_20260914` (real-time timeline rendering, cancel button, 429 failover)
+  - `fix_settings_agent_tab_crash_20260913` (defensive settings defaults, optional chaining, model health check safety)
+- **Policy/Infra Blockers Explicitly Flagged**:
+  - `/api/config/status` public skip list & execution pre-flight blocked pending Tyler decision.
+  - Cloudflare edge custom domain / skip rule blocked pending Tyler decision (friendly 403 error handled in parseHttpError).
+  - Persistent Qdrant provisioning on Render is an infra/env task, not code.
+- **Test Integrity**: Maintain 100% test pass rate across Vitest, Portable Swarm, Multi-App Simulation, CLI, and SSE test suites.
