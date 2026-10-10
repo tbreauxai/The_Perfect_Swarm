@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 const MAX_PROCESSED_FEEDBACK = 10000;
 
@@ -23,6 +24,7 @@ export function removeFeedbackInFlight(key: string): void {
 let processedFeedbackSubmissions = new Set<string>();
 let persistenceFilePath: string | null = null;
 let isPersistent = false;
+let supabase: SupabaseClient | null = null;
 
 // Simple string hash function for dedupe key fallback
 export function hashString(str: string): string {
@@ -46,10 +48,20 @@ export function generateDedupeKey(callerAppId: string, workflowId: string, pickI
     return `${callerAppId}:${workflowId}:${outcome}:${hash}`;
 }
 
-export function initFeedbackDedupe(options?: { persistDir?: string }): void {
+export function initFeedbackDedupe(options?: { persistDir?: string; supabaseUrl?: string; supabaseKey?: string }): void {
     const persistDir = options?.persistDir || process.env.RENDER_DISK_PATH;
+    const sbUrl = options?.supabaseUrl || process.env.SUPABASE_URL;
+    const sbKey = options?.supabaseKey || process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-    if (persistDir) {
+    if (!persistDir && sbUrl && sbKey) {
+        try {
+            supabase = createClient(sbUrl, sbKey);
+            isPersistent = true;
+        } catch (err) {
+            console.warn('[SwarmServer] Failed to initialize Supabase client for feedback dedupe storage, falling back to in-memory:', err);
+            isPersistent = false;
+        }
+    } else if (persistDir) {
         try {
             if (!fs.existsSync(persistDir)) {
                 fs.mkdirSync(persistDir, { recursive: true });
@@ -74,8 +86,22 @@ export function initFeedbackDedupe(options?: { persistDir?: string }): void {
     }
 }
 
-function saveProcessedFeedback(): void {
-    if (isPersistent && persistenceFilePath) {
+async function saveProcessedFeedback(key?: string): Promise<void> {
+    if (!isPersistent) return;
+
+    if (supabase && key) {
+        try {
+            const { error } = await supabase
+                .from('swarm_feedback_dedupe')
+                .insert([{ dedupe_key: key }]);
+            // We ignore conflict errors since they just mean it's already recorded
+            if (error && error.code !== '23505') {
+                console.error('[SwarmServer] Failed to save processed feedback submission to Supabase:', error);
+            }
+        } catch (err) {
+            console.error('[SwarmServer] Failed to save processed feedback submission to Supabase:', err);
+        }
+    } else if (persistenceFilePath) {
         try {
             // Convert Set to Array for JSON serialization
             const data = JSON.stringify(Array.from(processedFeedbackSubmissions));
@@ -89,7 +115,33 @@ function saveProcessedFeedback(): void {
     }
 }
 
-export function isFeedbackProcessed(key: string): boolean {
+export async function isFeedbackProcessed(key: string): Promise<boolean> {
+    if (supabase) {
+        if (processedFeedbackSubmissions.has(key)) return true; // Check local cache first
+
+        try {
+            const { data, error } = await supabase
+                .from('swarm_feedback_dedupe')
+                .select('dedupe_key')
+                .eq('dedupe_key', key)
+                .maybeSingle();
+
+            if (error) {
+                console.error('[SwarmServer] Error checking Supabase for dedupe key:', error);
+                return false;
+            }
+
+            if (data) {
+                processedFeedbackSubmissions.add(key); // Cache it
+                return true;
+            }
+            return false;
+        } catch (err) {
+            console.error('[SwarmServer] Error checking Supabase for dedupe key:', err);
+            return false;
+        }
+    }
+
     return processedFeedbackSubmissions.has(key);
 }
 
@@ -103,9 +155,7 @@ export function markFeedbackProcessed(key: string): void {
     }
 
     // Save asynchronously to not block the request
-    setTimeout(() => {
-        saveProcessedFeedback();
-    }, 0);
+    saveProcessedFeedback(key).catch(() => {});
 }
 
 // For testing purposes
@@ -114,4 +164,5 @@ export function _resetFeedbackDedupe(): void {
     processedFeedbackSubmissions.clear();
     isPersistent = false;
     persistenceFilePath = null;
+    supabase = null;
 }

@@ -65,10 +65,14 @@ export async function handleSwarmSse(
                 }
             });
 
-            await sendEvent('swarm_complete', {
-                ...result,
-                workflowId: result.workflowId || crypto.randomUUID()
-            });
+            const payload: any = { ...result };
+            if (result.workflowId) {
+                payload.workflowId = result.workflowId;
+            } else {
+                delete payload.workflowId;
+            }
+
+            await sendEvent('swarm_complete', payload);
         } catch (err: any) {
             await sendEvent('swarm_error', { error: err.message || String(err) });
         } finally {
