@@ -65,7 +65,7 @@ describe('Production / Staging Server Wrapper App', () => {
 
     describe('Static Routing and Soft-200 Prevention', () => {
         const staticApp = createMainApp({
-            defaultAi: { apiKey: 'mock-test-key' },
+            defaultAi: { apiKey: 'mock-test-key' } as any,
             serveStatic: true
         });
 

@@ -25,6 +25,15 @@ import { fetchProviderModels } from './modelsProvider.ts';
 import { buildCortexDiagnostics } from './cortexDiagnostics.ts';
 import { createAppAuthMiddleware } from './appAuth.ts';
 import { createCorsMiddleware } from './cors.ts';
+import {
+    initFeedbackDedupe,
+    generateDedupeKey,
+    isFeedbackInFlight,
+    setFeedbackInFlight,
+    removeFeedbackInFlight,
+    isFeedbackProcessed,
+    markFeedbackProcessed
+} from './feedbackDedupe.ts';
 
 export const FORBIDDEN_CLIENT_SECRET_KEYS = [
     'geminiApiKey',
@@ -103,6 +112,9 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
         initBenchmarker(process.env);
     }
 
+    // Initialize persistent dedupe (if RENDER_DISK_PATH is set)
+    initFeedbackDedupe();
+
     // Restore durable learning state in the background: never blocks boot or requests.
     restoreLearningState().catch((err) =>
         console.warn('[SwarmServer] Background learning-state restore failed:', err?.message || err)
@@ -162,10 +174,10 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
         return c.json({ status: 'ok', edge: true });
     });
 
-    const processedFeedbackSubmissions = new Set<string>();
-    const MAX_PROCESSED_FEEDBACK = 10000;
-
     app.post('/api/swarm/feedback', async (c) => {
+        const callerAppId = (c as any).get('callerAppId') as string | undefined;
+        let dedupKey: string | undefined = undefined;
+
         try {
             const body = await c.req.json().catch(() => ({}));
             const { workflowId, outcome, gradedAt, predictedProbability, sportKey, market } = body;
@@ -174,25 +186,23 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 return c.json({ error: 'Invalid workflowId or outcome' }, 400);
             }
 
-            const callerAppId = (c as any).get('callerAppId') as string | undefined;
             if (!callerAppId) {
                 return c.json({ error: 'Unauthorized: missing callerAppId' }, 401);
             }
             const originApp = callerAppId;
             const pickId = body.pickId || body.pick_id;
 
-            // Deduplicate (callerAppId, workflowId, pickId) submissions
-            if (pickId) {
-                const dedupKey = `${callerAppId}:${workflowId}:${pickId}`;
-                if (processedFeedbackSubmissions.has(dedupKey)) {
-                    return c.json({ ok: true, duplicate: true, message: 'Feedback already processed', workflowId, pickId }, 200);
-                }
-                if (processedFeedbackSubmissions.size >= MAX_PROCESSED_FEEDBACK) {
-                    const oldest = processedFeedbackSubmissions.values().next().value;
-                    if (oldest) processedFeedbackSubmissions.delete(oldest);
-                }
-                processedFeedbackSubmissions.add(dedupKey);
+            dedupKey = generateDedupeKey(callerAppId, workflowId, pickId, outcome, body);
+
+            if (isFeedbackInFlight(dedupKey)) {
+                return c.json({ error: 'Conflict: Feedback processing in progress, retry later' }, 409);
             }
+
+            if (isFeedbackProcessed(dedupKey)) {
+                return c.json({ ok: true, duplicate: true, message: 'Feedback already processed', workflowId, pickId }, 200);
+            }
+
+            setFeedbackInFlight(dedupKey);
 
             // 1. Grade the point in MemoryCortex
             let gradeResult = { found: false, alreadyProcessed: false };
@@ -338,6 +348,8 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 }
             }
 
+            markFeedbackProcessed(dedupKey);
+
             return c.json({
                 ok: true,
                 workflowId,
@@ -350,6 +362,10 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
         } catch (err: any) {
             console.error('[SwarmServer Feedback Error]:', err);
             return c.json({ error: err.message || 'Internal Server Error' }, 500);
+        } finally {
+            if (dedupKey) {
+                removeFeedbackInFlight(dedupKey);
+            }
         }
     });
 

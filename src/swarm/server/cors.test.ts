@@ -23,7 +23,7 @@ describe('Swarm Feedback CORS Before Auth & Deduplication', () => {
 
     it('returns 401 WITH Access-Control-Allow-Origin when allowed origin sends POST with no token', async () => {
         const app = createMainApp({
-            defaultAi: { apiKey: 'mock-key' }
+            defaultAi: { apiKey: 'mock-key' } as any
         });
 
         const res = await app.request('/api/swarm/feedback', {
@@ -44,7 +44,7 @@ describe('Swarm Feedback CORS Before Auth & Deduplication', () => {
 
     it('returns 401 WITHOUT Access-Control-Allow-Origin when disallowed origin sends POST with no token', async () => {
         const app = createMainApp({
-            defaultAi: { apiKey: 'mock-key' }
+            defaultAi: { apiKey: 'mock-key' } as any
         });
 
         const res = await app.request('/api/swarm/feedback', {
@@ -62,7 +62,7 @@ describe('Swarm Feedback CORS Before Auth & Deduplication', () => {
 
     it('returns 204 on OPTIONS preflight from allowed origin', async () => {
         const app = createMainApp({
-            defaultAi: { apiKey: 'mock-key' }
+            defaultAi: { apiKey: 'mock-key' } as any
         });
 
         const res = await app.request('/api/swarm/feedback', {
@@ -80,7 +80,7 @@ describe('Swarm Feedback CORS Before Auth & Deduplication', () => {
 
     it('returns 403 on OPTIONS preflight from disallowed origin', async () => {
         const app = createMainApp({
-            defaultAi: { apiKey: 'mock-key' }
+            defaultAi: { apiKey: 'mock-key' } as any
         });
 
         const res = await app.request('/api/swarm/feedback', {
@@ -95,7 +95,7 @@ describe('Swarm Feedback CORS Before Auth & Deduplication', () => {
 
     it('deduplicates (callerAppId, workflowId, pickId) feedback submissions and returns 200 { duplicate: true }', async () => {
         const server = createSwarmServer({
-            defaultAi: { apiKey: 'mock-key' }
+            defaultAi: { apiKey: 'mock-key' } as any
         });
 
         const submission = {
