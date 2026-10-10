@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-
 import {
     TokenBudgetManager,
     SpecialistAffinityRouter,
@@ -128,17 +127,6 @@ describe('SpecialistAffinityRouter', () => {
         });
 
         it('assigns 0.25 fallback score if role contains specialist/analyst but no domain rules match', () => {
-            // Need a role that has 'specialist' but doesn't match any domain rule role keywords
-            // Our rules: security, auth, secops, crypt, etc. (Security)
-            // performance, optimization, latency... (Performance)
-            // data, schema, sql... analyst... (Data)
-            // architect, design... (Architecture)
-            // developer, engineer, code... tester (Code)
-
-            // "Domain Specialist" has "specialist" and does not match any role keywords above.
-            // Wait, "Specialist" is not a role keyword in any domain?
-            // "analyst" IS a role keyword in Data domain.
-
             const genericSpecialist = router.scoreAffinity('Generic Specialist', 'Some unknown content');
             expect(genericSpecialist.score).toBe(0.25);
         });
