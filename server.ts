@@ -18,7 +18,7 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-export function createMainApp(options: { defaultAi?: any; defaultCortex?: any } = {}) {
+export function createMainApp(options: { defaultAi?: any; defaultCortex?: any; serveStatic?: any } = {}) {
   const defaultAi = options.defaultAi || new GoogleGenAI({
     apiKey: process.env.GEMINI_API_KEY || 'MISSING_KEY'
   });
