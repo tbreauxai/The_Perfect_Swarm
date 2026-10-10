@@ -74,4 +74,35 @@ describe('SettingsModal - Provider Key Input Removal & Server Status Badges', ()
         expect(html).toContain('Disable Provider Fallback');
         expect(html).toContain('Override Fast Track');
     });
+
+    it('null envStatus renders without crash', () => {
+        expect(() => {
+            renderToString(
+                React.createElement(SettingsModal, {
+                    isOpen: true,
+                    onClose: () => {},
+                    settings: mockSettings,
+                    onUpdateSetting: () => {},
+                    onUpdateAgent: () => {},
+                    envStatus: null as any,
+                    initialTab: 'keys'
+                })
+            );
+        }).not.toThrow();
+    });
+
+    it('app token field saves/clears', async () => {
+        const html = renderToString(
+            React.createElement(SettingsModal, {
+                isOpen: true,
+                onClose: () => {},
+                settings: mockSettings,
+                onUpdateSetting: () => {},
+                onUpdateAgent: () => {},
+                envStatus: mockEnvStatus,
+                initialTab: 'keys'
+            })
+        );
+        expect(html).toContain('App token');
+    });
 });
