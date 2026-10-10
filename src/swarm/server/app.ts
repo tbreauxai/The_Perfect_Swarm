@@ -598,6 +598,10 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
             }
 
             try {
+                if (!result.workflowId) {
+                    result.workflowId = crypto.randomUUID();
+                }
+
                 const seen = new WeakSet();
                 const safeReplacer = (_key: string, value: any) => {
                     if (typeof value === 'bigint') return value.toString();
