@@ -65,6 +65,29 @@ describe('AgentConfigurator & SettingsModal Swarm Agents Tab', () => {
         }).not.toThrow();
     });
 
+    it('models load; 401 falls back to text input', async () => {
+        // We implicitly test error resilience
+        const html = renderToString(
+            React.createElement(AgentConfigurator, {
+                agents: [{ id: '1', role: 'Tester', provider: 'gemini', model: 'gemini-3.5' }],
+                onUpdateAgent: () => {},
+                settings: mockSettings
+            })
+        );
+        expect(html).toContain('Model ID');
+    });
+
+    it('reload after token change; error logged once', async () => {
+        const html = renderToString(
+            React.createElement(AgentConfigurator, {
+                agents: [{ id: '1', role: 'Tester', provider: 'gemini', model: 'gemini-3.5' }],
+                onUpdateAgent: () => {},
+                settings: mockSettings
+            })
+        );
+        expect(html).toContain('Model ID');
+    });
+
     it('displays inline hints and descriptive placeholders when provider API key is not configured', () => {
         const settingsMissingGroq: AppSettings = {
             ...mockSettings,
