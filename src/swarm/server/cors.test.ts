@@ -95,7 +95,7 @@ describe('Swarm Feedback CORS Before Auth & Deduplication', () => {
 
     it('deduplicates (callerAppId, workflowId, pickId) feedback submissions and returns 200 { duplicate: true }', async () => {
         const server = createSwarmServer({
-            defaultAi: { apiKey: 'mock-key' }
+            defaultAi: { apiKey: 'mock-key' } as any
         });
 
         const submission = {
