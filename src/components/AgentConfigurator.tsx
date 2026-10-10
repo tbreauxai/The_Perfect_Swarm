@@ -43,24 +43,35 @@ export const AgentConfigurator: React.FC<AgentConfiguratorProps> = ({
     const [checkingHealth, setCheckingHealth] = useState<Record<string, boolean>>({});
     const [onlyHealthyFilter, setOnlyHealthyFilter] = useState<boolean>(false);
     const [authRequiredProviders, setAuthRequiredProviders] = useState<Record<string, boolean>>({});
+    const [tokenVersion, setTokenVersion] = useState<number>(0);
 
-    const requestedProvidersRef = useRef<Set<string>>(new Set());
+    const requestedProvidersRef = useRef<Map<string, string>>(new Map());
     const warnedProvidersRef = useRef<Set<string>>(new Set());
 
     const uniqueProviders = Array.from(new Set<string>((agents || []).map(a => a.provider).filter(p => p !== 'none')));
     const providersKey = uniqueProviders.sort().join(',');
 
     useEffect(() => {
+        const handleTokenChange = () => {
+            requestedProvidersRef.current.clear();
+            warnedProvidersRef.current.clear();
+            setTokenVersion(v => v + 1);
+        };
+        window.addEventListener('swarm_token_changed', handleTokenChange);
+        return () => window.removeEventListener('swarm_token_changed', handleTokenChange);
+    }, []);
+
+    useEffect(() => {
         let isMounted = true;
         const providers = Array.from(new Set<string>((agents || []).map(a => a.provider).filter(p => p !== 'none')));
 
         providers.forEach(provider => {
-            if (requestedProvidersRef.current.has(provider)) {
+            const apiKey = getApiKeyForProvider(settings, provider);
+            if (requestedProvidersRef.current.get(provider) === apiKey) {
                 return;
             }
-            requestedProvidersRef.current.add(provider);
+            requestedProvidersRef.current.set(provider, apiKey);
 
-            const apiKey = getApiKeyForProvider(settings, provider);
             setLoadingProviders(prev => ({ ...prev, [provider]: true }));
 
             fetchAvailableModels(provider, apiKey)
@@ -88,10 +99,13 @@ export const AgentConfigurator: React.FC<AgentConfiguratorProps> = ({
                         warnedProvidersRef.current.add(provider);
                         console.warn(`Failed to load models for ${provider}:`, err);
                     }
-                    if (err?.kind === 'app-auth' || err?.status === 401 || (err?.message && /app token|unauthorized/i.test(err.message))) {
+                    const isAuthError = err?.kind === 'app-auth' || err?.status === 401 || (err?.message && /app token|unauthorized|missing|key/i.test(err.message));
+                    if (isAuthError) {
                         setAuthRequiredProviders(prev => ({ ...prev, [provider]: true }));
+                        requestedProvidersRef.current.delete(provider);
+                    } else {
+                        setModelsByProvider(prev => ({ ...prev, [provider]: [] }));
                     }
-                    setModelsByProvider(prev => ({ ...prev, [provider]: [] }));
                     setLoadingProviders(prev => ({ ...prev, [provider]: false }));
                 });
         });
@@ -99,7 +113,7 @@ export const AgentConfigurator: React.FC<AgentConfiguratorProps> = ({
         return () => {
             isMounted = false;
         };
-    }, [providersKey, settings]);
+    }, [providersKey, settings, tokenVersion]);
 
     const getModelKey = (provider: string, modelId: string): string => {
         return `${provider.toLowerCase().trim()}:${modelId.trim()}`;
