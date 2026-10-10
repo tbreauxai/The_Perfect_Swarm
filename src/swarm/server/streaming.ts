@@ -67,7 +67,7 @@ export async function handleSwarmSse(
 
             await sendEvent('swarm_complete', {
                 ...result,
-                workflowId: result.workflowId
+                workflowId: result.workflowId || crypto.randomUUID()
             });
         } catch (err: any) {
             await sendEvent('swarm_error', { error: err.message || String(err) });
