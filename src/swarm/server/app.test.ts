@@ -82,7 +82,7 @@ describe('Swarm Server - Feedback Deduplication', () => {
         const res = await app.fetch(req);
         expect(res.status).toBe(400);
 
-        expect(isFeedbackProcessed('test-app:wf-3:pick-3')).toBe(false);
+        expect(await isFeedbackProcessed('test-app:wf-3:pick-3')).toBe(false);
         expect(isFeedbackInFlight('test-app:wf-3:pick-3')).toBe(false); // Cleaned up
     });
 
@@ -116,5 +116,55 @@ describe('Swarm Server - Feedback Deduplication', () => {
         expect(res.status).toBe(200);
         const data = await res.json();
         expect(data.duplicate).toBe(true);
+    });
+
+    it('workflowId round-trip test', async () => {
+        const { vi } = await import('vitest');
+        const engine = await import('../engine/index.ts');
+
+        // Mock executeSwarmWorkflow to return a fake workflowId instead of generating one in app.ts
+        const fakeWorkflowId = 'test-workflow-123';
+        const spy = vi.spyOn(engine, 'executeSwarmWorkflow').mockResolvedValue({
+            events: [],
+            finalAnalysis: {},
+            workflowId: fakeWorkflowId
+        });
+
+        const analyzePayload = {
+            task: "Should we buy or sell AAPL today?",
+            sportKey: "nba",
+            market: "moneyline",
+            bypassCache: true
+        };
+        const reqAnalyze = new Request('http://localhost/api/swarm/analyze', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(analyzePayload)
+        });
+
+        const resAnalyze = await app.fetch(reqAnalyze);
+        expect(resAnalyze.status).toBe(200);
+
+        const analyzeData = await resAnalyze.json();
+        const returnedWorkflowId = analyzeData.workflowId;
+        expect(returnedWorkflowId).toBe(fakeWorkflowId);
+
+        // Should be found and not return 404
+        const feedbackPayload = {
+            workflowId: returnedWorkflowId,
+            outcome: 'win',
+            pickId: 'pick-rt'
+        };
+
+        const reqFeedback = new Request('http://localhost/api/swarm/feedback', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(feedbackPayload)
+        });
+
+        const resFeedback = await app.fetch(reqFeedback);
+        expect(resFeedback.status).not.toBe(404);
+
+        spy.mockRestore();
     });
 });

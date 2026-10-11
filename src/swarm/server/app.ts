@@ -198,7 +198,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 return c.json({ error: 'Conflict: Feedback processing in progress, retry later' }, 409);
             }
 
-            if (isFeedbackProcessed(dedupKey)) {
+            if (await isFeedbackProcessed(dedupKey)) {
                 return c.json({ ok: true, duplicate: true, message: 'Feedback already processed', workflowId, pickId }, 200);
             }
 
@@ -599,7 +599,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
 
             try {
                 if (!result.workflowId) {
-                    result.workflowId = crypto.randomUUID();
+                    delete result.workflowId;
                 }
 
                 const seen = new WeakSet();
