@@ -125,8 +125,8 @@ describe('Swarm Server - Feedback Deduplication', () => {
         // Mock executeSwarmWorkflow to return a fake workflowId instead of generating one in app.ts
         const fakeWorkflowId = 'test-workflow-123';
         const spy = vi.spyOn(engine, 'executeSwarmWorkflow').mockResolvedValue({
-            title: 'Test',
-            componentsCount: 0,
+            events: [],
+            finalAnalysis: {},
             workflowId: fakeWorkflowId
         });
 
