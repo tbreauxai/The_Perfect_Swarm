@@ -145,6 +145,7 @@ describe('Shared Cortex: Tags, Blended Retrieval, Namespaced Wipes & OriginApp P
                 },
                 body: JSON.stringify({
                     task: 'Fast Analysis: team-a odds assessment',
+                    data: 'Some data about team-a',
                     settings: {
                         appId: 'fantasy', // Attacker / client attempts to impersonate writer
                         domain: 'odds'

@@ -67,7 +67,7 @@ export async function handleSwarmSse(
 
             const payload: any = { ...result };
             if (result.workflowId) {
-                payload.workflowId = result.workflowId;
+                payload.workflowId = String(result.workflowId);
             } else {
                 delete payload.workflowId;
             }
