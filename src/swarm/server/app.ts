@@ -471,6 +471,12 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
 
             if (c.req.method === 'POST') {
                 const body = await c.req.json().catch(() => ({}));
+                if (!body.task || body.data === undefined) {
+                    return c.json({ error: 'Missing required parameter: task and data' }, 400);
+                }
+                if (body.metadata) {
+                    console.log('[SwarmServer Stream Metadata]:', body.metadata);
+                }
                 const sanitizedSettings = sanitizeClientSettings(body.settings, edgeSettings, defaultSettings);
                 if (Array.isArray(body.agents)) {
                     const forbidden = new Set<string>(FORBIDDEN_CLIENT_SECRET_KEYS);
@@ -506,7 +512,10 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
             } else if (c.req.method === 'GET') {
                 const url = new URL(c.req.url);
                 const task = url.searchParams.get('task') || '';
-                const data = url.searchParams.get('data') || '';
+                const data = url.searchParams.get('data');
+                if (!task || data === null) {
+                    return c.json({ error: 'Missing required parameter: task and data' }, 400);
+                }
                 const appId = url.searchParams.get('appId') || defaultSettings.appId || 'default';
                 const domain = url.searchParams.get('domain') || undefined;
                 hydrateFromOutcomeRecords(originApp, globalFeedbackEngine.getKnowledgeRepository().queryOutcomes({ appId: originApp, limit: 500 }) as any);
@@ -524,10 +533,6 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 return c.json({ error: 'Method Not Allowed' }, 405);
             }
 
-            if (!params.task) {
-                return c.json({ error: 'Missing required parameter: task' }, 400);
-            }
-
             return handleSwarmSse(c, params);
         } catch (err: any) {
             console.error('[SwarmServer Stream Error]:', err);
@@ -538,8 +543,11 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
     app.post('/api/swarm/analyze', swarmBodyLimit, async (c) => {
         try {
             const body = await c.req.json().catch(() => ({}));
-            if (!body.task) {
-                return c.json({ error: 'Missing required parameter: task' }, 400);
+            if (!body.task || body.data === undefined) {
+                return c.json({ error: 'Missing required parameter: task and data' }, 400);
+            }
+            if (body.metadata) {
+                console.log('[SwarmServer Analyze Metadata]:', body.metadata);
             }
 
             const callerAppId = (c as any).get('callerAppId') as string | undefined;
@@ -598,7 +606,9 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
             }
 
             try {
-                if (!result.workflowId) {
+                if (result.workflowId) {
+                    result.workflowId = String(result.workflowId);
+                } else {
                     delete result.workflowId;
                 }
 

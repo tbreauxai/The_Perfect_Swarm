@@ -132,6 +132,7 @@ describe('Swarm Server - Feedback Deduplication', () => {
 
         const analyzePayload = {
             task: "Should we buy or sell AAPL today?",
+            data: "Current stock prices and news",
             sportKey: "nba",
             market: "moneyline",
             bypassCache: true
