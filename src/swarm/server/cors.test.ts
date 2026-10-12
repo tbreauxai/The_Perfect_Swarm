@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createMainApp } from '../../../server.ts';
 import { createSwarmServer } from './app.ts';
+import { getOrCreateDefaultCortex } from '../engine/cortex.ts';
 
 describe('Swarm Feedback CORS Before Auth & Deduplication', () => {
     let oldTokens: string | undefined;
@@ -103,6 +104,15 @@ describe('Swarm Feedback CORS Before Auth & Deduplication', () => {
             pickId: 'pick-42',
             outcome: 'win'
         };
+
+        // Seed the workflow in the store: unknown workflowIds now get a 404,
+        // so the dedupe flow needs a gradeable record to reach 200.
+        const cortex = getOrCreateDefaultCortex('perfect-swarm');
+        await cortex.store('Dedupe test workflow record', {
+            workflowId: submission.workflowId,
+            originApp: 'duelodds',
+            appId: 'duelodds',
+        } as any);
 
         const res1 = await server.request('/api/swarm/feedback', {
             method: 'POST',
