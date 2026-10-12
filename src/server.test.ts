@@ -1,4 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import { createMainApp } from '../server.ts';
 
 describe('Production / Staging Server Wrapper App', () => {
@@ -64,6 +66,19 @@ describe('Production / Staging Server Wrapper App', () => {
     });
 
     describe('Static Routing and Soft-200 Prevention', () => {
+        // The static handlers serve from ./dist (gitignored build output), which
+        // doesn't exist in a fresh checkout/CI. Create minimal dummy assets so the
+        // routing tests exercise the real handlers without a full client build.
+        const distDir = path.join(process.cwd(), 'dist');
+        beforeAll(() => {
+            fs.mkdirSync(distDir, { recursive: true });
+            fs.writeFileSync(path.join(distDir, 'robots.txt'), 'User-agent: *\nAllow: /\n');
+            fs.writeFileSync(
+                path.join(distDir, 'index.html'),
+                '<!DOCTYPE html><html><head><title>The Perfect Swarm</title></head><body><div id="root"></div></body></html>'
+            );
+        });
+
         const staticApp = createMainApp({
             defaultAi: { apiKey: 'mock-test-key' },
             serveStatic: true

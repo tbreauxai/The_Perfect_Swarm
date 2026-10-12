@@ -1,10 +1,16 @@
+// @vitest-environment jsdom
 import React from 'react';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { renderToString } from 'react-dom/server';
+import { render, screen, waitFor, act, cleanup } from '@testing-library/react';
 import { AgentConfigurator, getApiKeyForProvider, AgentConfig } from './AgentConfigurator';
 import { SettingsModal, AppSettings } from './SettingsModal';
 
 describe('AgentConfigurator & SettingsModal Swarm Agents Tab', () => {
+    afterEach(() => {
+        cleanup();
+        vi.restoreAllMocks();
+    });
     const mockAgents: AgentConfig[] = [
         { id: '1', role: 'Data Analyst', provider: 'gemini', model: 'gemini-3.5' },
         { id: '2', role: 'Security Specialist', provider: 'groq', model: 'llama-3.3-70b' },
@@ -66,14 +72,13 @@ describe('AgentConfigurator & SettingsModal Swarm Agents Tab', () => {
     });
 
     it('models load; 401 falls back to text input and app token hint shows + refetches on token change', async () => {
-        // We use string replacement to simulate the token change since we lack a full DOM.
         // The issue specifies: "mock models fetch -> 401, assert text-input fallback... change the app token in the store... assert the list loads without remount".
-
         const originalFetch = globalThis.fetch;
         try {
             let fetchCallCount = 0;
-            globalThis.fetch = vi.fn().mockImplementation(async () => {
-                fetchCallCount++;
+            globalThis.fetch = vi.fn().mockImplementation(async (url: any) => {
+                // Only count model-list fetches; the parallel health check also uses fetch
+                if (String(url).includes('/api/swarm/models')) fetchCallCount++;
                 return {
                     ok: false,
                     status: 401,
@@ -82,23 +87,23 @@ describe('AgentConfigurator & SettingsModal Swarm Agents Tab', () => {
                 };
             });
 
-            // 1. Initial Render (Missing Token)
-            let html = renderToString(
-                React.createElement(AgentConfigurator, {
-                    agents: [{ id: '1', role: 'Tester', provider: 'gemini', model: 'gemini-3.5' }],
-                    onUpdateAgent: () => {},
-                    settings: { ...mockSettings, geminiApiKey: '' }
-                })
+            // 1. Initial Render with key, triggering 401
+            render(
+                <AgentConfigurator 
+                    agents={[{ id: '1', role: 'Tester', provider: 'gemini', model: 'gemini-3.5' }]}
+                    onUpdateAgent={() => {}}
+                    settings={{ ...mockSettings, geminiApiKey: 'test-key-trigger-401' }}
+                />
             );
-            expect(html).toContain('Model ID (API Key required to load list)');
-            expect(html).toContain('API Key required');
 
-            // To properly test the token change and avoid hacking React internals, we will dispatch the token change event
-            // and verify that the component fetches exactly once when provided a valid token in the new settings,
-            // as renderToString does execute the component body (but not effects).
+            // Wait for effect to fetch and set state
+            await waitFor(() => {
+                expect(screen.getByText('Add an app token to load the model list')).toBeDefined();
+            });
 
-            globalThis.fetch = vi.fn().mockImplementation(async () => {
-                fetchCallCount++;
+            // Re-mock to return success
+            globalThis.fetch = vi.fn().mockImplementation(async (url: any) => {
+                if (String(url).includes('/api/swarm/models')) fetchCallCount++;
                 return {
                     ok: true,
                     status: 200,
@@ -107,30 +112,22 @@ describe('AgentConfigurator & SettingsModal Swarm Agents Tab', () => {
                 };
             });
 
-            if (typeof window !== 'undefined') {
-                const tokenChangeEvent = new Event('swarm_token_changed');
-                window.dispatchEvent(tokenChangeEvent);
-            }
+            const countBeforeEvent = fetchCallCount;
 
-            // Simulating the list load and refetch properly via standard React Server rendering state
-            let html2 = renderToString(
-                React.createElement(AgentConfigurator, {
-                    agents: [{ id: '1', role: 'Tester', provider: 'gemini', model: 'gemini-3.5' }],
-                    onUpdateAgent: () => {},
-                    settings: { ...mockSettings, geminiApiKey: 'new-token' }
-                })
-            );
-            expect(html2).not.toContain('API Key required to load list');
+            // Dispatch event to simulate token change
+            await act(async () => {
+                window.dispatchEvent(new Event('swarm_token_changed'));
+            });
 
-            // To ensure the component does not loop, we render it again with the same valid token
-            let html3 = renderToString(
-                React.createElement(AgentConfigurator, {
-                    agents: [{ id: '1', role: 'Tester', provider: 'gemini', model: 'gemini-3.5' }],
-                    onUpdateAgent: () => {},
-                    settings: { ...mockSettings, geminiApiKey: 'new-token' }
-                })
-            );
-            expect(html3).not.toContain('API Key required to load list');
+            // Wait for refetch logic
+            await waitFor(() => {
+                expect(fetchCallCount).toBe(countBeforeEvent + 1);
+            });
+            
+            // Wait a little bit to verify no further loops
+            await new Promise(resolve => setTimeout(resolve, 50));
+            expect(fetchCallCount).toBe(countBeforeEvent + 1);
+
         } finally {
             globalThis.fetch = originalFetch;
         }
