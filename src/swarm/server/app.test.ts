@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { Hono } from 'hono';
 import { createSwarmServer } from './app.ts';
 import { _resetFeedbackDedupe, hashString, setFeedbackInFlight, markFeedbackProcessed, removeFeedbackInFlight, isFeedbackProcessed, isFeedbackInFlight } from './feedbackDedupe.ts';
@@ -17,6 +17,15 @@ describe('Swarm Server - Feedback Deduplication', () => {
         app = new Hono();
         app.use('*', async (c: any, next: any) => {
             c.set('callerAppId', 'test-app');
+            // Inject env vars to simulate them in Hono context
+            c.env = {
+                SWARM_APP_TOKENS: 'test-app:test-token-123',
+                SWARM_AUTH_REQUIRED: 'true',
+                GEMINI_API_KEY: 'test',
+                OPENROUTER_API_KEY: 'sk-or-v1-test',
+                GROQ_API_KEY: 'test',
+                MISTRAL_API_KEY: 'test'
+            };
             await next();
         });
         app.route('/', baseApp);
@@ -120,14 +129,16 @@ describe('Swarm Server - Feedback Deduplication', () => {
 
     it('workflowId round-trip test', async () => {
         const { vi } = await import('vitest');
-        const engine = await import('../engine/index.ts');
 
-        // Mock executeSwarmWorkflow to return a fake workflowId instead of generating one in app.ts
-        const fakeWorkflowId = 'test-workflow-123';
-        const spy = vi.spyOn(engine, 'executeSwarmWorkflow').mockResolvedValue({
-            events: [],
-            finalAnalysis: {},
-            workflowId: fakeWorkflowId
+        // Stop mocking engine/workflow store. Run real engine with LLM provider HTTP calls stubbed
+        const originalFetch = globalThis.fetch;
+        globalThis.fetch = vi.fn().mockResolvedValue({
+            ok: true,
+            status: 200,
+            json: async () => ({
+                choices: [{ message: { content: "Mocked LLM response" } }]
+            }),
+            headers: new Headers()
         });
 
         const analyzePayload = {
@@ -135,7 +146,17 @@ describe('Swarm Server - Feedback Deduplication', () => {
             data: "Current stock prices and news",
             sportKey: "nba",
             market: "moneyline",
-            bypassCache: true
+            bypassCache: true,
+            settings: {
+                geminiApiKey: 'test',
+                openRouterApiKey: 'sk-or-v1-test',
+                groqApiKey: 'test',
+                mistralApiKey: 'test',
+                agents: [
+                    { id: "manager", role: "Manager Node", provider: "openrouter", model: "auto" },
+                    { id: "analyst", role: "Data Analyst", provider: "gemini", model: "auto" }
+                ]
+            }
         };
         const reqAnalyze = new Request('http://localhost/api/swarm/analyze', {
             method: 'POST',
@@ -148,7 +169,8 @@ describe('Swarm Server - Feedback Deduplication', () => {
 
         const analyzeData = await resAnalyze.json();
         const returnedWorkflowId = analyzeData.workflowId;
-        expect(returnedWorkflowId).toBe(fakeWorkflowId);
+        expect(typeof returnedWorkflowId).toBe('string');
+        expect(returnedWorkflowId.length).toBeGreaterThan(0);
 
         // Should be found and not return 404
         const feedbackPayload = {
@@ -164,8 +186,176 @@ describe('Swarm Server - Feedback Deduplication', () => {
         });
 
         const resFeedback = await app.fetch(reqFeedback);
-        expect(resFeedback.status).not.toBe(404);
+        expect(resFeedback.status).toBe(200);
 
-        spy.mockRestore();
+        // Repeat for the stream swarm_complete id
+        const reqStream = new Request('http://localhost/api/swarm/stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(analyzePayload)
+        });
+
+        const resStream = await app.fetch(reqStream);
+        expect(resStream.status).toBe(200);
+
+        const streamBody = await resStream.text();
+        const swarmCompleteEventStr = streamBody.split('\n\n').find(part => part.includes('event: swarm_complete'));
+        expect(swarmCompleteEventStr).toBeDefined();
+
+        const dataLine = swarmCompleteEventStr.split('\n').find(line => line.startsWith('data: '));
+        const streamData = JSON.parse(dataLine.replace('data: ', ''));
+        const streamWorkflowId = streamData.workflowId;
+
+        expect(typeof streamWorkflowId).toBe('string');
+        expect(streamWorkflowId.length).toBeGreaterThan(0);
+
+        const streamFeedbackPayload = {
+            workflowId: streamWorkflowId,
+            outcome: 'win',
+            pickId: 'pick-rt-stream'
+        };
+
+        const streamReqFeedback = new Request('http://localhost/api/swarm/feedback', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(streamFeedbackPayload)
+        });
+
+        const streamResFeedback = await app.fetch(streamReqFeedback);
+        expect(streamResFeedback.status).toBe(200);
+
+        globalThis.fetch = originalFetch;
+    });
+});
+
+describe('Contract Tests', () => {
+    let contractApp: any;
+    const testEnv = {
+        SWARM_APP_TOKENS: 'test-app:test-token-123',
+        SWARM_AUTH_REQUIRED: 'true',
+        GEMINI_API_KEY: 'test',
+        OPENROUTER_API_KEY: 'sk-or-v1-test',
+        GROQ_API_KEY: 'test',
+        MISTRAL_API_KEY: 'test'
+    };
+
+    beforeEach(async () => {
+        const { vi } = await import('vitest');
+        vi.stubEnv('SWARM_APP_TOKENS', 'test-app:test-token-123');
+        vi.stubEnv('SWARM_AUTH_REQUIRED', 'true');
+
+        const SwarmServer = await import('./app.ts');
+        contractApp = SwarmServer.createSwarmServer({
+            defaultSettings: {
+                appId: 'test-app',
+                agents: [
+                    { id: "manager", role: "Manager Node", provider: "openrouter", model: "auto" },
+                    { id: "analyst", role: "Data Analyst", provider: "gemini", model: "auto" }
+                ]
+            }
+        });
+
+        globalThis.fetch = vi.fn().mockResolvedValue({
+            ok: true,
+            status: 200,
+            json: async () => ({
+                choices: [{ message: { content: "Mocked LLM response" } }]
+            }),
+            headers: new Headers()
+        });
+    });
+
+    afterEach(async () => {
+        const { vi } = await import('vitest');
+        vi.unstubAllEnvs();
+        if ((globalThis.fetch as any).mockRestore) {
+            (globalThis.fetch as any).mockRestore();
+        }
+    });
+
+    it('GET /api/health with no token: 200 {status:"ok"}', async () => {
+        const req = new Request('http://localhost/api/health');
+        const res = await contractApp.fetch(req, testEnv);
+        expect(res.status).toBe(200);
+        const data = await res.json();
+        expect(data.status).toBe('ok');
+    });
+
+    it('POST /api/swarm/analyze {task,data} with no token: 401', async () => {
+        const req = new Request('http://localhost/api/swarm/analyze', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ task: "test", data: "test" })
+        });
+        const res = await contractApp.fetch(req, testEnv);
+        expect(res.status).toBe(401);
+    });
+
+    it('Same request with Authorization: Bearer wrong: 401', async () => {
+        const req = new Request('http://localhost/api/swarm/analyze', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer wrong-token'
+            },
+            body: JSON.stringify({ task: "test", data: "test" })
+        });
+        const res = await contractApp.fetch(req, testEnv);
+        expect(res.status).toBe(401);
+    });
+
+    it('SWARM_APP_TOKENS="" with SWARM_AUTH_REQUIRED="true": 503', async () => {
+        const { vi } = await import('vitest');
+        vi.stubEnv('SWARM_APP_TOKENS', '');
+
+        const req = new Request('http://localhost/api/swarm/analyze', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer test-token-123'
+            },
+            body: JSON.stringify({ task: "test", data: "test" })
+        });
+        const res = await contractApp.fetch(req, { ...testEnv, SWARM_APP_TOKENS: '' });
+        expect(res.status).toBe(503);
+    });
+
+    it('Bearer test-token-123 with a clean body (with metadata): 200 plus workflowId', async () => {
+        const req = new Request('http://localhost/api/swarm/analyze', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer test-token-123'
+            },
+            body: JSON.stringify({
+                task: "Should we buy AAPL?",
+                data: "Current stock prices",
+                metadata: { source: 'test' }
+            })
+        });
+        const res = await contractApp.fetch(req, testEnv);
+        expect(res.status).toBe(200);
+        const data = await res.json();
+        expect(typeof data.workflowId).toBe('string');
+        expect(data.workflowId.length).toBeGreaterThan(0);
+    });
+
+    it('Bearer test-token-123 with a clean body (without metadata): 200 plus workflowId', async () => {
+        const req = new Request('http://localhost/api/swarm/analyze', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer test-token-123'
+            },
+            body: JSON.stringify({
+                task: "Should we buy AAPL?",
+                data: "Current stock prices"
+            })
+        });
+        const res = await contractApp.fetch(req, testEnv);
+        expect(res.status).toBe(200);
+        const data = await res.json();
+        expect(typeof data.workflowId).toBe('string');
+        expect(data.workflowId.length).toBeGreaterThan(0);
     });
 });
