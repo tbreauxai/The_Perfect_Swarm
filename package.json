@@ -218,9 +218,11 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260918.1",
+    "@testing-library/react": "^16.3.3",
     "@types/node": "^22.20.2",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.25.0",
+    "jsdom": "^29.1.1",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.23.15",
     "typescript": "~5.8.2",
