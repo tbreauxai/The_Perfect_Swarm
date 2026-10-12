@@ -5,6 +5,12 @@ import { _resetFeedbackDedupe, hashString, setFeedbackInFlight, markFeedbackProc
 
 describe('Swarm Server - Feedback Deduplication', () => {
     let app: any;
+    const originalFetch = globalThis.fetch;
+
+    afterEach(() => {
+        // Restore by reassignment; mockRestore doesn't work on a directly assigned vi.fn()
+        globalThis.fetch = originalFetch;
+    });
 
     beforeEach(() => {
         _resetFeedbackDedupe();
@@ -131,7 +137,6 @@ describe('Swarm Server - Feedback Deduplication', () => {
         const { vi } = await import('vitest');
 
         // Stop mocking engine/workflow store. Run real engine with LLM provider HTTP calls stubbed
-        const originalFetch = globalThis.fetch;
         globalThis.fetch = vi.fn().mockResolvedValue({
             ok: true,
             status: 200,
@@ -187,6 +192,11 @@ describe('Swarm Server - Feedback Deduplication', () => {
 
         const resFeedback = await app.fetch(reqFeedback);
         expect(resFeedback.status).toBe(200);
+        const feedbackData = await resFeedback.json();
+        // The returned workflowId must exist in the store: a genuine record,
+        // not a 404 and not a recorded-without-workflow fallback.
+        expect(feedbackData.ok).toBe(true);
+        expect(feedbackData.recordedWithoutWorkflow).not.toBe(true);
 
         // Repeat for the stream swarm_complete id
         const reqStream = new Request('http://localhost/api/swarm/stream', {
@@ -223,8 +233,25 @@ describe('Swarm Server - Feedback Deduplication', () => {
 
         const streamResFeedback = await app.fetch(streamReqFeedback);
         expect(streamResFeedback.status).toBe(200);
+    });
 
-        globalThis.fetch = originalFetch;
+    it('unknown workflowId gets 404 from /feedback', async () => {
+        const payload = {
+            workflowId: crypto.randomUUID(),
+            outcome: 'win',
+            pickId: 'pick-unknown-uuid'
+        };
+
+        const req = new Request('http://localhost/api/swarm/feedback', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        const res = await app.fetch(req);
+        expect(res.status).toBe(404);
+        const data = await res.json();
+        expect(data.error).toContain('Workflow not found');
     });
 });
 

@@ -394,6 +394,12 @@ export class MemoryCortex {
                     if (existing.points.length > 0 && (existing.points[0].score ?? 0) >= 0.92) {
                         const matched = existing.points[0];
                         const existingPayload = (matched.payload || {}) as Record<string, any>;
+                        // Never merge two distinct workflow executions: each workflowId
+                        // must stay addressable in the store for feedback grading.
+                        const newWf = (pointPayload as any).workflowId;
+                        if (newWf && existingPayload.workflowId && existingPayload.workflowId !== newWf) {
+                            // Fall through to insert as a new point below.
+                        } else {
                         const newFreq = ((existingPayload.frequency as number) || 1) + 1;
                         const mergedRating = metadata.qualityRating !== undefined
                             ? Math.max(metadata.qualityRating, (existingPayload.qualityRating as number) || 0)
@@ -416,6 +422,7 @@ export class MemoryCortex {
                         }));
 
                         storedId = String(matched.id);
+                        }
                     }
                 }
 
@@ -452,7 +459,15 @@ export class MemoryCortex {
                     const match = this.vectorIndex.findMostSimilar(
                         denseVector,
                         0.92,
-                        (item) => (item.data.payload.originApp || item.data.payload.appId) === originApp
+                        (item) => {
+                            if ((item.data.payload.originApp || item.data.payload.appId) !== originApp) return false;
+                            // Never merge two distinct workflow executions: each workflowId
+                            // must stay addressable in the store for feedback grading.
+                            const existingWf = item.data.payload.workflowId;
+                            const newWf = (pointPayload as any).workflowId;
+                            if (existingWf && newWf && existingWf !== newWf) return false;
+                            return true;
+                        }
                     );
 
                     if (match) {

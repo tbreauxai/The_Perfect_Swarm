@@ -128,6 +128,13 @@ describe('AgentConfigurator & SettingsModal Swarm Agents Tab', () => {
             await new Promise(resolve => setTimeout(resolve, 50));
             expect(fetchCallCount).toBe(countBeforeEvent + 1);
 
+            // The requested-set must have been cleared by the token-change handler:
+            // a stale set would have suppressed the refetch above as a duplicate.
+            // And the refetched provider list renders the new models.
+            await waitFor(() => {
+                expect(screen.getByText(/Gemini New/)).toBeDefined();
+            });
+
         } finally {
             globalThis.fetch = originalFetch;
         }

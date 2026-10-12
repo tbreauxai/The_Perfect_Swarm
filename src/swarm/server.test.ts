@@ -95,7 +95,7 @@ describe('Swarm Server & Feedback Attribution', () => {
         expect(data.edge).toBe(true);
     });
 
-    it('rejects feedback request with missing parameters', async () => {
+    it('rejects feedback with missing parameters (400) and unknown workflowId (404)', async () => {
         const oldTokens = process.env.SWARM_APP_TOKENS;
         process.env.SWARM_APP_TOKENS = 'test-app:test-token';
         try {
@@ -127,10 +127,9 @@ describe('Swarm Server & Feedback Attribution', () => {
                 },
                 body: JSON.stringify({ workflowId: 'non-existent-wf', outcome: 'win' })
             });
-            expect(res3.status).toBe(200);
+            expect(res3.status).toBe(404);
             const missing = await res3.json();
-            expect(missing.recordedWithoutWorkflow).toBe(true);
-            expect(missing.workflowId).toBe('non-existent-wf');
+            expect(missing.error).toBe('Workflow not found');
         } finally {
             if (oldTokens !== undefined) process.env.SWARM_APP_TOKENS = oldTokens;
             else delete process.env.SWARM_APP_TOKENS;
