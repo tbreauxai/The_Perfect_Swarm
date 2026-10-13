@@ -140,13 +140,13 @@ export function initBenchmarker(env: Record<string, any>) {
     const targets: BenchmarkTarget[] = [];
     
     if (env.GROQ_API_KEY) {
-        targets.push({ provider: 'groq', modelName: 'mixtral-8x7b-32768', apiKey: env.GROQ_API_KEY });
-        targets.push({ provider: 'groq', modelName: 'gemma2-9b-it', apiKey: env.GROQ_API_KEY });
+        targets.push({ provider: 'groq', modelName: 'llama-3.3-70b-versatile', apiKey: env.GROQ_API_KEY });
+        targets.push({ provider: 'groq', modelName: 'llama-3.1-8b-instant', apiKey: env.GROQ_API_KEY });
     }
     
     if (env.OPENROUTER_API_KEY) {
-        targets.push({ provider: 'openrouter', modelName: 'deepseek/deepseek-r1', apiKey: env.OPENROUTER_API_KEY });
-        targets.push({ provider: 'openrouter', modelName: 'google/gemini-flash-1.5', apiKey: env.OPENROUTER_API_KEY });
+        targets.push({ provider: 'openrouter', modelName: 'nvidia/nemotron-3-super-120b-a12b:free', apiKey: env.OPENROUTER_API_KEY });
+        targets.push({ provider: 'openrouter', modelName: 'google/gemma-4-31b-it:free', apiKey: env.OPENROUTER_API_KEY });
     }
 
     if (targets.length > 0) {

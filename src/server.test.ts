@@ -1,9 +1,12 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, vi, afterAll } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createMainApp } from '../server.ts';
 
 describe('Production / Staging Server Wrapper App', () => {
+    beforeAll(() => { vi.stubEnv('SWARM_APP_TOKENS', 'test-app:test-token-123'); });
+    afterAll(() => { vi.unstubAllEnvs(); });
+
     const app = createMainApp({
         defaultAi: {
             apiKey: 'mock-test-key'
@@ -11,7 +14,9 @@ describe('Production / Staging Server Wrapper App', () => {
     });
 
     it('returns JSON 404 for unknown /api/* routes, not HTML', async () => {
-        const res = await app.request('/api/does-not-exist');
+        const res = await app.request('/api/does-not-exist', {
+            headers: { 'Authorization': 'Bearer test-token-123' }
+        });
         expect(res.status).toBe(404);
         expect(res.headers.get('content-type')).toContain('application/json');
         const body = await res.json();
@@ -19,7 +24,9 @@ describe('Production / Staging Server Wrapper App', () => {
     });
 
     it('attaches security headers to every response', async () => {
-        const res = await app.request('/api/config/status');
+        const res = await app.request('/api/config/status', {
+            headers: { 'Authorization': 'Bearer test-token-123' }
+        });
         expect(res.status).toBe(200);
         expect(res.headers.get('content-security-policy')).toBe(
             "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://the-perfect-swarm.onrender.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
@@ -30,7 +37,9 @@ describe('Production / Staging Server Wrapper App', () => {
     });
 
     it('routes known /api/config/status successfully', async () => {
-        const res = await app.request('/api/config/status');
+        const res = await app.request('/api/config/status', {
+            headers: { 'Authorization': 'Bearer test-token-123' }
+        });
         expect(res.status).toBe(200);
         const data = await res.json();
         expect(data).toHaveProperty('hasGeminiKey');

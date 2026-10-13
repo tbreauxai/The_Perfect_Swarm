@@ -12,7 +12,7 @@ import { ManagerResponseSchema, AnalystResponseSchema } from './schemas.ts';
 export const DEFAULT_PROVIDER_MODELS: Record<string, string> = {
     gemini: 'gemini-3.5-flash',
     groq: 'openai/gpt-oss-120b',
-    openrouter: 'deepseek/deepseek-r1:free',
+    openrouter: 'nvidia/nemotron-3-super-120b-a12b:free',
     mistral: 'mistral-small-latest',
     github: 'gpt-4o-mini'
 };
@@ -274,7 +274,9 @@ export class Agent {
                         errMsg.includes('500') ||
                         errMsg.includes('SERVER_ERROR') ||
                         errMsg.includes('401') ||
+                        errMsg.includes('402') ||
                         errMsg.includes('403') ||
+                        errMsg.includes('model_decommissioned') ||
                         errLower.includes('rate limit') ||
                         errLower.includes('quota') ||
                         errLower.includes('timeout') ||
@@ -289,7 +291,9 @@ export class Agent {
                         errMsg.includes('NOT_FOUND') ||
                         errMsg.includes('400') ||
                         errMsg.includes('401') ||
+                        errMsg.includes('402') ||
                         errMsg.includes('403') ||
+                        errMsg.includes('model_decommissioned') ||
                         errLower.includes('api key not valid') ||
                         errLower.includes('invalid api key') ||
                         errLower.includes('not found') ||

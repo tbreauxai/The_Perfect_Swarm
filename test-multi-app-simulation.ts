@@ -145,7 +145,7 @@ Synthesizing structured findings.
         'sim-groq-free',
         'key-groq',
         undefined,
-        [{ provider: 'sim-openrouter-free', apiKey: 'key-openrouter', modelName: 'deepseek-r1-free' }]
+        [{ provider: 'sim-openrouter-free', apiKey: 'key-openrouter', modelName: 'nvidia/nemotron-3-super-120b-a12b:free' }]
     );
 
     // Run execution - should fail on Groq (429) and cascade to OpenRouter with <think> stripping
@@ -233,7 +233,7 @@ Synthesizing structured findings.
             'sim-groq-free',
             'key-groq',
             undefined,
-            [{ provider: 'sim-openrouter-free', apiKey: 'key-openrouter', modelName: 'deepseek-r1-free' }]
+            [{ provider: 'sim-openrouter-free', apiKey: 'key-openrouter', modelName: 'nvidia/nemotron-3-super-120b-a12b:free' }]
         );
 
         const task = stressAgent.run(`Stress Task #${i} for ${tenantAppId}`, stressContext, { responseMimeType: 'application/json' })

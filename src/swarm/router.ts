@@ -148,10 +148,10 @@ export class ModelRouter {
                 return complexity === 'instant' ? 'llama-3.1-8b-instant' : 'llama-3.3-70b-versatile';
             case 'openrouter':
                 return complexity === 'complex'
-                    ? 'deepseek/deepseek-r1:free'
+                    ? 'nvidia/nemotron-3-super-120b-a12b:free'
                     : complexity === 'instant'
                     ? 'meta-llama/llama-3.3-70b-instruct:free'
-                    : 'deepseek/deepseek-r1:free';
+                    : 'nvidia/nemotron-3-super-120b-a12b:free';
             case 'mistral':
                 // mistral-small-latest is available on Mistral free API tier
                 return 'mistral-small-latest';

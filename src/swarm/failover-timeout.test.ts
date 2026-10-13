@@ -55,6 +55,46 @@ describe('Phase 1: Failover, Timeout Guards, and Stream Error Handling', () => {
         expect(duration).toBeLessThan(3000);
     });
 
+    it('immediately cascades to fallback provider on 404, 402, and 400 without retrying', async () => {
+        let primaryCallCount = 0;
+        let backupCallCount = 0;
+
+        ProviderRegistry.register({
+            providerName: 'test-primary-fatal' as any,
+            async call() {
+                primaryCallCount++;
+                throw new Error('model_decommissioned 400 Bad Request');
+            }
+        });
+
+        ProviderRegistry.register({
+            providerName: 'test-backup-fatal-success' as any,
+            async call() {
+                backupCallCount++;
+                return JSON.stringify({ success: true, source: 'backup-fatal' });
+            }
+        });
+
+        const agent = new Agent(
+            'Test Fatal Agent',
+            'primary-model-dead',
+            'test-primary-fatal' as any,
+            'key-1',
+            undefined,
+            [{ provider: 'test-backup-fatal-success' as any, apiKey: 'key-2', modelName: 'backup-model' }]
+        );
+
+        const context = new SwarmContext();
+        const startTime = Date.now();
+        const result = await agent.run('Task prompt', context, { responseMimeType: 'application/json' });
+        const duration = Date.now() - startTime;
+
+        expect(result.source).toBe('backup-fatal');
+        expect(primaryCallCount).toBe(1);
+        expect(backupCallCount).toBe(1);
+        expect(duration).toBeLessThan(3000);
+    });
+
     it('cascades to fallback provider immediately when encountering Google high traffic error', async () => {
         let primaryCallCount = 0;
         let backupCallCount = 0;
