@@ -38,6 +38,7 @@ async function runSseServerTests() {
     });
 
     // 3. Instantiate server
+    process.env.SWARM_APP_TOKENS = 'test-app:test-token';
     const server = createSwarmServer({
         cors: true,
         defaultSettings: {
@@ -115,7 +116,7 @@ async function runSseServerTests() {
         }
 
         // 2e. Unknown API path returns 404 JSON, not HTML
-        const notFoundRes = await fetch(`${baseUrl}/api/does-not-exist`);
+        const notFoundRes = await fetch(`${baseUrl}/api/does-not-exist`, { headers: { 'Authorization': 'Bearer ' + 'test-token' } });
         if (notFoundRes.status !== 404) throw new Error(`Expected 404 for unknown API path, got ${notFoundRes.status}`);
         const notFoundJson = await notFoundRes.json();
         if (notFoundJson.error !== 'Not found') throw new Error(`Expected { error: 'Not found' }, got ${JSON.stringify(notFoundJson)}`);
@@ -126,7 +127,7 @@ async function runSseServerTests() {
         console.log('\n[Test 3] POST /api/swarm/stream with missing task');
         const invalidRes = await fetch(`${baseUrl}/api/swarm/stream`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer test-token' },
             body: JSON.stringify({})
         });
         if (invalidRes.status !== 400) throw new Error(`Expected 400 for missing task, got ${invalidRes.status}`);
@@ -143,7 +144,8 @@ async function runSseServerTests() {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Accept': 'text/event-stream'
+                    'Accept': 'text/event-stream',
+                    'Authorization': 'Bearer test-token'
                 }
             }, (res) => {
                 if (res.statusCode !== 200) {
@@ -213,7 +215,8 @@ async function runSseServerTests() {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Accept': 'text/event-stream'
+                    'Accept': 'text/event-stream',
+                    'Authorization': 'Bearer test-token'
                 }
             }, (res) => {
                 let buffer = '';

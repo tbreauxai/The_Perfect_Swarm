@@ -104,9 +104,7 @@ describe('Swarm Server & Feedback Attribution', () => {
             const res1 = await fetch(`${baseUrl}/api/swarm/feedback`, {
                 method: 'POST',
                 headers: {
-                'Authorization': 'Bearer test-token-123',
-                    'Content-Type': 'application/json',
-                    'Authorization': 'Bearer test-token'
+                'Content-Type': 'application/json', 'Authorization': 'Bearer test-token'
                 },
                 body: JSON.stringify({})
             });
@@ -115,9 +113,7 @@ describe('Swarm Server & Feedback Attribution', () => {
             const res2 = await fetch(`${baseUrl}/api/swarm/feedback`, {
                 method: 'POST',
                 headers: {
-                'Authorization': 'Bearer test-token-123',
-                    'Content-Type': 'application/json',
-                    'Authorization': 'Bearer test-token'
+                'Content-Type': 'application/json', 'Authorization': 'Bearer test-token'
                 },
                 body: JSON.stringify({ workflowId: 'wf-1' })
             });
@@ -126,9 +122,7 @@ describe('Swarm Server & Feedback Attribution', () => {
             const res3 = await fetch(`${baseUrl}/api/swarm/feedback`, {
                 method: 'POST',
                 headers: {
-                'Authorization': 'Bearer test-token-123',
-                    'Content-Type': 'application/json',
-                    'Authorization': 'Bearer test-token'
+                'Content-Type': 'application/json', 'Authorization': 'Bearer test-token'
                 },
                 body: JSON.stringify({ workflowId: 'non-existent-wf', outcome: 'win' })
             });
@@ -169,9 +163,7 @@ describe('Swarm Server & Feedback Attribution', () => {
             const feedbackRes = await fetch(`${baseUrl}/api/swarm/feedback`, {
                 method: 'POST',
                 headers: {
-                'Authorization': 'Bearer test-token-123',
-                    'Content-Type': 'application/json',
-                    'Authorization': 'Bearer duelodds-token'
+                'Content-Type': 'application/json', 'Authorization': 'Bearer duelodds-token'
                 },
                 body: JSON.stringify({
                     workflowId,
@@ -189,7 +181,7 @@ describe('Swarm Server & Feedback Attribution', () => {
             // Verify metrics endpoint reports real roles
             const metricsRes = await fetch(`${baseUrl}/api/swarm/metrics`, {
                 headers: {
-                'Authorization': 'Bearer test-token-123', 'Authorization': 'Bearer duelodds-token' }
+                'Authorization': 'Bearer duelodds-token' }
             });
             expect(metricsRes.status).toBe(200);
             const metricsData = await metricsRes.json();
@@ -217,9 +209,7 @@ describe('Swarm Server & Feedback Attribution', () => {
             const repeatRes = await fetch(`${baseUrl}/api/swarm/feedback`, {
                 method: 'POST',
                 headers: {
-                'Authorization': 'Bearer test-token-123',
-                    'Content-Type': 'application/json',
-                    'Authorization': 'Bearer duelodds-token'
+                'Content-Type': 'application/json', 'Authorization': 'Bearer duelodds-token'
                 },
                 body: JSON.stringify({ workflowId, outcome: 'win' })
             });
@@ -257,9 +247,7 @@ describe('Swarm Server & Feedback Attribution', () => {
             const feedbackRes = await fetch(`${baseUrl}/api/swarm/feedback`, {
                 method: 'POST',
                 headers: {
-                'Authorization': 'Bearer test-token-123',
-                    'Content-Type': 'application/json',
-                    'Authorization': 'Bearer empty-roles-token'
+                'Content-Type': 'application/json', 'Authorization': 'Bearer empty-roles-token'
                 },
                 body: JSON.stringify({ workflowId, outcome: 'loss' })
             });
@@ -277,7 +265,7 @@ describe('Swarm Server & Feedback Attribution', () => {
     it('calibrates reward weights via POST and queries status via GET /api/swarm/calibrate', async () => {
         // Query GET /api/swarm/calibrate
         const getRes = await fetch(`${baseUrl}/api/swarm/calibrate?appId=test-app`, { headers: {
-                'Authorization': 'Bearer test-token-123', 'Authorization': 'Bearer test-token-123' } });
+                'Authorization': 'Bearer test-token-123' } });
         expect(getRes.status).toBe(200);
         const getData = await getRes.json();
         expect(getData.currentWeights).toBeDefined();
@@ -324,7 +312,7 @@ describe('Swarm Server & Feedback Attribution', () => {
         const postRes = await fetch(`${baseUrl}/api/swarm/calibrate`, {
             method: 'POST',
             headers: {
-                'Authorization': 'Bearer test-token-123', 'Content-Type': 'application/json', 'Authorization': 'Bearer test-token-123' },
+                'Content-Type': 'application/json', 'Authorization': 'Bearer test-token-123' },
             body: JSON.stringify({
                 appId: 'test-app',
                 observations,
@@ -396,7 +384,7 @@ describe('Swarm Server & Feedback Attribution', () => {
 
     it('returns JSON 404 for unknown /api/* endpoints', async () => {
         const res = await fetch(`${baseUrl}/api/does-not-exist`, { headers: {
-                'Authorization': 'Bearer test-token-123', 'Authorization': 'Bearer test-token-123' } });
+                'Authorization': 'Bearer test-token-123' } });
         expect(res.status).toBe(404);
         expect(res.headers.get('content-type')).toContain('application/json');
         const data = await res.json();
@@ -479,9 +467,7 @@ describe('Swarm Server & Feedback Attribution', () => {
     it('ignores x-provider-key on /api/swarm/models', async () => {
         const res = await fetch(`${baseUrl}/api/swarm/models?provider=simulated`, {
             headers: {
-                'Authorization': 'Bearer test-token-123',
-                'x-provider-key': 'attacker-key',
-                'Authorization': 'Bearer test-token-123'
+                'x-provider-key': 'attacker-key', 'Authorization': 'Bearer test-token-123'
             }
         });
         expect(res.status).toBe(200);
