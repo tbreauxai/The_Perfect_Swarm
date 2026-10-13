@@ -209,7 +209,7 @@ async function runPortableValidation() {
         }
     });
 
-    const reasoningAgent = new Agent('Reasoning Worker', 'deepseek-r1', 'mock-reasoning-model', 'fake-key');
+    const reasoningAgent = new Agent('Reasoning Worker', 'nvidia/nemotron-3-super-120b-a12b:free', 'mock-reasoning-model', 'fake-key');
     const sanitizedOutput = await reasoningAgent.run('Analyze', context, { responseMimeType: 'application/json' });
     console.log('Sanitized reasoning output:', sanitizedOutput);
     if (!sanitizedOutput.cleanParsed) {

@@ -12,6 +12,7 @@ import { createSwarmServer } from './src/swarm/server.ts';
 import { createCorsMiddleware } from './src/swarm/server/cors.ts';
 import { createAppAuthMiddleware } from './src/swarm/server/appAuth.ts';
 import { getOrCreateDefaultCortex } from './src/swarm/engine/cortex.ts';
+import { fetchProviderModels } from './src/swarm/server/modelsProvider.ts';
 
 dotenv.config();
 
@@ -120,6 +121,18 @@ async function startServer() {
   const defaultCortex = getOrCreateDefaultCortex('perfect-swarm', defaultAi);
 
   const isProd = process.env.NODE_ENV === "production";
+
+  if (isProd && !process.env.SWARM_APP_TOKENS) {
+    console.error('ERROR: NODE_ENV is production but SWARM_APP_TOKENS is not set. All protected routes will fail closed (503).');
+  } else if (!isProd && process.env.SWARM_AUTH_DISABLED === 'true') {
+    console.warn('WARNING: SWARM_AUTH_DISABLED is set. Authentication is disabled for development.');
+  }
+
+  const envVars = process.env;
+  if (envVars.GEMINI_API_KEY) fetchProviderModels('gemini', undefined, envVars).catch(() => {});
+  if (envVars.GROQ_API_KEY) fetchProviderModels('groq', undefined, envVars).catch(() => {});
+  if (envVars.OPENROUTER_API_KEY) fetchProviderModels('openrouter', undefined, envVars).catch(() => {});
+
   const app = createMainApp({ defaultAi, defaultCortex, serveStatic: isProd });
 
   // 3. Setup Vite & Node HTTP Server

@@ -55,7 +55,8 @@ export function resolveCaller(authorization: string | undefined, tokens: Map<str
 export function readAuthEnv(env: Record<string, any> | undefined): { tokens: Map<string, string>; required: boolean } {
     const source = env || {};
     const tokens = parseAppTokens(source.SWARM_APP_TOKENS);
-    const required = source.SWARM_AUTH_REQUIRED === 'true' || tokens.size > 0;
+    const disabled = source.SWARM_AUTH_DISABLED === 'true' && source.NODE_ENV !== 'production';
+    const required = !disabled;
     return { tokens, required };
 }
 
@@ -70,7 +71,7 @@ export function createAppAuthMiddleware() {
         const { tokens, required } = readAuthEnv(env);
         if (!required) return next();
         if (tokens.size === 0) {
-            return c.json({ error: 'Swarm auth is required but SWARM_APP_TOKENS is not configured' }, 503);
+            return c.json({ error: 'auth not configured' }, 503);
         }
         const caller = resolveCaller(c.req.header('authorization') || c.req.header('Authorization'), tokens);
         if (!caller) return c.json({ error: 'Unauthorized' }, 401);

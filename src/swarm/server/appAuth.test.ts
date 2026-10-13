@@ -28,30 +28,65 @@ describe('app auth tokens', () => {
 });
 
 describe('app auth middleware scope', () => {
+    const runMiddleware = async (middleware: any, path: string, authorization?: string, env?: any) => {
+        const c: any = {
+            req: { method: 'GET', path, header: (name: string) => authorization },
+            env: env || {},
+            json: (body: unknown, status: number) => ({ body, status }),
+            set: () => undefined
+        };
+        let nextCalled = false;
+        const result = await middleware(c, async () => { nextCalled = true; });
+        return { nextCalled, result };
+    };
+
     it('lets the dashboard load and still blocks API routes', async () => {
         const previous = process.env.SWARM_APP_TOKENS;
         process.env.SWARM_APP_TOKENS = 'perfect-swarm:secret';
+        process.env.NODE_ENV = 'production';
         const middleware = createAppAuthMiddleware();
-        const calls: string[] = [];
-        const run = async (path: string, authorization?: string) => {
-            const c: any = {
-                req: { method: 'GET', path, header: (name: string) => authorization },
-                env: {},
-                json: (body: unknown, status: number) => ({ body, status }),
-                set: () => undefined
-            };
-            let nextCalled = false;
-            const result = await middleware(c, async () => { nextCalled = true; });
-            calls.push(path + ':' + String(nextCalled));
-            return { nextCalled, result };
-        };
-        expect((await run('/')).nextCalled).toBe(true);
-        expect((await run('/assets/index.js')).nextCalled).toBe(true);
-        expect((await run('/api/health')).nextCalled).toBe(true);
-        expect((await run('/api/swarm/metrics')).nextCalled).toBe(false);
-        expect((await run('/api/swarm/metrics', 'Bearer secret')).nextCalled).toBe(true);
+
+        expect((await runMiddleware(middleware, '/')).nextCalled).toBe(true);
+        expect((await runMiddleware(middleware, '/assets/index.js')).nextCalled).toBe(true);
+        expect((await runMiddleware(middleware, '/api/health')).nextCalled).toBe(true);
+        expect((await runMiddleware(middleware, '/api/swarm/metrics')).nextCalled).toBe(false);
+        expect((await runMiddleware(middleware, '/api/swarm/metrics', 'Bearer secret')).nextCalled).toBe(true);
         if (previous === undefined) delete process.env.SWARM_APP_TOKENS;
         else process.env.SWARM_APP_TOKENS = previous;
-        expect(calls).toContain('/:true');
+    });
+
+    it('enforces fail-closed rules correctly', async () => {
+        const middleware = createAppAuthMiddleware();
+
+        // production + no env -> /api/swarm/analyze 503, /api/health 200
+        let res = await runMiddleware(middleware, '/api/swarm/analyze', undefined, { NODE_ENV: 'production' });
+        expect(res.nextCalled).toBe(false);
+        expect(res.result).toEqual({ body: { error: 'auth not configured' }, status: 503 });
+
+        res = await runMiddleware(middleware, '/api/health', undefined, { NODE_ENV: 'production' });
+        expect(res.nextCalled).toBe(true);
+
+        // production + tokens + no header -> 401
+        res = await runMiddleware(middleware, '/api/swarm/analyze', undefined, { NODE_ENV: 'production', SWARM_APP_TOKENS: 'app:secret' });
+        expect(res.nextCalled).toBe(false);
+        expect(res.result).toEqual({ body: { error: 'Unauthorized' }, status: 401 });
+
+        // production + valid token -> 200 (next called)
+        res = await runMiddleware(middleware, '/api/swarm/analyze', 'Bearer secret', { NODE_ENV: 'production', SWARM_APP_TOKENS: 'app:secret' });
+        expect(res.nextCalled).toBe(true);
+
+        // production + SWARM_AUTH_DISABLED=true -> still enforced (503 without tokens)
+        res = await runMiddleware(middleware, '/api/swarm/analyze', undefined, { NODE_ENV: 'production', SWARM_AUTH_DISABLED: 'true' });
+        expect(res.nextCalled).toBe(false);
+        expect(res.result).toEqual({ body: { error: 'auth not configured' }, status: 503 });
+
+        // NODE_ENV=development + SWARM_AUTH_DISABLED=true -> allowed
+        res = await runMiddleware(middleware, '/api/swarm/analyze', undefined, { NODE_ENV: 'development', SWARM_AUTH_DISABLED: 'true' });
+        expect(res.nextCalled).toBe(true);
+
+        // development + no flag + no tokens -> 503
+        res = await runMiddleware(middleware, '/api/swarm/analyze', undefined, { NODE_ENV: 'development' });
+        expect(res.nextCalled).toBe(false);
+        expect(res.result).toEqual({ body: { error: 'auth not configured' }, status: 503 });
     });
 });

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createSwarmServer } from './server.ts';
 import { globalFeedbackEngine } from './feedback.ts';
 import { MemoryCortex } from './memory.ts';
@@ -62,6 +62,7 @@ describe('Swarm Server & Feedback Attribution', () => {
     let baseUrl: string;
 
     beforeEach(async () => {
+        vi.stubEnv('SWARM_APP_TOKENS', 'test-app:test-token-123');
         cortex = new MemoryCortex({
             defaultAppId: 'test-app'
         });
@@ -82,6 +83,7 @@ describe('Swarm Server & Feedback Attribution', () => {
     });
 
     afterEach(async () => {
+        vi.unstubAllEnvs();
         if (server) {
             server.close();
         }
@@ -102,8 +104,7 @@ describe('Swarm Server & Feedback Attribution', () => {
             const res1 = await fetch(`${baseUrl}/api/swarm/feedback`, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': 'Bearer test-token'
+                'Content-Type': 'application/json', 'Authorization': 'Bearer test-token'
                 },
                 body: JSON.stringify({})
             });
@@ -112,8 +113,7 @@ describe('Swarm Server & Feedback Attribution', () => {
             const res2 = await fetch(`${baseUrl}/api/swarm/feedback`, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': 'Bearer test-token'
+                'Content-Type': 'application/json', 'Authorization': 'Bearer test-token'
                 },
                 body: JSON.stringify({ workflowId: 'wf-1' })
             });
@@ -122,8 +122,7 @@ describe('Swarm Server & Feedback Attribution', () => {
             const res3 = await fetch(`${baseUrl}/api/swarm/feedback`, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': 'Bearer test-token'
+                'Content-Type': 'application/json', 'Authorization': 'Bearer test-token'
                 },
                 body: JSON.stringify({ workflowId: 'non-existent-wf', outcome: 'win' })
             });
@@ -164,8 +163,7 @@ describe('Swarm Server & Feedback Attribution', () => {
             const feedbackRes = await fetch(`${baseUrl}/api/swarm/feedback`, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': 'Bearer duelodds-token'
+                'Content-Type': 'application/json', 'Authorization': 'Bearer duelodds-token'
                 },
                 body: JSON.stringify({
                     workflowId,
@@ -182,7 +180,8 @@ describe('Swarm Server & Feedback Attribution', () => {
 
             // Verify metrics endpoint reports real roles
             const metricsRes = await fetch(`${baseUrl}/api/swarm/metrics`, {
-                headers: { 'Authorization': 'Bearer duelodds-token' }
+                headers: {
+                'Authorization': 'Bearer duelodds-token' }
             });
             expect(metricsRes.status).toBe(200);
             const metricsData = await metricsRes.json();
@@ -210,8 +209,7 @@ describe('Swarm Server & Feedback Attribution', () => {
             const repeatRes = await fetch(`${baseUrl}/api/swarm/feedback`, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': 'Bearer duelodds-token'
+                'Content-Type': 'application/json', 'Authorization': 'Bearer duelodds-token'
                 },
                 body: JSON.stringify({ workflowId, outcome: 'win' })
             });
@@ -249,8 +247,7 @@ describe('Swarm Server & Feedback Attribution', () => {
             const feedbackRes = await fetch(`${baseUrl}/api/swarm/feedback`, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': 'Bearer empty-roles-token'
+                'Content-Type': 'application/json', 'Authorization': 'Bearer empty-roles-token'
                 },
                 body: JSON.stringify({ workflowId, outcome: 'loss' })
             });
@@ -267,7 +264,8 @@ describe('Swarm Server & Feedback Attribution', () => {
 
     it('calibrates reward weights via POST and queries status via GET /api/swarm/calibrate', async () => {
         // Query GET /api/swarm/calibrate
-        const getRes = await fetch(`${baseUrl}/api/swarm/calibrate?appId=test-app`);
+        const getRes = await fetch(`${baseUrl}/api/swarm/calibrate?appId=test-app`, { headers: {
+                'Authorization': 'Bearer test-token-123' } });
         expect(getRes.status).toBe(200);
         const getData = await getRes.json();
         expect(getData.currentWeights).toBeDefined();
@@ -313,7 +311,8 @@ describe('Swarm Server & Feedback Attribution', () => {
 
         const postRes = await fetch(`${baseUrl}/api/swarm/calibrate`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json', 'Authorization': 'Bearer test-token-123' },
             body: JSON.stringify({
                 appId: 'test-app',
                 observations,
@@ -334,14 +333,16 @@ describe('Swarm Server & Feedback Attribution', () => {
         // Disallowed preflight
         const optionsRes = await fetch(`${baseUrl}/api/swarm/stream`, {
             method: 'OPTIONS',
-            headers: { 'Origin': 'https://evil.example' }
+            headers: {
+                'Authorization': 'Bearer test-token-123', 'Origin': 'https://evil.example' }
         });
         expect(optionsRes.status).toBe(403);
         expect(await optionsRes.text()).toContain('Forbidden: Origin not allowed');
 
         // Disallowed actual request
         const getRes = await fetch(`${baseUrl}/api/health`, {
-            headers: { 'Origin': 'https://evil.example' }
+            headers: {
+                'Authorization': 'Bearer test-token-123', 'Origin': 'https://evil.example' }
         });
         expect(getRes.status).toBe(200);
         expect(getRes.headers.get('access-control-allow-origin')).toBeNull();
@@ -351,7 +352,8 @@ describe('Swarm Server & Feedback Attribution', () => {
         // Allowed preflight
         const optionsRes = await fetch(`${baseUrl}/api/swarm/stream`, {
             method: 'OPTIONS',
-            headers: { 'Origin': 'https://duelodds.pages.dev' }
+            headers: {
+                'Authorization': 'Bearer test-token-123', 'Origin': 'https://duelodds.pages.dev' }
         });
         expect(optionsRes.status).toBe(204);
         expect(optionsRes.headers.get('access-control-allow-origin')).toBe('https://duelodds.pages.dev');
@@ -362,7 +364,8 @@ describe('Swarm Server & Feedback Attribution', () => {
 
         // Allowed actual request
         const getRes = await fetch(`${baseUrl}/api/health`, {
-            headers: { 'Origin': 'https://duelodds.pages.dev' }
+            headers: {
+                'Authorization': 'Bearer test-token-123', 'Origin': 'https://duelodds.pages.dev' }
         });
         expect(getRes.status).toBe(200);
         expect(getRes.headers.get('access-control-allow-origin')).toBe('https://duelodds.pages.dev');
@@ -380,7 +383,8 @@ describe('Swarm Server & Feedback Attribution', () => {
     });
 
     it('returns JSON 404 for unknown /api/* endpoints', async () => {
-        const res = await fetch(`${baseUrl}/api/does-not-exist`);
+        const res = await fetch(`${baseUrl}/api/does-not-exist`, { headers: {
+                'Authorization': 'Bearer test-token-123' } });
         expect(res.status).toBe(404);
         expect(res.headers.get('content-type')).toContain('application/json');
         const data = await res.json();
@@ -463,7 +467,7 @@ describe('Swarm Server & Feedback Attribution', () => {
     it('ignores x-provider-key on /api/swarm/models', async () => {
         const res = await fetch(`${baseUrl}/api/swarm/models?provider=simulated`, {
             headers: {
-                'x-provider-key': 'attacker-key'
+                'x-provider-key': 'attacker-key', 'Authorization': 'Bearer test-token-123'
             }
         });
         expect(res.status).toBe(200);
@@ -477,6 +481,7 @@ describe('Swarm Server & Feedback Attribution', () => {
         const res = await fetch(`${baseUrl}/api/swarm/stream`, {
             method: 'POST',
             headers: {
+                'Authorization': 'Bearer test-token-123',
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({ task: 'Analyze big data', data: largeString })
@@ -491,6 +496,7 @@ describe('Swarm Server & Feedback Attribution', () => {
         const res = await fetch(`${baseUrl}/api/swarm/analyze`, {
             method: 'POST',
             headers: {
+                'Authorization': 'Bearer test-token-123',
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({ task: 'Analyze big data', data: largeString })
