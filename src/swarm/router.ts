@@ -145,7 +145,7 @@ export class ModelRouter {
             case 'gemini':
                 return complexity === 'instant' ? 'gemini-2.5-flash-lite' : 'gemini-2.5-flash';
             case 'groq':
-                return complexity === 'instant' ? 'llama-3.1-8b-instant' : 'llama-3.3-70b-versatile';
+                return complexity === 'instant' ? 'openai/gpt-oss-20b' : 'openai/gpt-oss-120b';
             case 'openrouter':
                 return complexity === 'complex'
                     ? 'nvidia/nemotron-3-super-120b-a12b:free'
