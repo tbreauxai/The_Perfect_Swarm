@@ -1,56 +1,38 @@
 [
   {
-    "id": "goal-1-phase-1-shared-error-helper-and-token-ui",
-    "description": "Phase 1: Implement shared parseHttpError helper in src/services/httpError.ts, refine formatActionableError in src/swarm/types.ts, and add masked app token input with save/clear in SettingsModal keys tab.",
+    "id": "goal-1-phase-0b-diagnose-reward-anomaly-and-observability",
+    "description": "Phase 0B Fix 1: Stop discarding reward components and raw inputs. Emit rewardComponents and rewardInputs in Policy Tuned & Outcome Indexed SSE events and /api/swarm/feedback responses.",
     "status": "completed",
-    "verification": "parseHttpError parses JSON/HTML/status safely without HTML leaks; formatActionableError distinguishes provider errors from app-auth 401; SettingsModal manages app token in localStorage."
+    "verification": "rewardComponents and rewardInputs emitted in learningPipeline.ts events and /api/swarm/feedback response; verified in app.test.ts and test-sse-server.mjs."
   },
   {
-    "id": "goal-2-phase-2-run-path-resilience-and-sse-heartbeat",
-    "description": "Phase 2 (Issues 1+4): Implement runSwarm in-flight guard, AbortController connect/idle timeouts, parseHttpError integration, SSE heartbeat in streaming.ts, Run Swarm disabled button, and double-click/hang tests.",
+    "id": "goal-2-phase-0b-rescale-penalties-and-split-failovers",
+    "description": "Phase 0B Fixes 2 & 3: Rescale dead latency (120,000ms) and cost (100,000 tokens) penalty denominators, and isolate hardErrorCount from failoverCount with capped penalty (-0.02, max 0.06).",
     "status": "completed",
-    "verification": "Rapid double-clicks dispatch only 1 POST; hung 401 or network disconnect times out safely without permanent loading spinner; SSE keepalive sends heartbeat comments; all useSwarmExecution tests pass."
+    "verification": "calculateCompositeRewardWithWeights uses 120000ms and 100000 tokens; failovers incur capped -0.02 penalty without tanking base accuracy; tests in policyOptimizer.ts and test-portable-swarm.ts pass."
   },
   {
-    "id": "goal-3-phase-3-diagnostics-viewer-and-settings-status",
-    "description": "Phase 3 (Issue 2): Refactor CortexDiagnosticsViewer to use parseHttpError, display calm app-auth state instead of red card on 401, pause polling after 401 until token changes, and guard envStatus in useSwarmSettings.",
+    "id": "goal-3-phase-0b-blend-analyst-ledger-accuracy",
+    "description": "Phase 0B Fix 4: Blend operational accuracy with empirical analystLedger win rate across participating agent roles.",
     "status": "completed",
-    "verification": "Unauthenticated dashboard load shows calm token prompt without 30s 401 polling storms; valid token resumes polling; env status handles 401/failures gracefully."
+    "verification": "analystLedger.getAverageAccuracy blends up to 50% based on observed outcomes; attributed to real analyst roles in feedback handler; verified in test-sse-server.mjs."
   },
   {
-    "id": "goal-4-phase-4-provider-models-spinner-and-configurator",
-    "description": "Phase 4 (Issue 5): Add body timeout & parseHttpError to fetchAvailableModels in providerService.ts, optimize AgentConfigurator useEffect deps and deduplication, and add app-auth fallback text input.",
+    "id": "goal-4-phase-1-correlation-and-convex-weight-calibration",
+    "description": "Phase 1: Implement PolicyOptimizer.computeCorrelation (Pearson r & MSE) and PolicyOptimizer.calibrateRewardWeights (convex optimization summing to 1.0).",
     "status": "completed",
-    "verification": "401 during model fetch resolves promptly without hanging spinners; AgentConfigurator does not re-fetch infinitely; manual model text input available when token is missing."
+    "verification": "computeCorrelation calculates valid r and MSE; calibrateRewardWeights optimizes objective r - 0.5*MSE within bounded weight ranges summing to 1.0; verified in unit tests."
   },
   {
-    "id": "goal-5-phase-5-input-size-limits-and-bodylimit-guard",
-    "description": "Phase 5 (Issue 3): Remove silent 500k cut in useSwarmExecution.ts, add client char caps (500k data, 20k task) with live counters in App.tsx, and enforce 2MB bodyLimit on /api/swarm/stream & /api/swarm/analyze returning 413 JSON.",
+    "id": "goal-5-phase-1-calibration-endpoints-and-repository-harvesting",
+    "description": "Phase 1: Implement ContinuousFeedbackEngine.calibrateFromKnowledgeRepository and expose POST & GET /api/swarm/calibrate endpoints.",
     "status": "completed",
-    "verification": "Over-limit text in UI blocks Run Swarm with explicit counter message; backend rejects payloads >2MB with 413 JSON; bodies <=1.5MB accepted."
+    "verification": "POST/GET /api/swarm/calibrate support direct observations and automated knowledge repo harvesting; verified in server tests."
   },
   {
-    "id": "goal-6-phase-6-static-routing-and-soft-200-prevention",
-    "description": "Phase 6 (Issue 6): Add public/robots.txt, configure production server.ts static handlers with correct MIME types, and restrict SPA shell fallback to GET/HEAD / and /index.html returning 404 HTML for unmatched routes.",
+    "id": "goal-6-full-regression-verification-gate",
+    "description": "Run complete test suite across all subsystems (Vitest, Portable Swarm, Multi-App Simulation, CLI, and SSE streaming server).",
     "status": "completed",
-    "verification": "GET /robots.txt returns text/plain 200; GET /nope returns 404 HTML; POST / returns 404/405; /api/* returns 404 JSON; /api/health returns 200."
-  },
-  {
-    "id": "goal-7-phase-7-csp-cleanup-and-prod-fallback-warnings",
-    "description": "Phase 7 (Extras): Remove duelodds.pages.dev from CSP connect-src in server.ts and app.ts, and add loud production startup warnings in cortex.ts and learningState.ts when running on in-memory vector store.",
-    "status": "completed",
-    "verification": "CSP connect-src cleaned up without altering CORS allowlist; NODE_ENV=production triggers clear warning logs when Qdrant is unavailable."
-  },
-  {
-    "id": "goal-8-phase-8-cors-before-auth-and-feedback-dedup",
-    "description": "Phase 8 (Swarm CORS Before Auth): Extract createCorsMiddleware, mount before createAppAuthMiddleware in server.ts, skip duplicate CORS/auth in app.ts, deduplicate /api/swarm/feedback, and add cors.test.ts.",
-    "status": "completed",
-    "verification": "POST /api/swarm/feedback from allowed origin without token returns 401 with Access-Control-Allow-Origin header; disallowed origin gets no ACAO; duplicate feedback returns 200 {duplicate:true}."
-  },
-  {
-    "id": "goal-9-phase-9-full-verification-and-regression-gate",
-    "description": "Phase 9: Run complete test suite and execute end-to-end verification checklist against punchlist requirements.",
-    "status": "completed",
-    "verification": "All test suites pass (npm test, vitest, portable, simulation, server, cli, cors); all verification criteria from punchlist verified."
+    "verification": "100% test pass rate across all suites (545+ Vitest tests, ESM/CJS bundles, CLI tests, SSE streaming tests)."
   }
 ]
