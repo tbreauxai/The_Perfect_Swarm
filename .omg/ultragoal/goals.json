@@ -1,38 +1,44 @@
 [
   {
-    "id": "goal-1-phase-0b-diagnose-reward-anomaly-and-observability",
-    "description": "Phase 0B Fix 1: Stop discarding reward components and raw inputs. Emit rewardComponents and rewardInputs in Policy Tuned & Outcome Indexed SSE events and /api/swarm/feedback responses.",
+    "id": "step-1-router-openrouter-instant-model",
+    "description": "Step 1: Update OpenRouter instant model in src/swarm/router.ts to nvidia/nemotron-3-super-120b-a12b:free",
     "status": "completed",
-    "verification": "rewardComponents and rewardInputs emitted in learningPipeline.ts events and /api/swarm/feedback response; verified in app.test.ts and test-sse-server.mjs."
+    "verification": "src/swarm/router.ts returns nvidia/nemotron-3-super-120b-a12b:free for openrouter instant complexity"
   },
   {
-    "id": "goal-2-phase-0b-rescale-penalties-and-split-failovers",
-    "description": "Phase 0B Fixes 2 & 3: Rescale dead latency (120,000ms) and cost (100,000 tokens) penalty denominators, and isolate hardErrorCount from failoverCount with capped penalty (-0.02, max 0.06).",
+    "id": "step-2-router-unit-test",
+    "description": "Step 2: Update OpenRouter instant model expectation in src/swarm/router.test.ts",
     "status": "completed",
-    "verification": "calculateCompositeRewardWithWeights uses 120000ms and 100000 tokens; failovers incur capped -0.02 penalty without tanking base accuracy; tests in policyOptimizer.ts and test-portable-swarm.ts pass."
+    "verification": "npx vitest run src/swarm/router.test.ts passes (33/33 tests)"
   },
   {
-    "id": "goal-3-phase-0b-blend-analyst-ledger-accuracy",
-    "description": "Phase 0B Fix 4: Blend operational accuracy with empirical analystLedger win rate across participating agent roles.",
+    "id": "step-3-router-lifecycle-test",
+    "description": "Step 3: Update OpenRouter instant model expectation in src/swarm/router-lifecycle.test.ts",
     "status": "completed",
-    "verification": "analystLedger.getAverageAccuracy blends up to 50% based on observed outcomes; attributed to real analyst roles in feedback handler; verified in test-sse-server.mjs."
+    "verification": "npx vitest run src/swarm/router-lifecycle.test.ts passes (5/5 tests)"
   },
   {
-    "id": "goal-4-phase-1-correlation-and-convex-weight-calibration",
-    "description": "Phase 1: Implement PolicyOptimizer.computeCorrelation (Pearson r & MSE) and PolicyOptimizer.calibrateRewardWeights (convex optimization summing to 1.0).",
+    "id": "step-4-models-provider-warn-test",
+    "description": "Step 4: Add test for OpenRouter nemotron instant model recognition in src/swarm/server/modelsProvider.warn.test.ts",
     "status": "completed",
-    "verification": "computeCorrelation calculates valid r and MSE; calibrateRewardWeights optimizes objective r - 0.5*MSE within bounded weight ranges summing to 1.0; verified in unit tests."
+    "verification": "npx vitest run src/swarm/server/modelsProvider.warn.test.ts passes (4/4 tests)"
   },
   {
-    "id": "goal-5-phase-1-calibration-endpoints-and-repository-harvesting",
-    "description": "Phase 1: Implement ContinuousFeedbackEngine.calibrateFromKnowledgeRepository and expose POST & GET /api/swarm/calibrate endpoints.",
+    "id": "step-5-simulation-fixture-update",
+    "description": "Step 5: Update cosmetic fixture ids in test-multi-app-simulation.ts:232 and :490 to openai/gpt-oss-20b",
     "status": "completed",
-    "verification": "POST/GET /api/swarm/calibrate support direct observations and automated knowledge repo harvesting; verified in server tests."
+    "verification": "npm run test:simulation passes (12/12 parallel tasks and all phases)"
   },
   {
-    "id": "goal-6-full-regression-verification-gate",
-    "description": "Run complete test suite across all subsystems (Vitest, Portable Swarm, Multi-App Simulation, CLI, and SSE streaming server).",
+    "id": "step-6-readme-documentation",
+    "description": "Step 6: Update README.md:17 to replace Groq LLaMA 3.3 70B with Groq gpt-oss (openai/gpt-oss-120b)",
     "status": "completed",
-    "verification": "100% test pass rate across all suites (545+ Vitest tests, ESM/CJS bundles, CLI tests, SSE streaming tests)."
+    "verification": "git grep -n 'LLaMA 3.3 70B' README.md prints nothing"
+  },
+  {
+    "id": "step-7-full-verify-and-audit",
+    "description": "Step 7: Run full verification checklist and merge PR #89",
+    "status": "completed",
+    "verification": "All checks passed; PR #89 merged into main (commit aa7e28c)"
   }
 ]

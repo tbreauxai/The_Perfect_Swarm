@@ -1,22 +1,14 @@
-# Ultragoal Brief: Implement Changes from todo.md
+# Ultragoal Brief: OpenRouter Instant Model Swap
 
 ## Objective
-Implement and verify all phases from `todo.md` (Phase 0B and Phase 1):
-1. Phase 0B: Fix the 0.136 Reward Anomaly & Rescale Penalties
-   - Stop discarding reward components and inputs in engine events and server responses.
-   - Rescale latency penalty (durationMs/120000) and cost penalty (tokensConsumed/100000).
-   - Split unrecovered hard errors from graceful provider failovers in accuracy calculations.
-   - Blend empirical analyst ledger win rate into operational accuracy.
-2. Phase 1: Reward Weight Calibration & Graded Outcome Correlation
-   - Implement Pearson correlation coefficient ($r$) and MSE between normalized composite rewards and empirical outcomes.
-   - Implement bounded stochastic optimization across convex weights summing to 1.0.
-   - Implement knowledge repository outcome auto-harvesting for continuous calibration.
-   - Expose `POST /api/swarm/calibrate` and `GET /api/swarm/calibrate` API endpoints.
-3. Verification & Regression Gate:
-   - Verify all test suites (Vitest, Portable Swarm, Multi-App Simulation, CLI, and SSE test suites) pass with 0 regressions.
+Swap retired OpenRouter instant model (`meta-llama/llama-3.3-70b-instruct:free` -> `nvidia/nemotron-3-super-120b-a12b:free`) across 6 discrete steps:
+- Step 1: `src/swarm/router.ts` (update OpenRouter instant recommendation to nvidia/nemotron-3-super-120b-a12b:free)
+- Step 2: `src/swarm/router.test.ts` (update unit test expectation)
+- Step 3: `src/swarm/router-lifecycle.test.ts` (update lifecycle test expectation)
+- Step 4: `src/swarm/server/modelsProvider.warn.test.ts` (add test for live list recognition)
+- Step 5: `test-multi-app-simulation.ts` (cosmetic fixture updates at L232 and L490)
+- Step 6: `README.md` (documentation update)
 
-## Constraints & Boundaries
-- Maintain strict backward compatibility for `/api/swarm/feedback` and SSE streaming schemas.
-- Ensure bounded optimization constraints for reward weights (quality: 0.10–0.60, accuracy: 0.15–0.65, latency: 0.02–0.35, cost: 0.01–0.20, savings: 0.02–0.25).
-- Ensure failovers receive minor penalties (-0.02, max -0.06) without depressing base accuracy.
-- Maintain 100% test pass rate across all suites.
+## Status
+- All 6 steps completed and verified
+- PR #89 created and squashed into main (`aa7e28c`)

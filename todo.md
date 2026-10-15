@@ -1,132 +1,164 @@
-# Perfect Swarm Fix — Phase 0B: Diagnose the 0.136 Reward Anomaly
+# THE PERFECT SWARM — OpenRouter "instant" model swap (meta-llama/llama-3.3-70b-instruct:free removed)
 
-**Source:** source audit of `tbreauxai/The_Perfect_Swarm` @ main (`src/swarm/feedback.ts` `PolicyOptimizer.calculateReward`, `src/swarm/lifecycle.ts` `computeReinforcementScore`, `src/swarm/engine/index.ts` reward wiring)
-**Applies to:** Perfect Swarm backend only (Oma / Jules).
+Repo: tbreauxai/The_Perfect_Swarm Base commit: 7d016ba ONE PR. Perfect Swarm only (no DuelOdds).
+Why: OpenRouter removed meta-llama/llama-3.3-70b-instruct:free. Live check 2026-10-15 ~9:30 AM CT of https://openrouter.ai/api/v1/models:
+meta-llama/llama-3.3-70b-instruct:free -> NOT listed
+nvidia/nemotron-3-super-120b-a12b:free -> LISTED (live) <- replacement
+(The paid meta-llama/llama-3.3-70b-instruct is still listed, but we stay on :free.)
+
+GIT RULES (Tyler's standing rule — follow exactly)
+
+- Start: git fetch origin && git checkout -b openrouter-instant-swap 7d016ba
+- After EACH step passes its Acceptance: git add -A && git commit -m 'step N'
+- NEVER run: git reset (soft or hard), git checkout ., git restore, git clean, git rebase, or any squash. Tyler squashes on merge.
+- Before submitting, paste the output of BOTH:
+  git log --oneline 7d016ba..HEAD
+  git diff --stat 7d016ba
+  and confirm the PR's "Files changed" tab is NOT empty and matches the list at the bottom.
+
+RULES FOR EDITS
+
+- Each step gives path:line at 7d016ba, a BEFORE block copied from the file by script, and an AFTER block. Replace BEFORE with AFTER.
+- If a BEFORE block does not match character-for-character, STOP and report it. Do not improvise.
 
 ---
 
-## The anomaly, restated
-
-Observed 2026-09-29: comparable good runs scored **0.601, 0.571, 0.604** — one good run scored **0.136**.
-The reward formula (`feedback.ts:146`):
+[x] STEP 1 — src/swarm/router.ts:150-154 OpenRouter instant model
+BEFORE:
 
 ```
-quality  = metrics.qualityScore ?? 0.8                                   × 0.35
-accuracy = metrics.accuracyScore ?? (errorCount==0 ? 0.9 : max(0.1, 1−errorCount×0.3)) × 0.35
-latency  = −min(1, durationMs/3000)                                      × 0.15
-cost     = −min(1, tokensConsumed/10000)                                × 0.05
-savings  = +min(1, tokenSavings/4000)                                   × 0.10
-composite = quality + accuracy + latency + cost + savings, clamped to [−1, 1]
+                return complexity === 'complex'
+                    ? 'nvidia/nemotron-3-super-120b-a12b:free'
+                    : complexity === 'instant'
+                    ? 'meta-llama/llama-3.3-70b-instruct:free'
+                    : 'nvidia/nemotron-3-super-120b-a12b:free';
 ```
 
-## Diagnosis
+AFTER:
 
-**The 0.136 is arithmetically consistent with a run punished for operational turbulence, not output
-quality.** Two reconstructions both land on it:
-
-- **Story A (critic path):** Deep-verification critic rejected the proposal twice → `computedRating`
-  0.35 → `qualityScore` 0.35; `isSuccess=false` → `accuracyScore` 0.30; latency+cost saturated
-  (−0.20); high token savings (+0.10) → **0.128** (≈0.136 within metric noise).
-- **Story B (failover path):** `isSuccess=false` → quality 0.40; `errorCount=2` (e.g. two Groq→Gemini
-  graceful failovers, exactly what the 9-29 5-agent test did) → accuracy `1−2×0.3` = 0.40;
-  saturated penalties (−0.20); moderate savings (+0.056) → **0.136 exactly**.
-
-Which one it was is **unknowable from the logs** — and that is itself the central bug (see fix #1).
-But both stories share the root cause, plus four structural flaws:
-
-**Root cause: the reward measures operational smoothness, not output quality.** A run with
-turbulent-but-recoverable execution (picky critic, provider failovers) and excellent picks scores
-0.136; a clean-but-mediocre run scores 0.60. The "learning signal" ranks runs by how quietly they
-ran. This is the same disease as the old 0.9-accuracy default, one level down.
-
-**Flaw 1 — the evidence is computed, then discarded.** `calculateReward` returns full
-`components` (`qualityReward`, `accuracyReward`, `latencyPenalty`, `costPenalty`, `savingsReward`),
-but the `Policy Tuned & Outcome Indexed` event (`engine/index.ts:1955`) logs only the single
-composite number. The raw inputs (`qualityScore`, `accuracyScore`, `errorCount`, `computedRating`,
-attempts) never leave the process. The anomaly was undiagnosable _by construction_.
-
-**Flaw 2 — dead penalties.** `min(1, durationMs/3000)`: every real run (30–60s) eats the full −0.15;
-a 4s run and a 4min run are penalized identically. `min(1, tokensConsumed/10000)`: every full-swarm
-run eats the full −0.05. Combined they are a constant **−0.20 operational tax**, which is why good
-runs ceiling at ~0.60 instead of ~0.80. Two of the five reward terms provide zero discrimination.
-
-**Flaw 3 — `computedRating` is mislabeled.** `lifecycle.ts:39` scores _verification attempts_
-(pass-1st-try 0.98, pass-2nd 0.88, exhausted-retries 0.35/0.20) — not output quality. A wrong-but-
-stubborn critic tanks "quality" on a good run, and the reward can't tell the difference.
-
-**Flaw 4 — failovers count as failures.** `accuracy = max(0.1, 1 − errorCount×0.3)` makes no
-distinction between a hard failure and a graceful provider failover — the system's own resilience
-mechanism. Two failovers with perfect final output: accuracy 0.9 → 0.4. The system punishes itself
-for working as designed. (Note the blast radius: `engine/index.ts:1950` feeds this composite into
-`globalLoadBalancer.recordReward(provider, …)` — failover priority is currently driven by a signal
-that punishes turbulence.)
-
-## The fix (in priority order)
-
-**1. Stop discarding the evidence (observability — do this first).**
-In `engine/index.ts` ~1955, extend the `Policy Tuned & Outcome Indexed` event `output` with:
-
-```ts
-rewardComponents: fbResult.reward.components,
-rewardInputs: {
-  qualityScore: <the qualityScore passed to processFeedback>,
-  accuracyScore: <the accuracyScore passed to processFeedback>,
-  errorCount: workflowRecord.metrics.errorCount,
-  durationMs: workflowRecord.metrics.durationMs,
-  tokensConsumed: workflowRecord.metrics.tokensConsumed,
-  tokenSavings: workflowRecord.metrics.tokenSavings,
-  computedRating: lifecycleResult?.computedRating ?? null,
-}
+```
+                return complexity === 'complex'
+                    ? 'nvidia/nemotron-3-super-120b-a12b:free'
+                    : complexity === 'instant'
+                    ? 'nvidia/nemotron-3-super-120b-a12b:free'
+                    : 'nvidia/nemotron-3-super-120b-a12b:free';
 ```
 
-And in `server.ts` `/api/swarm/feedback`, add `components: fbResult.reward.components` to the
-`{ ok: true, … }` response. Next anomaly gets diagnosed in one look instead of reverse-engineered.
+(Kept as a ternary so a different instant id can be dropped in later without restructuring.)
+Acceptance: Steps 2-3 pass.
 
-**2. Rescale the dead penalties to the operating range.**
-`durationMs/3000` → `durationMs/120000` (2 min saturation); `tokensConsumed/10000` →
-`tokensConsumed/100000`. Better still: penalize deviation from a rolling per-app baseline instead
-of absolutes — a 45s DuelOdds run is normal, a 45s run when the baseline is 20s is the signal.
+[x] STEP 2 — src/swarm/router.test.ts:131
+BEFORE:
 
-**3. Split errors from failovers.**
-Track `hardErrorCount` vs `failoverCount` separately in the workflow metrics. Accuracy term uses
-hard errors only (`max(0.1, 1 − hardErrorCount×0.3)`); failovers get a small separate term
-(e.g. −0.02 each, capped) or none — a recovered failover is a success story, not a demerit.
+```
+            expect(ModelRouter.getRecommendedModel('openrouter', 'instant')).toBe('meta-llama/llama-3.3-70b-instruct:free');
+```
 
-**4. Let graded outcomes own the accuracy term (follow-on, now unblocked).**
-The engine path still sets `accuracyScore: isSuccess ? 0.95 : 0.30` — operational, not predictive.
-Now that the feedback endpoint delivers real win/loss accuracy, the engine's per-run accuracy
-should blend toward the analyst ledger's observed win rate for the participating roles (see the
-analyst-ledger fix: real roles are now recorded). Until then, treat the composite as a _reliability_
-score in every UI label — not a quality score.
+AFTER:
 
-## Verify (Phase 0B pass bar) [COMPLETED]
+```
+            expect(ModelRouter.getRecommendedModel('openrouter', 'instant')).toBe('nvidia/nemotron-3-super-120b-a12b:free');
+```
 
-1. Deploy fix #1; re-run the same DuelOdds task twice with `bypassCache: true`.
-2. Both runs' composites within **±0.1**, **and** the event's `rewardComponents`/`rewardInputs`
-   explain any remaining gap in one reading (no reverse-engineering).
-3. Forced-turbulence check: run with a bad Groq key (forces failover) on a task with known-good
-   output — composite must stay within ±0.15 of the clean run, not crater to ~0.14.
-4. One-sentence statement of what the reward measures, recorded in the test plan. Proposed:
-   _"The composite scores execution cleanliness (penalizing latency/cost vs. operating baselines,
-   hard errors, and failed verifications) plus token efficiency; pick correctness enters only via
-   graded win/loss outcomes."_ If that sentence is embarrassing, the formula still needs work.
-5. Automated verification:
-   - Full reward component breakdown (`rewardComponents`) and inputs (`rewardInputs`) emitted in `Policy Tuned & Outcome Indexed` SSE events (`src/swarm/engine/index.ts`) and `/api/swarm/feedback` responses (`src/swarm/server.ts`).
-   - Latency penalty denominator rescaled to 120,000ms (2 minutes) and cost penalty denominator rescaled to 100,000 tokens in `PolicyOptimizer.calculateReward` (`src/swarm/feedback.ts`).
-   - Unrecovered hard errors (`hardErrorCount`) isolated from graceful provider failovers (`failoverCount`); failovers receive a capped minor adjustment (-0.02 each, max 0.06) without destroying accuracy.
-   - Empirical analyst ledger win rate (`analystLedger.getAverageAccuracy`) blended with operational accuracy in workflow execution (`src/swarm/engine/index.ts`).
-   - 47 vitest test files (535/535 tests pass), `npm test` 100% pass, `tsc --noEmit` 0 errors, and dual production ESM/CJS bundles successfully generated.
+Acceptance: `npx vitest run src/swarm/router.test.ts` passes.
 
-## Phase 1: Reward Weight Calibration & Graded Outcome Correlation [COMPLETED]
+[x] STEP 3 — src/swarm/router-lifecycle.test.ts:44
+BEFORE:
 
-1. **Outcome Correlation Engine**:
-   - Implemented `PolicyOptimizer.computeCorrelation` to calculate Pearson correlation coefficient ($r$) and MSE between normalized composite reward outputs ($[-1, 1] \to [0, 1]$) and empirical win/loss/push outcomes.
-2. **Convex Weight Optimization**:
-   - Implemented `PolicyOptimizer.calibrateRewardWeights` with bounded stochastic optimization across operating ranges (quality: 0.10–0.60, accuracy: 0.15–0.65, latency: 0.02–0.35, cost: 0.01–0.20, savings: 0.02–0.25) summing to 1.0.
-   - Objective function maximizes $r_{xy} - 0.5 \times \text{MSE}$ and dynamically updates internal weights with `autoApply`.
-3. **Repository Integration**:
-   - Added `ContinuousFeedbackEngine.calibrateFromKnowledgeRepository` to auto-harvest feedback-processed historical outcomes and calibrate weights without manual data extraction.
-4. **API Endpoints**:
-   - Exposed `POST /api/swarm/calibrate` and `GET /api/swarm/calibrate` in `src/swarm/server.ts` supporting both direct observation payloads and automated knowledge repository harvesting.
-5. **Automated Verification**:
-   - 48 vitest test files (545/545 tests pass), `tsc --noEmit` 0 errors, `npm test` 100% pass, and dual ESM/CJS production builds pass.
+```
+        expect(ModelRouter.getRecommendedModel('openrouter', 'instant')).toBe('meta-llama/llama-3.3-70b-instruct:free');
+```
+
+AFTER:
+
+```
+        expect(ModelRouter.getRecommendedModel('openrouter', 'instant')).toBe('nvidia/nemotron-3-super-120b-a12b:free');
+```
+
+Acceptance: `npx vitest run src/swarm/router-lifecycle.test.ts` passes.
+
+[x] STEP 4 — src/swarm/server/modelsProvider.warn.test.ts add one test (NO change to modelsProvider.ts)
+Finding: warnUnknownConfiguredModels (src/swarm/server/modelsProvider.ts:212-236) compares against the LIVE provider list
+(listProviderModels at L221; OpenRouter = https://openrouter.ai/api/v1/models). There is no static list to update. server.ts:138-146
+already feeds it ModelRouter.getRecommendedModel(...) for every tier, so the new id is checked automatically.
+Append inside the existing describe('warnUnknownConfiguredModels', ...) block, before its closing `});`:
+
+```
+  it('recognizes the OpenRouter nemotron instant model from the live list', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ data: [{ id: 'nvidia/nemotron-3-super-120b-a12b:free', pricing: { prompt: '0', completion: '0' } }] }), { status: 200 })));
+    const out = await warnUnknownConfiguredModels(
+      { openrouter: ['nvidia/nemotron-3-super-120b-a12b:free'] },
+      { OPENROUTER_API_KEY: 'k' }
+    );
+    expect(out).toEqual([]);
+  });
+```
+
+Acceptance: `npx vitest run src/swarm/server/modelsProvider.warn.test.ts` -> 4 passed.
+
+[x] STEP 5 — test-multi-app-simulation.ts:232 and :490 cosmetic fixture ids (simulated providers; any string works)
+BEFORE (L232):
+
+```
+            'llama-3-8b',
+```
+
+AFTER:
+
+```
+            'openai/gpt-oss-20b',
+```
+
+BEFORE (L490):
+
+```
+        'llama-3.1-8b',
+```
+
+AFTER:
+
+```
+        'openai/gpt-oss-20b',
+```
+
+Acceptance: `npm run test:simulation` passes.
+
+[x] STEP 6 — README.md:17 docs
+BEFORE:
+
+```
+- 🆓 **100% Free-Tier Calibrated**: Engineered for zero-cost operation across free LLM endpoints (Gemini 2.5 Flash, Groq LLaMA 3.3 70B, OpenRouter free models with automatic `:free` suffix resolution, Mistral Small, and GitHub Models).
+```
+
+AFTER:
+
+```
+- 🆓 **100% Free-Tier Calibrated**: Engineered for zero-cost operation across free LLM endpoints (Gemini 2.5 Flash, Groq gpt-oss (openai/gpt-oss-120b), OpenRouter free models with automatic `:free` suffix resolution, Mistral Small, and GitHub Models).
+```
+
+Acceptance: `git grep -n 'LLaMA 3.3 70B' README.md` prints nothing.
+
+---
+
+## VERIFY (all must pass)
+
+npm run lint
+npm run test:unit
+npm run test:simulation
+npm run build
+rg -n 'llama-3.3-70b-instruct' -> MUST print nothing
+git status (clean; every step committed)
+git log --oneline 7d016ba..HEAD (step 1 … step 6)
+git diff --stat 7d016ba
+Expected git diff --stat (exactly these 6 files):
+src/swarm/router.ts
+src/swarm/router.test.ts
+src/swarm/router-lifecycle.test.ts
+src/swarm/server/modelsProvider.warn.test.ts
+test-multi-app-simulation.ts
+README.md
+PR CHECK: the PR's "Files changed" tab MUST be non-empty and list exactly these 6 files. 0 files = branch not pushed; push it (no rebase/squash).
+Not changed on purpose: .omg/ultragoal/audit_v2.md:28, audit_v3.md:39 and src/swarm/providers/adapter.ts:36 mention "LLaMA 3.3" only as
+an example of models that emit <think> tags (not a configured id).
+
+DEPLOY (Tyler, after merge): Render redeploys from main; boot log must show no "WARNING: configured openrouter model" line.
