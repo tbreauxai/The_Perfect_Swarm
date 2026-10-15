@@ -14,7 +14,7 @@
 
 ### Key Features
 
-- 🆓 **100% Free-Tier Calibrated**: Engineered for zero-cost operation across free LLM endpoints (Gemini 2.5 Flash, Groq LLaMA 3.3 70B, OpenRouter free models with automatic `:free` suffix resolution, Mistral Small, and GitHub Models).
+- 🆓 **100% Free-Tier Calibrated**: Engineered for zero-cost operation across free LLM endpoints (Gemini 2.5 Flash, Groq gpt-oss (openai/gpt-oss-120b), OpenRouter free models with automatic `:free` suffix resolution, Mistral Small, and GitHub Models).
 - 🧠 **Continuous Qdrant & In-Memory Learning Cortex**: Semantic vector memory with dense (768d) + sparse (BM25 token frequency) hybrid Reciprocal Rank Fusion (RRF), configurable `denseWeight` and `sparseWeight`, verified payload indexing (`verified: bool`), automated memory consolidation triggers (`qualityRating < 0.40`), and cross-app shared learning baselines (`includeShared`).
 - ⚡ **Zero-Qdrant In-Memory Persistence**: Unconditional MemoryCortex binding with fallback store sharing per collection, semantic deduplication, and few-shot exemplar distillation working 100% offline without external infrastructure.
 - 🔄 **Cross-Provider Critic & RLAIF Feedback Loop**: Automated verification loops dynamically select alternative provider analysts as critics to eliminate LLM self-affirmation bias, scores agent outputs, and captures verified feedback across multi-session executions.
