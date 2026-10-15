@@ -121,8 +121,9 @@ describe('ModelRouter', () => {
         });
 
         it('should return correct models for groq', () => {
-            expect(ModelRouter.getRecommendedModel('groq', 'instant')).toBe('llama-3.1-8b-instant');
-            expect(ModelRouter.getRecommendedModel('groq', 'simple')).toBe('llama-3.3-70b-versatile');
+            expect(ModelRouter.getRecommendedModel('groq', 'instant')).toBe('openai/gpt-oss-20b');
+            expect(ModelRouter.getRecommendedModel('groq', 'simple')).toBe('openai/gpt-oss-120b');
+            expect(ModelRouter.getRecommendedModel('groq', 'complex')).toBe('openai/gpt-oss-120b');
         });
 
         it('should return correct models for openrouter', () => {
