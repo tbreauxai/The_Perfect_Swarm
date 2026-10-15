@@ -150,7 +150,7 @@ export class ModelRouter {
                 return complexity === 'complex'
                     ? 'nvidia/nemotron-3-super-120b-a12b:free'
                     : complexity === 'instant'
-                    ? 'meta-llama/llama-3.3-70b-instruct:free'
+                    ? 'nvidia/nemotron-3-super-120b-a12b:free'
                     : 'nvidia/nemotron-3-super-120b-a12b:free';
             case 'mistral':
                 // mistral-small-latest is available on Mistral free API tier
