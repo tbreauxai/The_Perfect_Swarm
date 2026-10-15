@@ -13,7 +13,7 @@ describe('AgentConfigurator & SettingsModal Swarm Agents Tab', () => {
     });
     const mockAgents: AgentConfig[] = [
         { id: '1', role: 'Data Analyst', provider: 'gemini', model: 'gemini-3.5' },
-        { id: '2', role: 'Security Specialist', provider: 'groq', model: 'llama-3.3-70b' },
+        { id: '2', role: 'Security Specialist', provider: 'groq', model: 'openai/gpt-oss-120b' },
         { id: '3', role: 'Disabled Agent', provider: 'none', model: '' }
     ];
 
