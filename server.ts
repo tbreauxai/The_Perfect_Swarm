@@ -12,7 +12,9 @@ import { createSwarmServer } from './src/swarm/server.ts';
 import { createCorsMiddleware } from './src/swarm/server/cors.ts';
 import { createAppAuthMiddleware } from './src/swarm/server/appAuth.ts';
 import { getOrCreateDefaultCortex } from './src/swarm/engine/cortex.ts';
-import { fetchProviderModels } from './src/swarm/server/modelsProvider.ts';
+import { fetchProviderModels, warnUnknownConfiguredModels } from './src/swarm/server/modelsProvider.ts';
+import { DEFAULT_PROVIDER_MODELS } from './src/swarm/agent.ts';
+import { ModelRouter } from './src/swarm/router.ts';
 
 dotenv.config();
 
@@ -132,6 +134,16 @@ async function startServer() {
   if (envVars.GEMINI_API_KEY) fetchProviderModels('gemini', undefined, envVars).catch(() => {});
   if (envVars.GROQ_API_KEY) fetchProviderModels('groq', undefined, envVars).catch(() => {});
   if (envVars.OPENROUTER_API_KEY) fetchProviderModels('openrouter', undefined, envVars).catch(() => {});
+
+  // Warn (never exit) when a configured default/routing model id is unknown to its provider.
+  const configuredModels: Record<string, string[]> = {};
+  for (const provider of ['gemini', 'groq', 'openrouter', 'mistral'] as const) {
+    configuredModels[provider] = [
+      DEFAULT_PROVIDER_MODELS[provider],
+      ...(['instant', 'simple', 'formatting', 'complex'] as const).map((c) => ModelRouter.getRecommendedModel(provider as any, c))
+    ].filter(Boolean);
+  }
+  warnUnknownConfiguredModels(configuredModels, envVars).catch(() => {});
 
   const app = createMainApp({ defaultAi, defaultCortex, serveStatic: isProd });
 
