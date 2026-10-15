@@ -83,7 +83,7 @@ const result = await executeSwarmWorkflow({
     appId: 'monitoring-app',
     agents: [
       { id: 'mgr', role: 'Manager Node', provider: 'openrouter', model: 'nvidia/nemotron-3-super-120b-a12b:free', apiKey: process.env.OPENROUTER_API_KEY },
-      { id: 'a1', role: 'Infrastructure Analyst', provider: 'groq', model: 'llama-3.3-70b-versatile', apiKey: process.env.GROQ_API_KEY }
+      { id: 'a1', role: 'Infrastructure Analyst', provider: 'groq', model: 'openai/gpt-oss-120b', apiKey: process.env.GROQ_API_KEY }
     ]
   },
   onEvent: (event) => {
