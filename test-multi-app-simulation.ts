@@ -229,7 +229,7 @@ Synthesizing structured findings.
         const tenantAppId = i % 2 === 0 ? 'app-fintech-fraud' : 'app-health-analytics';
         const stressAgent = new Agent(
             `StressWorker-${i}`,
-            'llama-3-8b',
+            'openai/gpt-oss-20b',
             'sim-groq-free',
             'key-groq',
             undefined,
@@ -487,7 +487,7 @@ Synthesizing structured findings.
     // Now execute requests and trigger 429 on groq
     const adaptiveAgent = new Agent(
         'Adaptive Stress Agent',
-        'llama-3.1-8b',
+        'openai/gpt-oss-20b',
         'sim-burst-groq',
         'k-groq',
         undefined,
