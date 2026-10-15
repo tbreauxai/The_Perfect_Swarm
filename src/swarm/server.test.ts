@@ -409,7 +409,7 @@ describe('Swarm Server & Feedback Attribution', () => {
                     id: 'agent-1',
                     role: 'Lead Analyst',
                     provider: 'groq',
-                    model: 'llama-3.3-70b',
+                    model: 'openai/gpt-oss-120b',
                     apiKey: 'agent-secret-leak',
                     groqApiKey: 'agent-groq-leak'
                 }
@@ -453,7 +453,7 @@ describe('Swarm Server & Feedback Attribution', () => {
         expect(sanitized.agents[0].id).toBe('agent-1');
         expect(sanitized.agents[0].role).toBe('Lead Analyst');
         expect(sanitized.agents[0].provider).toBe('groq');
-        expect(sanitized.agents[0].model).toBe('llama-3.3-70b');
+        expect(sanitized.agents[0].model).toBe('openai/gpt-oss-120b');
         expect(sanitized.agents[0].apiKey).toBeUndefined();
         expect(sanitized.agents[0].groqApiKey).toBeUndefined();
 

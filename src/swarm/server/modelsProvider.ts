@@ -204,3 +204,33 @@ async function listProviderModels(provider: string, clientKey?: string, env: Rec
             return [];
     }
 }
+
+/**
+ * Startup check: compares configured model ids against each provider's raw /models list (only when that provider's key is set).
+ * Logs one console.warn per unknown id. Never throws and never exits.
+ */
+export async function warnUnknownConfiguredModels(
+    configured: Record<string, string[]>,
+    env: Record<string, any> = {}
+): Promise<string[]> {
+    const warnings: string[] = [];
+    for (const [provider, ids] of Object.entries(configured)) {
+        try {
+            if (!keyFor(provider, env) && provider !== 'openrouter') continue;
+            if (provider === 'openrouter' && !env.OPENROUTER_API_KEY) continue;
+            const listed = await listProviderModels(provider, undefined, env);
+            if (!Array.isArray(listed) || listed.length === 0) continue;
+            const known = new Set(listed.map((m: any) => String(m.id)));
+            for (const id of Array.from(new Set(ids.filter(Boolean)))) {
+                if (!known.has(id)) {
+                    const msg = `WARNING: configured ${provider} model '${id}' is not in the provider's /models list (retired or no access?).`;
+                    console.warn(msg);
+                    warnings.push(msg);
+                }
+            }
+        } catch {
+            // listing failed (network/key): skip silently, never block startup
+        }
+    }
+    return warnings;
+}

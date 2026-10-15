@@ -24,7 +24,7 @@ This audit evaluates the codebase as a portable, zero-overhead foundation (`@per
 ## 2. AI Structure & Free Tool Execution Audit
 
 ### Current State
-- **Free-Tier Calibration**: Configured for `gemini-2.5-flash`, `llama-3.3-70b-versatile`, `deepseek-r1:free`, `mistral-small-latest`, and `gpt-4o-mini`.
+- **Free-Tier Calibration**: Configured for `gemini-2.5-flash`, `openai/gpt-oss-120b` (Groq), `deepseek-r1:free`, `mistral-small-latest`, and `gpt-4o-mini`.
 - **OpenRouter Auto-Resolution**: Automatically appends `:free` to models when using zero-balance OpenRouter keys to eliminate 402 Payment Required errors.
 - **Failover Cascades**: Automatic fallback across providers upon encountering 429 rate limits, timeouts, or 5xx server errors.
 - **Adaptive Load Balancer**: Latency EMA tracking, in-flight concurrency counting, and dynamic 5-second 429 cooldown routing.

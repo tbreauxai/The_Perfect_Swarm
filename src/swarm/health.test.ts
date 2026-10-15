@@ -21,16 +21,16 @@ describe('Model Health Checker & Circuit Breaker', () => {
         it('trips from CLOSED to OPEN after failureThreshold consecutive failures', () => {
             const breaker = new ModelCircuitBreaker({ failureThreshold: 3, resetTimeoutMs: 1000 });
             
-            breaker.recordFailure('groq', 'llama-3.3-70b');
-            expect(breaker.getState('groq', 'llama-3.3-70b')).toBe('CLOSED');
-            expect(breaker.isAvailable('groq', 'llama-3.3-70b')).toBe(true);
+            breaker.recordFailure('groq', 'openai/gpt-oss-120b');
+            expect(breaker.getState('groq', 'openai/gpt-oss-120b')).toBe('CLOSED');
+            expect(breaker.isAvailable('groq', 'openai/gpt-oss-120b')).toBe(true);
 
-            breaker.recordFailure('groq', 'llama-3.3-70b');
-            expect(breaker.getState('groq', 'llama-3.3-70b')).toBe('CLOSED');
+            breaker.recordFailure('groq', 'openai/gpt-oss-120b');
+            expect(breaker.getState('groq', 'openai/gpt-oss-120b')).toBe('CLOSED');
 
-            breaker.recordFailure('groq', 'llama-3.3-70b'); // 3rd failure trips
-            expect(breaker.getState('groq', 'llama-3.3-70b')).toBe('OPEN');
-            expect(breaker.isAvailable('groq', 'llama-3.3-70b')).toBe(false);
+            breaker.recordFailure('groq', 'openai/gpt-oss-120b'); // 3rd failure trips
+            expect(breaker.getState('groq', 'openai/gpt-oss-120b')).toBe('OPEN');
+            expect(breaker.isAvailable('groq', 'openai/gpt-oss-120b')).toBe(false);
         });
 
         it('recovers to HALF_OPEN after cooldown and resets to CLOSED on success', async () => {
