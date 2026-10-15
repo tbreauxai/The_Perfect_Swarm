@@ -141,7 +141,7 @@ Synthesizing structured findings.
     // Create resilient agent with Groq as primary, OpenRouter as failover cascade
     const fintechAgent = new Agent(
         'Fraud Analyst',
-        'llama-3.3-70b',
+        'openai/gpt-oss-120b',
         'sim-groq-free',
         'key-groq',
         undefined,
@@ -464,7 +464,7 @@ Synthesizing structured findings.
     });
 
     const candidateProviders = [
-        { provider: 'sim-burst-groq', apiKey: 'k-groq', modelName: 'llama-3.1-8b-instant' },
+        { provider: 'sim-burst-groq', apiKey: 'k-groq', modelName: 'openai/gpt-oss-20b' },
         { provider: 'sim-burst-gemini', apiKey: 'k-gemini', modelName: 'gemini-2.5-flash' },
         { provider: 'sim-burst-mistral', apiKey: 'k-mistral', modelName: 'mistral-small' }
     ];
