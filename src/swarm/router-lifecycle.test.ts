@@ -41,7 +41,7 @@ describe('ModelRouter Word-Boundary Precision & Recommendations', () => {
 
     it('returns modern verified OpenRouter free model recommendations', () => {
         expect(ModelRouter.getRecommendedModel('openrouter', 'complex')).toBe('nvidia/nemotron-3-super-120b-a12b:free');
-        expect(ModelRouter.getRecommendedModel('openrouter', 'instant')).toBe('meta-llama/llama-3.3-70b-instruct:free');
+        expect(ModelRouter.getRecommendedModel('openrouter', 'instant')).toBe('nvidia/nemotron-3-super-120b-a12b:free');
         expect(ModelRouter.getRecommendedModel('openrouter', 'simple')).toBe('nvidia/nemotron-3-super-120b-a12b:free');
     });
 });
