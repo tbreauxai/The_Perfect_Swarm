@@ -37,6 +37,8 @@ export class Agent {
     private systemInstruction?: string;
     private fallbacks: ProviderCredential[] = [];
     private loadBalancer?: AdaptiveLoadBalancer;
+    /** PS3: when true, fallbacks run in the given order (manager chain) instead of load-balancer score order. */
+    public preserveFallbackOrder = false;
 
     constructor(
         role: string,
@@ -86,7 +88,7 @@ export class Agent {
 
         const lb = (config?.loadBalancer as AdaptiveLoadBalancer) || this.loadBalancer || globalLoadBalancer;
         const candidateFallbacks = config?.fallbackProviders || this.fallbacks;
-        const sortedFallbacks = candidateFallbacks.length > 1
+        const sortedFallbacks = candidateFallbacks.length > 1 && !this.preserveFallbackOrder
             ? [...candidateFallbacks].sort((a, b) => lb.calculateScore(b.provider) - lb.calculateScore(a.provider))
             : candidateFallbacks;
 
