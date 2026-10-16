@@ -4,6 +4,7 @@ import type { SwarmEngineSettings } from '../types.ts';
 import type { AgentVariantConfig } from '../experiment.ts';
 import type { ToolRegistry } from '../tools/index.ts';
 import type { MemoryCortex } from '../memory.ts';
+import type { SwarmStagePayload } from './types.ts';
 import {
     globalHierarchicalMessageBus
 } from '../communication.ts';
@@ -21,6 +22,8 @@ import { guardAnalystResponse } from '../parser.ts';
 import { SwarmTracer } from '../profiler.ts';
 import { ANALYST_SYSTEM_INSTRUCTION } from './constants.ts';
 import { recordDegraded } from './partialResult.ts';
+import { AnalystScorecardSchema } from '../types.ts';
+import { runScorecardSeat, renderScorecardInstruction, scorecardAnalystMaxTokens, scorecardToAnalystReport } from './scorecard.ts';
 
 export interface AnalystExecutorConfig {
     task: string;
@@ -36,6 +39,8 @@ export interface AnalystExecutorConfig {
     analystClusterMap: Map<string, string>;
     specialistTree?: HierarchicalSpecialistTree;
     bypassCache: boolean;
+    /** R2: analysts reply with a compact scorecard (see scorecard.ts). */
+    scorecardMode?: boolean;
     onPromptCompression?: (metrics: {
         originalTokens: number;
         compressedTokens: number;
@@ -43,6 +48,8 @@ export interface AnalystExecutorConfig {
         deduplicatedCount: number;
     }) => void;
     onEscalation?: () => void;
+    /** R2-S3: emits one swarm_stage frame per scorecard (SSE). */
+    onStage?: (stagePayload: SwarmStagePayload) => void;
 }
 
 export function createAnalystExecutor(config: AnalystExecutorConfig) {
@@ -60,8 +67,10 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
         analystClusterMap,
         specialistTree,
         bypassCache,
+        scorecardMode,
         onPromptCompression,
-        onEscalation
+        onEscalation,
+        onStage
     } = config;
 
     // PS2: stagger analyst seat starts ~1.5s apart (first call per seat; later chunks of a seat are not re-delayed).
@@ -123,13 +132,33 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
 
         try {
             let rawOutput: any;
+            let scorecardReport: any = null;
             try {
-                rawOutput = await analyst.run(effectiveAnalystPrompt, context, { 
+                const analystRunConfig = {
                     responseMimeType: "application/json",
                     bypassCache,
                     groqMode: (settings as any)?.responseSchema === 'morning_judge' ? 'morning' : 'chat',
                     ...activeVariant?.parameters
-                });
+                };
+                if (scorecardMode) {
+                    // R2-S1/S2: the prompt ENDS with the scorecard schema + "JSON only"; max output 800 tokens
+                    // by default (settings.scorecardAnalystMaxTokens overrides)
+                    // (maxTokensCap also caps Groq chat). One repair on the same seat, then unstructured (never aborts).
+                    const seat = (analyst as any).id || analyst.role;
+                    const scorecardMaxTokens = scorecardAnalystMaxTokens(settings);
+                    const seatResult = await runScorecardSeat({
+                        agent: analyst,
+                        seat,
+                        prompt: effectiveAnalystPrompt + renderScorecardInstruction(seat),
+                        context,
+                        runConfig: { ...analystRunConfig, maxTokens: scorecardMaxTokens, maxTokensCap: scorecardMaxTokens },
+                        schema: AnalystScorecardSchema
+                    });
+                    scorecardReport = scorecardToAnalystReport(seatResult, analyst.role);
+                    rawOutput = scorecardReport;
+                } else {
+                    rawOutput = await analyst.run(effectiveAnalystPrompt, context, analystRunConfig);
+                }
             } catch (innerErr: any) {
                 SwarmTracer.getInstance().logEvent({
                     agentRole: 'Analyst',
@@ -191,13 +220,29 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
 
             // Resilient schema guard for Analyst output
             const strippedOutput = typeof rawOutput === 'string' ? toolRegistry.stripToolCalls(rawOutput) : rawOutput;
-            const resData = guardAnalystResponse(strippedOutput, analyst.role);
+            const resData = scorecardReport || guardAnalystResponse(strippedOutput, analyst.role);
             for (const tr of toolResults) {
                 if (tr.success) {
                     resData.insights.push(`[Tool Result: ${tr.tool}]: ${JSON.stringify(tr.result)}`);
                 }
             }
             (resData as any)._chunkIndex = chunkIdx;
+            if (scorecardReport) {
+                // R2-S3: stream each scorecard as soon as the seat finishes.
+                try {
+                    onStage?.({
+                        stage: 'scorecard',
+                        seat: scorecardReport.seat,
+                        role: analyst.role,
+                        chunk: chunkIdx,
+                        ...(scorecardReport.scorecard
+                            ? { scorecard: scorecardReport.scorecard }
+                            : { unstructured: true, text: scorecardReport.summary })
+                    });
+                } catch {
+                    // a stream write error never fails the seat
+                }
+            }
 
             // Record response token telemetry
             const outTokens = Math.max(10, Math.ceil((typeof rawOutput === 'string' ? rawOutput.length : JSON.stringify(rawOutput).length) / 4));

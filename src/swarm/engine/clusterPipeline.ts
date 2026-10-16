@@ -40,6 +40,7 @@ import { publishInteragentCoordination } from './coordinationPipeline.ts';
 import type { MemoryCortex } from '../memory.ts';
 import { setupClusterTopology } from './clusterTopology.ts';
 import { createAnalystExecutor } from './analystExecution.ts';
+import { isScorecardMode } from './scorecard.ts';
 import { evaluateEarlyExit } from './earlyExit.ts';
 
 export interface ClusterPipelineParams {
@@ -202,6 +203,8 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
             analystClusterMap,
             specialistTree,
             bypassCache,
+            scorecardMode: isScorecardMode(params, settings),
+            onStage: params.onStage,
             onPromptCompression: (m) => {
                 workflowOriginalPromptTokens += m.originalTokens;
                 workflowCompressedPromptTokens += m.compressedTokens;

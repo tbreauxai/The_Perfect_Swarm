@@ -4,6 +4,7 @@ import { LimiterSkipError } from './limiter.ts';
 /**
  * PS2 Groq budget modes (passed explicitly by callers via config.groqMode):
  * - 'chat':    prompt capped at 18,000 chars; max_tokens = min(2000, 7000 - ceil(promptChars/4)); < 800 => skip Groq (next fallback).
+ * - scorecard (chat + config.maxTokensCap, R2): max_tokens = min(cap, 7000 - ceil(promptChars/4)); the same < 800 => skip rule applies first.
  * - 'morning': unchanged legacy behavior (6,000-char cap + computeGroqMaxTokens 6k-total clamp).
  * A call with no groqMode (critic, verification, other callers) keeps the legacy/morning behavior.
  */
@@ -21,6 +22,15 @@ export function groqPromptCharCap(mode?: unknown): number {
 /** Chat mode: min(2000, 7000 - ceil(promptChars/4)). promptChars = system instruction + capped prompt. */
 export function computeGroqChatMaxTokens(promptChars: number): number {
     return Math.min(GROQ_CHAT_MAX_TOKENS, GROQ_CHAT_TPM_BUDGET - Math.ceil(Math.max(0, promptChars) / 4));
+}
+
+/**
+ * R2-S1 scorecard analysts (chat mode + config.maxTokensCap): min(cap, 7000 - ceil(promptChars/4)).
+ * Same ceil(chars/4) estimate and 7000 TPM budget as computeGroqChatMaxTokens; the cap (default 800, or
+ * settings.scorecardAnalystMaxTokens) takes the place of the 2000 chat ceiling.
+ */
+export function computeGroqScorecardMaxTokens(cap: number, promptChars: number): number {
+    return Math.min(Math.floor(cap), GROQ_CHAT_TPM_BUDGET - Math.ceil(Math.max(0, promptChars) / 4));
 }
 
 export function capGroqPrompt(prompt: string, maxChars: number = 6000): string {
@@ -76,15 +86,25 @@ export class GroqAdapter implements ProviderAdapter {
         // Estimate prompt tokens (~4 chars per token)
         const totalPromptLength = (options.systemInstruction?.length || 0) + promptText.length;
         const estimatedPromptTokens = Math.ceil(totalPromptLength / 4);
+        // R2-S1: scorecard analysts send config.maxTokensCap (default 800, or settings.scorecardAnalystMaxTokens).
+        const rawCap = Number(options.config?.maxTokensCap);
+        const maxTokensCap = Number.isFinite(rawCap) && rawCap > 0 ? Math.floor(rawCap) : 0;
         let maxTokens: number;
         if (mode === 'chat') {
             maxTokens = computeGroqChatMaxTokens(totalPromptLength);
             if (maxTokens < GROQ_CHAT_MIN_TOKENS) {
                 // No harder truncation: skip Groq so Agent.run moves to the next fallback immediately.
+                // Scorecard calls hit the same rule: if 7000 - prompt tokens < 800, Groq is skipped (never a smaller cap).
                 throw new LimiterSkipError('groq', options.modelName, `chat max_tokens budget ${maxTokens} < ${GROQ_CHAT_MIN_TOKENS}; skipping Groq`);
+            }
+            if (maxTokensCap) {
+                // R2-S1 scorecard: min(cap, 7000 - prompt tokens). The remainder is >= 800 here.
+                maxTokens = computeGroqScorecardMaxTokens(maxTokensCap, totalPromptLength);
             }
         } else {
             maxTokens = computeGroqMaxTokens(options, estimatedPromptTokens);
+            // Morning/legacy mode never runs scorecards; a cap there only lowers max_tokens.
+            if (maxTokensCap) maxTokens = Math.min(maxTokens, maxTokensCap);
         }
 
         const isJson = options.config?.responseMimeType === 'application/json';

@@ -11,8 +11,9 @@ import type { ClusterDigest } from "../communication.ts";
 import type { TaskDecompositionPlan } from "../coordination.ts";
 import type { SwarmTool, ToolRegistry } from "../tools/index.ts";
 import type { AnalystConsensusDigest } from "./consensusPipeline.ts";
+import type { Blackboard } from "./blackboard.ts";
 export interface SwarmStagePayload {
-    stage: 'routing' | 'cluster_aggregation' | 'partial_prediction' | 'manager_synthesis' | 'critic_verification' | 'completed';
+    stage: 'routing' | 'cluster_aggregation' | 'partial_prediction' | 'manager_synthesis' | 'critic_verification' | 'completed' | 'scorecard' | 'critic_scorecard';
     task?: string;
     digests?: Record<string, ClusterDigest>;
     partialPrediction?: any;
@@ -38,6 +39,8 @@ export interface SwarmWorkflowParams {
     speculativeParallel?: boolean;
     maxSpeculativeConcurrency?: number;
     complexityOverride?: TaskComplexity;
+    /** R2: opt-in scorecard + blackboard flow (same as settings.scorecardMode). Ignored for morning_judge runs. */
+    scorecardMode?: boolean;
     onEvent?: (event: SwarmEvent) => void;
     onMemoryLearned?: (event: LearnedMemoryEvent) => void;
     onStage?: (stagePayload: SwarmStagePayload) => void;
@@ -125,6 +128,8 @@ export interface SwarmWorkflowResult {
         tokensSaved?: number;
     };
     consensus?: AnalystConsensusDigest;
+    /** R2-S3: present only in scorecardMode: { brief, scorecards, degraded, citedRows, critic? }. */
+    blackboard?: Blackboard;
 }
 
 export interface SwarmFeedbackReport {
