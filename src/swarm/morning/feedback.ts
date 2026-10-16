@@ -113,6 +113,12 @@ export async function gradeAndRecordFinalGames(
       }
 
       // 4. Mark row status = 'final' in Supabase
+      // Same shape and Brier formula as the DuelOdds Worker grader (cloudflare/src/morningJudgments.ts), which
+      // DuelOdds learningLedgers reads (result.home_win, result.margin, brier). A push counts as home_win false.
+      const homeWin = homeScore > awayScore;
+      const brier = Number.isFinite(winProbHome)
+        ? Math.round(Math.pow(winProbHome - (homeWin ? 1 : 0), 2) * 1000) / 1000
+        : null;
       if (cfg) {
         try {
           await querySupabase(
@@ -120,14 +126,19 @@ export async function gradeAndRecordFinalGames(
             `game_judgments?game_date=eq.${encodeURIComponent(gameDate)}&event_id=eq.${encodeURIComponent(judgment.event_id)}`,
             {
               method: 'PATCH',
+              // The live column is `result` jsonb; there is no final_result column (that PATCH failed with PGRST204).
               body: JSON.stringify({
                 status: 'final',
-                final_result: {
+                result: {
                   home_score: homeScore,
                   away_score: awayScore,
+                  home_win: homeWin,
+                  margin: homeScore - awayScore,
+                  total: homeScore + awayScore,
                   outcome,
-                  settled_at: new Date().toISOString()
-                }
+                  settled_at: new Date().toISOString(),
+                },
+                brier,
               })
             },
             fetchFn
