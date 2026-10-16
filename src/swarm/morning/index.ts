@@ -94,7 +94,7 @@ export interface MorningSlateOptions {
  * 3. Query Supabase game_judgments (skip swarm, replace direct/null)
  * 4. Run swarm analyze path with buildJudgePrompt and settings.agents (no direct fallback)
  * 5. Upsert game_judgments with judge_source: "swarm" and real workflow_id
- * 6. Write line_snapshots (market: "all", is_baseline: true, omit game_id, skip identical)
+ * 6. Write line_snapshots (market: "all", is_baseline only on the first row per game_date + event_id, omit game_id, skip identical)
  * 7. Record feedback for completed games to drive calibration
  * 8. Return structured batch summary
  */
