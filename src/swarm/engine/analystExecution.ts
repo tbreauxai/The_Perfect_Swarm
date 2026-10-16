@@ -20,6 +20,7 @@ import { globalPromptCompressor } from '../compression.ts';
 import { guardAnalystResponse } from '../parser.ts';
 import { SwarmTracer } from '../profiler.ts';
 import { ANALYST_SYSTEM_INSTRUCTION } from './constants.ts';
+import { recordDegraded } from './partialResult.ts';
 
 export interface AnalystExecutorConfig {
     task: string;
@@ -250,7 +251,17 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                 error: errDetail
             });
             console.error(`[Analyst Fatal Error] ${analyst.role} failed:`, errDetail);
-            throw err;
+            // PS1: the seat exhausted all its fallbacks (no backup left). Mark it degraded and let the run continue.
+            recordDegraded(context, (analyst as any).id || analyst.role);
+            context.addEvent({
+                agentRole: analyst.role,
+                action: 'Analyst Failed (seat degraded)',
+                modelName: `${analyst.provider} / ${analyst.modelName}`,
+                prompt: `Analyst exhausted all fallbacks; continuing without this seat.`,
+                error: err?.message || String(err),
+                durationMs
+            });
+            return null;
         } finally {
             capacitySlot?.release();
         }
