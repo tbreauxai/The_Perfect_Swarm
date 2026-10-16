@@ -113,6 +113,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                 rawOutput = await analyst.run(effectiveAnalystPrompt, context, { 
                     responseMimeType: "application/json",
                     bypassCache,
+                    groqMode: (settings as any)?.responseSchema === 'morning_judge' ? 'morning' : 'chat',
                     ...activeVariant?.parameters
                 });
             } catch (innerErr: any) {
