@@ -169,6 +169,7 @@ export interface ProviderCallOptions {
     aiClient?: GoogleGenAI;
     config?: AgentRunConfig;
     timeoutMs?: number;
+    role?: string;
 }
 
 export interface ProviderAdapter {

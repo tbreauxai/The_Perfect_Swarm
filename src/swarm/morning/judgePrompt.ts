@@ -12,6 +12,25 @@ export function formatGameToColumnar(game: SlateGame): string {
 }
 
 /**
+ * Lean debater/proposer task prompt containing the game board, matchup, and baseline.
+ * Does NOT contain the JSON pick schema contract (which is only needed by the GodView Compiler / manager).
+ */
+export function buildProposerPrompt(game: SlateGame): string {
+  const weatherStr = game.weatherSnapshot?.displayValue 
+    ? `${game.weatherSnapshot.temperature ?? ''}°F, ${game.weatherSnapshot.displayValue}` 
+    : 'Indoor/Dome/Standard';
+  const oddsStr = game.oddsSnapshot?.details || (game.oddsSnapshot?.spread != null ? `Spread ${game.oddsSnapshot.spread}, Total ${game.oddsSnapshot.overUnder ?? 'N/A'}` : 'No Lines Posted');
+
+  return `EVENT: ${game.awayTeam} @ ${game.homeTeam}
+SPORT: ${game.sport}
+COMMENCE: ${game.commenceTime}
+WEATHER: ${weatherStr}
+POSTED BOARD: ${oddsStr}
+
+Analyze this matchup thoroughly. Evaluate team strengths, injuries, market movement, and tempo to assess fair lines, spread, total, and win probability from your specialist perspective.`;
+}
+
+/**
  * Clean judge prompt matching DuelOdds buildJudgePrompt.
  * Raw game data only; no prior verdict.
  */

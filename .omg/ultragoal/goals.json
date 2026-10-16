@@ -1,26 +1,26 @@
 [
   {
-    "id": "goal-1-strict-judge-prompt-parser",
-    "description": "Goal 1: In src/swarm/morning/judgePrompt.ts, stop defaulting missing fields. Inspect finalAnalysis objects, result, judgment, components, and fenced blocks. Require winProbHome in 0.01-0.99 and fairSpread as a valid number; return null otherwise. Mark valid outputs with isExplicit: true.",
+    "id": "goal-1-groq-token-budget-and-capping",
+    "description": "In src/swarm/providers/groq.ts: stop sending max_tokens: 8192. Default to 1024 for analyst/critic and 2048 for manager. Clamp maxTokens so estimatedPromptTokens + maxTokens stays under 6000 (never reserving the 8,000 TPM budget). Cap string sent to Groq at 6,000 characters.",
     "status": "completed",
-    "verification": "parseAndValidateJudgeOutput returns null when winProbHome or fairSpread is absent or out-of-range, extracts values from objects/fenced blocks, and never invents 0.5 or 0."
+    "verification": "GroqAdapter sends clamped max_tokens < 6000 and caps request prompt text to 6,000 characters."
   },
   {
-    "id": "goal-2-supabase-defense-guard",
-    "description": "Goal 2: In src/swarm/morning/supabase.ts, refuse to write a row whose win_prob_home is 0.5 and fair_spread is 0 unless judgment.isExplicit is true.",
+    "id": "goal-2-single-groq-seat-topology",
+    "description": "In src/swarm/morning/index.ts and agent configuration: maintain strictly one Groq seat (Market Proposer on openai/gpt-oss-120b). GodView Compiler stays on mistral-small-latest. No second agent is ever assigned to gpt-oss-120b or gpt-oss-20b.",
     "status": "completed",
-    "verification": "upsertGameJudgment throws or rejects writes when win_prob_home is 0.5 and fair_spread is 0 without isExplicit: true."
+    "verification": "buildDefaultAgents returns at most one agent on Groq (Market Proposer) and manager on Mistral; verified in unit tests."
   },
   {
-    "id": "goal-3-manager-schema-and-morning-index",
-    "description": "Goal 3: In src/swarm/morning/index.ts, pass judge schema and manager instruction in settings. If parseAndValidateJudgeOutput returns null, push error 'judge output missing winProbHome or fairSpread', do not upsert, and do not increment judged/replaced. In engine synthesis, respect custom manager instruction and preserve judge outputs.",
+    "id": "goal-3-prompt-separation-and-payload-sizing",
+    "description": "In src/swarm/morning/judgePrompt.ts and src/swarm/morning/index.ts: do not send the full pick JSON contract to every agent. Proposers receive the board and baseline; manager receives the JSON contract. Morning baselines stay; cut alternate markets first if trimming.",
     "status": "completed",
-    "verification": "runMorningSlate pushes expected error for unparseable output without upserting or incrementing counts; passes managerInstruction and schema."
+    "verification": "Proposers receive clean matchup board and baseline without the 1,500-char JSON schema; manager receives JUDGE_MANAGER_INSTRUCTION."
   },
   {
     "id": "goal-4-test-suite-and-verification",
-    "description": "Goal 4: Update and expand tests in src/swarm/server/morning.test.ts to cover strict parsing, object inspection, refusal to write default rows, and error handling. Run full verify (lint, test, build).",
+    "description": "Create src/swarm/providers/groq.test.ts to verify Groq token clamping, role-based defaults, and character capping. Run full test suite, tsc --noEmit, and npm run build.",
     "status": "completed",
-    "verification": "All unit tests pass, tsc --noEmit is clean, and dist build succeeds."
+    "verification": "All unit tests pass (including Groq and morning tests), tsc --noEmit is clean, and dist build succeeds."
   }
 ]

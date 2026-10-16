@@ -158,7 +158,8 @@ export class Agent {
                                 apiKey: currentTarget.apiKey,
                                 aiClient: currentTarget.aiClient || this.aiClient,
                                 config: effectiveConfig,
-                                timeoutMs
+                                timeoutMs,
+                                role: this.role
                             })
                         );
                         globalPayloadCache.set(cacheFingerprint, textOutput);

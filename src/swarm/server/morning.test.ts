@@ -5,6 +5,7 @@ import {
   sanitizeDateStrings,
   getDefaultSlateDate,
   buildJudgePrompt,
+  buildProposerPrompt,
   formatGameToColumnar,
   parseAndValidateJudgeOutput,
   computeModelSnapshot,
@@ -90,6 +91,27 @@ describe('Morning Slate Engine - Unit & Integration Tests', () => {
       expect(prompt).toContain('OUTPUT REQUIREMENT');
       expect(prompt).toContain('STRICT CONVENTIONS');
       expect(prompt).not.toContain('priorVerdict');
+    });
+
+    it('builds proposer prompt with board and baseline but without JSON pick contract', () => {
+      const mockGame: SlateGame = {
+        eventId: 'nfl-401765432',
+        sport: 'americanfootball_nfl',
+        league: 'nfl',
+        homeTeam: 'Kansas City Chiefs',
+        awayTeam: 'Denver Broncos',
+        commenceTime: '2026-10-15T18:00:00Z',
+        gameDate: '2026-10-15',
+        weatherSnapshot: { displayValue: 'Clear', temperature: 65 },
+        oddsSnapshot: { details: 'KC -7.0', spread: -7.0, overUnder: 47.5 }
+      };
+
+      const prompt = buildProposerPrompt(mockGame);
+      expect(prompt).toContain('Denver Broncos @ Kansas City Chiefs');
+      expect(prompt).toContain('POSTED BOARD: KC -7.0');
+      expect(prompt).not.toContain('OUTPUT REQUIREMENT');
+      expect(prompt).not.toContain('STRICT CONVENTIONS');
+      expect(prompt).not.toContain('"likelyWinner"');
     });
   });
 
@@ -816,6 +838,60 @@ describe('Morning Slate Engine - Unit & Integration Tests', () => {
       expect(result.errors).toEqual([
         { eventId: 'nfl-game-unjudged-1', error: 'judge output missing winProbHome or fairSpread' }
       ]);
+    });
+
+    it('enforces single Groq seat rule when multiple Groq agents are configured', async () => {
+      let capturedParams: any = null;
+      const mockExecuteWorkflow = vi.fn().mockImplementation(async (params: any) => {
+        capturedParams = params;
+        return {
+          workflowId: 'wf-single-groq',
+          finalAnalysis: {
+            likelyWinner: 'Cowboys',
+            winProbHome: 0.6,
+            fairSpread: -3.0
+          }
+        };
+      });
+
+      const mockFetch: typeof fetch = vi.fn().mockImplementation(async (url: string) => {
+        if (String(url).includes('/sports/football/nfl/')) {
+          return new Response(JSON.stringify({
+            events: [{
+              id: 'game-1',
+              date: '2026-10-15T18:00:00Z',
+              competitions: [{
+                competitors: [
+                  { homeAway: 'home', team: { displayName: 'Cowboys' } },
+                  { homeAway: 'away', team: { displayName: 'Eagles' } }
+                ],
+                odds: [{ details: 'DAL -3.0', spread: -3.0, overUnder: 48.0 }]
+              }]
+            }]
+          }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ events: [] }), { status: 200 });
+      });
+
+      const result = await runMorningSlate({
+        dateInput: '2026-10-15',
+        env: {
+          GEMINI_API_KEY: 'gemini-key',
+          GROQ_API_KEY: 'groq-key',
+          OPENROUTER_API_KEY: 'openrouter-key',
+          MISTRAL_API_KEY: 'mistral-key'
+        },
+        fetchFn: mockFetch,
+        executeWorkflowFn: mockExecuteWorkflow
+      });
+
+      expect(result.ok).toBe(true);
+      const groqAgents = capturedParams.settings.agents.filter(
+        (a: any) => a.provider === 'groq' || a.model.includes('gpt-oss')
+      );
+      expect(groqAgents.length).toBe(1);
+      expect(groqAgents[0].role).toBe('Market Proposer');
+      expect(groqAgents[0].model).toBe('openai/gpt-oss-120b');
     });
   });
 });

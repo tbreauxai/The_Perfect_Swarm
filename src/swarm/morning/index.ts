@@ -1,6 +1,7 @@
 import { fetchDaySlate, sanitizeDateStrings } from './espnSlate.ts';
 import {
   buildJudgePrompt,
+  buildProposerPrompt,
   formatGameToColumnar,
   parseAndValidateJudgeOutput,
   computeModelSnapshot,
@@ -159,10 +160,21 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
   let replacedCount = 0;
 
   // 3. Run Swarm analyze for each game (no direct fallback)
+  // Strict constraint: only one Groq seat allowed to prevent exhausting the 8,000 TPM bucket
+  let groqSeatCount = 0;
+  const singleGroqSeatAgents = agents.filter(a => {
+    if (a.provider === 'groq' || a.model.includes('gpt-oss')) {
+      groqSeatCount++;
+      return groqSeatCount === 1;
+    }
+    return true;
+  });
+
   for (const item of gamesToProcess) {
     const { game, isReplace } = item;
     try {
-      const task = buildJudgePrompt(game, '', '', '');
+      // Proposers receive lean board and baseline; manager receives JSON contract via JUDGE_MANAGER_INSTRUCTION
+      const task = buildProposerPrompt(game);
       const data = formatGameToColumnar(game);
 
       const workflowResult: any = await executeWorkflowFn({
@@ -178,7 +190,7 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
             manager: JUDGE_MANAGER_INSTRUCTION,
             'GodView Compiler': JUDGE_MANAGER_INSTRUCTION
           },
-          agents,
+          agents: singleGroqSeatAgents,
           geminiApiKey: env.GEMINI_API_KEY,
           groqApiKey: env.GROQ_API_KEY,
           openRouterApiKey: env.OPENROUTER_API_KEY,
