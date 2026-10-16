@@ -18,6 +18,14 @@ import { resolveExperimentVariant, resolveSwarmAgents } from "./agentResolution.
 import { resolveMemoryGrounding } from "./memoryGrounding.ts";
 import { runClusterPipeline } from "./clusterPipeline.ts";
 import { compileSynthesisPrompt, executeManagerSynthesis } from "./synthesisPipeline.ts";
+import {
+    recordDegraded,
+    getDegraded,
+    countAnalystOutputs,
+    pickBestAnalystOutput,
+    buildPartialFinalAnalysis,
+    type SwarmRunStatus
+} from "./partialResult.ts";
 import { runDeepAnalysisVerification } from "./verificationPipeline.ts";
 import { runLearningPipeline } from "./learningPipeline.ts";
 
@@ -214,6 +222,17 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 bypassCache
             });
 
+            // PS1: only ZERO analyst outputs is fatal (surfaces as swarm_error / HTTP 500).
+            // managerFailed = the final answer did NOT come from the manager (the only case that makes the run 'partial').
+            let managerFailed = false;
+            if (
+                countAnalystOutputs(clusterResult.allAnalystReports) === 0 &&
+                !(clusterResult.earlyExitTriggered && clusterResult.earlyFinalAnalysis)
+            ) {
+                const failedSeats = getDegraded(context).join(', ');
+                throw new Error(`All analysts failed; no analyst output to compile.${failedSeats ? ' Failed seats: ' + failedSeats : ''}`);
+            }
+
             let workflowOriginalPromptTokens = clusterResult.workflowOriginalPromptTokens;
             let workflowCompressedPromptTokens = clusterResult.workflowCompressedPromptTokens;
             let workflowPromptTokensSaved = clusterResult.workflowPromptTokensSaved;
@@ -259,30 +278,51 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 workflowDeduplicatedCount += synthesisResult.workflowDeduplicatedCount;
 
                 // Step 5 & 6: Verification vs Standard Synthesis Execution
-                if (deepAnalysisRequested && (analysts.length > 0 || dedicatedCriticAgent)) {
-                    const verificationResult = await runDeepAnalysisVerification({
-                        task,
-                        rawInput: profilingResult.rawInput,
-                        effectiveDynamicPrompt: synthesisResult.effectiveDynamicPrompt,
-                        effectiveCompiledReports: synthesisResult.effectiveCompiledReports,
-                        effectiveHistoricalContext: synthesisResult.effectiveHistoricalContext,
-                        managerAgent,
-                        analysts,
-                        dedicatedCriticAgent,
-                        context,
-                        settings
+                try {
+                    if (deepAnalysisRequested && (analysts.length > 0 || dedicatedCriticAgent)) {
+                        const verificationResult = await runDeepAnalysisVerification({
+                            task,
+                            rawInput: profilingResult.rawInput,
+                            effectiveDynamicPrompt: synthesisResult.effectiveDynamicPrompt,
+                            effectiveCompiledReports: synthesisResult.effectiveCompiledReports,
+                            effectiveHistoricalContext: synthesisResult.effectiveHistoricalContext,
+                            managerAgent,
+                            analysts,
+                            dedicatedCriticAgent,
+                            context,
+                            settings
+                        });
+                        finalAnalysis = verificationResult.finalAnalysis;
+                        workflowLifecycleResult = verificationResult.lifecycleResult;
+                    } else {
+                        finalAnalysis = await executeManagerSynthesis(
+                            managerAgent,
+                            synthesisResult.effectiveDynamicPrompt,
+                            context,
+                            activeVariant,
+                            bypassCache,
+                            settings
+                        );
+                    }
+                } catch (managerErr: any) {
+                    // PS1: the whole manager chain failed. Return the best analyst output as a partial answer.
+                    // Applies to chat AND morning runs (Architect decision 2026-10-16).
+                    const best = pickBestAnalystOutput(clusterResult.allAnalystReports, analysts);
+                    if (!best) {
+                        throw managerErr;
+                    }
+                    managerFailed = true;
+                    recordDegraded(context, managerAgent.id || 'manager');
+                    finalAnalysis = buildPartialFinalAnalysis(best, getDegraded(context));
+                    context.addEvent({
+                        agentRole: 'Partial Result Fallback',
+                        action: 'Manager Chain Exhausted',
+                        modelName: 'Local/PartialResult',
+                        prompt: `Manager chain failed; returning best analyst output from ${best.role} (${best.provider}) as a partial result.`,
+                        error: managerErr?.message || String(managerErr),
+                        output: { degraded: getDegraded(context) },
+                        durationMs: 0
                     });
-                    finalAnalysis = verificationResult.finalAnalysis;
-                    workflowLifecycleResult = verificationResult.lifecycleResult;
-                } else {
-                    finalAnalysis = await executeManagerSynthesis(
-                        managerAgent,
-                        synthesisResult.effectiveDynamicPrompt,
-                        context,
-                        activeVariant,
-                        bypassCache,
-                        settings
-                    );
                 }
             }
 
@@ -321,8 +361,14 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 parametersUsed: bestPolicy
             });
 
+            const degraded = getDegraded(context);
+            const status: SwarmRunStatus = managerFailed ? 'partial' : 'complete';
+
             return {
                 workflowId: (context as any).id,
+                status,
+                partial: managerFailed,
+                degraded,
                 events: context.events,
                 finalAnalysis,
                 metrics: learningResult.metrics,
