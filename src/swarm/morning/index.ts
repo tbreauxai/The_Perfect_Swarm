@@ -35,7 +35,7 @@ export interface MorningAgentConfig {
  * - a1: Quant Proposer (gemini-3.1-flash-lite) if GEMINI_API_KEY
  * - a2: Market Proposer (openai/gpt-oss-120b) if GROQ_API_KEY
  * - critic: Risk Critic (nvidia/nemotron-3-ultra-550b-a55b:free) if OPENROUTER_API_KEY
- * - manager: GodView Compiler (openai/gpt-oss-120b) if GROQ_API_KEY
+ * - manager: GodView Compiler (mistral-small-latest) if MISTRAL_API_KEY
  */
 export function buildDefaultAgents(env: Record<string, string | undefined> = {}): MorningAgentConfig[] {
   const agents: MorningAgentConfig[] = [];
@@ -67,12 +67,12 @@ export function buildDefaultAgents(env: Record<string, string | undefined> = {})
     });
   }
 
-  if (env.GROQ_API_KEY?.trim()) {
+  if (env.MISTRAL_API_KEY?.trim()) {
     agents.push({
       id: 'manager',
       role: 'GodView Compiler',
-      provider: 'groq',
-      model: 'openai/gpt-oss-120b'
+      provider: 'mistral',
+      model: 'mistral-small-latest'
     });
   }
 
