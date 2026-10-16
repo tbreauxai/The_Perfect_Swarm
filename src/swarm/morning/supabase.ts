@@ -178,8 +178,10 @@ export async function upsertGameJudgment(
 
 /**
  * Writes one line_snapshots row per game with scoreboard odds.
- * Fields: event_id, game_date, sport, book, market: "all", spread, total, ml_home, ml_away, snapshot_at, is_baseline: true.
- * Does not send game_id. Skips if an identical line already exists.
+ * Fields: event_id, game_date, sport, book, market: "all", spread, total, ml_home, ml_away, snapshot_at, is_baseline.
+ * is_baseline is true only for the first row of a (game_date, event_id); a moved line is inserted with is_baseline: false.
+ * (The live partial unique index line_snapshots_one_baseline allows one baseline per game_date + event_id.)
+ * Does not send game_id. Skips if an identical line already exists (null-safe, numeric compare).
  */
 export async function insertBaselineLineSnapshots(
   cfg: SupabaseConfig,
@@ -211,16 +213,30 @@ export async function insertBaselineLineSnapshots(
 
       if (Array.isArray(existing) && existing.length > 0) {
         const prev = existing[0];
+        // Null-safe numeric compare: null == null, and "-1.5" (numeric returned as text) == -1.5.
+        const same = (a: unknown, b: unknown) =>
+          (a == null && b == null) ||
+          (a != null && b != null && Number(a) === Number(b));
         if (
-          prev.spread === spread &&
-          prev.total === total &&
-          prev.ml_home === ml_home &&
-          prev.ml_away === ml_away
+          same(prev.spread, spread) &&
+          same(prev.total, total) &&
+          same(prev.ml_home, ml_home) &&
+          same(prev.ml_away, ml_away)
         ) {
           // Identical line already recorded; skip
           continue;
         }
       }
+
+      // Only the first snapshot of a (game_date, event_id) is the baseline. A second is_baseline row violates the
+      // partial unique index line_snapshots_one_baseline (409/23505), which is what happened when NBA lines moved.
+      const baseline = await querySupabase(
+        cfg,
+        `line_snapshots?game_date=eq.${encodeURIComponent(game.gameDate)}&event_id=eq.${encodeURIComponent(game.eventId)}&is_baseline=eq.true&select=id&limit=1`,
+        { method: "GET", headers: { Prefer: "return=representation" } },
+        fetchFn,
+      );
+      const hasBaseline = Array.isArray(baseline) && baseline.length > 0;
 
       const snapshotRow: LineSnapshotInsert = {
         event_id: game.eventId,
@@ -233,7 +249,7 @@ export async function insertBaselineLineSnapshots(
         ml_home,
         ml_away,
         snapshot_at: new Date().toISOString(),
-        is_baseline: true
+        is_baseline: !hasBaseline
       };
 
       await querySupabase(
