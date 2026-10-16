@@ -67,7 +67,6 @@ function keyFor(provider: string, env: Record<string, any>): string | undefined 
         case 'groq': return env.GROQ_API_KEY;
         case 'mistral': return env.MISTRAL_API_KEY;
         case 'openrouter': return env.OPENROUTER_API_KEY;
-        case 'github': return env.GITHUB_TOKEN;
         default: return undefined;
     }
 }
@@ -115,8 +114,6 @@ function probeUrl(provider: string, modelId: string, apiKey: string): string {
             return 'https://api.mistral.ai/v1/chat/completions';
         case 'openrouter':
             return 'https://openrouter.ai/api/v1/chat/completions';
-        case 'github':
-            return 'https://models.inference.ai.azure.com/chat/completions';
         default:
             return 'about:blank';
     }
@@ -191,15 +188,7 @@ async function listProviderModels(provider: string, clientKey?: string, env: Rec
             const data = await res.json();
             return (data.data || []).map((m: any) => ({ id: m.id, name: m.id, free: true }));
         }
-        case 'github': {
-            const apiKey = clientKey || env.GITHUB_TOKEN;
-            if (!apiKey) return [];
-            const res = await fetch('https://models.inference.ai.azure.com/models', { headers: { Authorization: `Bearer ${apiKey}` } });
-            if (!res.ok) throw new Error('Failed to fetch GitHub models');
-            const data = await res.json();
-            const list = Array.isArray(data) ? data : (data.data || []);
-            return list.map((m: any) => ({ id: m.name, name: m.friendly_name || m.name, free: true }));
-        }
+        // 'github' removed: GitHub Models was retired on 2026-07-30 (falls through to []).
         default:
             return [];
     }
