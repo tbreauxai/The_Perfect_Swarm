@@ -330,6 +330,10 @@ export function parseAndValidateJudgeOutput(
   } else if (areTeamsEqual(likelyWinner, normAway)) {
     likelyWinner = normAway;
   } else {
+    // Names neither team (e.g. a verdict copied from another game): keep the probability-based pick, but say so.
+    if (likelyWinner) {
+      console.warn(`[MorningJudge] likelyWinner "${likelyWinner}" matches neither ${normAway} nor ${normHome}; using the winProbHome side instead.`);
+    }
     likelyWinner = winProbHome >= 0.5 ? normHome : normAway;
   }
 

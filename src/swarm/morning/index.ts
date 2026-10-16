@@ -182,6 +182,8 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
         data,
         originApp: 'duelodds',
         callerAppId: 'duelodds',
+        // Every game is judged fresh: no semantic/payload cache hit can copy another game's verdict.
+        bypassCache: true,
         settings: {
           domain: 'sports-betting',
           responseSchema: 'morning_judge',

@@ -214,7 +214,9 @@ export async function executeManagerSynthesis(
         responseMimeType: "application/json",
         zodSchema,
         bypassCache,
-        groqMode: isMorningJudge ? 'morning' : 'chat',
+        // The morning judge on Groq gets the chat caps too (18k-char prompt, max_tokens = min(2000, 7000 - ceil(chars/4)),
+        // < 800 => skip to the next fallback), so its debate transcript isn't cut at the 6k legacy cap.
+        groqMode: 'chat',
         ...activeVariant?.parameters
     });
 
