@@ -1,44 +1,44 @@
 [
   {
-    "id": "step-1-router-openrouter-instant-model",
-    "description": "Step 1: Update OpenRouter instant model in src/swarm/router.ts to nvidia/nemotron-3-super-120b-a12b:free",
+    "id": "goal-1-espn-slate-loader",
+    "description": "Goal 1: Implement ESPN slate loader in src/swarm/morning/espnSlate.ts supporting NFL, NBA, MLB, NHL, WNBA, NCAAF, NCAAB with event_id normalization and scoreboard odds extraction.",
     "status": "completed",
-    "verification": "src/swarm/router.ts returns nvidia/nemotron-3-super-120b-a12b:free for openrouter instant complexity"
+    "verification": "fetchDaySlate returns normalized games with event_id format ${league}-${id}, weatherSnapshot, and oddsSnapshot for valid and default dates."
   },
   {
-    "id": "step-2-router-unit-test",
-    "description": "Step 2: Update OpenRouter instant model expectation in src/swarm/router.test.ts",
+    "id": "goal-2-supabase-client-and-judgments",
+    "description": "Goal 2: Implement Supabase morning persistence service in src/swarm/morning/supabase.ts to query existing game_judgments, skip swarm rows, replace direct/null rows, and upsert swarm judgments.",
     "status": "completed",
-    "verification": "npx vitest run src/swarm/router.test.ts passes (33/33 tests)"
+    "verification": "partitionSlateGames skips swarm judge_source and targets unjudged/direct rows; upsertGameJudgment writes all required columns with real workflow_id and judge_source: swarm."
   },
   {
-    "id": "step-3-router-lifecycle-test",
-    "description": "Step 3: Update OpenRouter instant model expectation in src/swarm/router-lifecycle.test.ts",
+    "id": "goal-3-line-snapshots-service",
+    "description": "Goal 3: Implement baseline line_snapshots insertion in src/swarm/morning/supabase.ts with deduping, market: all, is_baseline: true, and omitting game_id.",
     "status": "completed",
-    "verification": "npx vitest run src/swarm/router-lifecycle.test.ts passes (5/5 tests)"
+    "verification": "insertBaselineLineSnapshots writes one row per game with odds, skips identical existing lines, and never sends game_id."
   },
   {
-    "id": "step-4-models-provider-warn-test",
-    "description": "Step 4: Add test for OpenRouter nemotron instant model recognition in src/swarm/server/modelsProvider.warn.test.ts",
+    "id": "goal-4-finished-game-feedback",
+    "description": "Goal 4: Implement final game settlement and feedback loop in src/swarm/morning/feedback.ts to grade completed games and feed outcomes into continuous feedback calibration.",
     "status": "completed",
-    "verification": "npx vitest run src/swarm/server/modelsProvider.warn.test.ts passes (4/4 tests)"
+    "verification": "gradeAndRecordFinalGames detects completed games, determines win/loss against win_prob_home, and records feedback via recordProbabilityObservation for appId duelodds."
   },
   {
-    "id": "step-5-simulation-fixture-update",
-    "description": "Step 5: Update cosmetic fixture ids in test-multi-app-simulation.ts:232 and :490 to openai/gpt-oss-20b",
+    "id": "goal-5-morning-route-integration",
+    "description": "Goal 5: Implement POST /api/swarm/morning in src/swarm/server/app.ts integrating slate fetching, judgment execution, line snapshots, final game learning, and fail-safe error handling.",
     "status": "completed",
-    "verification": "npm run test:simulation passes (12/12 parallel tasks and all phases)"
+    "verification": "POST /api/swarm/morning requires app token, executes swarm analyze with buildJudgePrompt, writes judgments and line snapshots, grades final games, and returns structured summary."
   },
   {
-    "id": "step-6-readme-documentation",
-    "description": "Step 6: Update README.md:17 to replace Groq LLaMA 3.3 70B with Groq gpt-oss (openai/gpt-oss-120b)",
+    "id": "goal-6-render-cron-configuration",
+    "description": "Goal 6: Add Render cron service definition and documentation for morning schedule execution in render.yaml, scripts/morning-cron.mjs, and README.md.",
     "status": "completed",
-    "verification": "git grep -n 'LLaMA 3.3 70B' README.md prints nothing"
+    "verification": "render.yaml specifies cron service executing POST /api/swarm/morning with Authorization header."
   },
   {
-    "id": "step-7-full-verify-and-audit",
-    "description": "Step 7: Run full verification checklist and merge PR #89",
+    "id": "goal-7-test-suite-and-verification",
+    "description": "Goal 7: Create comprehensive unit/integration test suite in src/swarm/server/morning.test.ts and verify full regression gate (lint, test, build).",
     "status": "completed",
-    "verification": "All checks passed; PR #89 merged into main (commit aa7e28c)"
+    "verification": "All morning tests pass, npm test passes 100%, npm run lint is clean, and dual production builds succeed."
   }
 ]

@@ -25,6 +25,7 @@ import { fetchProviderModels } from './modelsProvider.ts';
 import { buildCortexDiagnostics } from './cortexDiagnostics.ts';
 import { createAppAuthMiddleware } from './appAuth.ts';
 import { createCorsMiddleware } from './cors.ts';
+import { runMorningSlate } from '../morning/index.ts';
 import {
     initFeedbackDedupe,
     generateDedupeKey,
@@ -297,6 +298,21 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
             if (dedupKey) {
                 removeFeedbackInFlight(dedupKey);
             }
+        }
+    });
+
+    app.post('/api/swarm/morning', async (c) => {
+        try {
+            const body = await c.req.json().catch(() => ({}));
+            const env = Object.assign({}, typeof process !== 'undefined' ? process.env : {}, c.env || {}) as Record<string, any>;
+            const result = await runMorningSlate({
+                dateInput: body?.date,
+                env
+            });
+            return c.json(result, 200);
+        } catch (err: any) {
+            console.error('[SwarmServer Morning Slate Error]:', err);
+            return c.json({ error: err.message || 'Internal Server Error' }, 500);
         }
     });
 

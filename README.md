@@ -294,6 +294,50 @@ const engine = new SwarmEngine({
 
 ---
 
+## 🌅 Morning Slate Engine (`/api/swarm/morning`)
+
+The Render service directly owns the daily morning slate. A single API call or Render cron trigger executes the full end-to-end pipeline:
+1. **ESPN Slate Ingestion**: Fetches scoreboards across NFL, NBA, MLB, NHL, WNBA, NCAAF, and NCAAB with normalized event IDs (`${league}-${id}`).
+2. **Supabase Partitioning**: Reads `game_judgments` in Supabase; preserves existing rows with `judge_source: "swarm"`, while replacing direct, null, or awaiting-line records.
+3. **Pure Swarm Debate & Judging**: Invokes the Swarm analysis path using raw game data and the DuelOdds judge prompt (no prior verdicts, no direct-judge fallback).
+4. **Dashboard-Ready Upsert**: Persists judgments with `judge_source: "swarm"`, authentic `workflow_id`, model snapshot, win probabilities, and fair spreads/totals.
+5. **Baseline Line Snapshots**: Records initial seen bookmaker odds to `line_snapshots` (`is_baseline: true`, omitting `game_id`, with duplicate suppression).
+6. **Continuous Calibration Feedback**: Grades finalized games against official scores and emits learning signals to the calibration engine (`appId: "duelodds"`).
+
+### Endpoint Specification
+
+- **Method**: `POST /api/swarm/morning`
+- **Auth**: `Authorization: Bearer <SWARM_APP_TOKEN>`
+- **Body** (optional): `{ "date": "YYYY-MM-DD" }` (defaults to today in `America/Chicago`)
+- **Response**:
+```json
+{
+  "ok": true,
+  "gameDate": "2026-10-15",
+  "judged": 14,
+  "replaced": 2,
+  "skipped": 5,
+  "snapshots": 16,
+  "errors": [],
+  "settled": 8
+}
+```
+
+### Render Cron Configuration
+
+A Render cron service is declared in `render.yaml` to trigger the morning slate daily at 6:00 AM Central (`0 11 * * *` UTC) with no 50-call cap:
+
+```yaml
+- type: cron
+  name: swarm-morning-slate
+  env: node
+  schedule: "0 11 * * *"
+  buildCommand: npm install
+  startCommand: "node scripts/morning-cron.mjs"
+```
+
+---
+
 ## 🐳 Docker Deployment
 
 Run the headless Swarm streaming server and a persistent Qdrant cluster with Docker Compose:
@@ -350,6 +394,7 @@ npm run test:server       # HTTP & SSE streaming tests
 | `@perfect-swarm/core/scheduler` | Adaptive priority queueing, work-stealing, rate-limit backpressure, and predictive latency scheduling |
 | `@perfect-swarm/core/hierarchy` | Hierarchical agent specialization, multi-tier capability trees, and dynamic routing |
 | `@perfect-swarm/core/tieredCache` | Multi-level L1/L2/L3 cache, vector quantization (SQ8 & 1-bit), and selective state snapshotting |
+| `@perfect-swarm/core/morning` | Render morning slate engine, ESPN scoreboard ingestion, and calibration loops |
 
 ---
 

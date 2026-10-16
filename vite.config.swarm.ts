@@ -32,7 +32,8 @@ export default defineConfig({
         coordination: path.resolve(__dirname, 'src/swarm/coordination.ts'),
         health: path.resolve(__dirname, 'src/swarm/health.ts'),
         optimization: path.resolve(__dirname, 'src/swarm/optimization.ts'),
-        actionPlanCache: path.resolve(__dirname, 'src/swarm/actionPlanCache.ts')
+        actionPlanCache: path.resolve(__dirname, 'src/swarm/actionPlanCache.ts'),
+        morning: path.resolve(__dirname, 'src/swarm/morning/index.ts')
       },
       formats: ['es', 'cjs'],
       fileName: (format, entryName) => `${entryName}.${format === 'es' ? 'js' : 'cjs'}`

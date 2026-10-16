@@ -176,6 +176,12 @@
       "import": "./dist/swarm/actionPlanCache.js",
       "require": "./dist/swarm/actionPlanCache.cjs",
       "default": "./src/swarm/actionPlanCache.ts"
+    },
+    "./morning": {
+      "types": "./dist/swarm/morning/index.d.ts",
+      "import": "./dist/swarm/morning/index.js",
+      "require": "./dist/swarm/morning/index.cjs",
+      "default": "./src/swarm/morning/index.ts"
     }
   },
   "scripts": {
