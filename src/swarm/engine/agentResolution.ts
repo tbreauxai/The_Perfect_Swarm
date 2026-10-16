@@ -7,6 +7,7 @@ import { globalAgentExperimentManager } from '../experiment.ts';
 import { SwarmContext } from '../context.ts';
 import { sanitizeApiKey, validateProviderKey, resolveProvider } from './utils.ts';
 import { buildManagerChain, buildAnalystPool, mergeFallbacks } from './managerChain.ts';
+import { applyMorningProviderPolicy, MORNING_POOL_PROVIDERS } from './morningProviders.ts';
 
 const safeEnv = typeof process !== "undefined" ? process.env : {} as Record<string, string | undefined>;
 // 'github' removed: GitHub Models was retired on 2026-07-30, so it can never be a fallback or a pool provider.
@@ -66,9 +67,12 @@ export function resolveSwarmAgents(
     activeVariant: AgentVariantConfig | undefined,
     defaultAi?: GoogleGenAI
 ): ResolvedSwarmAgents {
-    const rawAgents = (activeVariant?.agents && activeVariant.agents.length > 0)
+    const requestedAgents = (activeVariant?.agents && activeVariant.agents.length > 0)
         ? activeVariant.agents
         : (settings?.agents || []);
+    // Morning runs (morning_judge): judge on Groq, no OpenRouter seat (see morningProviders.ts). Other runs unchanged.
+    const isMorningRun = (settings as any)?.responseSchema === 'morning_judge';
+    const rawAgents = isMorningRun ? applyMorningProviderPolicy(requestedAgents, settings) : requestedAgents;
     let managerConfig = rawAgents.find((a: AgentConfig) => a.id === 'manager' || a.role === 'Manager Node');
     const dedicatedCriticConfig = rawAgents.find((a: AgentConfig) => a.id === 'critic' || a.role?.toLowerCase().includes('critic') || a.role?.toLowerCase().includes('verifier')) || settings?.critic;
     const analystConfigs = rawAgents.filter((a: AgentConfig) => a.id !== 'manager' && a.provider !== 'none');
@@ -85,11 +89,17 @@ export function resolveSwarmAgents(
     }
     // PS3: global analyst fallback pool. Any keyed, healthy provider can cover a failed seat,
     // not only providers that already have a seat in this run.
-    // Morning runs (morning_judge) do NOT borrow from the global pool: seat-model providers only (pre-PS3 behavior).
-    const isMorningRun = (settings as any)?.responseSchema === 'morning_judge';
+    // Morning runs (morning_judge) do NOT borrow from the global pool: seat-model providers only (pre-PS3 behavior),
+    // Groq first and never OpenRouter.
     const availableFallbacks: ProviderCredential[] = settings?.disableFallback
         ? []
-        : buildAnalystPool(ALL_PROVIDERS, settings, rawAgents, defaultAi, { seatModelsOnly: isMorningRun });
+        : buildAnalystPool(
+            isMorningRun ? MORNING_POOL_PROVIDERS : ALL_PROVIDERS,
+            settings,
+            rawAgents,
+            defaultAi,
+            { seatModelsOnly: isMorningRun }
+        );
 
     const { key: mKey, client: mClient } = resolveProvider(managerConfig.provider, settings, defaultAi);
     const finalMKey = managerConfig.apiKey ? sanitizeApiKey(managerConfig.apiKey) : mKey;
