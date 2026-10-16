@@ -1,4 +1,5 @@
 import type { GoogleGenAI } from '@google/genai';
+import { z } from "zod";
 
 export const KNOWN_PROVIDERS = ['gemini', 'groq', 'openrouter', 'github', 'mistral', 'simulated'] as const;
 
@@ -79,6 +80,10 @@ export interface SwarmEngineSettings {
     feedbackSettings?: SwarmFeedbackSettings;
     coordinationSettings?: SwarmCoordinationSettings;
     optimizationSettings?: SwarmOptimizationSettings;
+    /** R2: opt-in scorecard + blackboard flow (chat only; morning_judge runs ignore it). */
+    scorecardMode?: boolean;
+    /** R2-S1: analyst max output tokens in scorecard mode (default 800; reasoning models count thinking toward it). Per-request override. */
+    scorecardAnalystMaxTokens?: number;
     [key: string]: any;
 }
 
@@ -181,6 +186,38 @@ export interface VerificationResult {
     pass: boolean;
     feedback?: string;
 }
+
+/**
+ * R2-S1: compact analyst scorecard (scorecardMode only, about 150 tokens).
+ * Rows are the short ids (R1..Rn) of the caller's pipe tables in `data`.
+ */
+export const SCORECARD_ROW_ID = /^R\d+$/;
+export const ScorecardRowIdSchema = z.string().regex(SCORECARD_ROW_ID, 'row must be a table row id like R12');
+export const AnalystScorecardSchema = z.object({
+    seat: z.string().min(1),
+    picks: z.array(z.object({
+        row: ScorecardRowIdSchema,
+        note: z.string().max(60).optional()
+    })).max(8),
+    parlay: z.object({
+        rows: z.array(ScorecardRowIdSchema),
+        targetFit: z.enum(['in', 'near', 'none'])
+    }).optional(),
+    edge: z.number().finite(),
+    key_risk: z.string().max(120),
+    confidence: z.number().min(0).max(1),
+    status: z.enum(['ok', 'no_play'])
+});
+export type AnalystScorecard = z.infer<typeof AnalystScorecardSchema>;
+
+/** R2-S4: the critic's scorecard = an analyst scorecard plus a key_risk per cited row. */
+export const CriticScorecardSchema = AnalystScorecardSchema.extend({
+    row_risks: z.array(z.object({
+        row: ScorecardRowIdSchema,
+        key_risk: z.string().max(120)
+    })).max(30)
+});
+export type CriticScorecard = z.infer<typeof CriticScorecardSchema>;
 
 export interface LearnedMemoryEvent {
     appId: string;
