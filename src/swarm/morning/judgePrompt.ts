@@ -77,6 +77,38 @@ STRICT CONVENTIONS:
 6. Do NOT output any explanatory text before or after the JSON.`;
 }
 
+export const JUDGE_MANAGER_INSTRUCTION = `You are the Morning Swarm Judge (GodView Compiler) for DuelOdds.
+You must synthesize the full debate and determine fair lines and win probabilities.
+OUTPUT REQUIREMENT:
+Output STRICT JSON ONLY. Do NOT wrap in markdown codeblocks (no \`\`\`json). Output a single raw JSON object matching this exact schema:
+{
+  "likelyWinner": "<Home Team> or <Away Team>",
+  "winProbHome": 0.55,
+  "winProbAway": 0.45,
+  "fairSpread": -3.5,
+  "fairTotal": 215.5,
+  "totalLean": "over",
+  "arguments": [
+    {
+      "claim": "Key claim that survived critic review",
+      "advocate": "quant",
+      "weight": "high",
+      "supportingData": "Evidence"
+    }
+  ],
+  "invalidationConditions": [
+    "Condition that would immediately nullify this judgment"
+  ],
+  "dataAsOf": "${new Date().toISOString()}"
+}
+
+STRICT CONVENTIONS:
+1. "fairSpread": MUST be from the HOME perspective. Negative means HOME favored, positive means AWAY favored.
+2. "winProbHome" and "winProbAway": Must be numbers between 0.01 and 0.99, summing to 1.00.
+3. "fairTotal": Realistic game total or null.
+4. "totalLean": "over", "under", or "none".
+5. Do NOT output any explanatory text before or after the JSON.`;
+
 /**
  * Normalizes a team name for comparison.
  */
@@ -96,74 +128,202 @@ export function areTeamsEqual(a: string, b: string): boolean {
 }
 
 /**
+ * Helper to extract candidate judge JSON object from objects, results, judgments, or strings.
+ */
+function extractCandidateObject(raw: unknown): any {
+  if (!raw) return null;
+
+  // 1. Direct object inspection
+  if (typeof raw === 'object' && raw !== null) {
+    const obj = raw as Record<string, any>;
+
+    // Direct match if winProbHome / fairSpread exist on this object
+    if ((obj.winProbHome !== undefined || obj.win_prob_home !== undefined) &&
+        (obj.fairSpread !== undefined || obj.fair_spread !== undefined)) {
+      return obj;
+    }
+
+    // Check obj.judgment
+    if (obj.judgment && typeof obj.judgment === 'object') {
+      const nested = extractCandidateObject(obj.judgment);
+      if (nested) return nested;
+    }
+
+    // Check obj.result
+    if (obj.result && typeof obj.result === 'object') {
+      const nested = extractCandidateObject(obj.result);
+      if (nested) return nested;
+    }
+
+    // Check obj.finalAnalysis
+    if (obj.finalAnalysis && typeof obj.finalAnalysis === 'object') {
+      const nested = extractCandidateObject(obj.finalAnalysis);
+      if (nested) return nested;
+    }
+
+    // If components exist (e.g. Generative UI ManagerResponse)
+    if (Array.isArray(obj.components)) {
+      for (const comp of obj.components) {
+        if (comp?.props) {
+          if (Array.isArray(comp.props.insights)) {
+            for (const ins of comp.props.insights) {
+              const msg = typeof ins === 'string' ? ins : ins?.message;
+              if (typeof msg === 'string') {
+                const parsedFromMsg = extractCandidateFromString(msg);
+                if (parsedFromMsg) return parsedFromMsg;
+              }
+            }
+          }
+          if (typeof comp.props.value === 'string') {
+            const parsedVal = extractCandidateFromString(comp.props.value);
+            if (parsedVal) return parsedVal;
+          }
+        }
+      }
+    }
+
+    // Check obj.summary
+    if (typeof obj.summary === 'string') {
+      const parsedFromSummary = extractCandidateFromString(obj.summary);
+      if (parsedFromSummary) return parsedFromSummary;
+    }
+
+    // If obj has string property judgment or result
+    if (typeof obj.judgment === 'string') {
+      const parsedStr = extractCandidateFromString(obj.judgment);
+      if (parsedStr) return parsedStr;
+    }
+    if (typeof obj.result === 'string') {
+      const parsedStr = extractCandidateFromString(obj.result);
+      if (parsedStr) return parsedStr;
+    }
+    if (typeof obj.finalAnalysis === 'string') {
+      const parsedStr = extractCandidateFromString(obj.finalAnalysis);
+      if (parsedStr) return parsedStr;
+    }
+  }
+
+  // 2. String inspection
+  if (typeof raw === 'string') {
+    return extractCandidateFromString(raw);
+  }
+
+  return null;
+}
+
+function extractCandidateFromString(str: string): any {
+  if (!str || typeof str !== 'string') return null;
+
+  // Check fenced code block ```json ... ```
+  const fenced = str.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (fenced && fenced[1]) {
+    try {
+      const parsed = JSON.parse(fenced[1]);
+      if (parsed && typeof parsed === 'object') {
+        const nested = extractCandidateObject(parsed);
+        if (nested) return nested;
+      }
+    } catch {
+      // continue
+    }
+  }
+
+  // Direct JSON parse
+  try {
+    const direct = JSON.parse(str);
+    if (direct && typeof direct === 'object') {
+      const nested = extractCandidateObject(direct);
+      if (nested) return nested;
+    }
+  } catch {
+    // continue
+  }
+
+  // Match largest { ... } substring
+  const bracketMatch = str.match(/\{[\s\S]*\}/);
+  if (bracketMatch) {
+    try {
+      const parsed = JSON.parse(bracketMatch[0]);
+      if (parsed && typeof parsed === 'object') {
+        const nested = extractCandidateObject(parsed);
+        if (nested) return nested;
+      }
+    } catch {
+      // continue
+    }
+  }
+
+  return null;
+}
+
+/**
  * Safely parses and validates the judge output from the Swarm analysis.
+ * Strict validation: never defaults missing probabilities or fair spread to 50%/0.
  */
 export function parseAndValidateJudgeOutput(
-  rawResponse: string,
+  rawResponse: unknown,
   homeTeam: string,
   awayTeam: string,
   sportKey?: string,
   swarmWorkflowId?: string | null
 ): MorningJudgeOutput | null {
-  if (!rawResponse || typeof rawResponse !== 'string') return null;
+  if (!rawResponse) return null;
 
-  let parsed: any = null;
-  try {
-    parsed = JSON.parse(rawResponse);
-  } catch {
-    const match = rawResponse.match(/\{[\s\S]*\}/);
-    if (match) {
-      try {
-        parsed = JSON.parse(match[0]);
-      } catch {
-        return null;
-      }
-    } else {
-      return null;
-    }
+  const parsed = extractCandidateObject(rawResponse);
+  if (!parsed || typeof parsed !== 'object') return null;
+
+  // 1. Validate winProbHome: must be present, number, within 0.01 - 0.99
+  const rawWinProbHome = parsed.winProbHome ?? parsed.win_prob_home;
+  if (rawWinProbHome === undefined || rawWinProbHome === null || rawWinProbHome === '') {
+    return null;
+  }
+  const winProbHomeNum = typeof rawWinProbHome === 'number' ? rawWinProbHome : Number(rawWinProbHome);
+  if (!Number.isFinite(winProbHomeNum) || isNaN(winProbHomeNum) || winProbHomeNum < 0.01 || winProbHomeNum > 0.99) {
+    return null;
   }
 
-  if (!parsed || typeof parsed !== 'object') return null;
+  // 2. Validate fairSpread: must be present, valid finite number
+  const rawFairSpread = parsed.fairSpread ?? parsed.fair_spread;
+  if (rawFairSpread === undefined || rawFairSpread === null || rawFairSpread === '') {
+    return null;
+  }
+  const fairSpreadNum = typeof rawFairSpread === 'number' ? rawFairSpread : Number(rawFairSpread);
+  if (!Number.isFinite(fairSpreadNum) || isNaN(fairSpreadNum)) {
+    return null;
+  }
+
+  // Win probability normalization & clamping
+  let winProbAway = Number(parsed.winProbAway ?? parsed.win_prob_away);
+  if (isNaN(winProbAway) || winProbAway <= 0 || winProbAway >= 1) {
+    winProbAway = 1 - winProbHomeNum;
+  }
+  const sum = winProbHomeNum + winProbAway;
+  const winProbHome = Math.round((winProbHomeNum / sum) * 1000) / 1000;
+  const finalWinProbAway = Math.round((1 - winProbHome) * 1000) / 1000;
 
   const normHome = homeTeam.trim();
   const normAway = awayTeam.trim();
 
   // Likely Winner
-  let likelyWinner = String(parsed.likelyWinner || parsed.winner || '').trim();
+  let likelyWinner = String(parsed.likelyWinner || parsed.winner || parsed.likely_winner || '').trim();
   if (areTeamsEqual(likelyWinner, normHome)) {
     likelyWinner = normHome;
   } else if (areTeamsEqual(likelyWinner, normAway)) {
     likelyWinner = normAway;
   } else {
-    const homeP = Number(parsed.winProbHome ?? 0.5);
-    likelyWinner = homeP >= 0.5 ? normHome : normAway;
+    likelyWinner = winProbHome >= 0.5 ? normHome : normAway;
   }
-
-  // Win probabilities
-  let winProbHome = Number(parsed.winProbHome);
-  let winProbAway = Number(parsed.winProbAway);
-  if (isNaN(winProbHome) || winProbHome <= 0) winProbHome = 0.5;
-  if (isNaN(winProbAway) || winProbAway <= 0) winProbAway = 1 - winProbHome;
-
-  winProbHome = Math.min(0.99, Math.max(0.01, winProbHome));
-  winProbAway = Math.min(0.99, Math.max(0.01, winProbAway));
-  const sum = winProbHome + winProbAway;
-  winProbHome = Math.round((winProbHome / sum) * 1000) / 1000;
-  winProbAway = Math.round((1 - winProbHome) * 1000) / 1000;
-
-  // Fair spread
-  let fairSpread = Number(parsed.fairSpread);
-  if (isNaN(fairSpread)) fairSpread = 0;
 
   // Fair total
   let fairTotal: number | null = null;
-  if (parsed.fairTotal != null && !isNaN(Number(parsed.fairTotal)) && Number(parsed.fairTotal) > 0) {
-    fairTotal = Number(parsed.fairTotal);
+  const rawTotal = parsed.fairTotal ?? parsed.fair_total;
+  if (rawTotal != null && !isNaN(Number(rawTotal)) && Number(rawTotal) > 0) {
+    fairTotal = Number(rawTotal);
   }
 
   // Total lean
   let totalLean: 'over' | 'under' | 'none' = 'none';
-  const rawLean = String(parsed.totalLean || '').toLowerCase().trim();
+  const rawLean = String(parsed.totalLean || parsed.total_lean || '').toLowerCase().trim();
   if (rawLean === 'over' || rawLean === 'under') totalLean = rawLean;
 
   // Arguments
@@ -183,16 +343,18 @@ export function parseAndValidateJudgeOutput(
 
   // Invalidation conditions
   const invalidationConditions: string[] = [];
-  if (Array.isArray(parsed.invalidationConditions)) {
-    for (const c of parsed.invalidationConditions) {
+  const rawInvalidations = parsed.invalidationConditions || parsed.invalidation_conditions;
+  if (Array.isArray(rawInvalidations)) {
+    for (const c of rawInvalidations) {
       if (typeof c === 'string' && c.trim()) {
         invalidationConditions.push(c.trim());
       }
     }
   }
 
-  const dataAsOf = parsed.dataAsOf && !isNaN(new Date(parsed.dataAsOf).getTime())
-    ? new Date(parsed.dataAsOf).toISOString()
+  const rawDataAsOf = parsed.dataAsOf || parsed.data_as_of;
+  const dataAsOf = rawDataAsOf && !isNaN(new Date(rawDataAsOf).getTime())
+    ? new Date(rawDataAsOf).toISOString()
     : new Date().toISOString();
 
   let workflowId: string | null = null;
@@ -203,14 +365,15 @@ export function parseAndValidateJudgeOutput(
   return {
     likelyWinner,
     winProbHome,
-    winProbAway,
-    fairSpread,
+    winProbAway: finalWinProbAway,
+    fairSpread: fairSpreadNum,
     fairTotal,
     totalLean,
     arguments: args,
     invalidationConditions,
     dataAsOf,
-    workflowId
+    workflowId,
+    isExplicit: true
   };
 }
 

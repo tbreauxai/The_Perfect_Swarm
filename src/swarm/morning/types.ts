@@ -46,6 +46,7 @@ export interface MorningJudgeOutput {
   invalidationConditions: string[];
   dataAsOf: string;
   workflowId?: string | null;
+  isExplicit?: boolean;
 }
 
 export interface LineSnapshotInsert {

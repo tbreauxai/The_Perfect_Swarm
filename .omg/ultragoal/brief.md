@@ -1,14 +1,8 @@
-# Ultragoal Brief: Default Agent List & Provider Key Guard for Morning Slate
+# Ultragoal Brief: Strict Judge Output Validation & Manager Schema Enforcement
 
 ## Objective
-Prevent "No active Analysts found" failures in `runMorningSlate` (`POST /api/swarm/morning`) by dynamically building `settings.agents` from present environment API keys (`GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`) matching the DuelOdds pregame topology:
-1. `a1`: Quant Proposer (`gemini`, `gemini-3.1-flash-lite`) if `GEMINI_API_KEY` is present.
-2. `a2`: Market Proposer (`groq`, `openai/gpt-oss-120b`) if `GROQ_API_KEY` is present.
-3. `critic`: Risk Critic (`openrouter`, `nvidia/nemotron-3-ultra-550b-a55b:free`) if `OPENROUTER_API_KEY` is present.
-4. `manager`: GodView Compiler (`groq`, `openai/gpt-oss-120b`) if `GROQ_API_KEY` is present.
-
-## Guard & Fail-Fast Behavior
-- If none of `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY` are present, return immediately with one error in `errors` and do not loop the slate.
-- No direct-judge fallback.
-- Preserve `originApp: 'duelodds'` and `callerAppId: 'duelodds'` for calibration.
-- Preserve route signature: `POST /api/swarm/morning` takes `{ date? }` and returns `{ ok, gameDate, judged, replaced, skipped, snapshots, errors }`.
+Fix false positive 50%/0 default judgments in the morning slate engine across three modules:
+1. `src/swarm/morning/judgePrompt.ts`: Stop defaulting missing fields. Validate that `winProbHome` is a number in `0.01–0.99` and `fairSpread` is a valid number. Return `null` if missing. Inspect objects (`finalAnalysis`, `result`, `judgment`, components, fenced code blocks) before falling back. Mark judgments with `isExplicit: true`.
+2. `src/swarm/morning/supabase.ts`: Refuse to write rows with `win_prob_home: 0.5` and `fair_spread: 0` unless explicitly returned by the judge (`isExplicit: true`). Prevent missing judgments from overwriting real rows.
+3. `src/swarm/morning/index.ts`: Pass manager instruction & judge schema in `settings` so GodView Compiler emits raw judge JSON. If `parseAndValidateJudgeOutput` returns `null`, push `{ eventId, error: "judge output missing winProbHome or fairSpread" }`, skip upsert, leave existing row, and do not increment `judged` or `replaced` counters.
+4. Support in engine synthesis (`src/swarm/engine/synthesisPipeline.ts` & `verificationPipeline.ts`) to honor custom manager instruction and preserve judge output objects.

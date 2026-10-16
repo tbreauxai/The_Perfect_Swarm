@@ -3,7 +3,8 @@ import {
   buildJudgePrompt,
   formatGameToColumnar,
   parseAndValidateJudgeOutput,
-  computeModelSnapshot
+  computeModelSnapshot,
+  JUDGE_MANAGER_INSTRUCTION
 } from './judgePrompt.ts';
 import {
   getSupabaseConfig,
@@ -171,6 +172,12 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
         callerAppId: 'duelodds',
         settings: {
           domain: 'sports-betting',
+          responseSchema: 'morning_judge',
+          managerInstruction: JUDGE_MANAGER_INSTRUCTION,
+          systemPrompts: {
+            manager: JUDGE_MANAGER_INSTRUCTION,
+            'GodView Compiler': JUDGE_MANAGER_INSTRUCTION
+          },
           agents,
           geminiApiKey: env.GEMINI_API_KEY,
           groqApiKey: env.GROQ_API_KEY,
@@ -182,12 +189,8 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
         }
       });
 
-      const rawText = typeof workflowResult?.finalAnalysis === 'string'
-        ? workflowResult.finalAnalysis
-        : JSON.stringify(workflowResult?.finalAnalysis || {});
-
       const parsed = parseAndValidateJudgeOutput(
-        rawText,
+        workflowResult?.finalAnalysis ?? workflowResult,
         game.homeTeam,
         game.awayTeam,
         game.sport,
@@ -195,7 +198,11 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
       );
 
       if (!parsed) {
-        throw new Error(`Failed to parse Swarm Judge JSON for ${game.eventId}`);
+        errors.push({
+          eventId: game.eventId,
+          error: "judge output missing winProbHome or fairSpread"
+        });
+        continue;
       }
 
       const modelSnapshot = computeModelSnapshot(game, parsed.winProbHome);

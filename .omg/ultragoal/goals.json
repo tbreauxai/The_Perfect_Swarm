@@ -1,20 +1,26 @@
 [
   {
-    "id": "goal-1-build-default-agents",
-    "description": "Goal 1: Implement buildDefaultAgents(env) in src/swarm/morning/index.ts to construct the 4-agent DuelOdds topology based on GEMINI_API_KEY, GROQ_API_KEY, and OPENROUTER_API_KEY presence.",
+    "id": "goal-1-strict-judge-prompt-parser",
+    "description": "Goal 1: In src/swarm/morning/judgePrompt.ts, stop defaulting missing fields. Inspect finalAnalysis objects, result, judgment, components, and fenced blocks. Require winProbHome in 0.01-0.99 and fairSpread as a valid number; return null otherwise. Mark valid outputs with isExplicit: true.",
     "status": "completed",
-    "verification": "buildDefaultAgents returns only agents whose provider keys exist in env; returns empty array if no keys exist."
+    "verification": "parseAndValidateJudgeOutput returns null when winProbHome or fairSpread is absent or out-of-range, extracts values from objects/fenced blocks, and never invents 0.5 or 0."
   },
   {
-    "id": "goal-2-morning-slate-agent-wiring",
-    "description": "Goal 2: Wire buildDefaultAgents into runMorningSlate in src/swarm/morning/index.ts. If no provider keys exist, return immediately with one slate error without looping games. When keys exist, pass agents in settings.agents with originApp: 'duelodds' and callerAppId: 'duelodds'.",
+    "id": "goal-2-supabase-defense-guard",
+    "description": "Goal 2: In src/swarm/morning/supabase.ts, refuse to write a row whose win_prob_home is 0.5 and fair_spread is 0 unless judgment.isExplicit is true.",
     "status": "completed",
-    "verification": "runMorningSlate passes settings.agents to executeWorkflowFn; halts with single error when keys are missing without executing slate game loop."
+    "verification": "upsertGameJudgment throws or rejects writes when win_prob_home is 0.5 and fair_spread is 0 without isExplicit: true."
   },
   {
-    "id": "goal-3-test-suite-and-verification",
-    "description": "Goal 3: Add unit tests in src/swarm/server/morning.test.ts for buildDefaultAgents and missing key fail-fast behavior. Verify full regression suite (npm run lint, npm test, npm run build).",
+    "id": "goal-3-manager-schema-and-morning-index",
+    "description": "Goal 3: In src/swarm/morning/index.ts, pass judge schema and manager instruction in settings. If parseAndValidateJudgeOutput returns null, push error 'judge output missing winProbHome or fairSpread', do not upsert, and do not increment judged/replaced. In engine synthesis, respect custom manager instruction and preserve judge outputs.",
     "status": "completed",
-    "verification": "All tests pass, tsc --noEmit is clean, and dist build completes cleanly."
+    "verification": "runMorningSlate pushes expected error for unparseable output without upserting or incrementing counts; passes managerInstruction and schema."
+  },
+  {
+    "id": "goal-4-test-suite-and-verification",
+    "description": "Goal 4: Update and expand tests in src/swarm/server/morning.test.ts to cover strict parsing, object inspection, refusal to write default rows, and error handling. Run full verify (lint, test, build).",
+    "status": "completed",
+    "verification": "All unit tests pass, tsc --noEmit is clean, and dist build succeeds."
   }
 ]

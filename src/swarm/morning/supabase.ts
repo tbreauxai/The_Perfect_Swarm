@@ -128,6 +128,10 @@ export async function upsertGameJudgment(
   modelSnapshot: Record<string, any>,
   fetchFn: typeof fetch = fetch
 ): Promise<void> {
+  if (judgment.winProbHome === 0.5 && judgment.fairSpread === 0 && !judgment.isExplicit) {
+    throw new Error(`Refusing to write default 50%/0 judgment for ${game.eventId}: not explicitly returned by judge`);
+  }
+
   const inputs = ['swarm_intelligence'];
   if (game.oddsSnapshot) inputs.push('odds');
   if (game.weatherSnapshot) inputs.push('weather');

@@ -269,7 +269,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                         managerAgent,
                         analysts,
                         dedicatedCriticAgent,
-                        context
+                        context,
+                        settings
                     });
                     finalAnalysis = verificationResult.finalAnalysis;
                     workflowLifecycleResult = verificationResult.lifecycleResult;
@@ -279,7 +280,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                         synthesisResult.effectiveDynamicPrompt,
                         context,
                         activeVariant,
-                        bypassCache
+                        bypassCache,
+                        settings
                     );
                 }
             }

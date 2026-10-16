@@ -9,10 +9,12 @@ import {
   parseAndValidateJudgeOutput,
   computeModelSnapshot,
   partitionSlateGames,
+  upsertGameJudgment,
   insertBaselineLineSnapshots,
   gradeAndRecordFinalGames,
   runMorningSlate,
   buildDefaultAgents,
+  JUDGE_MANAGER_INSTRUCTION,
   type SlateGame,
   type SupabaseConfig
 } from '../morning/index.ts';
@@ -204,6 +206,168 @@ describe('Morning Slate Engine - Unit & Integration Tests', () => {
       expect(snapshot.projected_margin).toBe(3.5);
       expect(snapshot.projected_total).toBe(224.5);
       expect(snapshot.derived_from).toBe('swarm_analysis_composite');
+    });
+
+    it('returns null if winProbHome is missing, not a number, or outside 0.01-0.99', () => {
+      // missing winProbHome
+      expect(parseAndValidateJudgeOutput({ fairSpread: -3.5 }, 'Home', 'Away')).toBeNull();
+      // non-number winProbHome
+      expect(parseAndValidateJudgeOutput({ winProbHome: 'invalid', fairSpread: -3.5 }, 'Home', 'Away')).toBeNull();
+      // winProbHome <= 0
+      expect(parseAndValidateJudgeOutput({ winProbHome: 0, fairSpread: -3.5 }, 'Home', 'Away')).toBeNull();
+      expect(parseAndValidateJudgeOutput({ winProbHome: -0.5, fairSpread: -3.5 }, 'Home', 'Away')).toBeNull();
+      // winProbHome >= 1
+      expect(parseAndValidateJudgeOutput({ winProbHome: 1.0, fairSpread: -3.5 }, 'Home', 'Away')).toBeNull();
+      expect(parseAndValidateJudgeOutput({ winProbHome: 1.5, fairSpread: -3.5 }, 'Home', 'Away')).toBeNull();
+      // outside 0.01 - 0.99
+      expect(parseAndValidateJudgeOutput({ winProbHome: 0.005, fairSpread: -3.5 }, 'Home', 'Away')).toBeNull();
+      expect(parseAndValidateJudgeOutput({ winProbHome: 0.995, fairSpread: -3.5 }, 'Home', 'Away')).toBeNull();
+    });
+
+    it('returns null if fairSpread is missing or not a number', () => {
+      // missing fairSpread
+      expect(parseAndValidateJudgeOutput({ winProbHome: 0.55 }, 'Home', 'Away')).toBeNull();
+      // non-number fairSpread
+      expect(parseAndValidateJudgeOutput({ winProbHome: 0.55, fairSpread: 'xyz' }, 'Home', 'Away')).toBeNull();
+    });
+
+    it('does not invent 0.5 or 0 when standard manager UI components payload is passed', () => {
+      const managerUiOutput = {
+        ui_title: 'Executive Swarm Synthesis',
+        components: [
+          {
+            type: 'InsightList',
+            props: {
+              title: 'Key Insights',
+              insights: [{ type: 'positive', message: 'Home team has advantage' }]
+            }
+          }
+        ]
+      };
+
+      const result = parseAndValidateJudgeOutput(managerUiOutput, 'Chiefs', 'Broncos');
+      expect(result).toBeNull();
+    });
+
+    it('extracts candidate judge JSON from object properties and nested components', () => {
+      // Direct object with winProbHome and fairSpread
+      const directObj = {
+        likelyWinner: 'Chiefs',
+        winProbHome: 0.65,
+        fairSpread: -6.5
+      };
+      const r1 = parseAndValidateJudgeOutput(directObj, 'Chiefs', 'Broncos');
+      expect(r1).not.toBeNull();
+      expect(r1?.winProbHome).toBe(0.65);
+      expect(r1?.fairSpread).toBe(-6.5);
+      expect(r1?.isExplicit).toBe(true);
+
+      // Nested inside result string
+      const nestedResult = {
+        result: JSON.stringify({
+          likelyWinner: 'Broncos',
+          winProbHome: 0.45,
+          fairSpread: 3.5
+        })
+      };
+      const r2 = parseAndValidateJudgeOutput(nestedResult, 'Chiefs', 'Broncos');
+      expect(r2).not.toBeNull();
+      expect(r2?.winProbHome).toBe(0.45);
+      expect(r2?.fairSpread).toBe(3.5);
+
+      // Embedded inside components props insights message
+      const insideComponent = {
+        ui_title: 'Swarm Verdict',
+        components: [
+          {
+            props: {
+              insights: [
+                {
+                  message: '```json\n{"likelyWinner":"Chiefs","winProbHome":0.7,"fairSpread":-7.0}\n```'
+                }
+              ]
+            }
+          }
+        ]
+      };
+      const r3 = parseAndValidateJudgeOutput(insideComponent, 'Chiefs', 'Broncos');
+      expect(r3).not.toBeNull();
+      expect(r3?.winProbHome).toBe(0.7);
+      expect(r3?.fairSpread).toBe(-7.0);
+    });
+
+    it('allows valid explicit 50%/0 judgment when both fields are actually present in input', () => {
+      const explicitFifty = {
+        likelyWinner: 'Chiefs',
+        winProbHome: 0.5,
+        fairSpread: 0
+      };
+      const result = parseAndValidateJudgeOutput(explicitFifty, 'Chiefs', 'Broncos');
+      expect(result).not.toBeNull();
+      expect(result?.winProbHome).toBe(0.5);
+      expect(result?.fairSpread).toBe(0);
+      expect(result?.isExplicit).toBe(true);
+    });
+  });
+
+  describe('Supabase Guard - Refusal of Default 50%/0', () => {
+    const mockCfg: SupabaseConfig = {
+      supabaseUrl: 'https://mock.supabase.co',
+      supabaseServiceKey: 'mock-key'
+    };
+
+    const mockGame: SlateGame = {
+      eventId: 'nfl-test-guard-1',
+      sport: 'americanfootball_nfl',
+      league: 'nfl',
+      homeTeam: 'Cowboys',
+      awayTeam: 'Eagles',
+      commenceTime: '2026-10-15T18:00:00Z',
+      gameDate: '2026-10-15',
+      weatherSnapshot: null,
+      oddsSnapshot: null
+    };
+
+    it('refuses to write 50%/0 judgment when isExplicit is false or missing', async () => {
+      const defaultJudgment = {
+        likelyWinner: 'Cowboys',
+        winProbHome: 0.5,
+        winProbAway: 0.5,
+        fairSpread: 0,
+        fairTotal: null,
+        totalLean: 'none' as const,
+        arguments: [],
+        invalidationConditions: [],
+        dataAsOf: new Date().toISOString(),
+        isExplicit: false
+      };
+
+      await expect(
+        upsertGameJudgment(mockCfg, mockGame, defaultJudgment, {}, vi.fn())
+      ).rejects.toThrow(/Refusing to write default 50%\/0 judgment/);
+    });
+
+    it('allows writing 50%/0 judgment when explicitly returned by judge', async () => {
+      const explicitJudgment = {
+        likelyWinner: 'Cowboys',
+        winProbHome: 0.5,
+        winProbAway: 0.5,
+        fairSpread: 0,
+        fairTotal: null,
+        totalLean: 'none' as const,
+        arguments: [],
+        invalidationConditions: [],
+        dataAsOf: new Date().toISOString(),
+        isExplicit: true
+      };
+
+      const mockFetch = vi.fn().mockResolvedValue(new Response(null, { status: 201 }));
+
+      await expect(
+        upsertGameJudgment(mockCfg, mockGame, explicitJudgment, {}, mockFetch)
+      ).resolves.toBeUndefined();
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -598,11 +762,57 @@ describe('Morning Slate Engine - Unit & Integration Tests', () => {
       expect(capturedParams).not.toBeNull();
       expect(capturedParams.originApp).toBe('duelodds');
       expect(capturedParams.callerAppId).toBe('duelodds');
+      expect(capturedParams.settings.responseSchema).toBe('morning_judge');
+      expect(capturedParams.settings.managerInstruction).toBe(JUDGE_MANAGER_INSTRUCTION);
       expect(capturedParams.settings.agents).toEqual([
         { id: 'a1', role: 'Quant Proposer', provider: 'gemini', model: 'gemini-3.1-flash-lite' },
         { id: 'a2', role: 'Market Proposer', provider: 'groq', model: 'openai/gpt-oss-120b' },
         { id: 'critic', role: 'Risk Critic', provider: 'openrouter', model: 'nvidia/nemotron-3-ultra-550b-a55b:free' },
         { id: 'manager', role: 'GodView Compiler', provider: 'groq', model: 'openai/gpt-oss-120b' }
+      ]);
+    });
+
+    it('skips upsert, pushes error, and does not count judged/replaced when judge output is missing winProbHome or fairSpread', async () => {
+      const mockFetch: typeof fetch = vi.fn().mockImplementation(async (url: string) => {
+        if (String(url).includes('/sports/football/nfl/')) {
+          return new Response(JSON.stringify({
+            events: [{
+              id: 'game-unjudged-1',
+              date: '2026-10-15T18:00:00Z',
+              competitions: [{
+                competitors: [
+                  { homeAway: 'home', team: { displayName: 'Cowboys' } },
+                  { homeAway: 'away', team: { displayName: 'Eagles' } }
+                ],
+                odds: [{ details: 'DAL -3.0', spread: -3.0, overUnder: 48.0 }]
+              }]
+            }]
+          }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ events: [] }), { status: 200 });
+      });
+
+      // Swarm returns manager UI without winProbHome or fairSpread
+      const mockExecuteWorkflow = vi.fn().mockResolvedValue({
+        workflowId: 'wf-no-prob',
+        finalAnalysis: {
+          ui_title: 'Executive Swarm Synthesis',
+          components: [{ type: 'InsightList', props: { title: 'Insights', insights: [] } }]
+        }
+      });
+
+      const result = await runMorningSlate({
+        dateInput: '2026-10-15',
+        env: { GEMINI_API_KEY: 'test-key' },
+        fetchFn: mockFetch,
+        executeWorkflowFn: mockExecuteWorkflow
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.judged).toBe(0);
+      expect(result.replaced).toBe(0);
+      expect(result.errors).toEqual([
+        { eventId: 'nfl-game-unjudged-1', error: 'judge output missing winProbHome or fairSpread' }
       ]);
     });
   });
