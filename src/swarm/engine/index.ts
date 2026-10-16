@@ -28,6 +28,8 @@ import {
 } from "./partialResult.ts";
 import { runDeepAnalysisVerification } from "./verificationPipeline.ts";
 import { runLearningPipeline } from "./learningPipeline.ts";
+import { isScorecardMode } from "./scorecard.ts";
+import { buildBlackboard } from "./blackboard.ts";
 
 import { SwarmContext } from '../context.ts';
 import { globalMetricsCollector } from '../profiler.ts';
@@ -46,13 +48,15 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         (context as any).id = `wf-${Date.now()}`;
     }
     const unsubscribe = onEvent ? context.subscribe(onEvent) : undefined;
+    // R2: opt-in scorecard + blackboard flow (request or settings); never for morning_judge.
+    const scorecardMode = isScorecardMode(params, settings);
 
     try {
         const optSettings = settings?.optimizationSettings;
         const optimizationEnabled = optSettings?.enabled !== false;
 
         // 0a. Fast sub-computation cache check
-        if (optimizationEnabled && optSettings?.enableSubComputationCache !== false && !params.forceFullSwarm && !settings?.forceFullSwarm) {
+        if (optimizationEnabled && optSettings?.enableSubComputationCache !== false && !params.forceFullSwarm && !settings?.forceFullSwarm && !scorecardMode) {
             const subResult = checkSubComputationCache({
                 task,
                 context,
@@ -98,13 +102,15 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         const { memoryCortex, toolRegistry } = bindCortexAndTools(params, params.settings || settings, defaultAi, targetAppId);
 
         // 0. Infer Task Complexity via ModelRouter
-        const forceFullSwarm = params.forceFullSwarm ?? settings?.forceFullSwarm ?? settings?.disableFastPath ?? false;
+        // R2: scorecard mode always runs the full swarm (the fast path has no scorecards or blackboard).
+        const forceFullSwarm = scorecardMode || (params.forceFullSwarm ?? settings?.forceFullSwarm ?? settings?.disableFastPath ?? false);
         const bypassCache = params.bypassCache ?? false;
         const complexity: TaskComplexity = complexityOverride || ModelRouter.inferComplexity(task, (data || '').length, 1, forceFullSwarm);
         const deepAnalysisRequested = enableDeepAnalysis ?? settings?.enableDeepAnalysis ?? (complexity === 'complex');
 
         const agentConfigVersion = PayloadCache.hashString(
             (settings?.agents || []).map((a: any) => `${a.id || a.role}:${a.provider}/${a.model || ''}`).join('|')
+            + (scorecardMode ? '|scorecardMode' : '') // R2: never share cache entries with non-scorecard runs
         ).substring(0, 16);
 
         const cacheKey = PayloadCache.computeFingerprint(task, data || "", {
@@ -238,6 +244,17 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             let workflowPromptTokensSaved = clusterResult.workflowPromptTokensSaved;
             let workflowDeduplicatedCount = clusterResult.workflowDeduplicatedCount;
             let workflowConsensus: AnalystConsensusDigest | undefined;
+
+            // R2-S3: blackboard = { brief, scorecards, degraded, citedRows } (scorecardMode only).
+            const blackboard = scorecardMode
+                ? buildBlackboard({
+                    brief: task,
+                    data: data || '',
+                    analysts,
+                    allAnalystReports: clusterResult.allAnalystReports,
+                    degraded: getDegraded(context)
+                })
+                : undefined;
 
             if (clusterResult.earlyExitTriggered && clusterResult.earlyFinalAnalysis) {
                 finalAnalysis = clusterResult.earlyFinalAnalysis;
@@ -431,7 +448,9 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     tokenWeightRatio: profilingResult.tokenWeightReport?.metadataWeightRatio ?? 0,
                     tokensSaved: profilingResult.preFilterResult?.tokensSaved ?? 0
                 } : undefined,
-                consensus: workflowConsensus
+                consensus: workflowConsensus,
+                // R2-S3: /analyze and swarm_complete return the blackboard alongside finalAnalysis (degraded refreshed).
+                ...(blackboard ? { blackboard: { ...blackboard, degraded } } : {})
             };
         } catch (swarmErr: any) {
             const workflowDurationMs = Date.now() - workflowStartTime;
