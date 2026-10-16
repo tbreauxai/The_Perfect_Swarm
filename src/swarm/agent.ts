@@ -114,7 +114,8 @@ export class Agent {
             // Two attempts max: fail fast on free-tier stalls. Fatal (4xx) errors
             // never recover by retrying; transient (429/5xx/timeout) errors either
             // fail over immediately (when a backup exists) or get one quick retry.
-            const maxRetries = 2;
+            // config.noRetry (startup benchmark): one attempt per target, so a 429 is never retried.
+            const maxRetries = config?.noRetry ? 1 : 2;
 
             for (let attempt = 1; attempt <= maxRetries; attempt++) {
                 try {
