@@ -1,44 +1,20 @@
 [
   {
-    "id": "goal-1-espn-slate-loader",
-    "description": "Goal 1: Implement ESPN slate loader in src/swarm/morning/espnSlate.ts supporting NFL, NBA, MLB, NHL, WNBA, NCAAF, NCAAB with event_id normalization and scoreboard odds extraction.",
+    "id": "goal-1-build-default-agents",
+    "description": "Goal 1: Implement buildDefaultAgents(env) in src/swarm/morning/index.ts to construct the 4-agent DuelOdds topology based on GEMINI_API_KEY, GROQ_API_KEY, and OPENROUTER_API_KEY presence.",
     "status": "completed",
-    "verification": "fetchDaySlate returns normalized games with event_id format ${league}-${id}, weatherSnapshot, and oddsSnapshot for valid and default dates."
+    "verification": "buildDefaultAgents returns only agents whose provider keys exist in env; returns empty array if no keys exist."
   },
   {
-    "id": "goal-2-supabase-client-and-judgments",
-    "description": "Goal 2: Implement Supabase morning persistence service in src/swarm/morning/supabase.ts to query existing game_judgments, skip swarm rows, replace direct/null rows, and upsert swarm judgments.",
+    "id": "goal-2-morning-slate-agent-wiring",
+    "description": "Goal 2: Wire buildDefaultAgents into runMorningSlate in src/swarm/morning/index.ts. If no provider keys exist, return immediately with one slate error without looping games. When keys exist, pass agents in settings.agents with originApp: 'duelodds' and callerAppId: 'duelodds'.",
     "status": "completed",
-    "verification": "partitionSlateGames skips swarm judge_source and targets unjudged/direct rows; upsertGameJudgment writes all required columns with real workflow_id and judge_source: swarm."
+    "verification": "runMorningSlate passes settings.agents to executeWorkflowFn; halts with single error when keys are missing without executing slate game loop."
   },
   {
-    "id": "goal-3-line-snapshots-service",
-    "description": "Goal 3: Implement baseline line_snapshots insertion in src/swarm/morning/supabase.ts with deduping, market: all, is_baseline: true, and omitting game_id.",
+    "id": "goal-3-test-suite-and-verification",
+    "description": "Goal 3: Add unit tests in src/swarm/server/morning.test.ts for buildDefaultAgents and missing key fail-fast behavior. Verify full regression suite (npm run lint, npm test, npm run build).",
     "status": "completed",
-    "verification": "insertBaselineLineSnapshots writes one row per game with odds, skips identical existing lines, and never sends game_id."
-  },
-  {
-    "id": "goal-4-finished-game-feedback",
-    "description": "Goal 4: Implement final game settlement and feedback loop in src/swarm/morning/feedback.ts to grade completed games and feed outcomes into continuous feedback calibration.",
-    "status": "completed",
-    "verification": "gradeAndRecordFinalGames detects completed games, determines win/loss against win_prob_home, and records feedback via recordProbabilityObservation for appId duelodds."
-  },
-  {
-    "id": "goal-5-morning-route-integration",
-    "description": "Goal 5: Implement POST /api/swarm/morning in src/swarm/server/app.ts integrating slate fetching, judgment execution, line snapshots, final game learning, and fail-safe error handling.",
-    "status": "completed",
-    "verification": "POST /api/swarm/morning requires app token, executes swarm analyze with buildJudgePrompt, writes judgments and line snapshots, grades final games, and returns structured summary."
-  },
-  {
-    "id": "goal-6-render-cron-configuration",
-    "description": "Goal 6: Add Render cron service definition and documentation for morning schedule execution in render.yaml, scripts/morning-cron.mjs, and README.md.",
-    "status": "completed",
-    "verification": "render.yaml specifies cron service executing POST /api/swarm/morning with Authorization header."
-  },
-  {
-    "id": "goal-7-test-suite-and-verification",
-    "description": "Goal 7: Create comprehensive unit/integration test suite in src/swarm/server/morning.test.ts and verify full regression gate (lint, test, build).",
-    "status": "completed",
-    "verification": "All morning tests pass, npm test passes 100%, npm run lint is clean, and dual production builds succeed."
+    "verification": "All tests pass, tsc --noEmit is clean, and dist build completes cleanly."
   }
 ]

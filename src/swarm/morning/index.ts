@@ -1,4 +1,4 @@
-import { fetchDaySlate } from './espnSlate.ts';
+import { fetchDaySlate, sanitizeDateStrings } from './espnSlate.ts';
 import {
   buildJudgePrompt,
   formatGameToColumnar,
@@ -22,6 +22,62 @@ export * from './judgePrompt.ts';
 export * from './supabase.ts';
 export * from './feedback.ts';
 
+export interface MorningAgentConfig {
+  id: string;
+  role: string;
+  provider: 'gemini' | 'groq' | 'openrouter';
+  model: string;
+}
+
+/**
+ * Builds the default 4-agent DuelOdds pregame topology based on available API keys:
+ * - a1: Quant Proposer (gemini-3.1-flash-lite) if GEMINI_API_KEY
+ * - a2: Market Proposer (openai/gpt-oss-120b) if GROQ_API_KEY
+ * - critic: Risk Critic (nvidia/nemotron-3-ultra-550b-a55b:free) if OPENROUTER_API_KEY
+ * - manager: GodView Compiler (openai/gpt-oss-120b) if GROQ_API_KEY
+ */
+export function buildDefaultAgents(env: Record<string, string | undefined> = {}): MorningAgentConfig[] {
+  const agents: MorningAgentConfig[] = [];
+
+  if (env.GEMINI_API_KEY?.trim()) {
+    agents.push({
+      id: 'a1',
+      role: 'Quant Proposer',
+      provider: 'gemini',
+      model: 'gemini-3.1-flash-lite'
+    });
+  }
+
+  if (env.GROQ_API_KEY?.trim()) {
+    agents.push({
+      id: 'a2',
+      role: 'Market Proposer',
+      provider: 'groq',
+      model: 'openai/gpt-oss-120b'
+    });
+  }
+
+  if (env.OPENROUTER_API_KEY?.trim()) {
+    agents.push({
+      id: 'critic',
+      role: 'Risk Critic',
+      provider: 'openrouter',
+      model: 'nvidia/nemotron-3-ultra-550b-a55b:free'
+    });
+  }
+
+  if (env.GROQ_API_KEY?.trim()) {
+    agents.push({
+      id: 'manager',
+      role: 'GodView Compiler',
+      provider: 'groq',
+      model: 'openai/gpt-oss-120b'
+    });
+  }
+
+  return agents;
+}
+
 export interface MorningSlateOptions {
   dateInput?: string;
   env?: Record<string, string | undefined>;
@@ -31,13 +87,14 @@ export interface MorningSlateOptions {
 
 /**
  * Executes the complete morning slate pipeline:
- * 1. Fetch ESPN slate across NFL, NBA, MLB, NHL, WNBA, NCAAF, NCAAB
- * 2. Query Supabase game_judgments (skip swarm, replace direct/null)
- * 3. Run swarm analyze path with buildJudgePrompt (no direct fallback)
- * 4. Upsert game_judgments with judge_source: "swarm" and real workflow_id
- * 5. Write line_snapshots (market: "all", is_baseline: true, omit game_id, skip identical)
- * 6. Record feedback for completed games to drive calibration
- * 7. Return structured batch summary
+ * 1. Build default agents from env keys; fail fast if none exist
+ * 2. Fetch ESPN slate across NFL, NBA, MLB, NHL, WNBA, NCAAF, NCAAB
+ * 3. Query Supabase game_judgments (skip swarm, replace direct/null)
+ * 4. Run swarm analyze path with buildJudgePrompt and settings.agents (no direct fallback)
+ * 5. Upsert game_judgments with judge_source: "swarm" and real workflow_id
+ * 6. Write line_snapshots (market: "all", is_baseline: true, omit game_id, skip identical)
+ * 7. Record feedback for completed games to drive calibration
+ * 8. Return structured batch summary
  */
 export async function runMorningSlate(options: MorningSlateOptions = {}): Promise<MorningBatchResult> {
   const {
@@ -47,11 +104,30 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
     executeWorkflowFn = executeSwarmWorkflow
   } = options;
 
+  const { gameDate } = sanitizeDateStrings(dateInput);
+
+  // Build default agents from available provider keys
+  const agents = buildDefaultAgents(env);
+  if (agents.length === 0) {
+    return {
+      ok: false,
+      gameDate,
+      judged: 0,
+      replaced: 0,
+      skipped: 0,
+      snapshots: 0,
+      errors: [{
+        eventId: 'slate',
+        error: 'No active LLM provider keys found (GEMINI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY). Unable to judge slate.'
+      }],
+      settled: 0
+    };
+  }
+
   const errors: Array<{ eventId: string; error: string }> = [];
 
   // 1. Fetch ESPN slate
   const slate = await fetchDaySlate(dateInput, fetchFn);
-  const gameDate = slate.gameDate;
 
   if (!slate.games || slate.games.length === 0) {
     return {
@@ -95,6 +171,7 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
         callerAppId: 'duelodds',
         settings: {
           domain: 'sports-betting',
+          agents,
           geminiApiKey: env.GEMINI_API_KEY,
           groqApiKey: env.GROQ_API_KEY,
           openRouterApiKey: env.OPENROUTER_API_KEY,

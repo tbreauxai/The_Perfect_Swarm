@@ -12,6 +12,7 @@ import {
   insertBaselineLineSnapshots,
   gradeAndRecordFinalGames,
   runMorningSlate,
+  buildDefaultAgents,
   type SlateGame,
   type SupabaseConfig
 } from '../morning/index.ts';
@@ -87,6 +88,39 @@ describe('Morning Slate Engine - Unit & Integration Tests', () => {
       expect(prompt).toContain('OUTPUT REQUIREMENT');
       expect(prompt).toContain('STRICT CONVENTIONS');
       expect(prompt).not.toContain('priorVerdict');
+    });
+  });
+
+  describe('Default Agent Construction & Provider Key Guard', () => {
+    it('returns empty array when no provider keys are in env', () => {
+      const agents = buildDefaultAgents({});
+      expect(agents).toEqual([]);
+    });
+
+    it('includes all 4 agents when GEMINI_API_KEY, GROQ_API_KEY, and OPENROUTER_API_KEY exist', () => {
+      const agents = buildDefaultAgents({
+        GEMINI_API_KEY: 'test-gemini',
+        GROQ_API_KEY: 'test-groq',
+        OPENROUTER_API_KEY: 'test-openrouter'
+      });
+
+      expect(agents.length).toBe(4);
+      expect(agents).toEqual([
+        { id: 'a1', role: 'Quant Proposer', provider: 'gemini', model: 'gemini-3.1-flash-lite' },
+        { id: 'a2', role: 'Market Proposer', provider: 'groq', model: 'openai/gpt-oss-120b' },
+        { id: 'critic', role: 'Risk Critic', provider: 'openrouter', model: 'nvidia/nemotron-3-ultra-550b-a55b:free' },
+        { id: 'manager', role: 'GodView Compiler', provider: 'groq', model: 'openai/gpt-oss-120b' }
+      ]);
+    });
+
+    it('filters out agents whose provider key is missing', () => {
+      const agents = buildDefaultAgents({
+        GEMINI_API_KEY: 'test-gemini'
+      });
+
+      expect(agents.length).toBe(1);
+      expect(agents[0].id).toBe('a1');
+      expect(agents[0].provider).toBe('gemini');
     });
   });
 
@@ -401,7 +435,8 @@ describe('Morning Slate Engine - Unit & Integration Tests', () => {
         c.set('callerAppId', 'duelodds');
         c.env = {
           SWARM_APP_TOKENS: 'duelodds:test-token-123',
-          SWARM_AUTH_REQUIRED: 'true'
+          SWARM_AUTH_REQUIRED: 'true',
+          GEMINI_API_KEY: 'test-gemini-key'
         };
         await next();
       });
@@ -476,6 +511,7 @@ describe('Morning Slate Engine - Unit & Integration Tests', () => {
 
       const result = await runMorningSlate({
         dateInput: '2026-10-15',
+        env: { GEMINI_API_KEY: 'test-gemini-key' },
         fetchFn: mockFetch,
         executeWorkflowFn: failingExecuteWorkflow
       });
@@ -486,6 +522,88 @@ describe('Morning Slate Engine - Unit & Integration Tests', () => {
       expect(result.errors[0].error).toContain('Swarm provider 429 rate limit');
       expect(result.judged).toBe(0);
       expect(result.replaced).toBe(0);
+    });
+
+    it('halts and returns single error without looping slate when all provider keys are missing', async () => {
+      const mockFetch = vi.fn();
+      const mockExecuteWorkflow = vi.fn();
+
+      const result = await runMorningSlate({
+        dateInput: '2026-10-15',
+        env: {},
+        fetchFn: mockFetch,
+        executeWorkflowFn: mockExecuteWorkflow
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.judged).toBe(0);
+      expect(result.errors.length).toBe(1);
+      expect(result.errors[0].eventId).toBe('slate');
+      expect(result.errors[0].error).toContain('No active LLM provider keys found');
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    });
+
+    it('passes default agents and duelodds originApp to executeWorkflowFn', async () => {
+      let capturedParams: any = null;
+      const mockExecuteWorkflow = vi.fn().mockImplementation(async (params: any) => {
+        capturedParams = params;
+        return {
+          workflowId: 'wf-test-agents-1',
+          finalAnalysis: JSON.stringify({
+            likelyWinner: 'Cowboys',
+            winProbHome: 0.55,
+            winProbAway: 0.45,
+            fairSpread: -3.0,
+            fairTotal: 48.0,
+            totalLean: 'none',
+            arguments: []
+          })
+        };
+      });
+
+      const mockFetch: typeof fetch = vi.fn().mockImplementation(async (url: string) => {
+        if (String(url).includes('/sports/football/nfl/')) {
+          return new Response(JSON.stringify({
+            events: [{
+              id: 'game-1',
+              date: '2026-10-15T18:00:00Z',
+              competitions: [{
+                competitors: [
+                  { homeAway: 'home', team: { displayName: 'Cowboys' } },
+                  { homeAway: 'away', team: { displayName: 'Eagles' } }
+                ],
+                odds: [{ details: 'DAL -3.0', spread: -3.0, overUnder: 48.0 }]
+              }]
+            }]
+          }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ events: [] }), { status: 200 });
+      });
+
+      const result = await runMorningSlate({
+        dateInput: '2026-10-15',
+        env: {
+          GEMINI_API_KEY: 'gemini-key',
+          GROQ_API_KEY: 'groq-key',
+          OPENROUTER_API_KEY: 'openrouter-key'
+        },
+        fetchFn: mockFetch,
+        executeWorkflowFn: mockExecuteWorkflow
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.judged).toBe(1);
+      expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+      expect(capturedParams).not.toBeNull();
+      expect(capturedParams.originApp).toBe('duelodds');
+      expect(capturedParams.callerAppId).toBe('duelodds');
+      expect(capturedParams.settings.agents).toEqual([
+        { id: 'a1', role: 'Quant Proposer', provider: 'gemini', model: 'gemini-3.1-flash-lite' },
+        { id: 'a2', role: 'Market Proposer', provider: 'groq', model: 'openai/gpt-oss-120b' },
+        { id: 'critic', role: 'Risk Critic', provider: 'openrouter', model: 'nvidia/nemotron-3-ultra-550b-a55b:free' },
+        { id: 'manager', role: 'GodView Compiler', provider: 'groq', model: 'openai/gpt-oss-120b' }
+      ]);
     });
   });
 });

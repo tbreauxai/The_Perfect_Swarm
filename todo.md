@@ -1,15 +1,12 @@
 The Perfect Swarm
-Goal: the Render app owns the morning slate. One call judges the day, writes the rows, writes the first-seen lines, and learns from finished games. No Cloudflare Worker loop.
-Add POST /api/swarm/morning. Auth is the existing app token. Body is optional { date?: "YYYY-MM-DD" }. Default date is today in America/Chicago.
-The route:
+The morning route is live and the worker is calling it. The run fails on every game with No active Analysts found. runMorningSlate in src/swarm/morning/index.ts passes API keys to executeSwarmWorkflow but no settings.agents. The engine requires at least one analyst. A normal DuelOdds analyze sends agents. This path does not.
 
-- [x] 1. Load the ESPN slate for that date. Same leagues the worker uses: NFL, NBA, MLB, NHL, WNBA, NCAAF, NCAAB. Normalize to event_id like nhl-401892506.
-- [x] 2. Read game_judgments for that date from Supabase. Skip any row whose judge_source is swarm. Replace direct and null rows.
-- [x] 3. For each remaining game, run the existing swarm analyze path. Use the same judge prompt DuelOdds uses in buildJudgePrompt. Pass raw game data only. Do not pass a prior verdict.
-- [x] 4. Write game_judgments with judge_source: "swarm", the real workflow_id from the analyze envelope, win_prob_home, likely_winner, fair spread, fair total, and the model snapshot. Match the columns the dashboard already reads.
-- [x] 5. Write one line_snapshots row per game that has scoreboard odds. Fields: event_id, game_date, sport, book, market: "all", spread, total, ml_home, ml_away, snapshot_at, is_baseline: true. Do not send game_id. Skip if an identical line already exists.
-- [x] 6. When a judged game is final, record the result through the existing feedback path. Send workflow_id, predictedProbability from win_prob_home, outcome win or loss, sportKey, appId: "duelodds". That is what moves calibration after 8 samples.
-- [x] 7. Return { ok, gameDate, judged, replaced, skipped, snapshots, errors }.
-- [x] Needs on Render: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY. Qdrant is already set.
-- [x] Add a Render cron that calls POST /api/swarm/morning on the morning schedule. Render has no 50-call cap, so one run can finish the slate.
-- [x] Do not add a direct-judge fallback. If a game fails, leave it and retry it on the next run.
+- [x] In src/swarm/morning/index.ts, build a default agent list from the env keys and pass it as settings.agents. Use the same pregame topology DuelOdds uses:
+  - [x] a1: Quant Proposer (gemini, gemini-3.1-flash-lite) if GEMINI_API_KEY is present
+  - [x] a2: Market Proposer (groq, openai/gpt-oss-120b) if GROQ_API_KEY is present
+  - [x] critic: Risk Critic (openrouter, nvidia/nemotron-3-ultra-550b-a55b:free) if OPENROUTER_API_KEY is present
+  - [x] manager: GodView Compiler (groq, openai/gpt-oss-120b) if GROQ_API_KEY is present
+- [x] Only include an agent if its provider key is present: GEMINI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY.
+- [x] If none of those keys exist, return one error and do not loop the slate. Do not add a direct-judge fallback.
+- [x] Also set originApp: 'duelodds' and callerAppId: 'duelodds' so calibration stays on the DuelOdds app.
+- [x] Do not change the route shape. POST /api/swarm/morning still takes { date? } and returns { ok, gameDate, judged, replaced, skipped, snapshots, errors }.
