@@ -27,15 +27,22 @@ export const RETRY_503_BACKOFF_MS = 1_000;
 const TOKEN_WINDOW_MS = 60_000;
 
 export class LimiterSkipError extends Error {
+  public readonly provider: string;
+  public readonly model: string;
+  public readonly reason: string;
+
   constructor(
-    public readonly provider: string,
-    public readonly model: string,
-    public readonly reason: string,
+    provider: string,
+    model: string,
+    reason: string,
   ) {
     super(
       `[LIMITER_SKIP] ${provider}/${model || "default"} unavailable: ${reason}`,
     );
     this.name = "LimiterSkipError";
+    this.provider = provider;
+    this.model = model;
+    this.reason = reason;
   }
 }
 
@@ -115,15 +122,23 @@ export class ProviderLimiter {
   private states = new Map<string, ProviderState>();
   private deadModels = new Map<string, number>();
 
+  private readonly limits: Record<string, ProviderLimitConfig>;
+  private readonly now: () => number;
+  private readonly sleep: (ms: number) => Promise<void>;
+
   constructor(
-    private readonly limits: Record<
+    limits: Record<
       string,
       ProviderLimitConfig
     > = PROVIDER_LIMITS,
-    private readonly now: () => number = () => Date.now(),
-    private readonly sleep: (ms: number) => Promise<void> = (ms) =>
+    now: () => number = () => Date.now(),
+    sleep: (ms: number) => Promise<void> = (ms) =>
       new Promise<void>((r) => setTimeout(r, ms)),
-  ) {}
+  ) {
+    this.limits = limits;
+    this.now = now;
+    this.sleep = sleep;
+  }
 
   isManaged(provider: string): boolean {
     return Object.prototype.hasOwnProperty.call(this.limits, provider);
