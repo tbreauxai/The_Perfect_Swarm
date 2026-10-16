@@ -137,9 +137,9 @@ describe('ModelRouter', () => {
             expect(ModelRouter.getRecommendedModel('mistral', 'simple')).toBe('mistral-small-latest');
         });
 
-        it('should return gpt-4o-mini for github', () => {
-            expect(ModelRouter.getRecommendedModel('github', 'instant')).toBe('gpt-4o-mini');
-            expect(ModelRouter.getRecommendedModel('github', 'simple')).toBe('gpt-4o-mini');
+        it('no longer special-cases github (GitHub Models retired 2026-07-30): it falls back like an unknown provider', () => {
+            expect(ModelRouter.getRecommendedModel('github', 'instant')).toBe('gemini-2.5-flash');
+            expect(ModelRouter.getRecommendedModel('github', 'simple')).toBe('gemini-2.5-flash');
         });
 
         it('should fallback to gemini-2.5-flash for unknown providers', () => {
