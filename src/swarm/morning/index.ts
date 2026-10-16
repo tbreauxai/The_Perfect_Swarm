@@ -26,7 +26,7 @@ export * from './feedback.ts';
 export interface MorningAgentConfig {
   id: string;
   role: string;
-  provider: 'gemini' | 'groq' | 'openrouter';
+  provider: 'gemini' | 'groq' | 'openrouter' | 'mistral';
   model: string;
 }
 
@@ -119,7 +119,7 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
       snapshots: 0,
       errors: [{
         eventId: 'slate',
-        error: 'No active LLM provider keys found (GEMINI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY). Unable to judge slate.'
+        error: 'No active LLM provider keys found (GEMINI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY, MISTRAL_API_KEY). Unable to judge slate.'
       }],
       settled: 0
     };

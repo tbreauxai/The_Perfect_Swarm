@@ -99,11 +99,12 @@ describe('Morning Slate Engine - Unit & Integration Tests', () => {
       expect(agents).toEqual([]);
     });
 
-    it('includes all 4 agents when GEMINI_API_KEY, GROQ_API_KEY, and OPENROUTER_API_KEY exist', () => {
+    it('includes all 4 agents when GEMINI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY, and MISTRAL_API_KEY exist', () => {
       const agents = buildDefaultAgents({
         GEMINI_API_KEY: 'test-gemini',
         GROQ_API_KEY: 'test-groq',
-        OPENROUTER_API_KEY: 'test-openrouter'
+        OPENROUTER_API_KEY: 'test-openrouter',
+        MISTRAL_API_KEY: 'test-mistral'
       });
 
       expect(agents.length).toBe(4);
@@ -111,7 +112,7 @@ describe('Morning Slate Engine - Unit & Integration Tests', () => {
         { id: 'a1', role: 'Quant Proposer', provider: 'gemini', model: 'gemini-3.1-flash-lite' },
         { id: 'a2', role: 'Market Proposer', provider: 'groq', model: 'openai/gpt-oss-120b' },
         { id: 'critic', role: 'Risk Critic', provider: 'openrouter', model: 'nvidia/nemotron-3-ultra-550b-a55b:free' },
-        { id: 'manager', role: 'GodView Compiler', provider: 'groq', model: 'openai/gpt-oss-120b' }
+        { id: 'manager', role: 'GodView Compiler', provider: 'mistral', model: 'mistral-small-latest' }
       ]);
     });
 
@@ -750,7 +751,8 @@ describe('Morning Slate Engine - Unit & Integration Tests', () => {
         env: {
           GEMINI_API_KEY: 'gemini-key',
           GROQ_API_KEY: 'groq-key',
-          OPENROUTER_API_KEY: 'openrouter-key'
+          OPENROUTER_API_KEY: 'openrouter-key',
+          MISTRAL_API_KEY: 'mistral-key'
         },
         fetchFn: mockFetch,
         executeWorkflowFn: mockExecuteWorkflow
@@ -768,7 +770,7 @@ describe('Morning Slate Engine - Unit & Integration Tests', () => {
         { id: 'a1', role: 'Quant Proposer', provider: 'gemini', model: 'gemini-3.1-flash-lite' },
         { id: 'a2', role: 'Market Proposer', provider: 'groq', model: 'openai/gpt-oss-120b' },
         { id: 'critic', role: 'Risk Critic', provider: 'openrouter', model: 'nvidia/nemotron-3-ultra-550b-a55b:free' },
-        { id: 'manager', role: 'GodView Compiler', provider: 'groq', model: 'openai/gpt-oss-120b' }
+        { id: 'manager', role: 'GodView Compiler', provider: 'mistral', model: 'mistral-small-latest' }
       ]);
     });
 
