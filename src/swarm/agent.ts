@@ -15,8 +15,8 @@ export const DEFAULT_PROVIDER_MODELS: Record<string, string> = {
     gemini: 'gemini-3.5-flash',
     groq: 'openai/gpt-oss-120b',
     openrouter: 'nvidia/nemotron-3-super-120b-a12b:free',
-    mistral: 'mistral-small-latest',
-    github: 'gpt-4o-mini'
+    mistral: 'mistral-small-latest'
+    // github removed: GitHub Models was retired on 2026-07-30.
 };
 
 /**
