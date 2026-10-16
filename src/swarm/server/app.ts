@@ -558,6 +558,9 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 } else {
                     delete result.workflowId;
                 }
+                // PS1: partial runs return 200 with status:'partial' (and keep workflowId); degraded = seat ids with no backup left.
+                result.status = result.status || 'complete';
+                result.degraded = Array.isArray(result.degraded) ? result.degraded : [];
 
                 const seen = new WeakSet();
                 const safeReplacer = (_key: string, value: any) => {

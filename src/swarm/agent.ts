@@ -5,6 +5,8 @@ import { ProviderRegistry } from './providers/registry.ts';
 import { sanitizeModelOutput } from './providers/adapter.ts';
 import { SwarmTracer } from './profiler.ts';
 import { globalLoadBalancer, type AdaptiveLoadBalancer } from './loadBalancer.ts';
+import { globalProviderLimiter, estimateTokens, PROVIDER_CALL_TIMEOUT_MS } from './providers/limiter.ts';
+import { groqPromptCharCap } from './providers/groq.ts';
 import { globalPayloadCache, PayloadCache } from './cache.ts';
 import { parseJsonSafe, guardManagerResponse, guardAnalystResponse } from './parser.ts';
 import { ManagerResponseSchema, AnalystResponseSchema } from './schemas.ts';
@@ -13,8 +15,8 @@ export const DEFAULT_PROVIDER_MODELS: Record<string, string> = {
     gemini: 'gemini-3.5-flash',
     groq: 'openai/gpt-oss-120b',
     openrouter: 'nvidia/nemotron-3-super-120b-a12b:free',
-    mistral: 'mistral-small-latest',
-    github: 'gpt-4o-mini'
+    mistral: 'mistral-small-latest'
+    // github removed: GitHub Models was retired on 2026-07-30.
 };
 
 /**
@@ -35,6 +37,8 @@ export class Agent {
     private systemInstruction?: string;
     private fallbacks: ProviderCredential[] = [];
     private loadBalancer?: AdaptiveLoadBalancer;
+    /** PS3: when true, fallbacks run in the given order (manager chain) instead of load-balancer score order. */
+    public preserveFallbackOrder = false;
 
     constructor(
         role: string,
@@ -80,11 +84,11 @@ export class Agent {
 
     async run(prompt: string, context: SwarmContext, config?: AgentRunConfig): Promise<any> {
         const startTime = Date.now();
-        const timeoutMs = config?.timeoutMs || 30000; // 30s default: fail fast on free-tier stalls instead of hanging for 2 minutes
+        const timeoutMs = config?.timeoutMs || PROVIDER_CALL_TIMEOUT_MS; // 25s per call (PS2), then next fallback
 
         const lb = (config?.loadBalancer as AdaptiveLoadBalancer) || this.loadBalancer || globalLoadBalancer;
         const candidateFallbacks = config?.fallbackProviders || this.fallbacks;
-        const sortedFallbacks = candidateFallbacks.length > 1
+        const sortedFallbacks = candidateFallbacks.length > 1 && !this.preserveFallbackOrder
             ? [...candidateFallbacks].sort((a, b) => lb.calculateScore(b.provider) - lb.calculateScore(a.provider))
             : candidateFallbacks;
 
@@ -149,18 +153,24 @@ export class Agent {
                         SwarmTracer.getInstance().logEvent(cacheHitEvent);
                     } else {
                         const targetModel = currentTarget.modelName || (currentTarget.provider === this.provider ? this.modelName : (DEFAULT_PROVIDER_MODELS[currentTarget.provider] || this.modelName));
-                        textOutput = await lb.executeWithTelemetry(
-                            currentTarget.provider,
-                            () => adapter.call({
-                                modelName: targetModel,
-                                prompt,
-                                systemInstruction: this.systemInstruction,
-                                apiKey: currentTarget.apiKey,
-                                aiClient: currentTarget.aiClient || this.aiClient,
-                                config: effectiveConfig,
-                                timeoutMs,
-                                role: this.role
-                            })
+                        // Budget estimate (chars/4) uses what the adapter will actually send: Groq caps the prompt by mode (chat 18k / morning 6k).
+                        const promptCharCap = currentTarget.provider === 'groq' ? groqPromptCharCap(effectiveConfig.groqMode) : prompt.length;
+                        const estChars = Math.min(prompt.length, promptCharCap) + (this.systemInstruction?.length || 0);
+                        textOutput = await globalProviderLimiter.run(
+                            { provider: String(currentTarget.provider), model: targetModel, estTokens: estimateTokens(estChars) },
+                            () => lb.executeWithTelemetry(
+                                currentTarget.provider,
+                                () => adapter.call({
+                                    modelName: targetModel,
+                                    prompt,
+                                    systemInstruction: this.systemInstruction,
+                                    apiKey: currentTarget.apiKey,
+                                    aiClient: currentTarget.aiClient || this.aiClient,
+                                    config: effectiveConfig,
+                                    timeoutMs,
+                                    role: this.role
+                                })
+                            )
                         );
                         globalPayloadCache.set(cacheFingerprint, textOutput);
                     }
@@ -302,9 +312,10 @@ export class Agent {
                         errLower.includes('unsupported model');
 
                     const hasNextProvider = targetIdx < targetChain.length - 1;
+                    const isLimiterSkip = errMsg.includes('[LIMITER_SKIP]');
 
-                    if (isFatal && !hasNextProvider) {
-                        break; // Fatal error (like model not found), don't waste time retrying
+                    if ((isFatal || isLimiterSkip) && !hasNextProvider) {
+                        break; // Fatal error (like model not found) or limiter skip: retrying the same target cannot help
                     }
 
                     // If eligible for failover and a backup provider is ready, failover immediately without waiting

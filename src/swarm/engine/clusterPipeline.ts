@@ -350,6 +350,7 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
                 });
 
                 for (const resData of specResult.results) {
+                    if (resData === null || resData === undefined) continue; // PS1: failed seat
                     const chunkIdx = (resData as any)._chunkIndex ?? 0;
                     const assignment = routingPlan.assignments.find(asn => asn.chunkIndex === chunkIdx);
                     const assignedAnalyst = analysts.find(a => a.role === assignment?.agentRole) || analysts[chunkIdx % analysts.length];
@@ -410,8 +411,9 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
                     );
 
                 chunkTasks.forEach((taskItem, index) => {
-                    if (taskItem.analystIdx >= 0) {
-                        allAnalystReports[taskItem.analystIdx].push(chunkReports[index]);
+                    const rep = chunkReports[index];
+                    if (taskItem.analystIdx >= 0 && rep !== null && rep !== undefined) {
+                        allAnalystReports[taskItem.analystIdx].push(rep);
                     }
                 });
             }
@@ -425,7 +427,10 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
                     analysts.map((analyst) => executeAnalyst(analyst, chunks[0], 0))
                 );
             for (let a = 0; a < analysts.length; a++) {
-                allAnalystReports[a].push(chunkReports[a]);
+                const rep = chunkReports[a];
+                if (rep !== null && rep !== undefined) {
+                    allAnalystReports[a].push(rep);
+                }
             }
         }
     }

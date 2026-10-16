@@ -6,9 +6,11 @@ import type { AgentVariantConfig, AgentExperiment } from '../experiment.ts';
 import { globalAgentExperimentManager } from '../experiment.ts';
 import { SwarmContext } from '../context.ts';
 import { sanitizeApiKey, validateProviderKey, resolveProvider } from './utils.ts';
+import { buildManagerChain, buildAnalystPool, mergeFallbacks } from './managerChain.ts';
 
 const safeEnv = typeof process !== "undefined" ? process.env : {} as Record<string, string | undefined>;
-const ALL_PROVIDERS: Provider[] = ['gemini', 'openrouter', 'groq', 'github', 'mistral'];
+// 'github' removed: GitHub Models was retired on 2026-07-30, so it can never be a fallback or a pool provider.
+const ALL_PROVIDERS: Provider[] = ['gemini', 'openrouter', 'groq', 'mistral'];
 
 export interface ExperimentResolutionResult {
     activeExperiment?: AgentExperiment;
@@ -81,31 +83,26 @@ export function resolveSwarmAgents(
             model: ''
         };
     }
-    const availableFallbacks: ProviderCredential[] = [];
-    if (!settings?.disableFallback) {
-        for (const p of ALL_PROVIDERS) {
-            const { key, client } = resolveProvider(p, settings, defaultAi);
-            if (key) {
-                const userConfiguredAgent = rawAgents.find((a: AgentConfig) => a.provider === p && a.model);
-                const fallbackModel = userConfiguredAgent?.model || '';
-                if (fallbackModel && fallbackModel.trim().length > 0) {
-                    availableFallbacks.push({
-                        provider: p,
-                        apiKey: key,
-                        modelName: fallbackModel,
-                        aiClient: client
-                    });
-                }
-            }
-        }
-    }
+    // PS3: global analyst fallback pool. Any keyed, healthy provider can cover a failed seat,
+    // not only providers that already have a seat in this run.
+    // Morning runs (morning_judge) do NOT borrow from the global pool: seat-model providers only (pre-PS3 behavior).
+    const isMorningRun = (settings as any)?.responseSchema === 'morning_judge';
+    const availableFallbacks: ProviderCredential[] = settings?.disableFallback
+        ? []
+        : buildAnalystPool(ALL_PROVIDERS, settings, rawAgents, defaultAi, { seatModelsOnly: isMorningRun });
 
     const { key: mKey, client: mClient } = resolveProvider(managerConfig.provider, settings, defaultAi);
     const finalMKey = managerConfig.apiKey ? sanitizeApiKey(managerConfig.apiKey) : mKey;
     validateProviderKey(managerConfig.provider, finalMKey, managerConfig.role || 'Manager Node');
     const managerModel = managerConfig.model || '';
-    const managerFallbacks = availableFallbacks.filter(f => f.provider !== managerConfig.provider);
+    const managerFallbacks = settings?.disableFallback
+        ? []
+        : mergeFallbacks(
+            buildManagerChain(defaultAi, { provider: managerConfig.provider, model: managerModel }),
+            availableFallbacks.filter(f => f.provider !== managerConfig.provider)
+        );
     const managerAgent = new Agent('Manager Node', managerModel, managerConfig.provider, finalMKey, mClient, managerFallbacks);
+    managerAgent.preserveFallbackOrder = true;
     managerAgent.id = managerConfig.id || managerConfig.role || 'manager';
     managerAgent.maxTokens = managerConfig.maxTokens;
 

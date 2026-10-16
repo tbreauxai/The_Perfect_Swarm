@@ -20,6 +20,7 @@ import { globalPromptCompressor } from '../compression.ts';
 import { guardAnalystResponse } from '../parser.ts';
 import { SwarmTracer } from '../profiler.ts';
 import { ANALYST_SYSTEM_INSTRUCTION } from './constants.ts';
+import { recordDegraded } from './partialResult.ts';
 
 export interface AnalystExecutorConfig {
     task: string;
@@ -63,7 +64,21 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
         onEscalation
     } = config;
 
+    // PS2: stagger analyst seat starts ~1.5s apart (first call per seat; later chunks of a seat are not re-delayed).
+    // Override with settings.analystStaggerMs; 0 under vitest so existing tests stay fast.
+    const staggerMs: number = typeof (settings as any)?.analystStaggerMs === 'number'
+        ? (settings as any).analystStaggerMs
+        : (typeof process !== 'undefined' && process.env?.VITEST ? 0 : 1500);
+    const seatOrder = new Map<string, number>();
+
     return async function executeAnalyst(analyst: Agent, chunk: string, chunkIdx: number) {
+        const seatKey = (analyst as any).id || analyst.role;
+        if (!seatOrder.has(seatKey)) seatOrder.set(seatKey, seatOrder.size);
+        const startDelay = (seatOrder.get(seatKey) ?? 0) * staggerMs;
+        if (startDelay > 0) {
+            await new Promise(resolve => setTimeout(resolve, startDelay));
+        }
+
         const nodeKey = (analyst as any).id || analyst.role;
         const capacitySlot = globalNodeCapacityManager.tryAcquireSlot(nodeKey) ||
                              globalNodeCapacityManager.tryAcquireSlot(analyst.provider);
@@ -112,6 +127,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                 rawOutput = await analyst.run(effectiveAnalystPrompt, context, { 
                     responseMimeType: "application/json",
                     bypassCache,
+                    groqMode: (settings as any)?.responseSchema === 'morning_judge' ? 'morning' : 'chat',
                     ...activeVariant?.parameters
                 });
             } catch (innerErr: any) {
@@ -250,7 +266,17 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                 error: errDetail
             });
             console.error(`[Analyst Fatal Error] ${analyst.role} failed:`, errDetail);
-            throw err;
+            // PS1: the seat exhausted all its fallbacks (no backup left). Mark it degraded and let the run continue.
+            recordDegraded(context, (analyst as any).id || analyst.role);
+            context.addEvent({
+                agentRole: analyst.role,
+                action: 'Analyst Failed (seat degraded)',
+                modelName: `${analyst.provider} / ${analyst.modelName}`,
+                prompt: `Analyst exhausted all fallbacks; continuing without this seat.`,
+                error: err?.message || String(err),
+                durationMs
+            });
+            return null;
         } finally {
             capacitySlot?.release();
         }

@@ -176,6 +176,8 @@ describe('Swarm Server - Feedback Deduplication', () => {
         const returnedWorkflowId = analyzeData.workflowId;
         expect(typeof returnedWorkflowId).toBe('string');
         expect(returnedWorkflowId.length).toBeGreaterThan(0);
+        expect(['complete', 'partial']).toContain(analyzeData.status);
+        expect(Array.isArray(analyzeData.degraded)).toBe(true);
 
         // Should be found and not return 404
         const feedbackPayload = {
@@ -218,6 +220,8 @@ describe('Swarm Server - Feedback Deduplication', () => {
 
         expect(typeof streamWorkflowId).toBe('string');
         expect(streamWorkflowId.length).toBeGreaterThan(0);
+        expect(['complete', 'partial']).toContain(streamData.status);
+        expect(Array.isArray(streamData.degraded)).toBe(true);
 
         const streamFeedbackPayload = {
             workflowId: streamWorkflowId,

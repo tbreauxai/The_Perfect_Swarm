@@ -214,6 +214,7 @@ export async function executeManagerSynthesis(
         responseMimeType: "application/json",
         zodSchema,
         bypassCache,
+        groqMode: isMorningJudge ? 'morning' : 'chat',
         ...activeVariant?.parameters
     });
 

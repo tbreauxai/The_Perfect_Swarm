@@ -1,4 +1,27 @@
 import { cleanToken, buildStandardMessages, parseStandardResponse, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
+import { LimiterSkipError } from './limiter.ts';
+
+/**
+ * PS2 Groq budget modes (passed explicitly by callers via config.groqMode):
+ * - 'chat':    prompt capped at 18,000 chars; max_tokens = min(2000, 7000 - ceil(promptChars/4)); < 800 => skip Groq (next fallback).
+ * - 'morning': unchanged legacy behavior (6,000-char cap + computeGroqMaxTokens 6k-total clamp).
+ * A call with no groqMode (critic, verification, other callers) keeps the legacy/morning behavior.
+ */
+export type GroqMode = 'chat' | 'morning';
+export const GROQ_CHAT_PROMPT_CHARS = 18_000;
+export const GROQ_MORNING_PROMPT_CHARS = 6_000;
+export const GROQ_CHAT_MAX_TOKENS = 2_000;
+export const GROQ_CHAT_TPM_BUDGET = 7_000;
+export const GROQ_CHAT_MIN_TOKENS = 800;
+
+export function groqPromptCharCap(mode?: unknown): number {
+    return mode === 'chat' ? GROQ_CHAT_PROMPT_CHARS : GROQ_MORNING_PROMPT_CHARS;
+}
+
+/** Chat mode: min(2000, 7000 - ceil(promptChars/4)). promptChars = system instruction + capped prompt. */
+export function computeGroqChatMaxTokens(promptChars: number): number {
+    return Math.min(GROQ_CHAT_MAX_TOKENS, GROQ_CHAT_TPM_BUDGET - Math.ceil(Math.max(0, promptChars) / 4));
+}
 
 export function capGroqPrompt(prompt: string, maxChars: number = 6000): string {
     if (!prompt || prompt.length <= maxChars) return prompt;
@@ -44,15 +67,25 @@ export class GroqAdapter implements ProviderAdapter {
             throw new Error('Missing Groq API Key.');
         }
 
-        // Cap prompt string at 6,000 characters (preserving core task and baselines)
-        const promptText = capGroqPrompt(options.prompt, 6000);
+        // PS2: explicit mode. Chat caps at 18k chars; morning (and callers with no mode) keep the 6k cap.
+        const mode: GroqMode = options.config?.groqMode === 'chat' ? 'chat' : 'morning';
+        const promptText = capGroqPrompt(options.prompt, groqPromptCharCap(mode));
         const optionsWithCappedPrompt = { ...options, prompt: promptText };
         const messages = buildStandardMessages(optionsWithCappedPrompt);
 
         // Estimate prompt tokens (~4 chars per token)
         const totalPromptLength = (options.systemInstruction?.length || 0) + promptText.length;
         const estimatedPromptTokens = Math.ceil(totalPromptLength / 4);
-        const maxTokens = computeGroqMaxTokens(options, estimatedPromptTokens);
+        let maxTokens: number;
+        if (mode === 'chat') {
+            maxTokens = computeGroqChatMaxTokens(totalPromptLength);
+            if (maxTokens < GROQ_CHAT_MIN_TOKENS) {
+                // No harder truncation: skip Groq so Agent.run moves to the next fallback immediately.
+                throw new LimiterSkipError('groq', options.modelName, `chat max_tokens budget ${maxTokens} < ${GROQ_CHAT_MIN_TOKENS}; skipping Groq`);
+            }
+        } else {
+            maxTokens = computeGroqMaxTokens(options, estimatedPromptTokens);
+        }
 
         const isJson = options.config?.responseMimeType === 'application/json';
         const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 30000; // 30s default: fail fast on free-tier stalls instead of hanging for 2 minutes

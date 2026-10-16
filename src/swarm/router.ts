@@ -155,9 +155,7 @@ export class ModelRouter {
             case 'mistral':
                 // mistral-small-latest is available on Mistral free API tier
                 return 'mistral-small-latest';
-            case 'github':
-                // gpt-4o-mini has higher RPM allowance on GitHub Models free tier
-                return 'gpt-4o-mini';
+            // 'github' removed: GitHub Models was retired on 2026-07-30, so it falls through to the default.
             default:
                 return 'gemini-2.5-flash';
         }

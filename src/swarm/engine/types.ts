@@ -50,6 +50,11 @@ export interface SwarmWorkflowParams {
 
 export interface SwarmWorkflowResult {
     workflowId?: string;
+    /** 'partial' ONLY when the final answer did not come from the manager; absent on legacy paths = 'complete'. */
+    status?: 'complete' | 'partial';
+    partial?: boolean;
+    /** Seat ids that failed with no backup left (a seat that recovered via a fallback is not listed). */
+    degraded?: string[];
     events: SwarmEvent[];
     finalAnalysis: any;
     metrics?: SwarmBaselineReport;

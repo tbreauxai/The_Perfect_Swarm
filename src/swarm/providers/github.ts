@@ -1,9 +1,19 @@
 import { cleanToken, buildStandardMessages, parseStandardResponse, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
 
+/** GitHub Models was retired on 2026-07-30 (inference API, catalog and BYOK removed for everyone). */
+export const GITHUB_MODELS_RETIRED = true;
+export const GITHUB_MODELS_RETIRED_MESSAGE =
+    'GitHub Models was retired on 2026-07-30: the provider is disabled and its inference endpoint does not exist anymore. Pick another provider.';
+
 export class GitHubAdapter implements ProviderAdapter {
     readonly providerName = 'github';
 
     async call(options: ProviderCallOptions): Promise<string> {
+        // Retired provider: never hit the network. The message contains "does not exist", so Agent.run treats it
+        // as fatal and moves straight to the next fallback with no retry.
+        if (GITHUB_MODELS_RETIRED) {
+            throw new Error(GITHUB_MODELS_RETIRED_MESSAGE);
+        }
         const key = cleanToken(options.apiKey);
         if (!key) {
             throw new Error('Missing GitHub Models Personal Access Token.');
