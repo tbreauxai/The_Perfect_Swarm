@@ -204,6 +204,7 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
             specialistTree,
             bypassCache,
             scorecardMode: isScorecardMode(params, settings),
+            onStage: params.onStage,
             onPromptCompression: (m) => {
                 workflowOriginalPromptTokens += m.originalTokens;
                 workflowCompressedPromptTokens += m.compressedTokens;

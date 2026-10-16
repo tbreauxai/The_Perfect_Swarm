@@ -4,6 +4,7 @@ import type { SwarmEngineSettings } from '../types.ts';
 import type { AgentVariantConfig } from '../experiment.ts';
 import type { ToolRegistry } from '../tools/index.ts';
 import type { MemoryCortex } from '../memory.ts';
+import type { SwarmStagePayload } from './types.ts';
 import {
     globalHierarchicalMessageBus
 } from '../communication.ts';
@@ -47,6 +48,8 @@ export interface AnalystExecutorConfig {
         deduplicatedCount: number;
     }) => void;
     onEscalation?: () => void;
+    /** R2-S3: emits one swarm_stage frame per scorecard (SSE). */
+    onStage?: (stagePayload: SwarmStagePayload) => void;
 }
 
 export function createAnalystExecutor(config: AnalystExecutorConfig) {
@@ -66,7 +69,8 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
         bypassCache,
         scorecardMode,
         onPromptCompression,
-        onEscalation
+        onEscalation,
+        onStage
     } = config;
 
     // PS2: stagger analyst seat starts ~1.5s apart (first call per seat; later chunks of a seat are not re-delayed).
@@ -223,6 +227,22 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                 }
             }
             (resData as any)._chunkIndex = chunkIdx;
+            if (scorecardReport) {
+                // R2-S3: stream each scorecard as soon as the seat finishes.
+                try {
+                    onStage?.({
+                        stage: 'scorecard',
+                        seat: scorecardReport.seat,
+                        role: analyst.role,
+                        chunk: chunkIdx,
+                        ...(scorecardReport.scorecard
+                            ? { scorecard: scorecardReport.scorecard }
+                            : { unstructured: true, text: scorecardReport.summary })
+                    });
+                } catch {
+                    // a stream write error never fails the seat
+                }
+            }
 
             // Record response token telemetry
             const outTokens = Math.max(10, Math.ceil((typeof rawOutput === 'string' ? rawOutput.length : JSON.stringify(rawOutput).length) / 4));
