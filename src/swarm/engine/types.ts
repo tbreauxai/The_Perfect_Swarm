@@ -38,6 +38,8 @@ export interface SwarmWorkflowParams {
     speculativeParallel?: boolean;
     maxSpeculativeConcurrency?: number;
     complexityOverride?: TaskComplexity;
+    /** R2: opt-in scorecard + blackboard flow (same as settings.scorecardMode). Ignored for morning_judge runs. */
+    scorecardMode?: boolean;
     onEvent?: (event: SwarmEvent) => void;
     onMemoryLearned?: (event: LearnedMemoryEvent) => void;
     onStage?: (stagePayload: SwarmStagePayload) => void;
