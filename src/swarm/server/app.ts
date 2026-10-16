@@ -454,7 +454,8 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                     speculativeParallel: body.speculativeParallel,
                     maxSpeculativeConcurrency: body.maxSpeculativeConcurrency,
                     complexityOverride: body.complexityOverride,
-                    bypassCache: body.bypassCache
+                    bypassCache: body.bypassCache,
+                    scorecardMode: body.scorecardMode === true
                 };
             } else if (c.req.method === 'GET') {
                 const url = new URL(c.req.url);
@@ -545,7 +546,8 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                     speculativeParallel: body.speculativeParallel,
                     maxSpeculativeConcurrency: body.maxSpeculativeConcurrency,
                     complexityOverride: body.complexityOverride,
-                    bypassCache: body.bypassCache
+                    bypassCache: body.bypassCache,
+                    scorecardMode: body.scorecardMode === true
                 });
             } catch (workflowErr: any) {
                 console.error('[SwarmServer Analyze Workflow Error]:', workflowErr);
