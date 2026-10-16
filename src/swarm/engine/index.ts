@@ -30,6 +30,10 @@ import { runDeepAnalysisVerification } from "./verificationPipeline.ts";
 import { runLearningPipeline } from "./learningPipeline.ts";
 import { isScorecardMode } from "./scorecard.ts";
 import { buildBlackboard } from "./blackboard.ts";
+import {
+  executeScorecardSynthesis,
+  emptySynthesisResult,
+} from "./scorecardManager.ts";
 
 import { SwarmContext } from '../context.ts';
 import { globalMetricsCollector } from '../profiler.ts';
@@ -273,7 +277,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 }
 
                 // Step 5: Synthesis Pipeline
-                const synthesisResult = compileSynthesisPrompt({
+                const synthesisResult = blackboard ? emptySynthesisResult() : compileSynthesisPrompt({
                     task,
                     rawInput: profilingResult.rawInput,
                     analysts,
@@ -296,7 +300,22 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
 
                 // Step 5 & 6: Verification vs Standard Synthesis Execution
                 try {
-                    if (deepAnalysisRequested && (analysts.length > 0 || dedicatedCriticAgent)) {
+                    if (blackboard) {
+                        // R2-S4/S5: critic + manager see the brief, the scorecards and citedRows only (never the full data).
+                        // The critic runs when deep analysis is on (same gate as the verification critic).
+                        finalAnalysis = await executeScorecardSynthesis({
+                            blackboard,
+                            managerAgent,
+                            analysts,
+                            dedicatedCriticAgent,
+                            runCritic: deepAnalysisRequested,
+                            context,
+                            activeVariant,
+                            bypassCache,
+                            settings,
+                            onStage: params.onStage
+                        });
+                    } else if (deepAnalysisRequested && (analysts.length > 0 || dedicatedCriticAgent)) {
                         const verificationResult = await runDeepAnalysisVerification({
                             task,
                             rawInput: profilingResult.rawInput,
