@@ -51,8 +51,8 @@ export async function querySupabase(
 /**
  * Reads existing game_judgments for the date and partitions slate games into:
  * - gamesToJudge: newly encountered games
- * - gamesToReplace: games with direct/null judge_source or awaiting_lines
- * - skippedCount: games already judged by swarm
+ * - gamesToReplace: games with direct/null judge_source, or a swarm awaiting_lines row whose lines have now arrived
+ * - skippedCount: games already judged by swarm today (R3-S1: including awaiting_lines rows while there are still no lines)
  */
 export async function partitionSlateGames(
   cfg: SupabaseConfig | null,
@@ -103,7 +103,9 @@ export async function partitionSlateGames(
     const existing = rowMap.get(game.eventId);
     if (!existing) {
       gamesToJudge.push(game);
-    } else if (existing.judge_source === 'swarm' && existing.status !== 'awaiting_lines') {
+    } else if (existing.judge_source === 'swarm' && (existing.status !== 'awaiting_lines' || !game.oddsSnapshot)) {
+      // R3-S1: a swarm judgment today is never redone. The one exception is an awaiting_lines row once the
+      // scoreboard has lines (re-judged once; the new row is 'judged'). Before, awaiting_lines games were re-judged every run.
       skippedCount++;
     } else {
       gamesToReplace.push(game);
