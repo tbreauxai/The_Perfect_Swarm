@@ -67,6 +67,14 @@ export function resolveProvider(
             key = sanitizeApiKey(settings?.mistralApiKey || safeEnv.MISTRAL_API_KEY);
             break;
         }
+        case 'cloudflare': {
+            key = sanitizeApiKey(settings?.cloudflareApiToken || safeEnv.CLOUDFLARE_API_TOKEN || safeEnv.CLOUDFLARE_WORKERS_AI_TOKEN);
+            break;
+        }
+        case 'nvidia': {
+            key = sanitizeApiKey(settings?.nvidiaApiKey || safeEnv.NVIDIA_API_KEY);
+            break;
+        }
         case 'github': {
             key = sanitizeApiKey(settings?.githubToken || safeEnv.GITHUB_TOKEN);
             break;

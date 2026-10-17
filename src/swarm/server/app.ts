@@ -46,6 +46,8 @@ export const FORBIDDEN_CLIENT_SECRET_KEYS = [
     'openRouterApiKey',
     'groqApiKey',
     'mistralApiKey',
+    'cloudflareApiToken',
+    'nvidiaApiKey',
     'githubToken',
     'qdrantUrl',
     'qdrantApiKey',
@@ -419,6 +421,8 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 groqApiKey: env.GROQ_API_KEY,
                 openRouterApiKey: env.OPENROUTER_API_KEY,
                 mistralApiKey: env.MISTRAL_API_KEY,
+                cloudflareApiToken: env.CLOUDFLARE_API_TOKEN || env.CLOUDFLARE_WORKERS_AI_TOKEN,
+                nvidiaApiKey: env.NVIDIA_API_KEY,
                 githubToken: env.GITHUB_TOKEN,
                 qdrantUrl: env.QDRANT_URL,
                 qdrantApiKey: env.QDRANT_API_KEY
@@ -520,6 +524,8 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 groqApiKey: env.GROQ_API_KEY,
                 openRouterApiKey: env.OPENROUTER_API_KEY,
                 mistralApiKey: env.MISTRAL_API_KEY,
+                cloudflareApiToken: env.CLOUDFLARE_API_TOKEN || env.CLOUDFLARE_WORKERS_AI_TOKEN,
+                nvidiaApiKey: env.NVIDIA_API_KEY,
                 githubToken: env.GITHUB_TOKEN,
                 qdrantUrl: env.QDRANT_URL,
                 qdrantApiKey: env.QDRANT_API_KEY
