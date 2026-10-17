@@ -296,7 +296,7 @@ const engine = new SwarmEngine({
 
 ## 🌅 Morning Slate Engine (`/api/swarm/morning`)
 
-The Render service directly owns the daily morning slate. A single API call or Render cron trigger executes the full end-to-end pipeline:
+The Render service directly owns the daily morning slate. A single API call executes the full end-to-end pipeline; the DuelOdds Cloudflare Worker is the only scheduler (see Scheduling below):
 1. **ESPN Slate Ingestion**: Fetches scoreboards across NFL, NBA, MLB, NHL, WNBA, NCAAF, and NCAAB with normalized event IDs (`${league}-${id}`).
 2. **Supabase Partitioning**: Reads `game_judgments` in Supabase; preserves existing rows with `judge_source: "swarm"`, while replacing direct, null, or awaiting-line records.
 3. **Pure Swarm Debate & Judging**: Invokes the Swarm analysis path using raw game data and the DuelOdds judge prompt (no prior verdicts, no direct-judge fallback).
@@ -309,6 +309,8 @@ The Render service directly owns the daily morning slate. A single API call or R
 - **Method**: `POST /api/swarm/morning`
 - **Auth**: `Authorization: Bearer <SWARM_APP_TOKEN>`
 - **Body** (optional): `{ "date": "YYYY-MM-DD" }` (defaults to today in `America/Chicago`)
+- **Single-flight**: only one run at a time. A call that arrives while a run is in flight returns `202 {"status":"already_running"}` and does no work.
+- **Dedupe**: each run judges only games with no swarm judgment today (an `awaiting_lines` row is re-judged once, when lines arrive) and skips games another run claimed in the last 20 minutes (`skippedClaimed`).
 - **Response**:
 ```json
 {
@@ -317,24 +319,16 @@ The Render service directly owns the daily morning slate. A single API call or R
   "judged": 14,
   "replaced": 2,
   "skipped": 5,
+  "skippedClaimed": 0,
   "snapshots": 16,
   "errors": [],
   "settled": 8
 }
 ```
 
-### Render Cron Configuration
+### Scheduling
 
-A Render cron service is declared in `render.yaml` to trigger the morning slate daily at 6:00 AM Central (`0 11 * * *` UTC) with no 50-call cap:
-
-```yaml
-- type: cron
-  name: swarm-morning-slate
-  env: node
-  schedule: "0 11 * * *"
-  buildCommand: npm install
-  startCommand: "node scripts/morning-cron.mjs"
-```
+The DuelOdds Cloudflare Worker's cron trigger (`*/20 3-12`, UTC) is the only scheduler; it calls `POST /api/swarm/morning` every 20 minutes from 03:00 to 12:40 UTC. There is no Render cron service (removed in R3-S1 because it doubled the 11:00 UTC run). Single-flight plus the per-game dedupe make repeated triggers cheap: games already judged today are skipped.
 
 ---
 
