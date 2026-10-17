@@ -26,17 +26,3 @@ services:
         sync: false
       - key: MISTRAL_API_KEY
         sync: false
-
-  - type: cron
-    name: swarm-morning-slate
-    env: node
-    schedule: "0 11 * * *" # Daily 11:00 UTC = 06:00 AM America/Chicago
-    buildCommand: npm install
-    startCommand: "node scripts/morning-cron.mjs"
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: SWARM_BASE_URL
-        value: https://the-perfect-swarm.onrender.com
-      - key: SWARM_APP_TOKEN
-        sync: false
