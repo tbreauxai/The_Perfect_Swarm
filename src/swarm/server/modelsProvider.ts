@@ -66,6 +66,8 @@ function keyFor(provider: string, env: Record<string, any>): string | undefined 
         case 'gemini': return env.GEMINI_API_KEY;
         case 'groq': return env.GROQ_API_KEY;
         case 'mistral': return env.MISTRAL_API_KEY;
+        case 'cloudflare': return env.CLOUDFLARE_API_TOKEN || env.CLOUDFLARE_WORKERS_AI_TOKEN;
+        case 'nvidia': return env.NVIDIA_API_KEY;
         case 'openrouter': return env.OPENROUTER_API_KEY;
         default: return undefined;
     }
@@ -112,6 +114,14 @@ function probeUrl(provider: string, modelId: string, apiKey: string): string {
             return 'https://api.groq.com/openai/v1/chat/completions';
         case 'mistral':
             return 'https://api.mistral.ai/v1/chat/completions';
+        case 'nvidia':
+            return 'https://integrate.api.nvidia.com/v1/chat/completions';
+        case 'cloudflare': {
+            const account = typeof process !== 'undefined' ? String(process.env?.CLOUDFLARE_ACCOUNT_ID || '').trim() : '';
+            return account
+                ? `https://api.cloudflare.com/client/v4/accounts/${account}/ai/v1/chat/completions`
+                : 'about:blank';
+        }
         case 'openrouter':
             return 'https://openrouter.ai/api/v1/chat/completions';
         default:
@@ -188,6 +198,19 @@ async function listProviderModels(provider: string, clientKey?: string, env: Rec
             const data = await res.json();
             return (data.data || []).map((m: any) => ({ id: m.id, name: m.id, free: true }));
         }
+        case 'nvidia': {
+            const apiKey = clientKey || env.NVIDIA_API_KEY;
+            if (!apiKey) return [];
+            const res = await fetch('https://integrate.api.nvidia.com/v1/models', { headers: { Authorization: `Bearer ${apiKey}` } });
+            if (!res.ok) throw new Error('Failed to fetch NVIDIA models');
+            const data = await res.json();
+            return (data.data || []).map((m: any) => ({ id: m.id, name: m.id, free: false }));
+        }
+        case 'cloudflare':
+            return [
+                { id: '@cf/meta/llama-3.1-8b-instruct', name: 'Llama 3.1 8B Instruct', free: true },
+                { id: '@cf/meta/llama-3.3-70b-instruct-fp8-fast', name: 'Llama 3.3 70B Instruct', free: true }
+            ];
         // 'github' removed: GitHub Models was retired on 2026-07-30 (falls through to []).
         default:
             return [];
