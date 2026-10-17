@@ -16,6 +16,7 @@ import {
 } from './supabase.ts';
 import { gradeAndRecordFinalGames } from './feedback.ts';
 import type { MorningBatchResult, SlateGame } from './types.ts';
+import { morningClaimKey, type MorningClaimStore } from "./singleFlight.ts";
 import { executeSwarmWorkflow } from '../engine/index.ts';
 
 export * from './types.ts';
@@ -23,6 +24,7 @@ export * from './espnSlate.ts';
 export * from './judgePrompt.ts';
 export * from './supabase.ts';
 export * from './feedback.ts';
+export * from "./singleFlight.ts";
 
 export interface MorningAgentConfig {
   id: string;
@@ -85,6 +87,10 @@ export interface MorningSlateOptions {
   env?: Record<string, string | undefined>;
   fetchFn?: typeof fetch;
   executeWorkflowFn?: typeof executeSwarmWorkflow;
+  /** R3-S1: skip games claimed by another run in the last 20 minutes, and claim the rest. The route passes morningClaims. */
+  claims?: MorningClaimStore;
+  /** Clock for claims (tests). */
+  now?: () => number;
 }
 
 /**
@@ -103,7 +109,9 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
     dateInput,
     env = typeof process !== 'undefined' ? process.env : {},
     fetchFn = fetch,
-    executeWorkflowFn = executeSwarmWorkflow
+    executeWorkflowFn = executeSwarmWorkflow,
+    claims,
+    now = Date.now
   } = options;
 
   const { gameDate } = sanitizeDateStrings(dateInput);
@@ -156,6 +164,21 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
     ...gamesToJudge.map((g) => ({ game: g, isReplace: false }))
   ];
 
+  // R3-S1: judge only unclaimed games. A game claimed in the last 20 minutes is skipped; every other game is
+  // claimed now, before any LLM call, so an overlapping run can't pick it up.
+  let skippedClaimed = 0;
+  const unclaimedGames = claims
+    ? gamesToProcess.filter(({ game }) => {
+        const key = morningClaimKey(gameDate, game.eventId);
+        if (claims.isClaimed(key, now())) {
+          skippedClaimed++;
+          return false;
+        }
+        claims.claim(key, now());
+        return true;
+      })
+    : gamesToProcess;
+
   let judgedCount = 0;
   let replacedCount = 0;
 
@@ -170,7 +193,7 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
     return true;
   });
 
-  for (const item of gamesToProcess) {
+  for (const item of unclaimedGames) {
     const { game, isReplace } = item;
     try {
       // Proposers receive lean board and baseline; manager receives JSON contract via JUDGE_MANAGER_INSTRUCTION
@@ -266,6 +289,7 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
     judged: judgedCount,
     replaced: replacedCount,
     skipped: skippedCount,
+    skippedClaimed,
     snapshots: snapshotsCount,
     errors,
     settled: settledCount
