@@ -309,6 +309,8 @@ The Render service directly owns the daily morning slate. A single API call exec
 - **Method**: `POST /api/swarm/morning`
 - **Auth**: `Authorization: Bearer <SWARM_APP_TOKEN>`
 - **Body** (optional): `{ "date": "YYYY-MM-DD" }` (defaults to today in `America/Chicago`)
+- **Single-flight**: only one run at a time. A call that arrives while a run is in flight returns `202 {"status":"already_running"}` and does no work.
+- **Dedupe**: each run judges only games with no swarm judgment today (an `awaiting_lines` row is re-judged once, when lines arrive) and skips games another run claimed in the last 20 minutes (`skippedClaimed`).
 - **Response**:
 ```json
 {
@@ -317,6 +319,7 @@ The Render service directly owns the daily morning slate. A single API call exec
   "judged": 14,
   "replaced": 2,
   "skipped": 5,
+  "skippedClaimed": 0,
   "snapshots": 16,
   "errors": [],
   "settled": 8
