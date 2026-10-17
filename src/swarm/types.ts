@@ -1,7 +1,7 @@
 import type { GoogleGenAI } from '@google/genai';
 import { z } from "zod";
 
-export const KNOWN_PROVIDERS = ['gemini', 'groq', 'openrouter', 'github', 'mistral', 'simulated'] as const;
+export const KNOWN_PROVIDERS = ['gemini', 'groq', 'openrouter', 'github', 'mistral', 'cloudflare', 'nvidia', 'simulated'] as const;
 
 export type Provider = typeof KNOWN_PROVIDERS[number] | string;
 
@@ -62,6 +62,9 @@ export interface SwarmEngineSettings {
     openRouterApiKey?: string;
     groqApiKey?: string;
     mistralApiKey?: string;
+    cloudflareApiToken?: string;
+    cloudflareAccountId?: string;
+    nvidiaApiKey?: string;
     githubToken?: string;
     disableFallback?: boolean;
     forceFullSwarm?: boolean;
