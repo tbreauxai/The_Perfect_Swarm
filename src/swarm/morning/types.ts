@@ -69,6 +69,8 @@ export interface MorningBatchResult {
   judged: number;
   replaced: number;
   skipped: number;
+  /** R3-S1: games skipped because another run claimed them in the last 20 minutes. */
+  skippedClaimed?: number;
   snapshots: number;
   errors: Array<{ eventId: string; error: string }>;
   settled?: number;
