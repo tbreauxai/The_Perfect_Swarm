@@ -6,6 +6,7 @@ import { MistralAdapter } from './mistral.ts';
 import { GitHubAdapter } from './github.ts';
 import { CloudflareAdapter } from './cloudflare.ts';
 import { NvidiaAdapter } from './nvidia.ts';
+import { SimulatedAdapter } from './simulated.ts';
 
 export class ProviderRegistry {
     private static adapters: Map<string, ProviderAdapter> = new Map();
