@@ -1,20 +1,16 @@
-# Ultragoal Brief: Groq Token Optimization, Single-Seat Constraint & Prompt Sizing
+# Ultragoal Brief: R3-S1 Morning Run Dedupe Hotfix
 
 ## Objective
-Prevent Groq 8,801 TPM rate limit errors and 413 payload errors across Swarm execution by:
-1. `src/swarm/providers/groq.ts`:
-   - Stop sending `max_tokens: 8192`.
-   - Default to 1024 for analyst and critic calls, 2048 for the manager.
-   - Clamp `maxTokens` so `estimatedPromptTokens + maxTokens` stays under 6,000. Never allow a single call to reserve the entire 8,000 TPM budget.
-   - Cap the text string sent to Groq at 6,000 characters (preserving core task and baselines).
-2. `src/swarm/morning/index.ts` and DuelOdds Agent List:
-   - Ensure strictly one Groq seat: Market Proposer on `openai/gpt-oss-120b`.
-   - GodView Compiler on `mistral-small-latest`.
-   - Prohibit assigning any second agent to `gpt-oss-120b` or `gpt-oss-20b` (shared 8,000 TPM budget).
-3. Prompt Construction & Separation:
-   - Do not send the full pick JSON schema contract to every agent.
-   - Proposers receive the board and baseline; the manager receives the JSON contract.
-   - Keep morning baselines; truncate secondary fluff (alternate markets, old news) when capping.
-4. Verification & Validation:
-   - Unit tests in `src/swarm/providers/groq.test.ts` and `src/swarm/server/morning.test.ts`.
-   - Full test suite, TypeScript typecheck (`tsc --noEmit`), and bundle build pass cleanly.
+Implement R3-S1 hotfix for `The_Perfect_Swarm`:
+- Delete the Render cron service and remove `scripts/morning-cron.mjs`.
+- Add in-process single-flight locking and 20-minute per-game claim tracking for `/api/swarm/morning`.
+- Update Supabase partition rule so that already judged games today (and awaiting_lines without new lines) are skipped.
+- Add test coverage (`morningDedupe.test.ts`) and run smoke test (`scripts/smoke-start.mjs`).
+- Produce 11 clean commits on branch `fix/morning-dedupe` and open a PR against `main`.
+
+## Constraints & Rules
+- Zero conversational filler.
+- Exactly 11 commits named `step 1` through `step 11`.
+- Never run `git reset`, `git checkout .`, `git restore`, `git clean`, `git rebase`, or squash.
+- Never commit `todo.md`, `benchmark.md`, or `.omg/`.
+- All linters, unit tests, simulation, build, and smoke tests must pass.
