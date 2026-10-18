@@ -39,10 +39,8 @@ export class OpenRouterAdapter implements ProviderAdapter {
         const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 30000; // 30s default: fail fast on free-tier stalls instead of hanging for 2 minutes
         const effectiveModel = resolveOpenRouterModel(options.modelName);
 
-        const startTime = Date.now();
-        let response: Response;
-        try {
-            response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        const makeRequest = async (useJson: boolean): Promise<Response> => {
+            return fetch('https://openrouter.ai/api/v1/chat/completions', {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${key}`,
@@ -55,10 +53,30 @@ export class OpenRouterAdapter implements ProviderAdapter {
                     model: effectiveModel,
                     messages,
                     max_tokens: options.config?.maxTokens || 8192,
-                    response_format: isJson ? { type: 'json_object' } : undefined
+                    response_format: useJson ? { type: 'json_object' } : undefined
                 }),
                 signal: AbortSignal.timeout(timeoutMs)
             });
+        };
+
+        const startTime = Date.now();
+        let response: Response;
+        let activeJson = isJson;
+        try {
+            response = await makeRequest(activeJson);
+            if (!response.ok && response.status === 400 && activeJson) {
+                const peekError = await response.clone().text().catch(() => '');
+                const isFormatRejection = !peekError ||
+                    peekError.toLowerCase().includes('response_format') ||
+                    peekError.toLowerCase().includes('format') ||
+                    peekError.toLowerCase().includes('schema') ||
+                    peekError.toLowerCase().includes('json');
+                if (isFormatRejection) {
+                    console.warn(`[OpenRouter] Model '${options.modelName}' rejected response_format (${peekError}); retrying without format flag.`);
+                    activeJson = false;
+                    response = await makeRequest(false);
+                }
+            }
         } catch (err: any) {
             if (err.name === 'TimeoutError' || err.name === 'AbortError') {
                 throw new Error(`[TIMEOUT] OpenRouter request timed out after ${timeoutMs}ms.`);

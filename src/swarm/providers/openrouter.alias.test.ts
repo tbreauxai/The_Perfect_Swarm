@@ -46,4 +46,36 @@ describe("OpenRouter retired-model alias (nemotron-3-ultra → nemotron-3-super 
     } as any);
     expect(bodies[0].model).toBe(SUPER);
   });
+
+  it("retries without response_format if model returns 400 format error", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const bodies: any[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: any) => {
+        const body = JSON.parse(init.body);
+        bodies.push(body);
+        if (bodies.length === 1) {
+          return new Response("Unsupported parameter: response_format", { status: 400 });
+        }
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: '{"status":"ok_openrouter"}' } }],
+          }),
+          { status: 200 },
+        );
+      }),
+    );
+    const result = await new OpenRouterAdapter().call({
+      modelName: SUPER,
+      prompt: "hi",
+      apiKey: "sk-or-v1-test",
+      config: { responseMimeType: "application/json" },
+    } as any);
+
+    expect(bodies.length).toBe(2);
+    expect(bodies[0].response_format).toEqual({ type: "json_object" });
+    expect(bodies[1].response_format).toBeUndefined();
+    expect(result).toBe('{"status":"ok_openrouter"}');
+  });
 });

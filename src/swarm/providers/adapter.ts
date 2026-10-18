@@ -24,11 +24,86 @@ export function cleanToken(key: string | undefined | null): string {
 }
 
 /**
+ * Known reasoning models that emit raw thoughts/reasoning traces when JSON mode is forced.
+ * For these models, forcing response_format: { type: 'json_object' } can cause server-side 400
+ * validation failures or corrupted output; freeform generation with repair extraction is safer.
+ */
+export const KNOWN_REASONING_MODELS = new Set<string>([
+    'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+    'deepseek-ai/deepseek-r1',
+    'deepseek-r1',
+    'deepseek-reasoner'
+]);
+
+export function isKnownReasoningModel(modelName: string | undefined): boolean {
+    if (!modelName) return false;
+    const lower = modelName.toLowerCase().trim();
+    if (KNOWN_REASONING_MODELS.has(lower)) return true;
+    return lower.endsWith('-reasoning') || lower.includes('/deepseek-r1');
+}
+
+/**
+ * Scans a string for all balanced JSON structures (objects or arrays) that parse
+ * cleanly via JSON.parse, returning the largest (longest) valid JSON substring found.
+ * Handles nested braces and strings with escaped quotes.
+ */
+export function extractLargestValidJson(text: string): string | null {
+    if (!text || typeof text !== 'string') return null;
+
+    let longestJson: string | null = null;
+
+    for (let i = 0; i < text.length; i++) {
+        const openChar = text[i];
+        if (openChar !== '{' && openChar !== '[') continue;
+        const closeChar = openChar === '{' ? '}' : ']';
+        let depth = 0;
+        let inString = false;
+        let escape = false;
+
+        for (let j = i; j < text.length; j++) {
+            const ch = text[j];
+            if (escape) {
+                escape = false;
+                continue;
+            }
+            if (ch === '\\' && inString) {
+                escape = true;
+                continue;
+            }
+            if (ch === '"') {
+                inString = !inString;
+                continue;
+            }
+            if (!inString) {
+                if (ch === openChar) {
+                    depth++;
+                } else if (ch === closeChar) {
+                    depth--;
+                    if (depth === 0) {
+                        const candidate = text.substring(i, j + 1);
+                        try {
+                            JSON.parse(candidate);
+                            if (!longestJson || candidate.length > longestJson.length) {
+                                longestJson = candidate;
+                            }
+                        } catch {
+                            // not valid JSON, keep looking
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return longestJson;
+}
+
+/**
  * Sanitizes model outputs:
  * 1. Strips all reasoning traces (<think>, <thought>, <reasoning>, [THOUGHT]) emitted by reasoning models.
  * 2. Recovers from truncated unclosed reasoning tags.
  * 3. Strips markdown code blocks.
- * 4. Extracts clean JSON object or array substring if requested.
+ * 4. Extracts clean JSON object or array substring if requested (resilient against reasoning noise).
  */
 export function sanitizeModelOutput(raw: string, isJson: boolean = false): string {
     if (!raw || typeof raw !== 'string') return '';
@@ -61,18 +136,24 @@ export function sanitizeModelOutput(raw: string, isJson: boolean = false): strin
     text = text.replace(/\s*```$/i, '');
     text = text.replace(/```(?:json|javascript|js|jsonc)?/gi, '').trim();
 
-    // 4. Locate JSON container boundary
+    // 4. Try extracting the largest valid balanced JSON substring (strips leading/trailing reasoning prose)
+    const validJson = extractLargestValidJson(text);
+    if (validJson) {
+        return validJson;
+    }
+
+    // 5. Fallback: Locate outer JSON container boundary (for partial/truncated JSON repair downstream)
     const firstObj = text.indexOf('{');
     const firstArr = text.indexOf('[');
 
     if (firstObj !== -1 && (firstArr === -1 || firstObj < firstArr)) {
         const lastObj = text.lastIndexOf('}');
-        if (lastObj !== -1) {
+        if (lastObj !== -1 && lastObj >= firstObj) {
             return text.substring(firstObj, lastObj + 1);
         }
     } else if (firstArr !== -1) {
         const lastArr = text.lastIndexOf(']');
-        if (lastArr !== -1) {
+        if (lastArr !== -1 && lastArr >= firstArr) {
             return text.substring(firstArr, lastArr + 1);
         }
     }
