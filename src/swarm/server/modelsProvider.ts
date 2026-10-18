@@ -84,7 +84,8 @@ async function probeAvailability(provider: string, modelId: string, apiKey: stri
 
 async function pingModel(provider: string, modelId: string, apiKey: string): Promise<'ok' | 'limited' | 'dead'> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 3500);
+    const timeout = provider.toLowerCase() === 'nvidia' ? 8000 : 3500;
+    const timer = setTimeout(() => controller.abort(), timeout);
     try {
         const res = await fetch(probeUrl(provider, modelId, apiKey), {
             method: 'POST',
@@ -93,12 +94,13 @@ async function pingModel(provider: string, modelId: string, apiKey: string): Pro
             signal: controller.signal
         });
         if (res.ok) return 'ok';
-        if (res.status === 404 || res.status === 403 || res.status === 401) return 'dead';
         if (res.status === 429 || res.status === 503) return 'limited';
+        if (res.status === 400 || res.status === 422) return 'ok';
+        if (res.status === 404 || res.status === 401) return 'dead';
         const text = await res.text();
         if (/no longer available|does not exist|not available in your/i.test(text)) return 'dead';
-        if (/rate limit|high demand|quota/i.test(text)) return 'limited';
-        return 'dead';
+        if (/rate limit|high demand|quota|authorization failed/i.test(text)) return 'limited';
+        return 'limited';
     } catch {
         return 'limited';
     } finally {
@@ -139,7 +141,7 @@ function probeBody(provider: string, modelId: string): Record<string, any> {
     if (provider.toLowerCase() === 'gemini') {
         return { contents: [{ parts: [{ text: 'ok' }] }], generationConfig: { maxOutputTokens: 1 } };
     }
-    return { model: modelId, messages: [{ role: 'user', content: 'ok' }], max_tokens: 1 };
+    return { model: modelId, messages: [{ role: 'user', content: 'ok' }], max_tokens: 16 };
 }
 
 async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
