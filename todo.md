@@ -1042,3 +1042,101 @@ Then push the branch and open ONE PR; its "Files changed" tab must not be empty.
     If R3 lands first, round 2's app.ts lines move down by 7 (456-458 becomes 463-465, 547-549 becomes 554-556). Round 2 already says to find edits by BEFORE text.
 - No behavior overlap: round 1 left Groq morning mode unchanged, and round 2 scorecard mode is off for responseSchema 'morning_judge'.
   The morning judge calls executeSwarmWorkflow exactly as before.
+
+# Brief: Deterministic agent output formatting (NVIDIA + Cloudflare JSON-mode gap)
+
+**Repo:** The Perfect Swarm (backend — this is where provider calls are made)
+**Date:** 2026-10-17
+**Status:** Ready to implement. No DuelOdds frontend changes needed.
+
+## Problem
+
+Agent outputs are supposed to be machine-readable JSON (scorecards), but two seats —
+NVIDIA NIM and Cloudflare Workers AI — regularly return unstructured prose, causing
+"Scorecard Invalid" errors, repair attempts, and degraded seats. Benchmark 2026-10-17:
+Cloudflare Llama 3.3 70B returned prose instead of JSON while every other seat returned
+parseable output on the identical prompt.
+
+## Root cause (verified in code)
+
+The backend already enforces JSON mode — but only for four providers:
+
+- `src/swarm/providers/groq.ts:14,31`, `gemini.ts:28`, `mistral.ts:33,49`,
+  `openrouter.ts:18,38` — each checks
+  `options.config?.responseMimeType === 'application/json'` and sets
+  `response_format: { type: 'json_object' }` on the API call.
+- `src/swarm/engine/analystExecution.ts:113` — the analyst path already passes
+  `responseMimeType: "application/json"` on every run.
+- `src/swarm/agent.ts:171` — outputs are validated against zod schemas
+  (`AnalystResponseSchema`, `ManagerResponseSchema`) with repair fallbacks
+  (`guardAnalystResponse`, `guardManagerResponse`).
+
+The gap: `src/swarm/providers/registry.ts` registers only gemini, groq, openrouter,
+mistral, github, simulated. **There are no `nvidia.ts` / `cloudflare.ts` adapters.**
+Those seats execute through a path that never sets `response_format`, so the models
+are free to emit prose and the validation layer can only catch it after the fact.
+
+## Fix
+
+Add the two missing adapters. Both endpoints are OpenAI-compatible, so follow the
+existing `openrouter.ts` adapter as the template.
+
+### 1. `src/swarm/providers/nvidia.ts` (new)
+
+- `NvidiaAdapter`, provider name `'nvidia'`.
+- Base URL: `https://integrate.api.nvidia.com/v1` → POST `/chat/completions`.
+- Auth: `Authorization: Bearer <nvapi-... key>` (key arrives via the existing
+  client-settings plumbing — same as groq/mistral keys).
+- Honor the JSON flag exactly like the other adapters:
+  `response_format: isJson ? { type: 'json_object' } : undefined`
+  where `isJson = options.config?.responseMimeType === 'application/json'`.
+- Reuse `buildStandardMessages`, `cleanToken`, `sanitizeModelOutput` from
+  `adapter.ts` like the other adapters do.
+
+### 2. `src/swarm/providers/cloudflare.ts` (new)
+
+- `CloudflareAdapter`, provider name `'cloudflare'`.
+- Workers AI REST: `POST https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/{model}`
+  with `Authorization: Bearer <token>`.
+- **Open question for implementer:** the DuelOdds frontend stores `cloudflareApiToken`
+  in settings (`getKeyForProvider`, `useSwarmConfigForm.ts:30`), but the account ID
+  must come from somewhere — check how the current Cloudflare passthrough
+  authenticates and reuse that credential path; do not invent a new one.
+- Map the JSON flag: Workers AI accepts `response_format: { type: 'json_object' }`
+  on supported models (Llama 3.3 70B supports it). If a model rejects it, let the
+  call fall back to no format flag — the zod + repair layer below still applies.
+- Model IDs in the DuelOdds catalog use the `@cf/meta/llama-3.1-8b-instruct` form;
+  strip the `@cf/` prefix before placing into the run URL.
+
+### 3. Register both — `src/swarm/providers/registry.ts`
+
+Add the imports and register in `init()` next to the others. After this,
+`ProviderRegistry.get('nvidia')` / `.get('cloudflare')` resolve instead of throwing.
+
+### 4. Nothing else changes
+
+`agent.ts` (zod + repair) and `analystExecution.ts` (JSON flag) already handle the
+rest uniformly once the adapters exist. Do NOT add an LLM reformatting step — the
+repair functions plus the compiler's existing synthesis are the fallback path.
+
+## Verification
+
+1. Unit: registry lists `nvidia` and `cloudflare`; each adapter sets
+   `response_format: { type: 'json_object' }` iff `responseMimeType` is
+   `'application/json'`, omits it otherwise.
+2. Live: re-run the 8-model benchmark prompt against the NVIDIA and Cloudflare
+   seats — outputs must be parseable JSON without repair; "Scorecard Invalid"
+   for format reasons should drop to ~zero.
+3. Regression: existing four providers' behavior unchanged (their adapters are
+   untouched).
+
+## Related items (same area, small)
+
+- **Dead catalog entry:** `moonshotai/kimi-k2.6` returns 404 "Function not found"
+  from NVIDIA's API — the model ID doesn't exist. Remove or correct it in the
+  DuelOdds model catalog.
+- **Free-tier mislabel (DuelOdds frontend):** `src/services/swarmModelService.ts`
+  hardcodes the NVIDIA fallback models as `free: false`, so all 69 NVIDIA models
+  render under "Paid / Standard Models". NVIDIA's build.nvidia.com API is genuinely
+  free-tier (no card, ~40 req/min). Flip to `free: true`. One line; do it in the
+  same pass.

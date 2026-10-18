@@ -1,26 +1,26 @@
 [
   {
-    "id": "goal-1-r3-s1-1-cron-removal-steps-1-3",
-    "description": "Steps 1-3: remove Render cron from render.yaml, git rm scripts/morning-cron.mjs, update README.md docs.",
+    "id": "goal-1-nvidia-json-mode-and-free-tier",
+    "description": "Update nvidia.ts to pass response_format when responseMimeType is application/json; update modelsProvider.ts to mark NVIDIA models free: true.",
     "status": "completed",
-    "verification": "npm run lint && npm run test:unit pass, grep confirms no morning-cron in repo."
+    "verification": "nvidia.ts sends response_format: { type: 'json_object' }; modelsProvider.ts marks free: true."
   },
   {
-    "id": "goal-2-r3-s1-2-single-flight-and-dedupe-steps-4-9",
-    "description": "Steps 4-9: singleFlight.ts, types.ts, morning/index.ts, supabase.ts partition rule, app.ts single-flight route, README.md.",
+    "id": "goal-2-cloudflare-json-mode-and-fallback",
+    "description": "Update cloudflare.ts to pass response_format, fallback if rejected (400), and support flexible account ID resolution.",
     "status": "completed",
-    "verification": "npm run lint && npm run test:unit pass."
+    "verification": "cloudflare.ts sends response_format, falls back on format error, and resolves account ID."
   },
   {
-    "id": "goal-3-r3-s1-3-tests-step-10",
-    "description": "Step 10: new test file src/swarm/server/morningDedupe.test.ts.",
+    "id": "goal-3-duelodds-model-catalog-updates",
+    "description": "Update DuelOdds swarmModelService.ts: add moonshotai/kimi-k2.6 to DEAD_MODEL_IDS and set NVIDIA fallback models free: true.",
     "status": "completed",
-    "verification": "morningDedupe.test.ts passes (7 tests)."
+    "verification": "swarmModelService.ts in DuelOdds has moonshotai in DEAD_MODEL_IDS and free: true for nvidia models."
   },
   {
-    "id": "goal-4-smoke-and-final-verification-step-11",
-    "description": "Step 11 & Final Verification: smoke-start.mjs, build, unit, simulation, git push and PR.",
+    "id": "goal-4-unit-tests-and-full-suite-verification",
+    "description": "Add nvidia.test.ts and cloudflare.test.ts testing JSON mode, format fallbacks, and run full test suites.",
     "status": "completed",
-    "verification": "PR opened with 10 changed files and 11 commits."
+    "verification": "All unit tests pass (including new tests) and linter passes."
   }
 ]
