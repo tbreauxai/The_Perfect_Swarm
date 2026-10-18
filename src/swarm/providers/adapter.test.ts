@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { sanitizeModelOutput, cleanToken } from './adapter.ts';
+import { sanitizeModelOutput, cleanToken, extractLargestValidJson, isKnownReasoningModel } from './adapter.ts';
 
 describe('Provider Adapter Output Sanitization', () => {
     it('cleans API tokens with various prefixes and whitespaces', () => {
@@ -42,4 +42,21 @@ describe('Provider Adapter Output Sanitization', () => {
         const raw = 'Here is the array:\n```json\n[{"id": 1}, {"id": 2}]\n```\nHope that helps!';
         expect(sanitizeModelOutput(raw, true)).toBe('[{"id": 1}, {"id": 2}]');
     });
+
+    it('extracts largest valid balanced JSON when raw reasoning leaks outside think tags', () => {
+        const raw = '}{ ":" } Wait formatting: Must be valid JSON... {"seat": "analyst", "prediction": "win", "confidence": 0.85} Note: finished';
+        expect(sanitizeModelOutput(raw, true)).toBe('{"seat": "analyst", "prediction": "win", "confidence": 0.85}');
+    });
+
+    it('extractLargestValidJson handles nested braces and escaped quotes', () => {
+        const text = 'Some preamble {"msg": "nested {hello} and \\"quotes\\""} trailing text';
+        expect(extractLargestValidJson(text)).toBe('{"msg": "nested {hello} and \\"quotes\\""}');
+    });
+
+    it('identifies known reasoning models', () => {
+        expect(isKnownReasoningModel('nvidia/nemotron-3-nano-omni-30b-a3b-reasoning')).toBe(true);
+        expect(isKnownReasoningModel('deepseek-ai/deepseek-r1')).toBe(true);
+        expect(isKnownReasoningModel('meta/llama-3.1-8b-instruct')).toBe(false);
+    });
 });
+

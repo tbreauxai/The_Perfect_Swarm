@@ -28,24 +28,54 @@ export class GeminiAdapter implements ProviderAdapter {
         const isJson = options.config?.responseMimeType === 'application/json';
         const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 30000; // 30s default: fail fast on free-tier stalls instead of hanging for 2 minutes
 
-        let timeoutId: any;
-        const timeoutPromise = new Promise<never>((_, reject) => {
-            timeoutId = setTimeout(() => {
-                reject(new Error(`[TIMEOUT] Gemini request timed out after ${timeoutMs}ms.`));
-            }, timeoutMs);
-        });
+        const executeGeneration = async (cfg: any): Promise<any> => {
+            let timeoutId: any;
+            const timeoutPromise = new Promise<never>((_, reject) => {
+                timeoutId = setTimeout(() => {
+                    reject(new Error(`[TIMEOUT] Gemini request timed out after ${timeoutMs}ms.`));
+                }, timeoutMs);
+            });
+            try {
+                return await Promise.race([
+                    client.models.generateContent({
+                        model: options.modelName,
+                        contents: options.prompt,
+                        config: cfg
+                    }),
+                    timeoutPromise
+                ]);
+            } finally {
+                clearTimeout(timeoutId);
+            }
+        };
 
         let response: any;
         const startTime = Date.now();
+        let activeConfig = { ...reqConfig };
         try {
-            response = await Promise.race([
-                client.models.generateContent({
-                    model: options.modelName,
-                    contents: options.prompt,
-                    config: reqConfig
-                }),
-                timeoutPromise
-            ]);
+            try {
+                response = await executeGeneration(activeConfig);
+            } catch (firstErr: any) {
+                const errStr = String(firstErr?.message || firstErr || '');
+                const isFormatRejection = isJson && (
+                    firstErr?.status === 400 ||
+                    errStr.includes('400') ||
+                    errStr.includes('INVALID_ARGUMENT') ||
+                    errStr.toLowerCase().includes('responsemimetype') ||
+                    errStr.toLowerCase().includes('format') ||
+                    errStr.toLowerCase().includes('schema') ||
+                    errStr.toLowerCase().includes('json')
+                );
+                if (isFormatRejection) {
+                    console.warn(`[Gemini] Model '${options.modelName}' rejected responseMimeType (${errStr}); retrying without format flag.`);
+                    const fallbackConfig = { ...activeConfig };
+                    delete fallbackConfig.responseMimeType;
+                    delete fallbackConfig.responseSchema;
+                    response = await executeGeneration(fallbackConfig);
+                } else {
+                    throw firstErr;
+                }
+            }
         } catch (error: any) {
             console.error(`[GEMINI ERROR] ${new Date().toISOString()}\nModel: ${options.modelName}\nError: ${JSON.stringify(error, null, 2)}\nFull Error Object: ${error}`);
             const errStr = String(error?.message || error || '');
@@ -60,8 +90,6 @@ export class GeminiAdapter implements ProviderAdapter {
                 }
             }
             throw error;
-        } finally {
-            clearTimeout(timeoutId);
         }
 
         const durationMs = Date.now() - startTime;

@@ -88,4 +88,45 @@ describe('MistralAdapter 429 and Mutex Behavior', () => {
             prompt: 'Hello Mistral'
         })).rejects.toThrow(/\[RATE_LIMIT_429\] Mistral API rate limit exceeded: Too Many Requests/);
     });
+
+    it('retries without response_format if model returns 400 format error', async () => {
+        const adapter = new MistralAdapter();
+        const callBodies: any[] = [];
+
+        globalThis.fetch = vi.fn().mockImplementation(async (_url: string, opts: any) => {
+            const body = JSON.parse(opts.body);
+            callBodies.push(body);
+            if (callBodies.length === 1) {
+                return {
+                    ok: false,
+                    status: 400,
+                    headers: new Headers(),
+                    clone: () => ({
+                        text: async () => 'Unsupported parameter: response_format'
+                    }),
+                    text: async () => 'Unsupported parameter: response_format'
+                } as any;
+            }
+            return {
+                ok: true,
+                status: 200,
+                headers: new Headers(),
+                json: async () => ({
+                    choices: [{ message: { content: '{"status":"ok_mistral_retry"}' } }]
+                })
+            } as any;
+        });
+
+        const result = await adapter.call({
+            apiKey: 'test-key',
+            modelName: 'mistral-small-latest',
+            prompt: 'Output json',
+            config: { responseMimeType: 'application/json' }
+        });
+
+        expect(callBodies.length).toBe(2);
+        expect(callBodies[0].response_format).toEqual({ type: 'json_object' });
+        expect(callBodies[1].response_format).toBeUndefined();
+        expect(result).toBe('{"status":"ok_mistral_retry"}');
+    });
 });

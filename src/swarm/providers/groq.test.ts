@@ -178,5 +178,44 @@ describe('GroqAdapter Token Budget & Payload Sizing', () => {
             const userMsg = capturedBody.messages.find((m: any) => m.role === 'user');
             expect(userMsg.content.length).toBeLessThanOrEqual(6000);
         });
+
+        it('retries without response_format if model returns 400 json_validate_failed', async () => {
+            const callBodies: any[] = [];
+            globalThis.fetch = vi.fn().mockImplementation(async (_url: string, init: any) => {
+                const body = JSON.parse(init.body);
+                callBodies.push(body);
+                if (callBodies.length === 1) {
+                    return {
+                        ok: false,
+                        status: 400,
+                        clone: () => ({
+                            text: async () => JSON.stringify({ error: { message: 'json_validate_failed', type: 'invalid_request_error' } })
+                        }),
+                        text: async () => JSON.stringify({ error: { message: 'json_validate_failed', type: 'invalid_request_error' } })
+                    };
+                }
+                return {
+                    ok: true,
+                    status: 200,
+                    json: async () => ({
+                        choices: [{ message: { content: '{"status":"recovered"}' } }],
+                        usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 }
+                    })
+                };
+            });
+
+            const adapter = new GroqAdapter();
+            const result = await adapter.call({
+                modelName: 'openai/gpt-oss-120b',
+                prompt: 'Analyze odds',
+                apiKey: 'gsk-test',
+                config: { responseMimeType: 'application/json' }
+            });
+
+            expect(callBodies.length).toBe(2);
+            expect(callBodies[0].response_format).toEqual({ type: 'json_object' });
+            expect(callBodies[1].response_format).toBeUndefined();
+            expect(result).toBe('{"status":"recovered"}');
+        });
     });
 });
