@@ -206,7 +206,7 @@ async function listProviderModels(provider: string, clientKey?: string, env: Rec
             const res = await fetch('https://integrate.api.nvidia.com/v1/models', { headers: { Authorization: `Bearer ${apiKey}` } });
             if (!res.ok) throw new Error('Failed to fetch NVIDIA models');
             const data = await res.json();
-            return (data.data || []).map((m: any) => ({ id: m.id, name: m.id, free: false }));
+            return (data.data || []).map((m: any) => ({ id: m.id, name: m.id, free: true }));
         }
         case 'cloudflare':
             return [

@@ -25,7 +25,8 @@ export class NvidiaAdapter implements ProviderAdapter {
                     model: options.modelName,
                     messages,
                     max_tokens: options.config?.maxTokens || 2048,
-                    temperature: 0.2
+                    temperature: 0.2,
+                    response_format: isJson ? { type: 'json_object' } : undefined
                 }),
                 signal: AbortSignal.timeout(timeoutMs)
             });
