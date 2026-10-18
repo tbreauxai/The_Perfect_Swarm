@@ -68,7 +68,13 @@ export function resolveProvider(
             break;
         }
         case 'cloudflare': {
-            key = sanitizeApiKey(settings?.cloudflareApiToken || safeEnv.CLOUDFLARE_API_TOKEN || safeEnv.CLOUDFLARE_WORKERS_AI_TOKEN);
+            const rawKey = sanitizeApiKey(settings?.cloudflareApiToken || safeEnv.CLOUDFLARE_API_TOKEN || safeEnv.CLOUDFLARE_WORKERS_AI_TOKEN);
+            const account = sanitizeApiKey(settings?.cloudflareAccountId || safeEnv.CLOUDFLARE_ACCOUNT_ID || safeEnv.CF_ACCOUNT_ID);
+            if (rawKey && account && !rawKey.includes(':')) {
+                key = `${account}:${rawKey}`;
+            } else {
+                key = rawKey;
+            }
             break;
         }
         case 'nvidia': {
