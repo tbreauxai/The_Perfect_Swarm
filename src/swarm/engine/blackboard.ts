@@ -22,6 +22,8 @@ export interface Blackboard {
     header?: string;
     /** Row ids an analyst cited that are not in `data` (never sent to the critic or manager). */
     unknownRows: string[];
+    /** Used only when no analyst cited a row. A capped slice of the board table, so the manager is not blind. */
+    boardFallback?: string;
     /** R2-S4: the critic's scorecard (or its unstructured text), when a critic ran. */
     critic?: (CriticScorecard & { unstructured?: false }) | { seat: string; unstructured: true; text: string };
 }
@@ -115,13 +117,15 @@ export function buildBlackboard(p: {
         }
     });
     const { citedRows, header, unknownRows } = buildCitedRows(p.data, collectCitedRowIds(scorecards));
+    const fallback = citedRows.length === 0 ? boardFallback(p.data) : '';
     return {
         brief: p.brief,
         scorecards,
         degraded: [...p.degraded],
         citedRows,
         ...(header ? { header } : {}),
-        unknownRows
+        unknownRows,
+        ...(fallback ? { boardFallback: fallback } : {})
     };
 }
 
@@ -138,4 +142,13 @@ export function renderScorecardLines(scorecards: BlackboardScorecard[]): string 
 export function renderCitedRows(bb: Pick<Blackboard, 'citedRows' | 'header'>): string {
     if (bb.citedRows.length === 0) return '(no rows cited)';
     return [bb.header, ...bb.citedRows.map(r => r.line)].filter(Boolean).join('\n');
+}
+
+/** First table lines from the request data. Used when analysts cited nothing. */
+export function boardFallback(data: string, maxRows = 24): string {
+    const { lines, headers } = indexTableRows(data);
+    const rows = Array.from(lines.entries()).slice(0, maxRows);
+    if (rows.length === 0) return '';
+    const header = headers.get(rows[0][0]);
+    return [header, ...rows.map(([, line]) => line)].filter(Boolean).join('\n');
 }

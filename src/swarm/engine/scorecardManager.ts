@@ -36,10 +36,10 @@ Critic scorecard:
 ${critic}
 
 Cited rows (the only table lines you get, header first):
-${renderCitedRows(bb)}
+${bb.citedRows.length > 0 ? renderCitedRows(bb) : (bb.boardFallback || '(no rows cited)')}
 
 Scorecard mode: you get these rows only, not the full data. Keep the existing output format.
-Give every leg as its row id (for example R12) exactly as listed in Cited rows. Never invent a row id.`;
+${bb.citedRows.length === 0 && bb.boardFallback ? 'No analyst cited a row. The lines above are the board. Cite them by their row id.' : 'Give every leg as its row id (for example R12) exactly as listed in Cited rows. Never invent a row id.'}`;
 }
 
 /** In scorecard mode compileSynthesisPrompt is skipped (its prompt would be unused). */
