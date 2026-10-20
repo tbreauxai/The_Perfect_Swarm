@@ -11,7 +11,7 @@ import { applyMorningProviderPolicy, MORNING_POOL_PROVIDERS } from './morningPro
 
 const safeEnv = typeof process !== "undefined" ? process.env : {} as Record<string, string | undefined>;
 // 'github' removed: GitHub Models was retired on 2026-07-30, so it can never be a fallback or a pool provider.
-const ALL_PROVIDERS: Provider[] = ['gemini', 'openrouter', 'groq', 'mistral'];
+const ALL_PROVIDERS: Provider[] = ['gemini', 'openrouter', 'groq', 'mistral', 'nvidia', 'cloudflare'];
 
 export interface ExperimentResolutionResult {
     activeExperiment?: AgentExperiment;
