@@ -31,7 +31,13 @@ export async function probeAllProviders(env: Record<string, any> = {}): Promise<
 const NON_CHAT = /tts|whisper|image|embed|ocr|lyria|transcribe|prompt-guard|orpheus|robotics|moderation|computer-use|realtime|speech|safeguard|deep-research|antigravity|nano-banana|clip-preview/i;
 
 const availabilityCache = new Map<string, { state: 'ok' | 'limited' | 'dead'; at: number }>();
+const deadModels = new Set<string>();
 const CACHE_MS = 12 * 60 * 60 * 1000;
+
+/** A model the probe proved dead (404 / not found). Seats read this and skip it. */
+export function isModelDead(provider: string, modelId: string): boolean {
+    return deadModels.has(`${provider}:${modelId}`);
+}
 
 export function isChatModel(id: string): boolean {
     return Boolean(id) && !NON_CHAT.test(id);
@@ -144,6 +150,12 @@ async function probeOnce(provider: string, modelId: string, apiKey: string): Pro
         return 'dead';
     } catch (err: any) {
         const msg = String(err?.message || err);
+        // A 404 is a real deprecation. Record it so seats skip the model.
+        // A rate limit is not. It never touches the seat circuit.
+        if (/\b404\b|model_not_found|NOT_FOUND/i.test(msg)) {
+            deadModels.add(`${provider}:${modelId}`);
+            return 'dead';
+        }
         if (/429|rate limit|quota|503|high demand/i.test(msg)) return 'limited';
         return 'dead';
     }

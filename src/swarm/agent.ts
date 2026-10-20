@@ -6,6 +6,7 @@ import { sanitizeModelOutput } from './providers/adapter.ts';
 import { SwarmTracer } from './profiler.ts';
 import { globalLoadBalancer, type AdaptiveLoadBalancer } from './loadBalancer.ts';
 import { globalProviderLimiter, estimateTokens, PROVIDER_CALL_TIMEOUT_MS, MAX_BUDGET_WAIT_MS } from './providers/limiter.ts';
+import { isModelDead } from './server/modelsProvider.ts';
 import { groqPromptCharCap } from './providers/groq.ts';
 import { globalPayloadCache, PayloadCache } from './cache.ts';
 import { parseJsonSafe, guardManagerResponse, guardAnalystResponse } from './parser.ts';
@@ -114,6 +115,14 @@ export class Agent {
             const currentTarget = targetChain[targetIdx];
             const isFallback = targetIdx > 0;
             const targetModel = currentTarget.modelName || (currentTarget.provider === this.provider ? this.modelName : (DEFAULT_PROVIDER_MODELS[currentTarget.provider] || this.modelName));
+            // A model the probe proved dead (404) is skipped, even if it is assigned
+            // to this seat. The probe never opens the seat circuit; seats read its mark.
+            if (isModelDead(String(currentTarget.provider), targetModel)) {
+                lastFailedProvider = String(currentTarget.provider);
+                lastFailedModel = targetModel;
+                lastError = new Error(`model marked dead by catalog probe`);
+                continue;
+            }
             // Don't call a provider the limiter already knows will refuse. A circuit,
             // a dead model, or a token budget that needs more than the wait cap is not
             // an error worth logging: move to the next target.
