@@ -12,10 +12,26 @@ export async function fetchProviderModels(provider: string, clientKey?: string, 
     return rankModelsForAccount(provider, listed, apiKey);
 }
 
+const CATALOG_PROVIDERS = ['groq', 'gemini', 'openrouter', 'mistral', 'nvidia', 'cloudflare'];
+
+/**
+ * Probe every provider once. The morning and night schedule calls this.
+ * A picker open reads the cache this fills and does not probe.
+ */
+export async function probeAllProviders(env: Record<string, any> = {}): Promise<void> {
+    for (const provider of CATALOG_PROVIDERS) {
+        try {
+            await fetchProviderModels(provider, undefined, env);
+        } catch (err: any) {
+            console.warn(`[catalog] scheduled probe failed for ${provider}:`, err?.message || err);
+        }
+    }
+}
+
 const NON_CHAT = /tts|whisper|image|embed|ocr|lyria|transcribe|prompt-guard|orpheus|robotics|moderation|computer-use|realtime|speech|safeguard|deep-research|antigravity|nano-banana|clip-preview/i;
 
 const availabilityCache = new Map<string, { state: 'ok' | 'limited' | 'dead'; at: number }>();
-const CACHE_MS = 15 * 60 * 1000;
+const CACHE_MS = 12 * 60 * 60 * 1000;
 
 export function isChatModel(id: string): boolean {
     return Boolean(id) && !NON_CHAT.test(id);
