@@ -39,18 +39,20 @@ export async function rankModelsForAccount(provider: string, models: any[], apiK
     }));
     ranked.sort((a, b) => b.capability - a.capability);
 
-    const probePool = [...ranked].sort((a, b) => Number(b.free) - Number(a.free) || b.capability - a.capability);
-    const toProbe = apiKey ? probePool.slice(0, 8) : [];
-    await mapLimit(toProbe, 4, async (m) => {
-        m.availability = await probeAvailability(provider, m.id, apiKey as string);
+    if (!apiKey) return ranked.map((m) => ({ ...m, available: false }));
+
+    // Probe every chat model. A model is listed as live only if the probe
+    // returned ok or limited. Unprobed and dead models are not offered.
+    await mapLimit(ranked, 6, async (m) => {
+        m.availability = await probeAvailability(provider, m.id, apiKey);
     });
 
-    const usable = ranked.filter((m) => m.availability !== 'dead');
-    usable.sort((a, b) => availabilityRank(a.availability) - availabilityRank(b.availability) || b.capability - a.capability);
-    return usable.map((m) => ({
+    const live = ranked.filter((m) => m.availability === 'ok' || m.availability === 'limited');
+    live.sort((a, b) => availabilityRank(a.availability) - availabilityRank(b.availability) || b.capability - a.capability);
+    return live.map((m) => ({
         ...m,
         name: m.capability ? `${m.name} · c${m.capability}` : m.name,
-        available: m.availability === 'ok' || m.availability === 'limited'
+        available: true
     }));
 }
 
