@@ -86,8 +86,14 @@ async function probeAvailability(provider: string, modelId: string, apiKey: stri
 }
 
 async function pingModel(provider: string, modelId: string, apiKey: string): Promise<'ok' | 'limited' | 'dead'> {
+    const first = await probeOnce(provider, modelId, apiKey);
+    if (first !== 'dead') return first;
+    return probeOnce(provider, modelId, apiKey);
+}
+
+async function probeOnce(provider: string, modelId: string, apiKey: string): Promise<'ok' | 'limited' | 'dead'> {
     const controller = new AbortController();
-    const timeout = provider.toLowerCase() === 'nvidia' ? 12000 : 8000;
+    const timeout = 12000;
     const timer = setTimeout(() => controller.abort(), timeout);
     try {
         const res = await fetch(probeUrl(provider, modelId, apiKey), {
@@ -99,10 +105,9 @@ async function pingModel(provider: string, modelId: string, apiKey: string): Pro
         const text = await res.text();
         if (res.status === 429 || res.status === 503) return 'limited';
         if (res.status === 404 || res.status === 401 || res.status === 402) return 'dead';
-        if (/no longer available|does not exist|not found|not available in your/i.test(text)) return 'dead';
+        if (/no longer available|does not exist|not found for account|not available in your/i.test(text)) return 'dead';
         if (/rate limit|high demand|quota/i.test(text)) return 'limited';
-        // A status is not a completion. Only a body with generated text is live.
-        if (res.ok && hasCompletion(provider, text)) return 'ok';
+        if (res.ok && hasCompletion(text)) return 'ok';
         return 'dead';
     } catch {
         return 'dead';
@@ -111,15 +116,17 @@ async function pingModel(provider: string, modelId: string, apiKey: string): Pro
     }
 }
 
-function hasCompletion(provider: string, text: string): boolean {
+function hasCompletion(text: string): boolean {
     try {
         const body = JSON.parse(text);
-        if (provider.toLowerCase() === 'gemini') {
-            const parts = body?.candidates?.[0]?.content?.parts;
-            return Array.isArray(parts) && parts.some((p: any) => typeof p?.text === 'string' && p.text.trim().length > 0);
-        }
-        const content = body?.choices?.[0]?.message?.content;
-        return typeof content === 'string' && content.trim().length > 0;
+        if (body?.error) return false;
+        const content = body?.choices?.[0]?.message?.content
+            || body?.choices?.[0]?.message?.reasoning
+            || body?.choices?.[0]?.text;
+        if (typeof content === 'string' && content.trim().length > 0) return true;
+        const parts = body?.candidates?.[0]?.content?.parts;
+        if (Array.isArray(parts) && parts.some((p: any) => typeof p?.text === 'string' && p.text.trim().length > 0)) return true;
+        return false;
     } catch {
         return false;
     }
