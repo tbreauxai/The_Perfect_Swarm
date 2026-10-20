@@ -71,8 +71,11 @@ export async function rankModelsForAccount(provider: string, models: any[], apiK
     const PROBE_CAP = 20;
     const toProbe = ranked.slice(0, PROBE_CAP);
 
-    const paced = provider.toLowerCase() === 'mistral';
-    await mapLimit(toProbe, paced ? 1 : 6, async (m) => {
+    // OpenRouter free models rate limit fast. Probe fewer, slower, so some answer.
+    const paced = provider.toLowerCase() === 'mistral' || provider.toLowerCase() === 'openrouter';
+    const cap = paced ? 8 : PROBE_CAP;
+    const batch = toProbe.slice(0, cap);
+    await mapLimit(batch, paced ? 1 : 6, async (m) => {
         m.availability = await probeAvailability(provider, m.id, apiKey);
     });
 
@@ -80,7 +83,19 @@ export async function rankModelsForAccount(provider: string, models: any[], apiK
     // provider window and the caller's 20s timeout fired first, so the
     // catalog never arrived. A rate limit is not cached, so the next
     // request probes those models fresh.
-    const live = toProbe.filter((m) => m.availability === 'ok');
+    const live = batch.filter((m) => m.availability === 'ok');
+
+    // A fresh probe can come back empty when every model is rate limited.
+    // Keep the models a previous probe proved live so the catalog is not blank.
+    if (live.length === 0) {
+        for (const m of batch) {
+            const cached = availabilityCache.get(`${provider}:${m.id}`);
+            if (cached && cached.state === 'ok' && Date.now() - cached.at < CACHE_MS) {
+                m.availability = 'ok';
+                live.push(m);
+            }
+        }
+    }
     live.sort((a, b) => b.capability - a.capability);
     return live.map((m) => ({
         ...m,
