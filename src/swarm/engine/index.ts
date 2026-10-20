@@ -240,7 +240,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 !(clusterResult.earlyExitTriggered && clusterResult.earlyFinalAnalysis)
             ) {
                 const failedSeats = getDegraded(context).join(', ');
-                throw new Error(`All analysts failed; no analyst output to compile.${failedSeats ? ' Failed seats: ' + failedSeats : ''}`);
+                const lastError = [...context.events].reverse().find(e => e.error)?.error;
+                throw new Error(`All analysts failed; no analyst output to compile.${failedSeats ? ' Failed seats: ' + failedSeats : ''}${lastError ? ' Reason: ' + String(lastError).slice(0, 300) : ''}`);
             }
 
             let workflowOriginalPromptTokens = clusterResult.workflowOriginalPromptTokens;
