@@ -12,10 +12,12 @@ export interface ProviderLimitConfig {
 
 export const PROVIDER_LIMITS: Record<string, ProviderLimitConfig> = {
   groq: { concurrency: 1, minSpacingMs: 0, tokensPerMinute: 7000 },
-  mistral: { concurrency: 1, minSpacingMs: 1100 },
+  // Free tier is 2 requests a minute. 30s spacing keeps a probe and a seat inside it.
+  mistral: { concurrency: 1, minSpacingMs: 30000 },
   gemini: { concurrency: 2, minSpacingMs: 0 },
   openrouter: { concurrency: 1, minSpacingMs: 0 },
-  // github: not listed. GitHub Models was retired on 2026-07-30 (see the GH group).
+  nvidia: { concurrency: 2, minSpacingMs: 0 },
+  cloudflare: { concurrency: 2, minSpacingMs: 0 },
 };
 
 export const BREAKER_FAILURE_THRESHOLD = 3;

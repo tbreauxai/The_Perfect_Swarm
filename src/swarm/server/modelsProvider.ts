@@ -1,4 +1,5 @@
 import { ProviderRegistry } from '../providers/registry.ts';
+import { globalProviderLimiter, estimateTokens } from '../providers/limiter.ts';
 
 /**
  * Fetches available models from supported LLM providers with edge-safe fetch calls.
@@ -102,14 +103,17 @@ async function pingModel(provider: string, modelId: string, apiKey: string): Pro
 async function probeOnce(provider: string, modelId: string, apiKey: string): Promise<'ok' | 'limited' | 'dead'> {
     try {
         const adapter = ProviderRegistry.get(provider);
-        const text = await adapter.call({
-            modelName: modelId,
-            prompt: 'Reply with the single word ok.',
-            apiKey,
-            timeoutMs: 20000,
-            role: 'catalog-probe',
-            config: { maxTokens: 64, groqMode: 'chat' }
-        });
+        const text = await globalProviderLimiter.run(
+            { provider, model: modelId, estTokens: estimateTokens(40) },
+            () => adapter.call({
+                modelName: modelId,
+                prompt: 'Reply with the single word ok.',
+                apiKey,
+                timeoutMs: 20000,
+                role: 'catalog-probe',
+                config: { maxTokens: 64, groqMode: 'chat' }
+            })
+        );
         if (typeof text === 'string' && text.trim().length > 0) return 'ok';
         return 'dead';
     } catch (err: any) {
