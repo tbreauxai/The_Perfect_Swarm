@@ -8,16 +8,19 @@ export interface ProviderLimitConfig {
   concurrency: number;
   minSpacingMs: number;
   tokensPerMinute?: number;
+  /** Max input tokens a single seat call should send. The seat trims data to fit. */
+  maxInputTokens?: number;
 }
 
 export const PROVIDER_LIMITS: Record<string, ProviderLimitConfig> = {
-  groq: { concurrency: 1, minSpacingMs: 0, tokensPerMinute: 7000 },
-  // Free tier is 2 requests a minute. 30s spacing keeps a probe and a seat inside it.
-  mistral: { concurrency: 1, minSpacingMs: 30000 },
-  gemini: { concurrency: 2, minSpacingMs: 0 },
-  openrouter: { concurrency: 1, minSpacingMs: 0 },
-  nvidia: { concurrency: 2, minSpacingMs: 0 },
-  cloudflare: { concurrency: 2, minSpacingMs: 0 },
+  // 7000 TPM. A seat keeps its input small so output still fits the minute.
+  groq: { concurrency: 1, minSpacingMs: 0, tokensPerMinute: 7000, maxInputTokens: 2500 },
+  // Free tier is 2 requests a minute. One call has to count, so keep it compact.
+  mistral: { concurrency: 1, minSpacingMs: 30000, maxInputTokens: 2000 },
+  gemini: { concurrency: 2, minSpacingMs: 0, maxInputTokens: 8000 },
+  openrouter: { concurrency: 1, minSpacingMs: 0, maxInputTokens: 6000 },
+  nvidia: { concurrency: 2, minSpacingMs: 0, maxInputTokens: 8000 },
+  cloudflare: { concurrency: 2, minSpacingMs: 0, maxInputTokens: 6000 },
 };
 
 export const BREAKER_FAILURE_THRESHOLD = 3;
