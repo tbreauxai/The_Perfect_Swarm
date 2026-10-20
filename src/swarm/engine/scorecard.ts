@@ -60,6 +60,16 @@ export function validateScorecard<T = AnalystScorecard>(
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
         return { ok: false, error: 'reply is not a JSON object', text };
     }
+    // A long note is not a bad pick. Cut it instead of rejecting the card and
+    // forcing a repair call that walks the whole failover chain again.
+    if (Array.isArray(parsed.picks)) {
+        for (const p of parsed.picks) {
+            if (p && typeof p.note === 'string' && p.note.length > 60) p.note = p.note.slice(0, 60);
+        }
+    }
+    if (typeof parsed.key_risk === 'string' && parsed.key_risk.length > 120) {
+        parsed.key_risk = parsed.key_risk.slice(0, 120);
+    }
     const result = schema.safeParse({ ...parsed, seat });
     if (result.success) {
         return { ok: true, scorecard: result.data as T, text };
