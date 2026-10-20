@@ -76,15 +76,10 @@ export async function rankModelsForAccount(provider: string, models: any[], apiK
         m.availability = await probeAvailability(provider, m.id, apiKey);
     });
 
-    const interrupted = toProbe.filter((m) => m.availability === 'limited');
-    if (interrupted.length) {
-        const spacing = PROVIDER_LIMITS[provider.toLowerCase()]?.minSpacingMs || 60000;
-        await new Promise(r => setTimeout(r, spacing));
-        for (const m of interrupted) {
-            m.availability = await probeAvailability(provider, m.id, apiKey);
-        }
-    }
-
+    // Rate-limited models are not retried here. The retry waited out the
+    // provider window and the caller's 20s timeout fired first, so the
+    // catalog never arrived. A rate limit is not cached, so the next
+    // request probes those models fresh.
     const live = toProbe.filter((m) => m.availability === 'ok');
     live.sort((a, b) => b.capability - a.capability);
     return live.map((m) => ({
