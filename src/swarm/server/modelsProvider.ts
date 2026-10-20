@@ -43,11 +43,15 @@ export async function rankModelsForAccount(provider: string, models: any[], apiK
 
     if (!apiKey) return ranked.map((m) => ({ ...m, available: false }));
 
-    // Probe every chat model. Only a model that answered is listed.
-    // limited (429/503) and unknown (timeout, odd status) are not offered:
-    // a timeout is not proof the model exists.
-    await mapLimit(ranked, 6, async (m) => {
+    // Mistral's free tier allows 2 requests a minute. Probing 6 at once
+    // burns the limit and marks live models dead. Probe it one at a time
+    // and stop at the first rate limit so a real call still has budget.
+    const paced = provider.toLowerCase() === 'mistral';
+    let rateLimited = false;
+    await mapLimit(ranked, paced ? 1 : 6, async (m) => {
+        if (rateLimited) { m.availability = 'limited'; return; }
         m.availability = await probeAvailability(provider, m.id, apiKey);
+        if (m.availability === 'limited') rateLimited = true;
     });
 
     const live = ranked.filter((m) => m.availability === 'ok');
@@ -90,6 +94,8 @@ async function probeAvailability(provider: string, modelId: string, apiKey: stri
 async function pingModel(provider: string, modelId: string, apiKey: string): Promise<'ok' | 'limited' | 'dead'> {
     const first = await probeOnce(provider, modelId, apiKey);
     if (first !== 'dead') return first;
+    // A paced provider already spent its budget. Do not spend it again.
+    if (provider.toLowerCase() === 'mistral') return first;
     return probeOnce(provider, modelId, apiKey);
 }
 
