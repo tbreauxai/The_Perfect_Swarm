@@ -87,7 +87,7 @@ async function probeAvailability(provider: string, modelId: string, apiKey: stri
 
 async function pingModel(provider: string, modelId: string, apiKey: string): Promise<'ok' | 'limited' | 'dead'> {
     const controller = new AbortController();
-    const timeout = provider.toLowerCase() === 'nvidia' ? 8000 : 3500;
+    const timeout = provider.toLowerCase() === 'nvidia' ? 12000 : 8000;
     const timer = setTimeout(() => controller.abort(), timeout);
     try {
         const res = await fetch(probeUrl(provider, modelId, apiKey), {
@@ -96,18 +96,32 @@ async function pingModel(provider: string, modelId: string, apiKey: string): Pro
             body: JSON.stringify(probeBody(provider, modelId)),
             signal: controller.signal
         });
-        if (res.ok) return 'ok';
-        if (res.status === 429 || res.status === 503) return 'limited';
-        if (res.status === 400 || res.status === 422) return 'ok';
-        if (res.status === 404 || res.status === 401) return 'dead';
         const text = await res.text();
-        if (/no longer available|does not exist|not available in your/i.test(text)) return 'dead';
+        if (res.status === 429 || res.status === 503) return 'limited';
+        if (res.status === 404 || res.status === 401 || res.status === 402) return 'dead';
+        if (/no longer available|does not exist|not found|not available in your/i.test(text)) return 'dead';
         if (/rate limit|high demand|quota/i.test(text)) return 'limited';
+        // A status is not a completion. Only a body with generated text is live.
+        if (res.ok && hasCompletion(provider, text)) return 'ok';
         return 'dead';
     } catch {
         return 'dead';
     } finally {
         clearTimeout(timer);
+    }
+}
+
+function hasCompletion(provider: string, text: string): boolean {
+    try {
+        const body = JSON.parse(text);
+        if (provider.toLowerCase() === 'gemini') {
+            const parts = body?.candidates?.[0]?.content?.parts;
+            return Array.isArray(parts) && parts.some((p: any) => typeof p?.text === 'string' && p.text.trim().length > 0);
+        }
+        const content = body?.choices?.[0]?.message?.content;
+        return typeof content === 'string' && content.trim().length > 0;
+    } catch {
+        return false;
     }
 }
 
@@ -142,9 +156,9 @@ function probeHeaders(provider: string, apiKey: string): Record<string, string> 
 
 function probeBody(provider: string, modelId: string): Record<string, any> {
     if (provider.toLowerCase() === 'gemini') {
-        return { contents: [{ parts: [{ text: 'ok' }] }], generationConfig: { maxOutputTokens: 1 } };
+        return { contents: [{ parts: [{ text: 'Reply with the single word ok.' }] }], generationConfig: { maxOutputTokens: 8 } };
     }
-    return { model: modelId, messages: [{ role: 'user', content: 'ok' }], max_tokens: 16 };
+    return { model: modelId, messages: [{ role: 'user', content: 'Reply with the single word ok.' }], max_tokens: 16 };
 }
 
 async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
