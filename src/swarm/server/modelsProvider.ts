@@ -1,5 +1,5 @@
 import { ProviderRegistry } from '../providers/registry.ts';
-import { globalProviderLimiter } from '../providers/limiter.ts';
+import { globalProviderLimiter, PROVIDER_LIMITS } from '../providers/limiter.ts';
 
 /**
  * Fetches available models from supported LLM providers with edge-safe fetch calls.
@@ -60,18 +60,23 @@ export async function rankModelsForAccount(provider: string, models: any[], apiK
 
     if (!apiKey) return ranked.map((m) => ({ ...m, available: false }));
 
-    // Mistral's free tier allows 2 requests a minute. Probing 6 at once
-    // burns the limit and marks live models dead. Probe it one at a time
-    // and stop at the first rate limit so a real call still has budget.
     const paced = provider.toLowerCase() === 'mistral';
-    let rateLimited = false;
     await mapLimit(ranked, paced ? 1 : 6, async (m) => {
-        if (rateLimited) { m.availability = 'limited'; return; }
         m.availability = await probeAvailability(provider, m.id, apiKey);
-        if (m.availability === 'limited') rateLimited = true;
     });
 
-    const live = ranked.filter((m) => m.availability === 'ok' || m.availability === 'limited');
+    // A rate limit is not a verdict. Retry after the provider's own spacing
+    // so the retry lands in a fresh window instead of the same 429.
+    const interrupted = ranked.filter((m) => m.availability === 'limited');
+    if (interrupted.length) {
+        const spacing = PROVIDER_LIMITS[provider.toLowerCase()]?.minSpacingMs || 60000;
+        await new Promise(r => setTimeout(r, spacing));
+        for (const m of interrupted) {
+            m.availability = await probeAvailability(provider, m.id, apiKey);
+        }
+    }
+
+    const live = ranked.filter((m) => m.availability === 'ok');
     live.sort((a, b) => b.capability - a.capability);
     return live.map((m) => ({
         ...m,
