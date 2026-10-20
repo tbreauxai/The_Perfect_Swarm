@@ -1,26 +1,26 @@
 [
   {
-    "id": "goal-1-nvidia-json-mode-and-free-tier",
-    "description": "Update nvidia.ts to pass response_format when responseMimeType is application/json; update modelsProvider.ts to mark NVIDIA models free: true.",
+    "id": "goal-1-groq-and-nvidia-hardening",
+    "description": "Add 400-retry-without-format to groq.ts; in nvidia.ts add 400-retry-without-format and timeout retry with 25s default.",
     "status": "completed",
-    "verification": "nvidia.ts sends response_format: { type: 'json_object' }; modelsProvider.ts marks free: true."
+    "verification": "groq.ts and nvidia.ts retry without format on 400 rejection; nvidia.ts retries once on timeout."
   },
   {
-    "id": "goal-2-cloudflare-json-mode-and-fallback",
-    "description": "Update cloudflare.ts to pass response_format, fallback if rejected (400), and support flexible account ID resolution.",
+    "id": "goal-2-mistral-openrouter-gemini-hardening",
+    "description": "Add 400-retry-without-format to mistral.ts, openrouter.ts, and gemini.ts.",
     "status": "completed",
-    "verification": "cloudflare.ts sends response_format, falls back on format error, and resolves account ID."
+    "verification": "mistral.ts, openrouter.ts, and gemini.ts retry without format flag on 400/format error."
   },
   {
-    "id": "goal-3-duelodds-model-catalog-updates",
-    "description": "Update DuelOdds swarmModelService.ts: add moonshotai/kimi-k2.6 to DEAD_MODEL_IDS and set NVIDIA fallback models free: true.",
+    "id": "goal-3-adapter-reasoning-leakage-sanitization",
+    "description": "Harden sanitizeModelOutput in adapter.ts to extract largest valid balanced JSON substring and strip untagged reasoning prose.",
     "status": "completed",
-    "verification": "swarmModelService.ts in DuelOdds has moonshotai in DEAD_MODEL_IDS and free: true for nvidia models."
+    "verification": "sanitizeModelOutput correctly strips untagged reasoning noise and extracts valid JSON."
   },
   {
-    "id": "goal-4-unit-tests-and-full-suite-verification",
-    "description": "Add nvidia.test.ts and cloudflare.test.ts testing JSON mode, format fallbacks, and run full test suites.",
+    "id": "goal-4-unit-tests-and-verification",
+    "description": "Add/update tests for all adapters asserting format retry, timeout retry, and reasoning sanitization; verify lint and test suite.",
     "status": "completed",
-    "verification": "All unit tests pass (including new tests) and linter passes."
+    "verification": "All unit tests pass, linter passes, startup smoke test passes."
   }
 ]

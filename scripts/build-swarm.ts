@@ -13,7 +13,7 @@ if (fs.existsSync(outDir)) {
 fs.mkdirSync(outDir, { recursive: true });
 
 console.log('[build:swarm] 1. Running Vite library build for ESM & CJS bundles...');
-execSync('npx vite build --config vite.config.swarm.ts', { stdio: 'inherit' });
+execSync('npx --no-install vite build --config vite.config.swarm.ts', { stdio: 'inherit' });
 
 console.log('[build:swarm] 2. Generating TypeScript declaration (.d.ts) files...');
 if (fs.existsSync(stagingDir)) {
@@ -69,7 +69,7 @@ fs.writeFileSync(stagingTsConfig, JSON.stringify({
 }, null, 2), 'utf8');
 
 try {
-    execSync(`npx tsc -p "${stagingTsConfig}"`, { stdio: 'inherit' });
+    execSync(`npx --no-install tsc -p "${stagingTsConfig}"`, { stdio: 'inherit' });
     console.log('[build:swarm] TypeScript declarations (.d.ts) generated successfully in dist/swarm/');
 } finally {
     if (fs.existsSync(stagingDir)) {

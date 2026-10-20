@@ -1,10 +1,10 @@
-{"timestamp":"2026-10-17T21:13:00-05:00","event":"session_init","brief":"Deterministic agent output formatting (NVIDIA + Cloudflare JSON-mode gap)","goals_count":4}
-{"timestamp":"2026-10-17T21:13:00-05:00","event":"goal_transition","goal_id":"goal-1-nvidia-json-mode-and-free-tier","from":"todo","to":"in-progress"}
-{"timestamp":"2026-10-17T21:13:40-05:00","event":"goal_transition","goal_id":"goal-1-nvidia-json-mode-and-free-tier","from":"in-progress","to":"completed","evidence":"nvidia.ts updated with response_format, modelsProvider.ts updated with free: true"}
-{"timestamp":"2026-10-17T21:13:40-05:00","event":"goal_transition","goal_id":"goal-2-cloudflare-json-mode-and-fallback","from":"todo","to":"in-progress"}
-{"timestamp":"2026-10-17T21:15:00-05:00","event":"goal_transition","goal_id":"goal-2-cloudflare-json-mode-and-fallback","from":"in-progress","to":"completed","evidence":"cloudflare.ts updated with JSON mode, format fallback on 400, credential resolution, and app.ts edgeSettings updated"}
-{"timestamp":"2026-10-17T21:15:00-05:00","event":"goal_transition","goal_id":"goal-3-duelodds-model-catalog-updates","from":"todo","to":"in-progress"}
-{"timestamp":"2026-10-17T21:15:25-05:00","event":"goal_transition","goal_id":"goal-3-duelodds-model-catalog-updates","from":"in-progress","to":"completed","evidence":"DuelOdds swarmModelService.ts updated: moonshotai/kimi-k2.6 added to DEAD_MODEL_IDS, nvidia fallbacks set to free: true"}
-{"timestamp":"2026-10-17T21:15:25-05:00","event":"goal_transition","goal_id":"goal-4-unit-tests-and-full-suite-verification","from":"todo","to":"in-progress"}
-{"timestamp":"2026-10-17T21:18:05-05:00","event":"goal_transition","goal_id":"goal-4-unit-tests-and-full-suite-verification","from":"in-progress","to":"completed","evidence":"88 test files and 830 tests passed, tsc lint passed, smoke test passed, commit 012f39d"}
-{"timestamp":"2026-10-17T21:18:05-05:00","event":"session_completed","summary":"All 4 micro-goals completed successfully."}
+{"timestamp":"2026-10-18T00:48:00-05:00","event":"session_init","brief":"Harden all provider adapters (JSON-mode fallout + reasoning models + timeouts)","goals_count":4}
+{"timestamp":"2026-10-18T00:48:00-05:00","event":"goal_transition","goal_id":"goal-1-groq-and-nvidia-hardening","from":"todo","to":"in-progress"}
+{"timestamp":"2026-10-18T00:49:20-05:00","event":"goal_transition","goal_id":"goal-1-groq-and-nvidia-hardening","from":"in-progress","to":"completed","evidence":"groq.ts updated with 400 format retry; nvidia.ts updated with 400 format retry and timeout retry (25s)"}
+{"timestamp":"2026-10-18T00:49:20-05:00","event":"goal_transition","goal_id":"goal-2-mistral-openrouter-gemini-hardening","from":"todo","to":"in-progress"}
+{"timestamp":"2026-10-18T00:50:20-05:00","event":"goal_transition","goal_id":"goal-2-mistral-openrouter-gemini-hardening","from":"in-progress","to":"completed","evidence":"mistral.ts, openrouter.ts, and gemini.ts updated with 400 format error retry fallback"}
+{"timestamp":"2026-10-18T00:50:20-05:00","event":"goal_transition","goal_id":"goal-3-adapter-reasoning-leakage-sanitization","from":"todo","to":"in-progress"}
+{"timestamp":"2026-10-18T00:51:20-05:00","event":"goal_transition","goal_id":"goal-3-adapter-reasoning-leakage-sanitization","from":"in-progress","to":"completed","evidence":"adapter.ts updated with extractLargestValidJson, KNOWN_REASONING_MODELS, and sanitizeModelOutput hardened"}
+{"timestamp":"2026-10-18T00:51:20-05:00","event":"goal_transition","goal_id":"goal-4-unit-tests-and-verification","from":"todo","to":"in-progress"}
+{"timestamp":"2026-10-18T00:54:50-05:00","event":"goal_transition","goal_id":"goal-4-unit-tests-and-verification","from":"in-progress","to":"completed","evidence":"89 test files and 844 tests passed, tsc lint passed, smoke test passed, PR #99 created"}
+{"timestamp":"2026-10-18T00:54:50-05:00","event":"session_completed","summary":"All 4 micro-goals completed successfully."}
