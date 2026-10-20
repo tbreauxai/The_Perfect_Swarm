@@ -128,6 +128,11 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
         console.warn('[SwarmServer] Background learning-state restore failed:', err?.message || err)
     );
 
+    const serverEnv = typeof process !== 'undefined' ? (process.env as Record<string, any>) : {};
+    probeAllProviders(serverEnv).catch((err) =>
+        console.warn('[catalog] Background catalog warming failed:', err?.message || err)
+    );
+
     // Catalog probe runs at 6 AM and 10 PM CT, not on every picker open.
     // Seats read the cache. A probe never competes with a live analysis.
     if (typeof setInterval !== 'undefined') {
@@ -644,7 +649,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
 
             const env = Object.assign({}, typeof process !== 'undefined' ? process.env : {}, c.env || {}) as Record<string, any>;
             // Model listing uses server secrets only; ignore x-provider-key
-            const models = await fetchProviderModels(provider, undefined, env);
+            const models = await fetchProviderModels(provider, undefined, env, { boundedWaitMs: 8000 });
             return c.json(models);
         } catch (err: any) {
             console.error(`[SwarmServer Models Error]:`, err);

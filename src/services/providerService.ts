@@ -103,7 +103,8 @@ export async function fetchAvailableModels(provider: string, apiKey?: string): P
             case 'groq':
             case 'gemini':
             case 'mistral':
-            case 'github': {
+            case 'nvidia':
+            case 'cloudflare': {
                 const headers = authHeaders();
                 const res = await fetch(`/api/swarm/models?provider=${provider}`, { headers });
                 if (!res.ok) {
