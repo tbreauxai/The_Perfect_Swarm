@@ -13,8 +13,7 @@ export interface ProviderLimitConfig {
 }
 
 export const PROVIDER_LIMITS: Record<string, ProviderLimitConfig> = {
-  // 7000 TPM, and Groq skips if fewer than 800 tokens remain for the answer.
-  // The chunk budget leaves room for the system instruction and prompt overhead.
+  // 7000 TPM. The seat computes the real room per call, so this is only a floor.
   groq: { concurrency: 1, minSpacingMs: 0, tokensPerMinute: 7000, maxInputTokens: 1500 },
   // Free tier is 2 requests a minute. One call has to count, so keep it compact.
   mistral: { concurrency: 1, minSpacingMs: 30000, maxInputTokens: 2000 },
