@@ -41,14 +41,15 @@ export async function rankModelsForAccount(provider: string, models: any[], apiK
 
     if (!apiKey) return ranked.map((m) => ({ ...m, available: false }));
 
-    // Probe every chat model. A model is listed as live only if the probe
-    // returned ok or limited. Unprobed and dead models are not offered.
+    // Probe every chat model. Only a model that answered is listed.
+    // limited (429/503) and unknown (timeout, odd status) are not offered:
+    // a timeout is not proof the model exists.
     await mapLimit(ranked, 6, async (m) => {
         m.availability = await probeAvailability(provider, m.id, apiKey);
     });
 
-    const live = ranked.filter((m) => m.availability === 'ok' || m.availability === 'limited');
-    live.sort((a, b) => availabilityRank(a.availability) - availabilityRank(b.availability) || b.capability - a.capability);
+    const live = ranked.filter((m) => m.availability === 'ok');
+    live.sort((a, b) => b.capability - a.capability);
     return live.map((m) => ({
         ...m,
         name: m.capability ? `${m.name} · c${m.capability}` : m.name,
@@ -101,10 +102,10 @@ async function pingModel(provider: string, modelId: string, apiKey: string): Pro
         if (res.status === 404 || res.status === 401) return 'dead';
         const text = await res.text();
         if (/no longer available|does not exist|not available in your/i.test(text)) return 'dead';
-        if (/rate limit|high demand|quota|authorization failed/i.test(text)) return 'limited';
-        return 'limited';
+        if (/rate limit|high demand|quota/i.test(text)) return 'limited';
+        return 'dead';
     } catch {
-        return 'limited';
+        return 'dead';
     } finally {
         clearTimeout(timer);
     }
