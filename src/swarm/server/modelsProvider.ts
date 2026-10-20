@@ -1,5 +1,5 @@
 import { ProviderRegistry } from '../providers/registry.ts';
-import { globalProviderLimiter } from '../providers/limiter.ts';
+import { globalProviderLimiter, PROVIDER_LIMITS } from '../providers/limiter.ts';
 
 /**
  * Fetches available models from supported LLM providers with edge-safe fetch calls.
@@ -65,11 +65,12 @@ export async function rankModelsForAccount(provider: string, models: any[], apiK
         m.availability = await probeAvailability(provider, m.id, apiKey);
     });
 
-    // A rate limit is not a verdict. Retry those once after a pause so a
-    // parallel burst does not hide a model that works on its own.
+    // A rate limit is not a verdict. Retry after the provider's own spacing
+    // so the retry lands in a fresh window instead of the same 429.
     const interrupted = ranked.filter((m) => m.availability === 'limited');
     if (interrupted.length) {
-        await new Promise(r => setTimeout(r, 3000));
+        const spacing = PROVIDER_LIMITS[provider.toLowerCase()]?.minSpacingMs || 60000;
+        await new Promise(r => setTimeout(r, spacing));
         for (const m of interrupted) {
             m.availability = await probeAvailability(provider, m.id, apiKey);
         }
