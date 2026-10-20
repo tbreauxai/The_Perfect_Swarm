@@ -1,26 +1,26 @@
 [
   {
-    "id": "goal-1-groq-and-nvidia-hardening",
-    "description": "Add 400-retry-without-format to groq.ts; in nvidia.ts add 400-retry-without-format and timeout retry with 25s default.",
+    "id": "goal-1-models-provider-probe-selection",
+    "description": "Fix model selection and probe prioritization in modelsProvider.ts: guarantee DEFAULT_PROVIDER_MODELS and free models (:free) are included in the probe batch; prevent empty catalog returns when probes are rate-limited or cold.",
     "status": "completed",
-    "verification": "groq.ts and nvidia.ts retry without format on 400 rejection; nvidia.ts retries once on timeout."
+    "verification": "rankModelsForAccount probes default and free models first, keeps working models on rate limit, and returns non-empty working model catalog."
   },
   {
-    "id": "goal-2-mistral-openrouter-gemini-hardening",
-    "description": "Add 400-retry-without-format to mistral.ts, openrouter.ts, and gemini.ts.",
+    "id": "goal-2-cache-warming-and-fast-endpoint",
+    "description": "Implement startup cache warming and bounded response SLA in app.ts and modelsProvider.ts so /api/swarm/models never hangs or times out HTTP callers.",
     "status": "completed",
-    "verification": "mistral.ts, openrouter.ts, and gemini.ts retry without format flag on 400/format error."
+    "verification": "/api/swarm/models serves cached results or fast fallback within bounded timeout and warms catalog asynchronously."
   },
   {
-    "id": "goal-3-adapter-reasoning-leakage-sanitization",
-    "description": "Harden sanitizeModelOutput in adapter.ts to extract largest valid balanced JSON substring and strip untagged reasoning prose.",
+    "id": "goal-3-client-provider-service-alignment",
+    "description": "Update src/services/providerService.ts and src/components/AgentConfigurator.tsx to support nvidia and cloudflare, remove retired github, and handle model availability properly.",
     "status": "completed",
-    "verification": "sanitizeModelOutput correctly strips untagged reasoning noise and extracts valid JSON."
+    "verification": "providerService.fetchAvailableModels and AgentConfigurator support all active providers (gemini, groq, mistral, openrouter, nvidia, cloudflare)."
   },
   {
-    "id": "goal-4-unit-tests-and-verification",
-    "description": "Add/update tests for all adapters asserting format retry, timeout retry, and reasoning sanitization; verify lint and test suite.",
+    "id": "goal-4-test-suite-and-verification",
+    "description": "Add comprehensive unit tests for modelsProvider probing/ranking and providerService; verify npm run lint and npm run test:unit pass cleanly.",
     "status": "completed",
-    "verification": "All unit tests pass, linter passes, startup smoke test passes."
+    "verification": "All unit tests pass (including new modelsProvider tests) and TypeScript typecheck has 0 errors."
   }
 ]
