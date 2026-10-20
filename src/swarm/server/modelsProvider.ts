@@ -1,5 +1,5 @@
 import { ProviderRegistry } from '../providers/registry.ts';
-import { globalProviderLimiter, estimateTokens } from '../providers/limiter.ts';
+import { globalProviderLimiter } from '../providers/limiter.ts';
 
 /**
  * Fetches available models from supported LLM providers with edge-safe fetch calls.
@@ -12,10 +12,26 @@ export async function fetchProviderModels(provider: string, clientKey?: string, 
     return rankModelsForAccount(provider, listed, apiKey);
 }
 
+const CATALOG_PROVIDERS = ['groq', 'gemini', 'openrouter', 'mistral', 'nvidia', 'cloudflare'];
+
+/**
+ * Probe every provider once. The morning and night schedule calls this.
+ * A picker open reads the cache this fills and does not probe.
+ */
+export async function probeAllProviders(env: Record<string, any> = {}): Promise<void> {
+    for (const provider of CATALOG_PROVIDERS) {
+        try {
+            await fetchProviderModels(provider, undefined, env);
+        } catch (err: any) {
+            console.warn(`[catalog] scheduled probe failed for ${provider}:`, err?.message || err);
+        }
+    }
+}
+
 const NON_CHAT = /tts|whisper|image|embed|ocr|lyria|transcribe|prompt-guard|orpheus|robotics|moderation|computer-use|realtime|speech|safeguard|deep-research|antigravity|nano-banana|clip-preview/i;
 
 const availabilityCache = new Map<string, { state: 'ok' | 'limited' | 'dead'; at: number }>();
-const CACHE_MS = 15 * 60 * 1000;
+const CACHE_MS = 12 * 60 * 60 * 1000;
 
 export function isChatModel(id: string): boolean {
     return Boolean(id) && !NON_CHAT.test(id);
@@ -103,17 +119,20 @@ async function pingModel(provider: string, modelId: string, apiKey: string): Pro
 async function probeOnce(provider: string, modelId: string, apiKey: string): Promise<'ok' | 'limited' | 'dead'> {
     try {
         const adapter = ProviderRegistry.get(provider);
-        const text = await globalProviderLimiter.run(
-            { provider, model: modelId, estTokens: estimateTokens(40) },
-            () => adapter.call({
-                modelName: modelId,
-                prompt: 'Reply with the single word ok.',
-                apiKey,
-                timeoutMs: 20000,
-                role: 'catalog-probe',
-                config: { maxTokens: 64, groqMode: 'chat' }
-            })
-        );
+        // A probe never takes a seat's slot or budget. If a seat holds the
+        // provider, the probe waits and tries once more, then reports limited.
+        if (globalProviderLimiter.isBusy(provider)) {
+            await new Promise(r => setTimeout(r, 1500));
+            if (globalProviderLimiter.isBusy(provider)) return 'limited';
+        }
+        const text = await adapter.call({
+            modelName: modelId,
+            prompt: 'Reply with the single word ok.',
+            apiKey,
+            timeoutMs: 20000,
+            role: 'catalog-probe',
+            config: { maxTokens: 64, groqMode: 'chat' }
+        });
         if (typeof text === 'string' && text.trim().length > 0) return 'ok';
         return 'dead';
     } catch (err: any) {
