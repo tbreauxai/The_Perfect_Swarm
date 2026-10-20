@@ -8,14 +8,19 @@ export interface ProviderLimitConfig {
   concurrency: number;
   minSpacingMs: number;
   tokensPerMinute?: number;
+  /** Max input tokens a single seat call should send. The seat trims data to fit. */
+  maxInputTokens?: number;
 }
 
 export const PROVIDER_LIMITS: Record<string, ProviderLimitConfig> = {
-  groq: { concurrency: 1, minSpacingMs: 0, tokensPerMinute: 7000 },
-  mistral: { concurrency: 1, minSpacingMs: 1100 },
-  gemini: { concurrency: 2, minSpacingMs: 0 },
-  openrouter: { concurrency: 1, minSpacingMs: 0 },
-  // github: not listed. GitHub Models was retired on 2026-07-30 (see the GH group).
+  // 7000 TPM. A seat keeps its input small so output still fits the minute.
+  groq: { concurrency: 1, minSpacingMs: 0, tokensPerMinute: 7000, maxInputTokens: 2500 },
+  // Free tier is 2 requests a minute. One call has to count, so keep it compact.
+  mistral: { concurrency: 1, minSpacingMs: 30000, maxInputTokens: 2000 },
+  gemini: { concurrency: 2, minSpacingMs: 0, maxInputTokens: 8000 },
+  openrouter: { concurrency: 1, minSpacingMs: 0, maxInputTokens: 6000 },
+  nvidia: { concurrency: 2, minSpacingMs: 0, maxInputTokens: 8000 },
+  cloudflare: { concurrency: 2, minSpacingMs: 0, maxInputTokens: 6000 },
 };
 
 export const BREAKER_FAILURE_THRESHOLD = 3;
@@ -178,7 +183,11 @@ export class ProviderLimiter {
     return null;
   }
 
-  isAvailable(provider: string, model?: string): boolean {
+  /** True when a seat holds this provider's slot. Probes check this and wait. */
+  isBusy(provider: string): boolean {
+    if (!this.isManaged(provider)) return false;
+    return this.state(provider).active > 0;
+  }
     return this.getSkipReason(provider, model) === null;
   }
 

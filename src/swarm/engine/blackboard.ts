@@ -22,6 +22,8 @@ export interface Blackboard {
     header?: string;
     /** Row ids an analyst cited that are not in `data` (never sent to the critic or manager). */
     unknownRows: string[];
+    /** The board table, capped. The manager always gets this. Cited rows are the analysts' shortlist. */
+    board?: string;
     /** R2-S4: the critic's scorecard (or its unstructured text), when a critic ran. */
     critic?: (CriticScorecard & { unstructured?: false }) | { seat: string; unstructured: true; text: string };
 }
@@ -115,13 +117,15 @@ export function buildBlackboard(p: {
         }
     });
     const { citedRows, header, unknownRows } = buildCitedRows(p.data, collectCitedRowIds(scorecards));
+    const board = boardTable(p.data);
     return {
         brief: p.brief,
         scorecards,
         degraded: [...p.degraded],
         citedRows,
         ...(header ? { header } : {}),
-        unknownRows
+        unknownRows,
+        ...(board ? { board } : {})
     };
 }
 
@@ -138,4 +142,13 @@ export function renderScorecardLines(scorecards: BlackboardScorecard[]): string 
 export function renderCitedRows(bb: Pick<Blackboard, 'citedRows' | 'header'>): string {
     if (bb.citedRows.length === 0) return '(no rows cited)';
     return [bb.header, ...bb.citedRows.map(r => r.line)].filter(Boolean).join('\n');
+}
+
+/** Capped board table from the request data. The manager gets this on every scorecard run. */
+export function boardTable(data: string, maxRows = 24): string {
+    const { lines, headers } = indexTableRows(data);
+    const rows = Array.from(lines.entries()).slice(0, maxRows);
+    if (rows.length === 0) return '';
+    const header = headers.get(rows[0][0]);
+    return [header, ...rows.map(([, line]) => line)].filter(Boolean).join('\n');
 }

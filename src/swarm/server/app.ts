@@ -21,7 +21,7 @@ import { globalSpecialistProfiler } from '../loadBalancer.ts';
 import type { SwarmServerOptions, SwarmServerApp } from './types.ts';
 import { restoreLearningState } from './learningState.ts';
 import { handleSwarmSse } from './streaming.ts';
-import { fetchProviderModels } from './modelsProvider.ts';
+import { fetchProviderModels, probeAllProviders } from './modelsProvider.ts';
 import { buildCortexDiagnostics } from './cortexDiagnostics.ts';
 import { createAppAuthMiddleware } from './appAuth.ts';
 import { createCorsMiddleware } from './cors.ts';
@@ -127,6 +127,25 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
     restoreLearningState().catch((err) =>
         console.warn('[SwarmServer] Background learning-state restore failed:', err?.message || err)
     );
+
+    // Catalog probe runs at 6 AM and 10 PM CT, not on every picker open.
+    // Seats read the cache. A probe never competes with a live analysis.
+    if (typeof setInterval !== 'undefined') {
+        const CT_OFFSET_MS = 5 * 60 * 60 * 1000;
+        const PROBE_HOURS = new Set([6, 22]);
+        let lastProbeKey = '';
+        setInterval(() => {
+            const ct = new Date(Date.now() - CT_OFFSET_MS);
+            const hour = ct.getUTCHours();
+            const key = `${ct.toISOString().slice(0, 10)}-${hour}`;
+            if (!PROBE_HOURS.has(hour) || key === lastProbeKey) return;
+            lastProbeKey = key;
+            const env = typeof process !== 'undefined' ? process.env : {};
+            probeAllProviders(env as Record<string, any>).catch((err) =>
+                console.warn('[catalog] scheduled probe failed:', err?.message || err)
+            );
+        }, 30 * 60 * 1000);
+    }
 
     app.listen = function (portOrOpts?: any, hostnameOrCb?: any, cb?: any): any {
         let port = typeof portOrOpts === 'number' ? portOrOpts : (options.port ?? 3000);

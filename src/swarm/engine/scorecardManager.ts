@@ -18,8 +18,9 @@ import {
 } from "./synthesisPipeline.ts";
 
 /**
- * R2-S5: the manager gets the brief, all scorecards, the critic's scorecard and citedRows.
- * It NEVER gets the full `data` again. Its output stays in the existing chat contract, legs given as row ids.
+ * The manager gets the brief, the scorecards, the cited rows, and the board table.
+ * Cited rows are the analysts' shortlist. The board is always there, capped, so a
+ * failed analyst seat cannot leave the manager with nothing to price.
  */
 export function renderScorecardManagerPrompt(bb: Blackboard): string {
   const critic = !bb.critic
@@ -35,11 +36,13 @@ ${renderScorecardLines(bb.scorecards)}
 Critic scorecard:
 ${critic}
 
-Cited rows (the only table lines you get, header first):
+Analyst shortlist (rows an analyst cited):
 ${renderCitedRows(bb)}
 
-Scorecard mode: you get these rows only, not the full data. Keep the existing output format.
-Give every leg as its row id (for example R12) exactly as listed in Cited rows. Never invent a row id.`;
+Board (cite these row ids, header first):
+${bb.board || '(no board table in this request)'}
+
+Keep the existing output format. Give every leg as its row id (for example R12) from the board above. Never invent a row id.`;
 }
 
 /** In scorecard mode compileSynthesisPrompt is skipped (its prompt would be unused). */

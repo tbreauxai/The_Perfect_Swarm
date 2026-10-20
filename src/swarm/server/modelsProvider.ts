@@ -1,7 +1,10 @@
+import { ProviderRegistry } from '../providers/registry.ts';
+import { globalProviderLimiter } from '../providers/limiter.ts';
+
 /**
  * Fetches available models from supported LLM providers with edge-safe fetch calls.
- * Chat models are kept, dead ids are dropped after a short probe, and the rest
- * are ordered available-first then most capable.
+ * Chat models are kept. A model is live only if the same adapter a seat uses
+ * returns generated text for a tiny prompt. Dead ids are dropped.
  */
 export async function fetchProviderModels(provider: string, clientKey?: string, env: Record<string, any> = {}): Promise<any[]> {
     const listed = await listProviderModels(provider, clientKey, env);
@@ -9,10 +12,26 @@ export async function fetchProviderModels(provider: string, clientKey?: string, 
     return rankModelsForAccount(provider, listed, apiKey);
 }
 
+const CATALOG_PROVIDERS = ['groq', 'gemini', 'openrouter', 'mistral', 'nvidia', 'cloudflare'];
+
+/**
+ * Probe every provider once. The morning and night schedule calls this.
+ * A picker open reads the cache this fills and does not probe.
+ */
+export async function probeAllProviders(env: Record<string, any> = {}): Promise<void> {
+    for (const provider of CATALOG_PROVIDERS) {
+        try {
+            await fetchProviderModels(provider, undefined, env);
+        } catch (err: any) {
+            console.warn(`[catalog] scheduled probe failed for ${provider}:`, err?.message || err);
+        }
+    }
+}
+
 const NON_CHAT = /tts|whisper|image|embed|ocr|lyria|transcribe|prompt-guard|orpheus|robotics|moderation|computer-use|realtime|speech|safeguard|deep-research|antigravity|nano-banana|clip-preview/i;
 
 const availabilityCache = new Map<string, { state: 'ok' | 'limited' | 'dead'; at: number }>();
-const CACHE_MS = 15 * 60 * 1000;
+const CACHE_MS = 12 * 60 * 60 * 1000;
 
 export function isChatModel(id: string): boolean {
     return Boolean(id) && !NON_CHAT.test(id);
@@ -39,18 +58,25 @@ export async function rankModelsForAccount(provider: string, models: any[], apiK
     }));
     ranked.sort((a, b) => b.capability - a.capability);
 
-    const probePool = [...ranked].sort((a, b) => Number(b.free) - Number(a.free) || b.capability - a.capability);
-    const toProbe = apiKey ? probePool.slice(0, 8) : [];
-    await mapLimit(toProbe, 4, async (m) => {
-        m.availability = await probeAvailability(provider, m.id, apiKey as string);
+    if (!apiKey) return ranked.map((m) => ({ ...m, available: false }));
+
+    // Mistral's free tier allows 2 requests a minute. Probing 6 at once
+    // burns the limit and marks live models dead. Probe it one at a time
+    // and stop at the first rate limit so a real call still has budget.
+    const paced = provider.toLowerCase() === 'mistral';
+    let rateLimited = false;
+    await mapLimit(ranked, paced ? 1 : 6, async (m) => {
+        if (rateLimited) { m.availability = 'limited'; return; }
+        m.availability = await probeAvailability(provider, m.id, apiKey);
+        if (m.availability === 'limited') rateLimited = true;
     });
 
-    const usable = ranked.filter((m) => m.availability !== 'dead');
-    usable.sort((a, b) => availabilityRank(a.availability) - availabilityRank(b.availability) || b.capability - a.capability);
-    return usable.map((m) => ({
+    const live = ranked.filter((m) => m.availability === 'ok');
+    live.sort((a, b) => b.capability - a.capability);
+    return live.map((m) => ({
         ...m,
         name: m.capability ? `${m.name} · c${m.capability}` : m.name,
-        available: m.availability === 'ok' || m.availability === 'limited'
+        available: true
     }));
 }
 
@@ -83,65 +109,37 @@ async function probeAvailability(provider: string, modelId: string, apiKey: stri
 }
 
 async function pingModel(provider: string, modelId: string, apiKey: string): Promise<'ok' | 'limited' | 'dead'> {
-    const controller = new AbortController();
-    const timeout = provider.toLowerCase() === 'nvidia' ? 8000 : 3500;
-    const timer = setTimeout(() => controller.abort(), timeout);
+    const first = await probeOnce(provider, modelId, apiKey);
+    if (first !== 'dead') return first;
+    // A paced provider already spent its budget. Do not spend it again.
+    if (provider.toLowerCase() === 'mistral') return first;
+    return probeOnce(provider, modelId, apiKey);
+}
+
+async function probeOnce(provider: string, modelId: string, apiKey: string): Promise<'ok' | 'limited' | 'dead'> {
     try {
-        const res = await fetch(probeUrl(provider, modelId, apiKey), {
-            method: 'POST',
-            headers: probeHeaders(provider, apiKey),
-            body: JSON.stringify(probeBody(provider, modelId)),
-            signal: controller.signal
-        });
-        if (res.ok) return 'ok';
-        if (res.status === 429 || res.status === 503) return 'limited';
-        if (res.status === 400 || res.status === 422) return 'ok';
-        if (res.status === 404 || res.status === 401) return 'dead';
-        const text = await res.text();
-        if (/no longer available|does not exist|not available in your/i.test(text)) return 'dead';
-        if (/rate limit|high demand|quota|authorization failed/i.test(text)) return 'limited';
-        return 'limited';
-    } catch {
-        return 'limited';
-    } finally {
-        clearTimeout(timer);
-    }
-}
-
-function probeUrl(provider: string, modelId: string, apiKey: string): string {
-    switch (provider.toLowerCase()) {
-        case 'gemini':
-            return `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
-        case 'groq':
-            return 'https://api.groq.com/openai/v1/chat/completions';
-        case 'mistral':
-            return 'https://api.mistral.ai/v1/chat/completions';
-        case 'nvidia':
-            return 'https://integrate.api.nvidia.com/v1/chat/completions';
-        case 'cloudflare': {
-            const account = typeof process !== 'undefined' ? String(process.env?.CLOUDFLARE_ACCOUNT_ID || '').trim() : '';
-            return account
-                ? `https://api.cloudflare.com/client/v4/accounts/${account}/ai/v1/chat/completions`
-                : 'about:blank';
+        const adapter = ProviderRegistry.get(provider);
+        // A probe never takes a seat's slot or budget. If a seat holds the
+        // provider, the probe waits and tries once more, then reports limited.
+        if (globalProviderLimiter.isBusy(provider)) {
+            await new Promise(r => setTimeout(r, 1500));
+            if (globalProviderLimiter.isBusy(provider)) return 'limited';
         }
-        case 'openrouter':
-            return 'https://openrouter.ai/api/v1/chat/completions';
-        default:
-            return 'about:blank';
+        const text = await adapter.call({
+            modelName: modelId,
+            prompt: 'Reply with the single word ok.',
+            apiKey,
+            timeoutMs: 20000,
+            role: 'catalog-probe',
+            config: { maxTokens: 64, groqMode: 'chat' }
+        });
+        if (typeof text === 'string' && text.trim().length > 0) return 'ok';
+        return 'dead';
+    } catch (err: any) {
+        const msg = String(err?.message || err);
+        if (/429|rate limit|quota|503|high demand/i.test(msg)) return 'limited';
+        return 'dead';
     }
-}
-
-function probeHeaders(provider: string, apiKey: string): Record<string, string> {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (provider.toLowerCase() !== 'gemini') headers.Authorization = `Bearer ${apiKey}`;
-    return headers;
-}
-
-function probeBody(provider: string, modelId: string): Record<string, any> {
-    if (provider.toLowerCase() === 'gemini') {
-        return { contents: [{ parts: [{ text: 'ok' }] }], generationConfig: { maxOutputTokens: 1 } };
-    }
-    return { model: modelId, messages: [{ role: 'user', content: 'ok' }], max_tokens: 16 };
 }
 
 async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
