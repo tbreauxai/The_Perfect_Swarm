@@ -5,7 +5,7 @@ import { ProviderRegistry } from './providers/registry.ts';
 import { sanitizeModelOutput } from './providers/adapter.ts';
 import { SwarmTracer } from './profiler.ts';
 import { globalLoadBalancer, type AdaptiveLoadBalancer } from './loadBalancer.ts';
-import { globalProviderLimiter, estimateTokens, PROVIDER_CALL_TIMEOUT_MS } from './providers/limiter.ts';
+import { globalProviderLimiter, estimateTokens, PROVIDER_CALL_TIMEOUT_MS, MAX_BUDGET_WAIT_MS } from './providers/limiter.ts';
 import { groqPromptCharCap } from './providers/groq.ts';
 import { globalPayloadCache, PayloadCache } from './cache.ts';
 import { parseJsonSafe, guardManagerResponse, guardAnalystResponse } from './parser.ts';
@@ -113,6 +113,20 @@ export class Agent {
         for (let targetIdx = 0; targetIdx < targetChain.length; targetIdx++) {
             const currentTarget = targetChain[targetIdx];
             const isFallback = targetIdx > 0;
+            const targetModel = currentTarget.modelName || (currentTarget.provider === this.provider ? this.modelName : (DEFAULT_PROVIDER_MODELS[currentTarget.provider] || this.modelName));
+            // Don't call a provider the limiter already knows will refuse. A circuit,
+            // a dead model, or a token budget that needs more than the wait cap is not
+            // an error worth logging: move to the next target.
+            const knownSkip = globalProviderLimiter.getSkipReason(String(currentTarget.provider), targetModel);
+            const promptCharCap = currentTarget.provider === 'groq' ? groqPromptCharCap(config?.groqMode) : prompt.length;
+            const estChars = Math.min(prompt.length, promptCharCap) + (this.systemInstruction?.length || 0);
+            const budgetWait = globalProviderLimiter.budgetWaitMs(String(currentTarget.provider), estimateTokens(estChars));
+            if (knownSkip || budgetWait > MAX_BUDGET_WAIT_MS) {
+                lastFailedProvider = String(currentTarget.provider);
+                lastFailedModel = targetModel;
+                lastError = new Error(knownSkip || `token budget needs ${Math.ceil(budgetWait)}ms`);
+                continue;
+            }
             // Two attempts max: fail fast on free-tier stalls. Fatal (4xx) errors
             // never recover by retrying; transient (429/5xx/timeout) errors either
             // fail over immediately (when a backup exists) or get one quick retry.
