@@ -100,9 +100,9 @@ async function probeOnce(provider: string, modelId: string, apiKey: string): Pro
             modelName: modelId,
             prompt: 'Reply with the single word ok.',
             apiKey,
-            timeoutMs: 12000,
+            timeoutMs: 20000,
             role: 'catalog-probe',
-            config: { maxTokens: 16 }
+            config: { maxTokens: 64, groqMode: 'chat' }
         });
         if (typeof text === 'string' && text.trim().length > 0) return 'ok';
         return 'dead';
