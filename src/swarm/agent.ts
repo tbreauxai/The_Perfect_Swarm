@@ -6,21 +6,13 @@ import { sanitizeModelOutput } from './providers/adapter.ts';
 import { SwarmTracer } from './profiler.ts';
 import { globalLoadBalancer, type AdaptiveLoadBalancer } from './loadBalancer.ts';
 import { globalProviderLimiter, estimateTokens, PROVIDER_CALL_TIMEOUT_MS, MAX_BUDGET_WAIT_MS } from './providers/limiter.ts';
-import { isModelDead } from './server/modelsProvider.ts';
+import { isModelDead, DEFAULT_PROVIDER_MODELS } from './server/modelsProvider.ts';
 import { groqPromptCharCap } from './providers/groq.ts';
 import { globalPayloadCache, PayloadCache } from './cache.ts';
 import { parseJsonSafe, guardManagerResponse, guardAnalystResponse } from './parser.ts';
 import { ManagerResponseSchema, AnalystResponseSchema } from './schemas.ts';
 
-export const DEFAULT_PROVIDER_MODELS: Record<string, string> = {
-    gemini: 'gemini-3.5-flash',
-    groq: 'openai/gpt-oss-120b',
-    openrouter: 'nvidia/nemotron-3-super-120b-a12b:free',
-    mistral: 'mistral-small-latest',
-    cloudflare: '@cf/meta/llama-3.1-8b-instruct',
-    nvidia: 'nvidia/llama-3.3-nemotron-super-49b-v1.5'
-    // github removed: GitHub Models was retired on 2026-07-30.
-};
+export { DEFAULT_PROVIDER_MODELS } from './server/modelsProvider.ts';
 
 /**
  * Autonomous Swarm Agent decoupled from specific LLM provider implementations.

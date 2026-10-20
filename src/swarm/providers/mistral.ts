@@ -1,5 +1,7 @@
 import { cleanToken, buildStandardMessages, parseStandardResponse, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
 
+export function resetMistralMutex(): void {}
+
 export class MistralAdapter implements ProviderAdapter {
     readonly providerName = 'mistral';
 
