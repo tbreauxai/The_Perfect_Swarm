@@ -60,18 +60,22 @@ export async function rankModelsForAccount(provider: string, models: any[], apiK
 
     if (!apiKey) return ranked.map((m) => ({ ...m, available: false }));
 
-    // Mistral's free tier allows 2 requests a minute. Probing 6 at once
-    // burns the limit and marks live models dead. Probe it one at a time
-    // and stop at the first rate limit so a real call still has budget.
     const paced = provider.toLowerCase() === 'mistral';
-    let rateLimited = false;
     await mapLimit(ranked, paced ? 1 : 6, async (m) => {
-        if (rateLimited) { m.availability = 'limited'; return; }
         m.availability = await probeAvailability(provider, m.id, apiKey);
-        if (m.availability === 'limited') rateLimited = true;
     });
 
-    const live = ranked.filter((m) => m.availability === 'ok' || m.availability === 'limited');
+    // A rate limit is not a verdict. Retry those once after a pause so a
+    // parallel burst does not hide a model that works on its own.
+    const interrupted = ranked.filter((m) => m.availability === 'limited');
+    if (interrupted.length) {
+        await new Promise(r => setTimeout(r, 3000));
+        for (const m of interrupted) {
+            m.availability = await probeAvailability(provider, m.id, apiKey);
+        }
+    }
+
+    const live = ranked.filter((m) => m.availability === 'ok');
     live.sort((a, b) => b.capability - a.capability);
     return live.map((m) => ({
         ...m,
