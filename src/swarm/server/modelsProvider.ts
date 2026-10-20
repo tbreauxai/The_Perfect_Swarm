@@ -71,7 +71,7 @@ export async function rankModelsForAccount(provider: string, models: any[], apiK
         if (m.availability === 'limited') rateLimited = true;
     });
 
-    const live = ranked.filter((m) => m.availability === 'ok');
+    const live = ranked.filter((m) => m.availability === 'ok' || m.availability === 'limited');
     live.sort((a, b) => b.capability - a.capability);
     return live.map((m) => ({
         ...m,
@@ -104,7 +104,9 @@ async function probeAvailability(provider: string, modelId: string, apiKey: stri
     const cached = availabilityCache.get(cacheKey);
     if (cached && Date.now() - cached.at < CACHE_MS) return cached.state;
     const state = await pingModel(provider, modelId, apiKey);
-    availabilityCache.set(cacheKey, { state, at: Date.now() });
+    // A rate limit is transient. Cache only a real answer or a real failure,
+    // so a parallel probe burst does not hide a working model for 12 hours.
+    if (state !== 'limited') availabilityCache.set(cacheKey, { state, at: Date.now() });
     return state;
 }
 
