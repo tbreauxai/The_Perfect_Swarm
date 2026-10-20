@@ -66,14 +66,17 @@ export async function rankModelsForAccount(provider: string, models: any[], apiK
 
     if (!apiKey) return ranked.map((m) => ({ ...m, available: false }));
 
+    // A provider with hundreds of models never finishes a full probe.
+    // Probe the top by capability so the catalog returns proved-live models.
+    const PROBE_CAP = 20;
+    const toProbe = ranked.slice(0, PROBE_CAP);
+
     const paced = provider.toLowerCase() === 'mistral';
-    await mapLimit(ranked, paced ? 1 : 6, async (m) => {
+    await mapLimit(toProbe, paced ? 1 : 6, async (m) => {
         m.availability = await probeAvailability(provider, m.id, apiKey);
     });
 
-    // A rate limit is not a verdict. Retry after the provider's own spacing
-    // so the retry lands in a fresh window instead of the same 429.
-    const interrupted = ranked.filter((m) => m.availability === 'limited');
+    const interrupted = toProbe.filter((m) => m.availability === 'limited');
     if (interrupted.length) {
         const spacing = PROVIDER_LIMITS[provider.toLowerCase()]?.minSpacingMs || 60000;
         await new Promise(r => setTimeout(r, spacing));
@@ -82,7 +85,7 @@ export async function rankModelsForAccount(provider: string, models: any[], apiK
         }
     }
 
-    const live = ranked.filter((m) => m.availability === 'ok');
+    const live = toProbe.filter((m) => m.availability === 'ok');
     live.sort((a, b) => b.capability - a.capability);
     return live.map((m) => ({
         ...m,
