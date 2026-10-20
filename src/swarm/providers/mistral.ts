@@ -1,14 +1,5 @@
 import { cleanToken, buildStandardMessages, parseStandardResponse, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
 
-let mistralMutex: Promise<void> = Promise.resolve();
-
-/**
- * Resets the internal Mistral mutex. Primarily used in unit tests and manual rate-limit recovery.
- */
-export function resetMistralMutex(): void {
-    mistralMutex = Promise.resolve();
-}
-
 export class MistralAdapter implements ProviderAdapter {
     readonly providerName = 'mistral';
 
@@ -18,17 +9,9 @@ export class MistralAdapter implements ProviderAdapter {
             throw new Error('Missing Mistral API Key.');
         }
 
-        const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 30000; // 30s default: fail fast on free-tier stalls instead of hanging for 2 minutes
+        const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 30000;
 
-        // Mistral Free Tier pacing mutex (31s pacing to respect 2 RPM limit)
-        await mistralMutex;
-        let releaseMutex: () => void;
-        mistralMutex = new Promise(resolve => { releaseMutex = resolve as () => void; });
-
-        let isSuccess = false;
-
-        try {
-            const messages = buildStandardMessages(options);
+        const messages = buildStandardMessages(options);
 
             const isJson = options.config?.responseMimeType === 'application/json';
 
@@ -102,16 +85,7 @@ export class MistralAdapter implements ProviderAdapter {
             }
 
             const data = await response.json();
-            isSuccess = true;
             const durationMs = Date.now() - startTime;
             return parseStandardResponse(data, this.providerName, options, isJson, undefined, durationMs);
-        } finally {
-            if (isSuccess) {
-                setTimeout(releaseMutex!, 31000);
-            } else {
-                // Release mutex immediately on errors to avoid freezing subsequent requests
-                releaseMutex!();
-            }
-        }
     }
 }
