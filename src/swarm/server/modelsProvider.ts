@@ -1,7 +1,9 @@
+import { ProviderRegistry } from '../providers/registry.ts';
+
 /**
  * Fetches available models from supported LLM providers with edge-safe fetch calls.
- * Chat models are kept, dead ids are dropped after a short probe, and the rest
- * are ordered available-first then most capable.
+ * Chat models are kept. A model is live only if the same adapter a seat uses
+ * returns generated text for a tiny prompt. Dead ids are dropped.
  */
 export async function fetchProviderModels(provider: string, clientKey?: string, env: Record<string, any> = {}): Promise<any[]> {
     const listed = await listProviderModels(provider, clientKey, env);
@@ -92,80 +94,23 @@ async function pingModel(provider: string, modelId: string, apiKey: string): Pro
 }
 
 async function probeOnce(provider: string, modelId: string, apiKey: string): Promise<'ok' | 'limited' | 'dead'> {
-    const controller = new AbortController();
-    const timeout = 12000;
-    const timer = setTimeout(() => controller.abort(), timeout);
     try {
-        const res = await fetch(probeUrl(provider, modelId, apiKey), {
-            method: 'POST',
-            headers: probeHeaders(provider, apiKey),
-            body: JSON.stringify(probeBody(provider, modelId)),
-            signal: controller.signal
+        const adapter = ProviderRegistry.get(provider);
+        const text = await adapter.call({
+            modelName: modelId,
+            prompt: 'Reply with the single word ok.',
+            apiKey,
+            timeoutMs: 12000,
+            role: 'catalog-probe',
+            config: { maxTokens: 16 }
         });
-        const text = await res.text();
-        if (res.status === 429 || res.status === 503) return 'limited';
-        if (res.status === 404 || res.status === 401 || res.status === 402) return 'dead';
-        if (/no longer available|does not exist|not found for account|not available in your/i.test(text)) return 'dead';
-        if (/rate limit|high demand|quota/i.test(text)) return 'limited';
-        if (res.ok && hasCompletion(text)) return 'ok';
+        if (typeof text === 'string' && text.trim().length > 0) return 'ok';
         return 'dead';
-    } catch {
+    } catch (err: any) {
+        const msg = String(err?.message || err);
+        if (/429|rate limit|quota|503|high demand/i.test(msg)) return 'limited';
         return 'dead';
-    } finally {
-        clearTimeout(timer);
     }
-}
-
-function hasCompletion(text: string): boolean {
-    try {
-        const body = JSON.parse(text);
-        if (body?.error) return false;
-        const content = body?.choices?.[0]?.message?.content
-            || body?.choices?.[0]?.message?.reasoning
-            || body?.choices?.[0]?.text;
-        if (typeof content === 'string' && content.trim().length > 0) return true;
-        const parts = body?.candidates?.[0]?.content?.parts;
-        if (Array.isArray(parts) && parts.some((p: any) => typeof p?.text === 'string' && p.text.trim().length > 0)) return true;
-        return false;
-    } catch {
-        return false;
-    }
-}
-
-function probeUrl(provider: string, modelId: string, apiKey: string): string {
-    switch (provider.toLowerCase()) {
-        case 'gemini':
-            return `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
-        case 'groq':
-            return 'https://api.groq.com/openai/v1/chat/completions';
-        case 'mistral':
-            return 'https://api.mistral.ai/v1/chat/completions';
-        case 'nvidia':
-            return 'https://integrate.api.nvidia.com/v1/chat/completions';
-        case 'cloudflare': {
-            const account = typeof process !== 'undefined' ? String(process.env?.CLOUDFLARE_ACCOUNT_ID || '').trim() : '';
-            return account
-                ? `https://api.cloudflare.com/client/v4/accounts/${account}/ai/v1/chat/completions`
-                : 'about:blank';
-        }
-        case 'openrouter':
-            return 'https://openrouter.ai/api/v1/chat/completions';
-        default:
-            return 'about:blank';
-    }
-}
-
-function probeHeaders(provider: string, apiKey: string): Record<string, string> {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (provider.toLowerCase() !== 'gemini') headers.Authorization = `Bearer ${apiKey}`;
-    return headers;
-}
-
-function probeBody(provider: string, modelId: string): Record<string, any> {
-    if (provider.toLowerCase() === 'gemini') {
-        return { contents: [{ parts: [{ text: 'Reply with the single word ok.' }] }], generationConfig: { maxOutputTokens: 8 } };
-    }
-    return { model: modelId, messages: [{ role: 'user', content: 'Reply with the single word ok.' }], max_tokens: 16 };
 }
 
 async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
