@@ -183,7 +183,11 @@ export class ProviderLimiter {
     return null;
   }
 
-  isAvailable(provider: string, model?: string): boolean {
+  /** True when a seat holds this provider's slot. Probes check this and wait. */
+  isBusy(provider: string): boolean {
+    if (!this.isManaged(provider)) return false;
+    return this.state(provider).active > 0;
+  }
     return this.getSkipReason(provider, model) === null;
   }
 
