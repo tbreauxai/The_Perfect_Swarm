@@ -56,7 +56,27 @@ export function capabilityScore(id: string): number {
     return Math.round(score);
 }
 
+// Providers with a tight daily cap are not probed. A probe spends the
+// requests a seat needs. These lists are the known-good models and are
+// reviewed on the first of each month.
+const FIXED_CATALOGS: Record<string, { id: string; name: string }[]> = {
+    openrouter: [
+        { id: 'openrouter/free', name: 'OpenRouter Free' },
+        { id: 'google/gemma-4-31b-it:free', name: 'Gemma 4 31B' },
+        { id: 'nvidia/nemotron-3-super-120b-a12b:free', name: 'Nemotron 3 Super 120B' }
+    ],
+    mistral: [
+        { id: 'ministral-14b-latest', name: 'Ministral 14B' },
+        { id: 'mistral-small-latest', name: 'Mistral Small' }
+    ]
+};
+const FIXED_CATALOG_REVIEWED = '2026-10-01';
+
 export async function rankModelsForAccount(provider: string, models: any[], apiKey?: string): Promise<any[]> {
+    const fixed = FIXED_CATALOGS[provider.toLowerCase()];
+    if (fixed) {
+        return fixed.map(m => ({ ...m, capability: capabilityScore(m.id), available: true }));
+    }
     const chat = (models || []).filter((m) => m && isChatModel(m.id));
     const ranked = chat.map((m) => ({
         ...m,
