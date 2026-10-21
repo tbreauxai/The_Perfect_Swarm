@@ -31,8 +31,8 @@ describe('SwarmEngine: Hierarchical Agent Specialization & Dynamic Routing Integ
                 if (systemInst.includes('Critic') || prompt.includes('Verify whether this analysis faithfully represents')) {
                     return JSON.stringify({
                         pass: true,
-                        computedRating: 94,
-                        criticFeedback: 'Hierarchical specialization analysis verified.'
+                        computedRating: 0.94,
+                        feedback: 'Hierarchical specialization analysis verified.'
                     });
                 }
 

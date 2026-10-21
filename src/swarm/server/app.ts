@@ -1,7 +1,8 @@
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { createAdaptorServer, type ServerType } from '@hono/node-server';
-import { executeSwarmWorkflow, getOrCreateDefaultCortex, type SwarmWorkflowParams } from '../engine/index.ts';
+import { executeSwarmWorkflow, getOrCreateDefaultCortex, SwarmEngine, type SwarmWorkflowParams } from '../engine/index.ts';
+import { MemoryCortex } from '../memory/index.ts';
 import { globalTelemetryCollector, createTelemetryMiddleware } from '../telemetry.ts';
 import { globalPayloadCache, globalSemanticCache } from '../cache.ts';
 import { globalTieredCache } from '../tieredCache.ts';
@@ -636,6 +637,143 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
             }
         } catch (err: any) {
             console.error('[SwarmServer Analyze Error]:', err);
+            return c.json({ error: err.message || 'Internal Server Error' }, 500);
+        }
+    });
+
+    app.post('/api/swarm/backtest', swarmBodyLimit, async (c) => {
+        try {
+            const body = await c.req.json().catch(() => ({}));
+            const slate = Array.isArray(body)
+                ? body
+                : (Array.isArray(body.slate)
+                    ? body.slate
+                    : (Array.isArray(body.games) ? body.games : null));
+
+            if (!slate || slate.length === 0) {
+                return c.json({ error: 'Missing or empty slate array in request body' }, 400);
+            }
+
+            const callerAppId = (c as any).get('callerAppId') as string | undefined;
+            const serverDefaultAppId = defaultSettings.appId || 'perfect-swarm';
+            const originApp = callerAppId || serverDefaultAppId;
+
+            const env = Object.assign({}, typeof process !== 'undefined' ? process.env : {}, c.env || {}) as Record<string, any>;
+            const edgeSettings = {
+                geminiApiKey: env.GEMINI_API_KEY,
+                groqApiKey: env.GROQ_API_KEY,
+                openRouterApiKey: env.OPENROUTER_API_KEY,
+                mistralApiKey: env.MISTRAL_API_KEY,
+                cloudflareApiToken: env.CLOUDFLARE_API_TOKEN || env.CLOUDFLARE_WORKERS_AI_TOKEN,
+                cloudflareAccountId: env.CLOUDFLARE_ACCOUNT_ID || env.CF_ACCOUNT_ID,
+                nvidiaApiKey: env.NVIDIA_API_KEY,
+                githubToken: env.GITHUB_TOKEN,
+                qdrantUrl: env.QDRANT_URL,
+                qdrantApiKey: env.QDRANT_API_KEY
+            };
+
+            const sanitizedSettings = sanitizeClientSettings(body.settings, edgeSettings, defaultSettings);
+            if (Array.isArray(body.agents)) {
+                const forbidden = new Set<string>(FORBIDDEN_CLIENT_SECRET_KEYS);
+                sanitizedSettings.agents = body.agents.map((agent: any) => {
+                    if (!agent || typeof agent !== 'object') return agent;
+                    const cleanAgent: Record<string, any> = {};
+                    for (const [k, v] of Object.entries(agent)) {
+                        if (!forbidden.has(k)) cleanAgent[k] = v;
+                    }
+                    return cleanAgent;
+                });
+            }
+
+            // Create sandboxed in-memory cortex with isolatedStore to prevent polluting live memory or Qdrant
+            const sandboxedCortex = new MemoryCortex({
+                defaultAppId: originApp,
+                isolatedStore: true
+            });
+
+            const engine = new SwarmEngine(
+                sanitizedSettings,
+                body.defaultAi || defaultAi,
+                sandboxedCortex
+            );
+
+            const results: any[] = [];
+
+            for (const item of slate) {
+                const gameId = item.gameId || item.id || `game-${results.length + 1}`;
+                const task = item.task || body.task || `Historical backtest analysis for ${gameId}`;
+                const data = item.data !== undefined ? (typeof item.data === 'string' ? item.data : JSON.stringify(item.data)) : '';
+
+                const gameSettings = item.settings ? sanitizeClientSettings(item.settings, edgeSettings, sanitizedSettings) : sanitizedSettings;
+                if (Array.isArray(item.agents)) {
+                    const forbidden = new Set<string>(FORBIDDEN_CLIENT_SECRET_KEYS);
+                    gameSettings.agents = item.agents.map((agent: any) => {
+                        if (!agent || typeof agent !== 'object') return agent;
+                        const cleanAgent: Record<string, any> = {};
+                        for (const [k, v] of Object.entries(agent)) {
+                            if (!forbidden.has(k)) cleanAgent[k] = v;
+                        }
+                        return cleanAgent;
+                    });
+                }
+
+                try {
+                    const runResult = await engine.execute({
+                        task,
+                        data,
+                        originApp,
+                        callerAppId,
+                        domain: item.domain || body.domain || gameSettings.domain,
+                        settings: gameSettings,
+                        cortex: sandboxedCortex,
+                        memoryCortex: sandboxedCortex,
+                        tools: item.tools || body.tools,
+                        enableDeepAnalysis: item.enableDeepAnalysis ?? body.enableDeepAnalysis,
+                        forceFullSwarm: item.forceFullSwarm ?? body.forceFullSwarm,
+                        speculativeParallel: item.speculativeParallel ?? body.speculativeParallel,
+                        maxSpeculativeConcurrency: item.maxSpeculativeConcurrency ?? body.maxSpeculativeConcurrency,
+                        complexityOverride: item.complexityOverride ?? body.complexityOverride,
+                        bypassCache: item.bypassCache ?? body.bypassCache ?? true,
+                        scorecardMode: (item.scorecardMode ?? body.scorecardMode) === true
+                    });
+
+                    const closingLine = item.closingLine ?? item.closing_line;
+                    const actualOutcome = item.actualOutcome ?? item.outcome;
+                    let grading: any = undefined;
+
+                    if (actualOutcome || closingLine !== undefined) {
+                        grading = {
+                            closingLine,
+                            actualOutcome,
+                            simulatedAt: new Date().toISOString()
+                        };
+                    }
+
+                    results.push({
+                        gameId,
+                        status: runResult.status || 'complete',
+                        workflowId: runResult.workflowId ? String(runResult.workflowId) : undefined,
+                        finalAnalysis: runResult.finalAnalysis,
+                        grading,
+                        metrics: runResult.metrics,
+                        degraded: runResult.degraded || []
+                    });
+                } catch (itemErr: any) {
+                    results.push({
+                        gameId,
+                        status: 'error',
+                        error: itemErr.message || String(itemErr)
+                    });
+                }
+            }
+
+            return c.json({
+                ok: true,
+                simulatedCount: results.length,
+                results
+            }, 200);
+        } catch (err: any) {
+            console.error('[SwarmServer Backtest Error]:', err);
             return c.json({ error: err.message || 'Internal Server Error' }, 500);
         }
     });

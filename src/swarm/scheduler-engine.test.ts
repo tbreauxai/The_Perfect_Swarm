@@ -31,8 +31,8 @@ describe('SwarmEngine: Adaptive Load-Balancing & Task-Scheduling Integration', (
                 if (systemInst.includes('Critic') || prompt.includes('Verify whether this analysis faithfully represents')) {
                     return JSON.stringify({
                         pass: true,
-                        computedRating: 92,
-                        criticFeedback: 'Scheduled analysis verified.'
+                        computedRating: 0.92,
+                        feedback: 'Scheduled analysis verified.'
                     });
                 }
 

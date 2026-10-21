@@ -283,6 +283,17 @@ describe('ConceptDriftDetector (Page-Hinkley & Embedding Divergence)', () => {
         expect(driftDetected).toBe(true);
     });
 
+    it('does not trigger downward quality drift on push outcomes', () => {
+        const d = new (detector.constructor as any)();
+        for (let i = 0; i < 10; i++) {
+            d.recordQualityObservation(0.95);
+        }
+        for (let i = 0; i < 10; i++) {
+            const alert = d.recordQualityObservation(0.5, { isPush: true });
+            expect(alert).toBeNull();
+        }
+    });
+
     it('detects quality degradation drift via Page-Hinkley test', () => {
         // Normal high quality
         for (let i = 0; i < 10; i++) {

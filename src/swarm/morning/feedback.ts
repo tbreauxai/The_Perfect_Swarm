@@ -115,9 +115,10 @@ export async function gradeAndRecordFinalGames(
       // 4. Mark row status = 'final' in Supabase
       // Same shape and Brier formula as the DuelOdds Worker grader (cloudflare/src/morningJudgments.ts), which
       // DuelOdds learningLedgers reads (result.home_win, result.margin, brier). A push counts as home_win false.
+      const isPush = outcome === 'push' || homeScore === awayScore;
       const homeWin = homeScore > awayScore;
       const brier = Number.isFinite(winProbHome)
-        ? Math.round(Math.pow(winProbHome - (homeWin ? 1 : 0), 2) * 1000) / 1000
+        ? Math.round(Math.pow(winProbHome - (isPush ? 0.5 : (homeWin ? 1 : 0)), 2) * 1000) / 1000
         : null;
       if (cfg) {
         try {

@@ -378,6 +378,10 @@ export function renderPromptConsensusBlock(digest: AnalystConsensusDigest): stri
         }
     }
 
+    if (digest.agreementLevel === 'divergent' && digest.confidenceScore < 0.45) {
+        lines.push('• High Divergence Warning: Specialist opinions sharply diverge with low consensus confidence (< 0.45). Directive: Evaluate a no_play / pass rating rather than forcing low-conviction picks.');
+    }
+
     lines.push('Directives: Give highest synthesis weight to Unanimous and Majority findings. Address Dissenting Observations if corroborated by data.');
 
     return lines.join('\n');
