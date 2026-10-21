@@ -34,8 +34,8 @@ describe('SwarmEngine: Tiered Caching & State-Compression Integration', () => {
                 if (systemInst.includes('Critic') || prompt.includes('Verify whether this analysis faithfully represents')) {
                     return JSON.stringify({
                         pass: true,
-                        computedRating: 95,
-                        criticFeedback: 'Tiered caching analysis verified.'
+                        computedRating: 0.95,
+                        feedback: 'Tiered caching analysis verified.'
                     });
                 }
 

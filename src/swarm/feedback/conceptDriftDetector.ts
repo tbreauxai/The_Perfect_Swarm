@@ -75,7 +75,9 @@ export class ConceptDriftDetector {
     /**
      * Page-Hinkley test for downward quality drift.
      */
-    public recordQualityObservation(qualityScore: number): DriftAlert | null {
+    public recordQualityObservation(qualityScore: number, options?: { isPush?: boolean; isVoid?: boolean } | boolean): DriftAlert | null {
+        const isPush = typeof options === 'boolean' ? options : Boolean(options?.isPush || options?.isVoid);
+        if (isPush) return null;
         this.qualityCount++;
         this.qualityMean += (qualityScore - this.qualityMean) / this.qualityCount;
         // Tracking downward drop

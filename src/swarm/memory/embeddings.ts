@@ -62,7 +62,7 @@ export class DeterministicLocalEmbeddingProvider implements EmbeddingProvider {
 
     static computeVector(text: string, dimension: number = 768): number[] {
         const vector = new Array(dimension).fill(0);
-        const tokens = (text || '').toLowerCase().match(/\b\w+\b/g) || [];
+        const tokens = (text || '').toLowerCase().match(/[+-]?\d+(?:\.\d+)?|[a-z0-9_\/]+/gi) || [];
         if (tokens.length === 0) return vector;
 
         for (const token of tokens) {

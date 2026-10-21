@@ -115,8 +115,8 @@ export class MemoryCortex {
 
     constructor(config: MemoryCortexConfig) {
         const safeEnv = typeof process !== 'undefined' ? process.env : {} as Record<string, string | undefined>;
-        const url = config.url || safeEnv.QDRANT_URL;
-        const apiKey = config.apiKey || safeEnv.QDRANT_API_KEY;
+        const url = config.url !== undefined ? config.url : (config.isolatedStore ? undefined : safeEnv.QDRANT_URL);
+        const apiKey = config.apiKey !== undefined ? config.apiKey : (config.isolatedStore ? undefined : safeEnv.QDRANT_API_KEY);
         this.collectionNameTemplate = config.collectionNameTemplate;
         this.collectionName = config.collectionName || "pwa_swarm_dev_cortex_v2";
         this.defaultAppId = config.defaultAppId || "default";

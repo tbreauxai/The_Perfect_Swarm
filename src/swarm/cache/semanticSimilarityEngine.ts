@@ -13,7 +13,10 @@ export class SemanticSimilarityEngine {
     static normalizeText(text: string): string {
         return (text || '')
             .toLowerCase()
-            .replace(/[^\w\s]/g, ' ')
+            .replace(/\.{2,}/g, ' ')
+            .replace(/(?<=[a-z])-(?=[a-z])/g, ' ')
+            .replace(/[^\w\s+\-\/.]/g, ' ')
+            .replace(/(?<!\d)\.|\.(?!\d)/g, ' ')
             .replace(/\s+/g, ' ')
             .trim();
     }

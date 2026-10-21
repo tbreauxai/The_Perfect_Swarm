@@ -92,7 +92,8 @@ export class ContinuousFeedbackEngine {
         if (latAlert) activeAlerts.push(latAlert);
 
         if (metrics.qualityScore !== undefined) {
-            const qualAlert = this.driftDetector.recordQualityObservation(metrics.qualityScore);
+            const isPush = Boolean((metrics as any).isPush || (metrics as any).outcome === 'push' || (params as any).outcome === 'push');
+            const qualAlert = this.driftDetector.recordQualityObservation(metrics.qualityScore, { isPush });
             if (qualAlert) activeAlerts.push(qualAlert);
         }
 

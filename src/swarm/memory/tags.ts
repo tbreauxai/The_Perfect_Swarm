@@ -146,6 +146,8 @@ export interface CandidateRankingOptions {
     verifiedOnly?: boolean;
     agentRole?: string;
     includeShared?: boolean;
+    halfLifeDays?: number;
+    referenceTime?: number;
     [key: string]: any;
 }
 
@@ -172,10 +174,13 @@ export function rankAndFilterCandidates(
         id: string;
         payload: any;
         vectorScore: number;
-        weight: number;
+        weight: number; recency?: number;
         finalScore: number;
         memoryType: MemoryType;
     }[] = [];
+
+    const halfLifeDays = options.halfLifeDays ?? 30;
+    const now = options.referenceTime ?? Date.now();
 
     for (const c of candidates) {
         const tags = normalizeMemoryPayload(c.payload, defaultAppId);
@@ -186,7 +191,22 @@ export function rankAndFilterCandidates(
         if (options.verifiedOnly && tags.memoryType !== 'fact') continue;
         if (options.agentRole && c.payload.agentRole !== options.agentRole) continue;
 
-        const finalScore = c.vectorScore * weight;
+        // Recency decay:
+        // Facts (graded outcomes, baseline axioms) retain stable weight (recency = 1.0).
+        // Judgments, insights, and transient observations decay exponentially with age: recency = 0.5^(daysOld / halfLifeDays).
+        let recency = 1.0;
+        if (tags.memoryType !== 'fact' && halfLifeDays > 0) {
+            const rawTime = c.payload.timestamp || c.payload.created_at || c.payload.gradedAt;
+            if (rawTime) {
+                const itemTime = typeof rawTime === 'number' ? rawTime : new Date(rawTime).getTime();
+                if (!Number.isNaN(itemTime) && itemTime > 0) {
+                    const daysOld = Math.max(0, (now - itemTime) / (1000 * 60 * 60 * 24));
+                    recency = Math.pow(0.5, daysOld / halfLifeDays);
+                }
+            }
+        }
+
+        const finalScore = c.vectorScore * weight * recency;
         scored.push({
             id: c.id,
             payload: {
@@ -198,10 +218,12 @@ export function rankAndFilterCandidates(
                 entityIds: tags.entityIds,
                 retrievalWeight: weight,
                 retrievalScore: finalScore,
+                recencyFactor: recency,
                 rawSimilarity: c.vectorScore
             },
             vectorScore: c.vectorScore,
             weight,
+            recency,
             finalScore,
             memoryType: tags.memoryType
         });
