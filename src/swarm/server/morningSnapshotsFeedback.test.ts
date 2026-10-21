@@ -349,6 +349,23 @@ describe("Morning write-error hotfix", () => {
       expect(m.patches[0].body.brier).toBeCloseTo(0.36, 3);
     });
 
+    it("a push/tie: calculates brier against 0.5 neutrality instead of 0", async () => {
+      const m = judgmentsFetch([judgment("nhl-401892510", 0.6)]);
+      await gradeAndRecordFinalGames(
+        cfg,
+        [finalGame("nhl-401892510", 3, 3)],
+        "2026-10-15",
+        m.fetchFn,
+      );
+      expect(m.patches[0].body.result).toMatchObject({
+        home_win: false,
+        margin: 0,
+        total: 6,
+        outcome: "push",
+      });
+      expect(m.patches[0].body.brier).toBeCloseTo(0.01, 3);
+    });
+
     it("brier is rounded to 3 decimals, like the DuelOdds Worker grader", async () => {
       const m = judgmentsFetch([judgment("nhl-401892508", 0.6543)]);
       await gradeAndRecordFinalGames(

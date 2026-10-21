@@ -91,4 +91,44 @@ describe('Memory Tag Utilities', () => {
         expect(ranked[1].content).toBe('Judgment 1');
         expect(ranked[0].retrievalWeight).toBe(1.0);
     });
+    it('decays stale judgments exponentially with age while keeping facts stable', () => {
+        const now = 1700000000000;
+        const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+        const sixtyDaysMs = 60 * 24 * 60 * 60 * 1000;
+
+        const candidates = [
+            {
+                id: 'fresh-judgment',
+                payload: { originApp: 'duelodds', domain: 'odds', memoryType: 'judgment', content: 'Fresh Judgment', timestamp: new Date(now).toISOString() },
+                vectorScore: 0.80
+            },
+            {
+                id: 'stale-judgment-60d',
+                payload: { originApp: 'duelodds', domain: 'odds', memoryType: 'judgment', content: 'Stale Judgment', timestamp: new Date(now - sixtyDaysMs).toISOString() },
+                vectorScore: 0.95 // higher initial vector score, but decays: 0.95 * 0.5^(60/30) = 0.95 * 0.25 = 0.2375
+            },
+            {
+                id: 'stale-fact-60d',
+                payload: { originApp: 'duelodds', domain: 'odds', memoryType: 'fact', content: 'Stale Fact', timestamp: new Date(now - sixtyDaysMs).toISOString() },
+                vectorScore: 0.85 // fact retains 1.0 recency factor
+            }
+        ];
+
+        const ranked = rankAndFilterCandidates(
+            candidates,
+            { appId: 'duelodds', domain: 'odds', referenceTime: now, halfLifeDays: 30 },
+            'odds'
+        );
+
+        // Stale fact retains recency 1.0 (outranks judgments at same weight)
+        expect(ranked[0].content).toBe('Stale Fact');
+        expect(ranked[0].recencyFactor).toBe(1.0);
+
+        // Fresh judgment (score 0.80 * 1.0 = 0.80) outranks 60-day stale judgment (0.95 * 0.25 = 0.2375)
+        expect(ranked[1].content).toBe('Fresh Judgment');
+        expect(ranked[1].recencyFactor).toBeCloseTo(1.0, 2);
+
+        expect(ranked[2].content).toBe('Stale Judgment');
+        expect(ranked[2].recencyFactor).toBeCloseTo(0.25, 2);
+    });
 });

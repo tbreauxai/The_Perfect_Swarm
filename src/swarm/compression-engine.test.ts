@@ -38,8 +38,8 @@ describe('SwarmEngine: Token-Aware Prompt Compression & Semantic Deduplication I
                 if (systemInst.includes('Critic') || prompt.includes('Verify whether this analysis faithfully represents')) {
                     return JSON.stringify({
                         pass: true,
-                        computedRating: 94,
-                        criticFeedback: 'Analysis is sound and adheres strictly to verified findings.'
+                        computedRating: 0.94,
+                        feedback: 'Analysis is sound and adheres strictly to verified findings.'
                     });
                 }
 

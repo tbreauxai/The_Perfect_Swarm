@@ -188,6 +188,8 @@ export class ProviderLimiter {
     if (!this.isManaged(provider)) return false;
     return this.state(provider).active > 0;
   }
+
+  isAvailable(provider: string, model?: string): boolean {
     return this.getSkipReason(provider, model) === null;
   }
 

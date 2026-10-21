@@ -27,7 +27,8 @@ export const getApiKeyForProvider = (settings?: Partial<AppSettings>, provider?:
         case 'groq': return settings.groqApiKey || '';
         case 'mistral': return settings.mistralApiKey || '';
         case 'openrouter': return settings.openRouterApiKey || '';
-        case 'github': return settings.githubToken || '';
+        case 'nvidia': return settings.nvidiaApiKey || '';
+        case 'cloudflare': return settings.cloudflareApiToken || '';
         default: return '';
     }
 };

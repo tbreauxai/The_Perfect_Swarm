@@ -8,6 +8,8 @@ export interface AppSettings {
     openRouterApiKey?: string;
     groqApiKey?: string;
     mistralApiKey?: string;
+    nvidiaApiKey?: string;
+    cloudflareApiToken?: string;
     qdrantUrl?: string;
     qdrantApiKey?: string;
     githubToken?: string;

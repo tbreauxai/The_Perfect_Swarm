@@ -131,4 +131,20 @@ describe('Consensus Pipeline & Disagreement Arbitration', () => {
         expect(extracted).toContain('Normal disk I/O');
         expect(extracted).toContain('Overall operations stable');
     });
+    it('injects no_play directive when agreementLevel is divergent and confidence < 0.45', () => {
+        const divergentDigest: AnalystConsensusDigest = {
+            totalAnalysts: 3,
+            consensusScore: 0.15,
+            agreementLevel: 'divergent',
+            confidenceScore: 0.35,
+            unanimousFindings: [],
+            majorityFindings: [],
+            dissentingOpinions: ['Seat 1 bet Home ML', 'Seat 2 bet Away +4.5', 'Seat 3 bet Under 44.5'],
+            summaryText: 'High divergence detected across specialists'
+        };
+
+        const block = renderPromptConsensusBlock(divergentDigest);
+        expect(block).toContain('High Divergence Warning');
+        expect(block).toContain('no_play / pass');
+    });
 });

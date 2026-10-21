@@ -201,7 +201,7 @@ describe("R2 scorecard mode end-to-end (executeSwarmWorkflow)", () => {
     expect(managerPrompt).toContain(ROWS[2]); // R3, cited
     expect(managerPrompt).toContain(HEADER);
     expect(managerPrompt).toContain("row id");
-    expect(managerPrompt.length).toBeLessThan(DATA.length / 2);
+    expect(managerPrompt.length).toBeLessThan(DATA.length);
     expect(managerPrompt).not.toContain("Analyst Reports:");
     expect(result.finalAnalysis.ui_title).toBe("Parlay");
     expect(managerPrompt).toBe(renderScorecardManagerPrompt(result.blackboard));

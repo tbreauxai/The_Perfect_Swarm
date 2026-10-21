@@ -1,26 +1,44 @@
 [
   {
-    "id": "goal-1-nvidia-json-mode-and-free-tier",
-    "description": "Update nvidia.ts to pass response_format when responseMimeType is application/json; update modelsProvider.ts to mark NVIDIA models free: true.",
+    "id": "goal-1-push-aware-drift-and-brier",
+    "description": "Fix push/tie outcome calibration and Brier scoring in feedback.ts and conceptDriftDetector.ts so pushes evaluate with 0.5 neutrality or skip rather than penalizing as losses or triggering false downward drift alerts.",
     "status": "completed",
-    "verification": "nvidia.ts sends response_format: { type: 'json_object' }; modelsProvider.ts marks free: true."
+    "verification": "Pushes are scored against 0.5 target in feedback.ts Brier calculation; push events do not trigger downward drift alerts in conceptDriftDetector.ts."
   },
   {
-    "id": "goal-2-cloudflare-json-mode-and-fallback",
-    "description": "Update cloudflare.ts to pass response_format, fallback if rejected (400), and support flexible account ID resolution.",
+    "id": "goal-2-test-mock-contract-alignment",
+    "description": "Standardize mock critic responses across engine test suites (scheduler, tieredCache, compression, hierarchy) using computedRating: 0.9X and feedback: string.",
     "status": "completed",
-    "verification": "cloudflare.ts sends response_format, falls back on format error, and resolves account ID."
+    "verification": "Mocks comply with VerificationResult schema and all 4 engine test suites pass."
   },
   {
-    "id": "goal-3-duelodds-model-catalog-updates",
-    "description": "Update DuelOdds swarmModelService.ts: add moonshotai/kimi-k2.6 to DEAD_MODEL_IDS and set NVIDIA fallback models free: true.",
+    "id": "goal-3-time-decayed-memory-retrieval",
+    "description": "Implement exponential time-decay in tags.ts candidate ranking using Math.pow(0.5, daysOld / halfLifeDays) for judgments while exempting axioms/facts.",
     "status": "completed",
-    "verification": "swarmModelService.ts in DuelOdds has moonshotai in DEAD_MODEL_IDS and free: true for nvidia models."
+    "verification": "Stale judgments decay in retrieval priority relative to recent observations while facts retain stable weight."
   },
   {
-    "id": "goal-4-unit-tests-and-full-suite-verification",
-    "description": "Add nvidia.test.ts and cloudflare.test.ts testing JSON mode, format fallbacks, and run full test suites.",
+    "id": "goal-4-sparse-tokenizer-betting-symbols",
+    "description": "Preserve signed lines (+3.5, -110) and betting operators (O/U, ATS, ML, PK) across tokenizer.ts, embeddings.ts, and semanticSimilarityEngine.ts.",
     "status": "completed",
-    "verification": "All unit tests pass (including new tests) and linter passes."
+    "verification": "Signed numbers, slashes, and key betting symbols are retained as distinct tokens during lexical and embedding encoding."
+  },
+  {
+    "id": "goal-5-divergence-gating-synthesis",
+    "description": "Implement dynamic divergence gating in consensusPipeline.ts ordering Manager to evaluate no_play/pass when agreementLevel is divergent and confidence < 0.45.",
+    "status": "completed",
+    "verification": "Consensus block prompt includes explicit no_play directive when specialists diverge with low confidence."
+  },
+  {
+    "id": "goal-6-isolated-historical-backtesting",
+    "description": "Implement POST /api/swarm/backtest in app.ts with sandboxed in-memory cortex (isolatedStore: true) for historical slate simulation.",
+    "status": "completed",
+    "verification": "POST /api/swarm/backtest simulates historical slate without mutating global/Qdrant memory or telemetry."
+  },
+  {
+    "id": "goal-7-test-suite-and-verification",
+    "description": "Run npm run lint, npm run test:unit, and node scripts/smoke-start.mjs to ensure 100% green verification.",
+    "status": "completed",
+    "verification": "Zero TypeScript errors, 100% unit tests passing, smoke start passes."
   }
 ]

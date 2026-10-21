@@ -1,15 +1,84 @@
 import { ProviderRegistry } from '../providers/registry.ts';
-import { globalProviderLimiter, PROVIDER_LIMITS } from '../providers/limiter.ts';
+import { globalProviderLimiter } from '../providers/limiter.ts';
+
+export const DEFAULT_PROVIDER_MODELS: Record<string, string> = {
+    gemini: 'gemini-3.5-flash',
+    groq: 'openai/gpt-oss-120b',
+    openrouter: 'nvidia/nemotron-3-super-120b-a12b:free',
+    mistral: 'mistral-small-latest',
+    cloudflare: '@cf/meta/llama-3.1-8b-instruct',
+    nvidia: 'nvidia/llama-3.3-nemotron-super-49b-v1.5'
+};
+
+const catalogCache = new Map<string, { models: any[]; at: number }>();
+const inFlightProbes = new Map<string, Promise<any[]>>();
+export const CATALOG_CACHE_MS = 60 * 60 * 1000;
+
+export function clearCatalogCache(): void {
+    catalogCache.clear();
+    availabilityCache.clear();
+    deadModels.clear();
+    inFlightProbes.clear();
+}
 
 /**
  * Fetches available models from supported LLM providers with edge-safe fetch calls.
  * Chat models are kept. A model is live only if the same adapter a seat uses
  * returns generated text for a tiny prompt. Dead ids are dropped.
  */
-export async function fetchProviderModels(provider: string, clientKey?: string, env: Record<string, any> = {}): Promise<any[]> {
-    const listed = await listProviderModels(provider, clientKey, env);
-    const apiKey = clientKey || keyFor(provider, env);
-    return rankModelsForAccount(provider, listed, apiKey);
+export async function fetchProviderModels(
+    provider: string,
+    clientKey?: string,
+    env: Record<string, any> = {},
+    options?: { forceRefresh?: boolean; boundedWaitMs?: number }
+): Promise<any[]> {
+    const prov = provider.toLowerCase();
+    const apiKey = clientKey || keyFor(prov, env);
+    const cacheKey = `${prov}:${apiKey ? apiKey.slice(-6) : 'unkeyed'}`;
+
+    if (!options?.forceRefresh) {
+        const cached = catalogCache.get(cacheKey);
+        if (cached && Date.now() - cached.at < CATALOG_CACHE_MS) {
+            return cached.models;
+        }
+    }
+
+    if (inFlightProbes.has(cacheKey)) {
+        return inFlightProbes.get(cacheKey)!;
+    }
+
+    const probePromise = (async () => {
+        try {
+            const listed = await listProviderModels(prov, clientKey, env);
+            const ranked = await rankModelsForAccount(prov, listed, apiKey);
+            if (ranked.length > 0) {
+                catalogCache.set(cacheKey, { models: ranked, at: Date.now() });
+            }
+            return ranked;
+        } finally {
+            inFlightProbes.delete(cacheKey);
+        }
+    })();
+
+    inFlightProbes.set(cacheKey, probePromise);
+
+    if (options?.boundedWaitMs && options.boundedWaitMs > 0) {
+        let timer: any;
+        const timeoutPromise = new Promise<any[]>((resolve) => {
+            timer = setTimeout(() => {
+                const existing = catalogCache.get(cacheKey);
+                if (existing) {
+                    resolve(existing.models);
+                } else {
+                    const fallbackModel = DEFAULT_PROVIDER_MODELS[prov];
+                    resolve(fallbackModel ? [{ id: fallbackModel, name: fallbackModel, available: true }] : []);
+                }
+            }, options.boundedWaitMs);
+        });
+        return Promise.race([probePromise, timeoutPromise]).finally(() => clearTimeout(timer));
+    }
+
+    return probePromise;
 }
 
 const CATALOG_PROVIDERS = ['groq', 'gemini', 'openrouter', 'mistral', 'nvidia', 'cloudflare'];
@@ -36,7 +105,7 @@ const CACHE_MS = 12 * 60 * 60 * 1000;
 
 /** A model the probe proved dead (404 / not found). Seats read this and skip it. */
 export function isModelDead(provider: string, modelId: string): boolean {
-    return deadModels.has(`${provider}:${modelId}`);
+    return deadModels.has(`${provider.toLowerCase()}:${modelId}`);
 }
 
 export function isChatModel(id: string): boolean {
@@ -73,18 +142,40 @@ const FIXED_CATALOGS: Record<string, { id: string; name: string }[]> = {
 const FIXED_CATALOG_REVIEWED = '2026-10-01';
 
 export async function rankModelsForAccount(provider: string, models: any[], apiKey?: string): Promise<any[]> {
-    const fixed = FIXED_CATALOGS[provider.toLowerCase()];
+    const prov = provider.toLowerCase();
+    const fixed = FIXED_CATALOGS[prov];
     if (fixed) {
         return fixed.map(m => ({ ...m, capability: capabilityScore(m.id), available: true }));
     }
     const chat = (models || []).filter((m) => m && isChatModel(m.id));
-    const ranked = chat.map((m) => ({
-        ...m,
-        capability: capabilityScore(m.id)
-    }));
+    const defaultModelId = DEFAULT_PROVIDER_MODELS[prov];
+
+    const ranked = chat.map((m) => {
+        const isFree = Boolean(m.free || /:free|openrouter\/free/i.test(m.id));
+        const isDefault = defaultModelId && (m.id === defaultModelId || m.id.endsWith(defaultModelId));
+        let cap = capabilityScore(m.id);
+        // Priority boost: default model and free models must rank highest for probing
+        if (isDefault) cap += 1000;
+        else if (isFree && prov === 'openrouter') cap += 500;
+        return {
+            ...m,
+            free: isFree,
+            capability: cap
+        };
+    });
     ranked.sort((a, b) => b.capability - a.capability);
 
-    if (!apiKey) return ranked.map((m) => ({ ...m, available: false }));
+    if (!apiKey) {
+        return ranked.map((m) => {
+            const displayCap = capabilityScore(m.id);
+            return {
+                ...m,
+                capability: displayCap,
+                name: displayCap ? `${m.name} · c${displayCap}` : m.name,
+                available: false
+            };
+        });
+    }
 
     // A provider with hundreds of models never finishes a full probe.
     // Probe the top by capability so the catalog returns proved-live models.
@@ -92,7 +183,7 @@ export async function rankModelsForAccount(provider: string, models: any[], apiK
     const toProbe = ranked.slice(0, PROBE_CAP);
 
     // OpenRouter free models rate limit fast. Probe fewer, slower, so some answer.
-    const paced = provider.toLowerCase() === 'mistral' || provider.toLowerCase() === 'openrouter';
+    const paced = prov === 'mistral' || prov === 'openrouter';
     const cap = paced ? 8 : PROBE_CAP;
     const batch = toProbe.slice(0, cap);
     await mapLimit(batch, paced ? 1 : 6, async (m) => {
@@ -103,25 +194,47 @@ export async function rankModelsForAccount(provider: string, models: any[], apiK
     // provider window and the caller's 20s timeout fired first, so the
     // catalog never arrived. A rate limit is not cached, so the next
     // request probes those models fresh.
-    const live = batch.filter((m) => m.availability === 'ok');
+    let live = batch.filter((m) => m.availability === 'ok');
 
-    // A fresh probe can come back empty when every model is rate limited.
-    // Keep the models a previous probe proved live so the catalog is not blank.
+    // 1. If none returned 'ok', check if previously cached live models exist for this provider
     if (live.length === 0) {
         for (const m of batch) {
-            const cached = availabilityCache.get(`${provider}:${m.id}`);
+            const cached = availabilityCache.get(`${prov}:${m.id}`);
             if (cached && cached.state === 'ok' && Date.now() - cached.at < CACHE_MS) {
                 m.availability = 'ok';
                 live.push(m);
             }
         }
     }
+
+    // 2. If still empty, check if models in batch were 'limited' (rate limited, NOT dead)
+    // Rate-limited models are valid working models that are temporarily throttled.
+    if (live.length === 0) {
+        const limited = batch.filter((m) => m.availability === 'limited');
+        if (limited.length > 0) {
+            live = limited;
+        }
+    }
+
+    // 3. If still empty (e.g. cold start, all network failed), preserve default model or batch models
+    // so the catalog is NEVER blank when known models exist.
+    if (live.length === 0 && batch.length > 0) {
+        const defaultMatch = batch.find((m) => m.id === defaultModelId) || batch[0];
+        if (defaultMatch && !isModelDead(prov, defaultMatch.id)) {
+            live = [defaultMatch];
+        }
+    }
+
     live.sort((a, b) => b.capability - a.capability);
-    return live.map((m) => ({
-        ...m,
-        name: m.capability ? `${m.name} · c${m.capability}` : m.name,
-        available: true
-    }));
+    return live.map((m) => {
+        const displayCap = capabilityScore(m.id);
+        return {
+            ...m,
+            capability: displayCap,
+            name: displayCap ? `${m.name} · c${displayCap}` : m.name,
+            available: m.availability !== 'dead'
+        };
+    });
 }
 
 function availabilityRank(state?: string): number {
@@ -136,7 +249,14 @@ function keyFor(provider: string, env: Record<string, any>): string | undefined 
         case 'gemini': return env.GEMINI_API_KEY;
         case 'groq': return env.GROQ_API_KEY;
         case 'mistral': return env.MISTRAL_API_KEY;
-        case 'cloudflare': return env.CLOUDFLARE_API_TOKEN || env.CLOUDFLARE_WORKERS_AI_TOKEN;
+        case 'cloudflare': {
+            const token = env.CLOUDFLARE_API_TOKEN || env.CLOUDFLARE_WORKERS_AI_TOKEN;
+            const account = env.CLOUDFLARE_ACCOUNT_ID || env.CF_ACCOUNT_ID;
+            if (token && account && !token.includes(':')) {
+                return `${account}:${token}`;
+            }
+            return token;
+        }
         case 'nvidia': return env.NVIDIA_API_KEY;
         case 'openrouter': return env.OPENROUTER_API_KEY;
         default: return undefined;
@@ -144,7 +264,7 @@ function keyFor(provider: string, env: Record<string, any>): string | undefined 
 }
 
 async function probeAvailability(provider: string, modelId: string, apiKey: string): Promise<'ok' | 'limited' | 'dead'> {
-    const cacheKey = `${provider}:${modelId}`;
+    const cacheKey = `${provider.toLowerCase()}:${modelId}`;
     const cached = availabilityCache.get(cacheKey);
     if (cached && Date.now() - cached.at < CACHE_MS) return cached.state;
     const state = await pingModel(provider, modelId, apiKey);
@@ -158,7 +278,7 @@ async function pingModel(provider: string, modelId: string, apiKey: string): Pro
     const first = await probeOnce(provider, modelId, apiKey);
     if (first !== 'dead') return first;
     // A paced provider already spent its budget. Do not spend it again.
-    if (provider.toLowerCase() === 'mistral') return first;
+    if (provider.toLowerCase() === 'mistral' || provider.toLowerCase() === 'openrouter') return first;
     return probeOnce(provider, modelId, apiKey);
 }
 
@@ -175,9 +295,9 @@ async function probeOnce(provider: string, modelId: string, apiKey: string): Pro
             modelName: modelId,
             prompt: 'Reply with the single word ok.',
             apiKey,
-            timeoutMs: 20000,
+            timeoutMs: 15000,
             role: 'catalog-probe',
-            config: { maxTokens: 64, groqMode: 'chat' }
+            config: { maxTokens: 64, maxTokensCap: 64, groqMode: 'chat' }
         });
         if (typeof text === 'string' && text.trim().length > 0) return 'ok';
         return 'dead';
@@ -185,11 +305,13 @@ async function probeOnce(provider: string, modelId: string, apiKey: string): Pro
         const msg = String(err?.message || err);
         // A 404 is a real deprecation. Record it so seats skip the model.
         // A rate limit is not. It never touches the seat circuit.
-        if (/\b404\b|model_not_found|NOT_FOUND/i.test(msg)) {
-            deadModels.add(`${provider}:${modelId}`);
+        if (/\b404\b|model_not_found|NOT_FOUND|deprecated/i.test(msg)) {
+            deadModels.add(`${provider.toLowerCase()}:${modelId}`);
             return 'dead';
         }
-        if (/429|rate limit|quota|503|high demand/i.test(msg)) return 'limited';
+        if (/429|rate limit|quota|503|502|504|timeout|timed out|abort|high demand|temporarily unavailable/i.test(msg)) {
+            return 'limited';
+        }
         return 'dead';
     }
 }
@@ -217,7 +339,7 @@ async function listProviderModels(provider: string, clientKey?: string, env: Rec
                 id: m.id,
                 name: m.name || m.id,
                 context_length: m.context_length,
-                free: m.pricing?.prompt === '0' && m.pricing?.completion === '0'
+                free: Boolean((m.pricing?.prompt === '0' && m.pricing?.completion === '0') || m.id?.endsWith(':free'))
             }));
         }
         case 'groq': {

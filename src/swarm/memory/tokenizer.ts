@@ -5,7 +5,7 @@ import type { SparseVector } from './types.ts';
  */
 export class SparseTokenizer {
     static encode(text: string, vocabSize: number = 10000): SparseVector {
-        const tokens = text.toLowerCase().match(/\b\w+\b/g) || [];
+        const tokens = text.toLowerCase().match(/[+-]?\d+(?:\.\d+)?|[a-z0-9_\/]+/gi) || [];
         const termFreqs: Record<number, number> = {};
 
         for (const token of tokens) {

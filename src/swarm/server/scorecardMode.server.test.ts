@@ -8,7 +8,8 @@ const DATA = [
   "id|event|pick|mkt|line|odds|fairP|modelP|ev",
   "R1|NYY @ BOS 10-16 18:10|NYY|ml|-|-120|0.530|0.560|2.1",
   "R2|NYY @ BOS 10-16 18:10|BOS|ml|-|+102|0.470|0.440|-3.0",
-  "R3|SENTINEL-SERVER-ROW|X|ml|-|+100|0.500|0.500|0.0",
+  ...Array.from({ length: 23 }, (_, i) => `R${i + 3}|Team${i} @ TeamB 10-16 18:10|Team${i}|ml|-|-110|0.500|0.500|0.0`),
+  "R26|SENTINEL-SERVER-ROW|X|ml|-|+100|0.500|0.500|0.0",
 ].join("\n");
 
 const agents = [
