@@ -1,26 +1,44 @@
 [
   {
-    "id": "goal-1-models-provider-probe-selection",
-    "description": "Fix model selection and probe prioritization in modelsProvider.ts: guarantee DEFAULT_PROVIDER_MODELS and free models (:free) are included in the probe batch; prevent empty catalog returns when probes are rate-limited or cold.",
+    "id": "goal-1-push-aware-drift-and-brier",
+    "description": "Fix push/tie outcome calibration and Brier scoring in feedback.ts and conceptDriftDetector.ts so pushes evaluate with 0.5 neutrality or skip rather than penalizing as losses or triggering false downward drift alerts.",
     "status": "completed",
-    "verification": "rankModelsForAccount probes default and free models first, keeps working models on rate limit, and returns non-empty working model catalog."
+    "verification": "Pushes are scored against 0.5 target in feedback.ts Brier calculation; push events do not trigger downward drift alerts in conceptDriftDetector.ts."
   },
   {
-    "id": "goal-2-cache-warming-and-fast-endpoint",
-    "description": "Implement startup cache warming and bounded response SLA in app.ts and modelsProvider.ts so /api/swarm/models never hangs or times out HTTP callers.",
+    "id": "goal-2-test-mock-contract-alignment",
+    "description": "Standardize mock critic responses across engine test suites (scheduler, tieredCache, compression, hierarchy) using computedRating: 0.9X and feedback: string.",
     "status": "completed",
-    "verification": "/api/swarm/models serves cached results or fast fallback within bounded timeout and warms catalog asynchronously."
+    "verification": "Mocks comply with VerificationResult schema and all 4 engine test suites pass."
   },
   {
-    "id": "goal-3-client-provider-service-alignment",
-    "description": "Update src/services/providerService.ts and src/components/AgentConfigurator.tsx to support nvidia and cloudflare, remove retired github, and handle model availability properly.",
+    "id": "goal-3-time-decayed-memory-retrieval",
+    "description": "Implement exponential time-decay in tags.ts candidate ranking using Math.pow(0.5, daysOld / halfLifeDays) for judgments while exempting axioms/facts.",
     "status": "completed",
-    "verification": "providerService.fetchAvailableModels and AgentConfigurator support all active providers (gemini, groq, mistral, openrouter, nvidia, cloudflare)."
+    "verification": "Stale judgments decay in retrieval priority relative to recent observations while facts retain stable weight."
   },
   {
-    "id": "goal-4-test-suite-and-verification",
-    "description": "Add comprehensive unit tests for modelsProvider probing/ranking and providerService; verify npm run lint and npm run test:unit pass cleanly.",
+    "id": "goal-4-sparse-tokenizer-betting-symbols",
+    "description": "Preserve signed lines (+3.5, -110) and betting operators (O/U, ATS, ML, PK) across tokenizer.ts, embeddings.ts, and semanticSimilarityEngine.ts.",
     "status": "completed",
-    "verification": "All unit tests pass (including new modelsProvider tests) and TypeScript typecheck has 0 errors."
+    "verification": "Signed numbers, slashes, and key betting symbols are retained as distinct tokens during lexical and embedding encoding."
+  },
+  {
+    "id": "goal-5-divergence-gating-synthesis",
+    "description": "Implement dynamic divergence gating in consensusPipeline.ts ordering Manager to evaluate no_play/pass when agreementLevel is divergent and confidence < 0.45.",
+    "status": "completed",
+    "verification": "Consensus block prompt includes explicit no_play directive when specialists diverge with low confidence."
+  },
+  {
+    "id": "goal-6-isolated-historical-backtesting",
+    "description": "Implement POST /api/swarm/backtest in app.ts with sandboxed in-memory cortex (isolatedStore: true) for historical slate simulation.",
+    "status": "completed",
+    "verification": "POST /api/swarm/backtest simulates historical slate without mutating global/Qdrant memory or telemetry."
+  },
+  {
+    "id": "goal-7-test-suite-and-verification",
+    "description": "Run npm run lint, npm run test:unit, and node scripts/smoke-start.mjs to ensure 100% green verification.",
+    "status": "completed",
+    "verification": "Zero TypeScript errors, 100% unit tests passing, smoke start passes."
   }
 ]

@@ -1,9 +1,11 @@
-# Ultragoal Brief: Fix Model List & Live Probing System
+# Ultragoal Brief: Sports Betting Swarm Optimizations & Hardening
 
 ## Objective
-Fix the model list system in `The_Perfect_Swarm` so that it reliably probes for live models and returns a catalog of working models available for use:
-1. Ensure `DEFAULT_PROVIDER_MODELS` and free models (`:free`) are prioritized in `rankModelsForAccount` so probes never fail exclusively on inaccessible paid models (e.g. OpenRouter).
-2. Prevent empty catalogs (`[]`) when providers return rate limits or on cold cache: retain working baseline models with appropriate availability flags.
-3. Optimize probe latency and warm cache on boot in `app.ts` so `/api/swarm/models` responds fast and never times out callers.
-4. Support all active providers (`nvidia`, `cloudflare`, `groq`, `gemini`, `mistral`, `openrouter`) in `src/services/providerService.ts` and `AgentConfigurator.tsx`, removing retired `github`.
-5. Comprehensive unit test coverage asserting live probing, ranking, fallback retention, and client service integration.
+Implement sports betting intelligence optimizations and hardening across `The_Perfect_Swarm` backend according to `todo.md`:
+1. Push-Aware Quality Drift & Brier Hardening: Handle ties/pushes cleanly in `src/swarm/morning/feedback.ts` and `src/swarm/feedback/conceptDriftDetector.ts` without distorting Brier scores or triggering false Page-Hinkley quality drift alarms.
+2. Test Mock Verification & Contract Alignment: Standardize critic test mocks across engine suites (`computedRating: 0.9X`, `feedback: string`).
+3. Time-Decayed Memory Retrieval: Exponential recency decay `Math.pow(0.5, daysOld / halfLifeDays)` in `src/swarm/memory/tags.ts` for judgments while retaining stable weight for axioms/facts.
+4. Domain-Specific Sparse Tokenizer & Betting Symbols: Preserve signed lines (`+3.5`, `-110`) and operators (`O/U`, `ATS`, `ML`, `PK`) across `tokenizer.ts`, `embeddings.ts`, and `semanticSimilarityEngine.ts`.
+5. Dynamic Divergence Gating: Inject `no_play` / `pass` directive in `src/swarm/engine/consensusPipeline.ts` when consensus is divergent and confidence < 0.45.
+6. Isolated Historical Backtesting: Implement `POST /api/swarm/backtest` in `src/swarm/server/app.ts` with sandboxed in-memory cortex (`isolatedStore: true`).
+7. Complete Test & Lint Verification: Ensure zero TypeScript errors and all unit tests pass cleanly.
