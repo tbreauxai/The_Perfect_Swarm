@@ -20,7 +20,7 @@ describe('modelsProvider rankModelsForAccount & probing', () => {
         clearCatalogCache();
     });
 
-    it('prioritizes DEFAULT_PROVIDER_MODELS and OpenRouter free models in probe batch', async () => {
+    it('serves fixed catalog for capped providers without probing', async () => {
         const mockCall = vi.fn(async () => 'ok');
         vi.spyOn(ProviderRegistry, 'get').mockReturnValue({
             providerName: 'openrouter',
@@ -28,19 +28,38 @@ describe('modelsProvider rankModelsForAccount & probing', () => {
         } as any);
 
         const models = [
-            { id: 'meta-llama/llama-3.1-405b-instruct', name: 'Paid Flagship', context_length: 128000 },
-            { id: 'anthropic/claude-3.5-sonnet', name: 'Paid Sonnet', context_length: 200000 },
-            { id: 'nvidia/nemotron-3-super-120b-a12b:free', name: 'Default Nemotron Free', context_length: 128000 },
-            { id: 'meta-llama/llama-3.3-70b-instruct:free', name: 'Llama 70B Free', context_length: 128000 },
-            { id: 'mistralai/mistral-7b-instruct:free', name: 'Mistral 7B Free', context_length: 32000 }
+            { id: 'meta-llama/llama-3.1-405b-instruct', name: 'Paid Flagship', context_length: 128000 }
         ];
 
         const result = await rankModelsForAccount('openrouter', models, 'test-key');
 
+        expect(result.length).toBe(3);
+        expect(result.map(m => m.id)).toEqual([
+            'openrouter/free',
+            'google/gemma-4-31b-it:free',
+            'nvidia/nemotron-3-super-120b-a12b:free'
+        ]);
+        expect(mockCall).not.toHaveBeenCalled();
+    });
+
+    it('prioritizes DEFAULT_PROVIDER_MODELS in probe batch for dynamic providers', async () => {
+        const mockCall = vi.fn(async () => 'ok');
+        vi.spyOn(ProviderRegistry, 'get').mockReturnValue({
+            providerName: 'groq',
+            call: mockCall
+        } as any);
+
+        const models = [
+            { id: 'llama-3.1-8b-instant', name: 'Fast 8B' },
+            { id: 'openai/gpt-oss-120b', name: 'Default 120B' },
+            { id: 'llama-3.3-70b-versatile', name: 'Llama 70B' }
+        ];
+
+        const result = await rankModelsForAccount('groq', models, 'test-key');
+
         expect(result.length).toBeGreaterThan(0);
         const probedModelNames = mockCall.mock.calls.map((c: any) => c[0].modelName);
-        expect(probedModelNames).toContain(DEFAULT_PROVIDER_MODELS.openrouter);
-        expect(probedModelNames).toContain('meta-llama/llama-3.3-70b-instruct:free');
+        expect(probedModelNames).toContain(DEFAULT_PROVIDER_MODELS.groq);
     });
 
     it('does not return an empty catalog when all probed models are rate-limited', async () => {
@@ -75,20 +94,20 @@ describe('modelsProvider rankModelsForAccount & probing', () => {
         });
 
         vi.spyOn(ProviderRegistry, 'get').mockReturnValue({
-            providerName: 'mistral',
+            providerName: 'groq',
             call: mockCall
         } as any);
 
         const models = [
             { id: 'dead-model-404', name: 'Dead Model' },
             { id: 'transient-timeout', name: 'Timeout Model' },
-            { id: 'mistral-small-latest', name: 'Working Default' }
+            { id: 'openai/gpt-oss-120b', name: 'Working Default' }
         ];
 
-        await rankModelsForAccount('mistral', models, 'test-key');
+        await rankModelsForAccount('groq', models, 'test-key');
 
-        expect(isModelDead('mistral', 'dead-model-404')).toBe(true);
-        expect(isModelDead('mistral', 'transient-timeout')).toBe(false);
+        expect(isModelDead('groq', 'dead-model-404')).toBe(true);
+        expect(isModelDead('groq', 'transient-timeout')).toBe(false);
     });
 
     it('returns available: false without probing when no apiKey is provided', async () => {
