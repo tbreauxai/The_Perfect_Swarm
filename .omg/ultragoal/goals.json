@@ -1,44 +1,20 @@
 [
   {
-    "id": "goal-1-push-aware-drift-and-brier",
-    "description": "Fix push/tie outcome calibration and Brier scoring in feedback.ts and conceptDriftDetector.ts so pushes evaluate with 0.5 neutrality or skip rather than penalizing as losses or triggering false downward drift alerts.",
+    "id": "goal-1-modularize-helpers",
+    "description": "Extract modular helper functions in src/swarm/server/app.ts: sanitizeAgent, resolveEnvironment, buildEdgeSettings, resolveAppIds, hydrateAppOutcomes, buildSafeFallback, and serializeSwarmResult.",
     "status": "completed",
-    "verification": "Pushes are scored against 0.5 target in feedback.ts Brier calculation; push events do not trigger downward drift alerts in conceptDriftDetector.ts."
+    "verification": "Exported helpers are defined with explicit types and tested."
   },
   {
-    "id": "goal-2-test-mock-contract-alignment",
-    "description": "Standardize mock critic responses across engine test suites (scheduler, tieredCache, compression, hierarchy) using computedRating: 0.9X and feedback: string.",
+    "id": "goal-2-refactor-app-routes",
+    "description": "Replace duplicated inline blocks across src/swarm/server/app.ts with calls to the extracted modular helpers.",
     "status": "completed",
-    "verification": "Mocks comply with VerificationResult schema and all 4 engine test suites pass."
+    "verification": "All duplicated blocks identified in todo.md are replaced with clean modular calls."
   },
   {
-    "id": "goal-3-time-decayed-memory-retrieval",
-    "description": "Implement exponential time-decay in tags.ts candidate ranking using Math.pow(0.5, daysOld / halfLifeDays) for judgments while exempting axioms/facts.",
+    "id": "goal-3-verification-gate",
+    "description": "Execute typecheck (tsc --noEmit), vitest unit test suite, and scripts/smoke-start.mjs to verify zero regressions.",
     "status": "completed",
-    "verification": "Stale judgments decay in retrieval priority relative to recent observations while facts retain stable weight."
-  },
-  {
-    "id": "goal-4-sparse-tokenizer-betting-symbols",
-    "description": "Preserve signed lines (+3.5, -110) and betting operators (O/U, ATS, ML, PK) across tokenizer.ts, embeddings.ts, and semanticSimilarityEngine.ts.",
-    "status": "completed",
-    "verification": "Signed numbers, slashes, and key betting symbols are retained as distinct tokens during lexical and embedding encoding."
-  },
-  {
-    "id": "goal-5-divergence-gating-synthesis",
-    "description": "Implement dynamic divergence gating in consensusPipeline.ts ordering Manager to evaluate no_play/pass when agreementLevel is divergent and confidence < 0.45.",
-    "status": "completed",
-    "verification": "Consensus block prompt includes explicit no_play directive when specialists diverge with low confidence."
-  },
-  {
-    "id": "goal-6-isolated-historical-backtesting",
-    "description": "Implement POST /api/swarm/backtest in app.ts with sandboxed in-memory cortex (isolatedStore: true) for historical slate simulation.",
-    "status": "completed",
-    "verification": "POST /api/swarm/backtest simulates historical slate without mutating global/Qdrant memory or telemetry."
-  },
-  {
-    "id": "goal-7-test-suite-and-verification",
-    "description": "Run npm run lint, npm run test:unit, and node scripts/smoke-start.mjs to ensure 100% green verification.",
-    "status": "completed",
-    "verification": "Zero TypeScript errors, 100% unit tests passing, smoke start passes."
+    "verification": "0 tsc errors, 100% vitest tests pass, and smoke-start passes."
   }
 ]
