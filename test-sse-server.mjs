@@ -344,7 +344,9 @@ async function runSseServerTests() {
     }
 }
 
-runSseServerTests().catch(err => {
+runSseServerTests().then(() => {
+    process.exit(0);
+}).catch(err => {
     console.error('Server test failure:', err);
     process.exit(1);
 });
