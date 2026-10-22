@@ -55,6 +55,99 @@ export const FORBIDDEN_CLIENT_SECRET_KEYS = [
     'apiKey'
 ] as const;
 
+export function sanitizeAgent(agent: any): any {
+    if (!agent || typeof agent !== 'object') return agent;
+    const forbidden = new Set<string>(FORBIDDEN_CLIENT_SECRET_KEYS);
+    const cleanAgent: Record<string, any> = {};
+    for (const [k, v] of Object.entries(agent)) {
+        if (!forbidden.has(k)) {
+            cleanAgent[k] = v;
+        }
+    }
+    return cleanAgent;
+}
+
+export function resolveEnvironment(c?: any): Record<string, any> {
+    return Object.assign({}, typeof process !== 'undefined' ? process.env : {}, c?.env || {}) as Record<string, any>;
+}
+
+export function buildEdgeSettings(env: Record<string, any>): Record<string, any> {
+    return {
+        geminiApiKey: env.GEMINI_API_KEY,
+        groqApiKey: env.GROQ_API_KEY,
+        openRouterApiKey: env.OPENROUTER_API_KEY,
+        mistralApiKey: env.MISTRAL_API_KEY,
+        cloudflareApiToken: env.CLOUDFLARE_API_TOKEN || env.CLOUDFLARE_WORKERS_AI_TOKEN,
+        cloudflareAccountId: env.CLOUDFLARE_ACCOUNT_ID || env.CF_ACCOUNT_ID,
+        nvidiaApiKey: env.NVIDIA_API_KEY,
+        githubToken: env.GITHUB_TOKEN,
+        qdrantUrl: env.QDRANT_URL,
+        qdrantApiKey: env.QDRANT_API_KEY
+    };
+}
+
+export function resolveAppIds(c: any, defaultSettings: Record<string, any> = {}): { callerAppId?: string; originApp: string } {
+    const callerAppId = (c as any).get?.('callerAppId') as string | undefined;
+    const serverDefaultAppId = defaultSettings.appId || 'perfect-swarm';
+    const originApp = callerAppId || serverDefaultAppId;
+    return { callerAppId, originApp };
+}
+
+export function hydrateAppOutcomes(originApp: string, limit: number = 500): void {
+    hydrateFromOutcomeRecords(
+        originApp,
+        globalFeedbackEngine.getKnowledgeRepository().queryOutcomes({ appId: originApp, limit }) as any
+    );
+}
+
+export function buildSafeFallback(result: any, serializationErr: any): Record<string, any> {
+    return {
+        finalAnalysis: result?.finalAnalysis || 'Analysis completed successfully (fallback serialization)',
+        events: Array.isArray(result?.events) ? result.events.slice(-10) : [],
+        metrics: result?.metrics || null,
+        serializationWarning: serializationErr?.message || String(serializationErr)
+    };
+}
+
+export function serializeSwarmResult(c: any, result: any): Response {
+    try {
+        if (result.workflowId) {
+            result.workflowId = String(result.workflowId);
+        } else {
+            delete result.workflowId;
+        }
+        // PS1: partial runs return 200 with status:'partial' (and keep workflowId); degraded = seat ids with no backup left.
+        result.status = result.status || 'complete';
+        result.degraded = Array.isArray(result.degraded) ? result.degraded : [];
+
+        const seen = new WeakSet();
+        const safeReplacer = (_key: string, value: any) => {
+            if (typeof value === 'bigint') return value.toString();
+            if (typeof value === 'object' && value !== null) {
+                if (seen.has(value)) {
+                    return '[Circular]';
+                }
+                seen.add(value);
+            }
+            return value;
+        };
+
+        const serialized = JSON.stringify(result, safeReplacer);
+        return c.newResponse(serialized, 200, {
+            'Content-Type': 'application/json; charset=utf-8'
+        });
+    } catch (serializationErr: any) {
+        console.error('[SwarmServer Analyze Serialization Error]:', serializationErr);
+        const safeFallback = buildSafeFallback(result, serializationErr);
+        return c.json(safeFallback, 200);
+    }
+}
+
+export function handleServerError(context: string, err: any, c: any) {
+    console.error(`[SwarmServer ${context} Error]:`, err);
+    return c.json({ error: err?.message || 'Internal Server Error' }, 500);
+}
+
 export function sanitizeClientSettings(
     rawSettings: any,
     edgeSettings: Record<string, any> = {},
@@ -70,17 +163,6 @@ export function sanitizeClientSettings(
             }
         }
     }
-
-    const sanitizeAgent = (agent: any) => {
-        if (!agent || typeof agent !== 'object') return agent;
-        const cleanAgent: Record<string, any> = {};
-        for (const [k, v] of Object.entries(agent)) {
-            if (!forbidden.has(k)) {
-                cleanAgent[k] = v;
-            }
-        }
-        return cleanAgent;
-    };
 
     if (Array.isArray(cleanSettings.agents)) {
         cleanSettings.agents = cleanSettings.agents.map(sanitizeAgent);
@@ -203,6 +285,10 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
     // Apply telemetry middleware to track request latency across all endpoints
     app.use('*', createTelemetryMiddleware());
 
+    app.onError((err, c) => {
+        return handleServerError('Unhandled', err, c);
+    });
+
     app.get('/api/health', (c) => {
         return c.json({ status: 'ok', edge: true });
     });
@@ -324,8 +410,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 calibration: fitCalibration(observationsForApp(originApp))
             });
         } catch (err: any) {
-            console.error('[SwarmServer Feedback Error]:', err);
-            return c.json({ error: err.message || 'Internal Server Error' }, 500);
+            return handleServerError('Feedback', err, c);
         } finally {
             if (dedupKey) {
                 removeFeedbackInFlight(dedupKey);
@@ -340,7 +425,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
         }
         try {
             const body = await c.req.json().catch(() => ({}));
-            const env = Object.assign({}, typeof process !== 'undefined' ? process.env : {}, c.env || {}) as Record<string, any>;
+            const env = resolveEnvironment(c);
             const result = await runMorningSlate({
                 dateInput: body?.date,
                 env,
@@ -348,8 +433,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
             });
             return c.json(result, 200);
         } catch (err: any) {
-            console.error('[SwarmServer Morning Slate Error]:', err);
-            return c.json({ error: err.message || 'Internal Server Error' }, 500);
+            return handleServerError('Morning Slate', err, c);
         } finally {
             releaseMorningLock();
         }
@@ -380,8 +464,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 currentWeights: globalFeedbackEngine.getRewardWeights()
             });
         } catch (err: any) {
-            console.error('[SwarmServer Calibrate Error]:', err);
-            return c.json({ error: err.message || 'Internal Server Error' }, 500);
+            return handleServerError('Calibrate', err, c);
         }
     });
 
@@ -427,8 +510,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
             const diagnostics = await buildCortexDiagnostics(cortex, appId);
             return c.json(diagnostics);
         } catch (err: any) {
-            console.error('[SwarmServer Cortex Diagnostics Error]:', err);
-            return c.json({ error: err.message || 'Internal Server Error' }, 500);
+            return handleServerError('Cortex Diagnostics', err, c);
         }
     });
 
@@ -440,23 +522,10 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
     app.all('/api/swarm/stream', swarmBodyLimit, async (c) => {
         let params: SwarmWorkflowParams;
         try {
-            const env = Object.assign({}, typeof process !== 'undefined' ? process.env : {}, c.env || {}) as Record<string, any>;
-            const edgeSettings = {
-                geminiApiKey: env.GEMINI_API_KEY,
-                groqApiKey: env.GROQ_API_KEY,
-                openRouterApiKey: env.OPENROUTER_API_KEY,
-                mistralApiKey: env.MISTRAL_API_KEY,
-                cloudflareApiToken: env.CLOUDFLARE_API_TOKEN || env.CLOUDFLARE_WORKERS_AI_TOKEN,
-                cloudflareAccountId: env.CLOUDFLARE_ACCOUNT_ID || env.CF_ACCOUNT_ID,
-                nvidiaApiKey: env.NVIDIA_API_KEY,
-                githubToken: env.GITHUB_TOKEN,
-                qdrantUrl: env.QDRANT_URL,
-                qdrantApiKey: env.QDRANT_API_KEY
-            };
+            const env = resolveEnvironment(c);
+            const edgeSettings = buildEdgeSettings(env);
 
-            const callerAppId = (c as any).get('callerAppId') as string | undefined;
-            const serverDefaultAppId = defaultSettings.appId || 'perfect-swarm';
-            const originApp = callerAppId || serverDefaultAppId;
+            const { callerAppId, originApp } = resolveAppIds(c, defaultSettings);
 
             if (c.req.method === 'POST') {
                 const body = await c.req.json().catch(() => ({}));
@@ -468,17 +537,9 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 }
                 const sanitizedSettings = sanitizeClientSettings(body.settings, edgeSettings, defaultSettings);
                 if (Array.isArray(body.agents)) {
-                    const forbidden = new Set<string>(FORBIDDEN_CLIENT_SECRET_KEYS);
-                    sanitizedSettings.agents = body.agents.map((agent: any) => {
-                        if (!agent || typeof agent !== 'object') return agent;
-                        const cleanAgent: Record<string, any> = {};
-                        for (const [k, v] of Object.entries(agent)) {
-                            if (!forbidden.has(k)) cleanAgent[k] = v;
-                        }
-                        return cleanAgent;
-                    });
+                    sanitizedSettings.agents = body.agents.map(sanitizeAgent);
                 }
-                hydrateFromOutcomeRecords(originApp, globalFeedbackEngine.getKnowledgeRepository().queryOutcomes({ appId: originApp, limit: 500 }) as any);
+                hydrateAppOutcomes(originApp);
 
                 params = {
                     task: body.task,
@@ -508,7 +569,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 }
                 const appId = url.searchParams.get('appId') || defaultSettings.appId || 'default';
                 const domain = url.searchParams.get('domain') || undefined;
-                hydrateFromOutcomeRecords(originApp, globalFeedbackEngine.getKnowledgeRepository().queryOutcomes({ appId: originApp, limit: 500 }) as any);
+                hydrateAppOutcomes(originApp);
                 params = {
                     task,
                     data: prependCalibrationToData(data, originApp),
@@ -525,8 +586,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
 
             return handleSwarmSse(c, params);
         } catch (err: any) {
-            console.error('[SwarmServer Stream Error]:', err);
-            return c.json({ error: err.message || 'Internal Server Error' }, 500);
+            return handleServerError('Stream', err, c);
         }
     });
 
@@ -540,38 +600,17 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 console.log('[SwarmServer Analyze Metadata]:', body.metadata);
             }
 
-            const callerAppId = (c as any).get('callerAppId') as string | undefined;
-            const serverDefaultAppId = defaultSettings.appId || 'perfect-swarm';
-            const originApp = callerAppId || serverDefaultAppId;
+            const { callerAppId, originApp } = resolveAppIds(c, defaultSettings);
 
-            const env = Object.assign({}, typeof process !== 'undefined' ? process.env : {}, c.env || {}) as Record<string, any>;
-            const edgeSettings = {
-                geminiApiKey: env.GEMINI_API_KEY,
-                groqApiKey: env.GROQ_API_KEY,
-                openRouterApiKey: env.OPENROUTER_API_KEY,
-                mistralApiKey: env.MISTRAL_API_KEY,
-                cloudflareApiToken: env.CLOUDFLARE_API_TOKEN || env.CLOUDFLARE_WORKERS_AI_TOKEN,
-                cloudflareAccountId: env.CLOUDFLARE_ACCOUNT_ID || env.CF_ACCOUNT_ID,
-                nvidiaApiKey: env.NVIDIA_API_KEY,
-                githubToken: env.GITHUB_TOKEN,
-                qdrantUrl: env.QDRANT_URL,
-                qdrantApiKey: env.QDRANT_API_KEY
-            };
+            const env = resolveEnvironment(c);
+            const edgeSettings = buildEdgeSettings(env);
 
             const sanitizedSettings = sanitizeClientSettings(body.settings, edgeSettings, defaultSettings);
             if (Array.isArray(body.agents)) {
-                const forbidden = new Set<string>(FORBIDDEN_CLIENT_SECRET_KEYS);
-                sanitizedSettings.agents = body.agents.map((agent: any) => {
-                    if (!agent || typeof agent !== 'object') return agent;
-                    const cleanAgent: Record<string, any> = {};
-                    for (const [k, v] of Object.entries(agent)) {
-                        if (!forbidden.has(k)) cleanAgent[k] = v;
-                    }
-                    return cleanAgent;
-                });
+                sanitizedSettings.agents = body.agents.map(sanitizeAgent);
             }
 
-            hydrateFromOutcomeRecords(originApp, globalFeedbackEngine.getKnowledgeRepository().queryOutcomes({ appId: originApp, limit: 500 }) as any);
+            hydrateAppOutcomes(originApp);
 
             let result: any;
             try {
@@ -599,45 +638,9 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 return c.json({ error: workflowErr.message || 'Swarm workflow execution failed' }, 500);
             }
 
-            try {
-                if (result.workflowId) {
-                    result.workflowId = String(result.workflowId);
-                } else {
-                    delete result.workflowId;
-                }
-                // PS1: partial runs return 200 with status:'partial' (and keep workflowId); degraded = seat ids with no backup left.
-                result.status = result.status || 'complete';
-                result.degraded = Array.isArray(result.degraded) ? result.degraded : [];
-
-                const seen = new WeakSet();
-                const safeReplacer = (_key: string, value: any) => {
-                    if (typeof value === 'bigint') return value.toString();
-                    if (typeof value === 'object' && value !== null) {
-                        if (seen.has(value)) {
-                            return '[Circular]';
-                        }
-                        seen.add(value);
-                    }
-                    return value;
-                };
-
-                const serialized = JSON.stringify(result, safeReplacer);
-                return c.newResponse(serialized, 200, {
-                    'Content-Type': 'application/json; charset=utf-8'
-                });
-            } catch (serializationErr: any) {
-                console.error('[SwarmServer Analyze Serialization Error]:', serializationErr);
-                const safeFallback = {
-                    finalAnalysis: result?.finalAnalysis || 'Analysis completed successfully (fallback serialization)',
-                    events: Array.isArray(result?.events) ? result.events.slice(-10) : [],
-                    metrics: result?.metrics || null,
-                    serializationWarning: serializationErr.message || String(serializationErr)
-                };
-                return c.json(safeFallback, 200);
-            }
+            return serializeSwarmResult(c, result);
         } catch (err: any) {
-            console.error('[SwarmServer Analyze Error]:', err);
-            return c.json({ error: err.message || 'Internal Server Error' }, 500);
+            return handleServerError('Analyze', err, c);
         }
     });
 
@@ -654,35 +657,14 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 return c.json({ error: 'Missing or empty slate array in request body' }, 400);
             }
 
-            const callerAppId = (c as any).get('callerAppId') as string | undefined;
-            const serverDefaultAppId = defaultSettings.appId || 'perfect-swarm';
-            const originApp = callerAppId || serverDefaultAppId;
+            const { callerAppId, originApp } = resolveAppIds(c, defaultSettings);
 
-            const env = Object.assign({}, typeof process !== 'undefined' ? process.env : {}, c.env || {}) as Record<string, any>;
-            const edgeSettings = {
-                geminiApiKey: env.GEMINI_API_KEY,
-                groqApiKey: env.GROQ_API_KEY,
-                openRouterApiKey: env.OPENROUTER_API_KEY,
-                mistralApiKey: env.MISTRAL_API_KEY,
-                cloudflareApiToken: env.CLOUDFLARE_API_TOKEN || env.CLOUDFLARE_WORKERS_AI_TOKEN,
-                cloudflareAccountId: env.CLOUDFLARE_ACCOUNT_ID || env.CF_ACCOUNT_ID,
-                nvidiaApiKey: env.NVIDIA_API_KEY,
-                githubToken: env.GITHUB_TOKEN,
-                qdrantUrl: env.QDRANT_URL,
-                qdrantApiKey: env.QDRANT_API_KEY
-            };
+            const env = resolveEnvironment(c);
+            const edgeSettings = buildEdgeSettings(env);
 
             const sanitizedSettings = sanitizeClientSettings(body.settings, edgeSettings, defaultSettings);
             if (Array.isArray(body.agents)) {
-                const forbidden = new Set<string>(FORBIDDEN_CLIENT_SECRET_KEYS);
-                sanitizedSettings.agents = body.agents.map((agent: any) => {
-                    if (!agent || typeof agent !== 'object') return agent;
-                    const cleanAgent: Record<string, any> = {};
-                    for (const [k, v] of Object.entries(agent)) {
-                        if (!forbidden.has(k)) cleanAgent[k] = v;
-                    }
-                    return cleanAgent;
-                });
+                sanitizedSettings.agents = body.agents.map(sanitizeAgent);
             }
 
             // Create sandboxed in-memory cortex with isolatedStore to prevent polluting live memory or Qdrant
@@ -706,15 +688,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
 
                 const gameSettings = item.settings ? sanitizeClientSettings(item.settings, edgeSettings, sanitizedSettings) : sanitizedSettings;
                 if (Array.isArray(item.agents)) {
-                    const forbidden = new Set<string>(FORBIDDEN_CLIENT_SECRET_KEYS);
-                    gameSettings.agents = item.agents.map((agent: any) => {
-                        if (!agent || typeof agent !== 'object') return agent;
-                        const cleanAgent: Record<string, any> = {};
-                        for (const [k, v] of Object.entries(agent)) {
-                            if (!forbidden.has(k)) cleanAgent[k] = v;
-                        }
-                        return cleanAgent;
-                    });
+                    gameSettings.agents = item.agents.map(sanitizeAgent);
                 }
 
                 try {
@@ -773,8 +747,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 results
             }, 200);
         } catch (err: any) {
-            console.error('[SwarmServer Backtest Error]:', err);
-            return c.json({ error: err.message || 'Internal Server Error' }, 500);
+            return handleServerError('Backtest', err, c);
         }
     });
 
@@ -785,13 +758,12 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
                 return c.json({ error: 'Missing required query parameter: provider' }, 400);
             }
 
-            const env = Object.assign({}, typeof process !== 'undefined' ? process.env : {}, c.env || {}) as Record<string, any>;
+            const env = resolveEnvironment(c);
             // Model listing uses server secrets only; ignore x-provider-key
             const models = await fetchProviderModels(provider, undefined, env, { boundedWaitMs: 8000 });
             return c.json(models);
         } catch (err: any) {
-            console.error(`[SwarmServer Models Error]:`, err);
-            return c.json({ error: err.message || 'Internal Server Error' }, 500);
+            return handleServerError('Models', err, c);
         }
     });
 
