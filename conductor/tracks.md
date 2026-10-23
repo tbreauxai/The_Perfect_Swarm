@@ -13,6 +13,5 @@
 - ~~[x] **Track: Full Application Modularization**~~ *Link: [./archive/app_modularization_20261002/index.md](./archive/app_modularization_20261002/index.md)*
 
 ---
-- [x] **Track: Large Data Scale Audit & Swarm Resilience Hardening**
-  *Link: [./tracks/large_data_scale_20261023/index.md](./tracks/large_data_scale_20261023/index.md)*
+- ~~[x] **Track: Large Data Scale Audit & Swarm Resilience Hardening**~~ *Link: [./archive/large_data_scale_20261023/index.md](./archive/large_data_scale_20261023/index.md)*
 
