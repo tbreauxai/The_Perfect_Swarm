@@ -40,10 +40,13 @@ describe('Adaptive Manager Synthesis & Context Ceiling Protection (synthesisPipe
         const clusterDigests: Record<string, ClusterDigest> = {
             'data-cluster': {
                 clusterId: 'data-cluster',
+                specialistCount: 2,
                 specialistRoles: ['Database Specialist', 'Security Analyst'],
                 keyFindings: ['Sustained write load', 'Token saturation warning'],
                 anomalies: ['Memory spike at chunk 2'],
                 summary: 'Aggregated findings from data cluster specialists.',
+                originalTokensEstimate: 1000,
+                compressedTokensEstimate: 400,
                 tokenReductionRatio: 0.6
             }
         };
