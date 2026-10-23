@@ -42,11 +42,16 @@ export interface ScorecardValidation<T> {
     scorecard?: T;
     error?: string;
     text: string;
+    synthesized?: boolean;
 }
 
 function toText(raw: unknown): string {
     if (typeof raw === 'string') return raw;
     try { return JSON.stringify(raw ?? ''); } catch { return String(raw); }
+}
+
+function isScorecardLike(obj: any): boolean {
+    return !!(obj && typeof obj === 'object' && !Array.isArray(obj) && (Array.isArray(obj.picks) || typeof obj.status === 'string'));
 }
 
 /** Parse with the shared parseJsonSafe, then validate with zod. The seat id is owned by code, not the model. */
@@ -57,7 +62,60 @@ export function validateScorecard<T = AnalystScorecard>(
 ): ScorecardValidation<T> {
     const text = toText(raw);
     const parsed = parseJsonSafe<any>(raw, null);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    if (!isScorecardLike(parsed)) {
+        // Auto-extract row IDs via regex (/R\d+/g) from unstructured markdown/prose if standard JSON parse fails
+        const rowMatches = text.match(/R\d+/g);
+        if (rowMatches && rowMatches.length > 0) {
+            const uniqueRows = Array.from(new Set(rowMatches)).slice(0, 8);
+            const picks = uniqueRows.map(row => {
+                const regex = new RegExp(`${row}[:\\-\\s]+([^\\n.,;]+)`, 'i');
+                const m = text.match(regex);
+                const note = m && m[1] ? m[1].trim().slice(0, 60) : undefined;
+                return note ? { row, note } : { row };
+            });
+
+            let edge = 0;
+            const edgeMatch = text.match(/(?:edge|advantage)[:\s]*([+-]?\d+(?:\.\d+)?)/i) || text.match(/([+-]?\d+(?:\.\d+)?)\s*%\s*edge/i);
+            if (edgeMatch && edgeMatch[1]) {
+                const parsedEdge = parseFloat(edgeMatch[1]);
+                if (Number.isFinite(parsedEdge)) edge = parsedEdge;
+            }
+
+            let confidence = 0.5;
+            const confMatch = text.match(/confidence[:\s]*([0-1]?(?:\.\d+)?)/i);
+            if (confMatch && confMatch[1]) {
+                const parsedConf = parseFloat(confMatch[1]);
+                if (Number.isFinite(parsedConf) && parsedConf >= 0 && parsedConf <= 1) {
+                    confidence = parsedConf;
+                }
+            }
+
+            let key_risk = 'Synthesized from unstructured recommendation';
+            const riskMatch = text.match(/(?:key[ _]risk|risk)[:\s]*([^\n]+)/i);
+            if (riskMatch && riskMatch[1]) {
+                key_risk = riskMatch[1].trim().slice(0, 120);
+            } else {
+                const cleanText = text.replace(/[\r\n]+/g, ' ').trim();
+                if (cleanText.length > 0) {
+                    key_risk = cleanText.slice(0, 120);
+                }
+            }
+
+            const synthesized: any = {
+                seat,
+                picks,
+                edge,
+                key_risk,
+                confidence,
+                status: 'ok',
+                row_risks: picks.map(p => ({ row: p.row, key_risk: key_risk.slice(0, 120) }))
+            };
+
+            const result = schema.safeParse(synthesized);
+            if (result.success) {
+                return { ok: true, scorecard: result.data as T, text, synthesized: true };
+            }
+        }
         return { ok: false, error: 'reply is not a JSON object', text };
     }
     // A long note is not a bad pick. Cut it instead of rejecting the card and
@@ -107,7 +165,14 @@ export async function runScorecardSeat<T = AnalystScorecard>(opts: {
 
     const first = await agent.run(prompt, context, runConfig);
     const v1 = validateScorecard<T>(first, seat, schema);
-    if (v1.ok) return { seat, scorecard: v1.scorecard, repaired: false };
+    if (v1.ok) {
+        return {
+            seat,
+            scorecard: v1.scorecard,
+            unstructured: v1.synthesized ? v1.text.slice(0, SCORECARD_UNSTRUCTURED_MAX_CHARS) : undefined,
+            repaired: false
+        };
+    }
 
     context.addEvent({
         agentRole: agent.role,
@@ -123,7 +188,14 @@ export async function runScorecardSeat<T = AnalystScorecard>(opts: {
         const repairPrompt = `${prompt}\n\n[SYSTEM: Your previous reply was not a valid scorecard (${v1.error}). Reply again with the corrected scorecard JSON only.]`;
         const second = await agent.run(repairPrompt, context, { ...runConfig, bypassCache: true });
         const v2 = validateScorecard<T>(second, seat, schema);
-        if (v2.ok) return { seat, scorecard: v2.scorecard, repaired: true };
+        if (v2.ok) {
+            return {
+                seat,
+                scorecard: v2.scorecard,
+                unstructured: v2.synthesized ? v2.text.slice(0, SCORECARD_UNSTRUCTURED_MAX_CHARS) : undefined,
+                repaired: true
+            };
+        }
         lastText = v2.text || lastText;
     } catch (repairErr: any) {
         context.addEvent({
@@ -134,6 +206,17 @@ export async function runScorecardSeat<T = AnalystScorecard>(opts: {
             error: repairErr?.message || String(repairErr),
             durationMs: 0
         });
+    }
+
+    // Auto-repair fallback: If lastText has valid unstructured recommendations with row IDs, preserve as synthesized scorecard
+    const vFallback = validateScorecard<T>(lastText, seat, schema);
+    if (vFallback.ok) {
+        return {
+            seat,
+            scorecard: vFallback.scorecard,
+            unstructured: lastText.slice(0, SCORECARD_UNSTRUCTURED_MAX_CHARS),
+            repaired: true
+        };
     }
 
     recordDegraded(context, seat);
@@ -159,14 +242,18 @@ export function scorecardToAnalystReport(result: ScorecardSeatResult<AnalystScor
         const insights = sc.picks.map(p => (p.note ? `${p.row}: ${p.note}` : p.row));
         if (sc.parlay) insights.push(`Parlay ${sc.parlay.rows.join(' + ')} (target fit: ${sc.parlay.targetFit})`);
         const headline = sc.status === 'no_play' ? 'No play' : `Edge ${sc.edge}%`;
+        const summary = result.unstructured
+            ? `${headline} | ${result.unstructured}`
+            : `${headline} | confidence ${sc.confidence} | key risk: ${sc.key_risk}`;
         return {
             insights,
             anomalies: [],
-            summary: `${headline} | confidence ${sc.confidence} | key risk: ${sc.key_risk}`,
+            summary,
             seat: result.seat,
             role,
             scorecard: sc,
-            scorecardRepaired: result.repaired
+            scorecardRepaired: result.repaired,
+            ...(result.unstructured ? { unstructured: result.unstructured } : {})
         };
     }
     return {

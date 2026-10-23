@@ -1,20 +1,26 @@
 [
   {
-    "id": "goal-1-modularize-helpers",
-    "description": "Extract modular helper functions in src/swarm/server/app.ts: sanitizeAgent, resolveEnvironment, buildEdgeSettings, resolveAppIds, hydrateAppOutcomes, buildSafeFallback, and serializeSwarmResult.",
+    "id": "goal-1-scorecard-auto-repair",
+    "description": "Enhance validateScorecard in src/swarm/engine/scorecard.ts to auto-extract row IDs via regex (/R\\d+/g) from unstructured text and preserve valid unstructured recommendations as a synthesized scorecard rather than dropping the seat.",
     "status": "completed",
-    "verification": "Exported helpers are defined with explicit types and tested."
+    "verification": "validateScorecard extracts row IDs (/R\\d+/g) and synthesizes a scorecard when JSON parse fails; unit tests in scorecard.test.ts pass."
   },
   {
-    "id": "goal-2-refactor-app-routes",
-    "description": "Replace duplicated inline blocks across src/swarm/server/app.ts with calls to the extracted modular helpers.",
+    "id": "goal-2-cluster-pipeline-multi-chunk",
+    "description": "Update src/swarm/engine/clusterPipeline.ts to ensure all active analysts evaluate the primary chunk or receive distributed chunk assignments with minimum 1 execution per analyst.",
     "status": "completed",
-    "verification": "All duplicated blocks identified in todo.md are replaced with clean modular calls."
+    "verification": "All active analysts are guaranteed >= 1 chunk assignment; unit tests verify zero dropped analysts."
   },
   {
-    "id": "goal-3-verification-gate",
-    "description": "Execute typecheck (tsc --noEmit), vitest unit test suite, and scripts/smoke-start.mjs to verify zero regressions.",
+    "id": "goal-3-groq-pruning-and-fallback-chain",
+    "description": "Update src/swarm/providers/groq.ts and src/swarm/engine/agentResolution.ts (or Agent) to prune input history before rejecting under 7,000 TPM, and never disable provider fallbacks on transient 429s or limiter skips even when disableFallback is toggled.",
     "status": "completed",
-    "verification": "0 tsc errors, 100% vitest tests pass, and smoke-start passes."
+    "verification": "computeGroqScorecardMaxTokens / Groq pruning prevents premature TPM rejections, and 429/limiter-skips retain fallback paths even if disableFallback is set; unit tests pass."
+  },
+  {
+    "id": "goal-4-verification-gate",
+    "description": "Execute tsc --noEmit and vitest run across all unit tests to verify zero regressions.",
+    "status": "completed",
+    "verification": "tsc --noEmit exits with 0 errors and all unit tests pass."
   }
 ]

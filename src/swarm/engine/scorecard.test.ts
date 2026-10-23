@@ -240,4 +240,47 @@ describe("R2-S2 validation and repair", () => {
     expect(report.summary).toContain("Edge 3.4%");
     expect(report.scorecard.seat).toBe("a1");
   });
+
+  it("auto-extracts row IDs via regex (/R\\d+/g) from unstructured markdown/prose when standard JSON parse fails", () => {
+    const prose = `
+### Analyst Recommendation
+Based on line movement, I recommend targeting **R12** and **R45**.
+R12: sharp reverse line movement on under.
+R45: heavy public fade.
+Edge: 4.2% with confidence: 0.85. Key risk: starting pitcher scratch.
+    `;
+    const v = validateScorecard(prose, "seat-prose");
+    expect(v.ok).toBe(true);
+    expect(v.synthesized).toBe(true);
+    expect(v.scorecard).toBeDefined();
+    expect(v.scorecard?.seat).toBe("seat-prose");
+    expect(v.scorecard?.picks.length).toBe(2);
+    expect(v.scorecard?.picks[0].row).toBe("R12");
+    expect(v.scorecard?.picks[0].note).toContain("sharp reverse line movement");
+    expect(v.scorecard?.picks[1].row).toBe("R45");
+    expect(v.scorecard?.edge).toBe(4.2);
+    expect(v.scorecard?.confidence).toBe(0.85);
+    expect(v.scorecard?.key_risk).toContain("starting pitcher scratch");
+    expect(v.scorecard?.status).toBe("ok");
+  });
+
+  it("preserves unstructured recommendations as synthesized scorecard without dropping seat in runScorecardSeat", async () => {
+    const prose = "Strong play on R88: value spread. Edge 2.5%, confidence 0.7. Risk: rain forecast.";
+    const f = fakeAgent([prose]);
+    const ctx = new SwarmContext();
+    const r = await runScorecardSeat({
+      agent: f.agent,
+      seat: "a-prose",
+      prompt: "P",
+      context: ctx,
+      runConfig: {},
+    });
+    expect(r.scorecard).toBeDefined();
+    expect(r.scorecard?.picks[0].row).toBe("R88");
+    expect(getDegraded(ctx)).toEqual([]);
+    const report = scorecardToAnalystReport(r, "Prose Analyst");
+    expect(report.scorecard).toBeDefined();
+    expect(report.insights).toContain("R88: value spread");
+    expect(report.summary).toContain("Edge 2.5%");
+  });
 });

@@ -135,6 +135,41 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
         let routingPlan: SpecialistRoutingPlan;
         if (chunks.length > 1) {
             routingPlan = globalSpecialistRouter.planDistribution(task, chunks, analysts);
+            // Ensure all active analysts evaluate the primary chunk or receive distributed chunk assignments with minimum 1 execution per analyst
+            const assignedRoles = new Set(routingPlan.assignments.map(asn => asn.agentRole));
+            const unassigned = analysts.filter(a => !assignedRoles.has(a.role));
+            if (unassigned.length > 0) {
+                unassigned.forEach((analyst, uIdx) => {
+                    const chunkIdx = uIdx % chunks.length;
+                    const chunk = chunks[chunkIdx];
+                    const estTokens = Math.max(10, Math.ceil(chunk.length / 4));
+                    const { score: affinity, matchedDomain } = globalSpecialistRouter.scoreAffinity(analyst.role, `${task}\n${chunk}`);
+                    globalTokenBudgetManager.recordUsage(analyst.provider, estTokens, analyst.role);
+                    routingPlan.assignments.push({
+                        chunkIndex: chunkIdx,
+                        estimatedTokens: estTokens,
+                        agentId: (analyst as any).id || analyst.role,
+                        agentRole: analyst.role,
+                        provider: analyst.provider,
+                        affinityScore: affinity,
+                        allocatedTokens: estTokens,
+                        reason: matchedDomain
+                            ? `Distributed multi-chunk coverage for '${matchedDomain}' (${Math.round(affinity * 100)}%)`
+                            : `Distributed multi-chunk coverage (${Math.round(affinity * 100)}%)`
+                    });
+                    if (!routingPlan.specialistSummary[analyst.role]) {
+                        routingPlan.specialistSummary[analyst.role] = {
+                            role: analyst.role,
+                            chunksAssigned: 1,
+                            tokensAllocated: estTokens
+                        };
+                    } else {
+                        routingPlan.specialistSummary[analyst.role].chunksAssigned++;
+                        routingPlan.specialistSummary[analyst.role].tokensAllocated += estTokens;
+                    }
+                    routingPlan.totalEstimatedTokens += estTokens;
+                });
+            }
         } else {
             const estTokens = Math.max(10, Math.ceil(chunks[0].length / 4));
             const assignments = analysts.map(analyst => {
@@ -259,19 +294,19 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
 
             let schedTasks: ScheduledTask[];
             if (chunks.length > 1) {
-                schedTasks = chunks.map((chunk, i) => {
-                    const assignment = routingPlan.assignments.find(asn => asn.chunkIndex === i);
-                    const assignedAnalyst = analysts.find(a => a.role === assignment?.agentRole) || analysts[i % analysts.length];
-                    const estTokens = assignment?.estimatedTokens || Math.max(10, Math.ceil(chunk.length / 4));
+                schedTasks = routingPlan.assignments.map((assignment, taskIdx) => {
+                    const chunk = chunks[assignment.chunkIndex] || chunks[0];
+                    const assignedAnalyst = analysts.find(a => a.role === assignment.agentRole) || analysts[taskIdx % analysts.length];
+                    const estTokens = assignment.estimatedTokens || Math.max(10, Math.ceil(chunk.length / 4));
                     return {
-                        id: `chunk-task-${i}`,
-                        priority: (i === 0 ? 'high' : 'normal') as TaskPriority,
+                        id: `chunk-task-${taskIdx}`,
+                        priority: (assignment.chunkIndex === 0 ? 'high' : 'normal') as TaskPriority,
                         assignedWorkerId: assignedAnalyst.role,
                         targetProvider: assignedAnalyst.provider,
                         domain: assignedAnalyst.role,
                         estimatedTokens: estTokens,
                         payload: chunk,
-                        execute: () => executeAnalyst(assignedAnalyst, chunk, i)
+                        execute: () => executeAnalyst(assignedAnalyst, chunk, assignment.chunkIndex)
                     };
                 });
             } else {
@@ -299,7 +334,7 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
                 if (item.success && item.result) {
                     const resData = item.result;
                     const chunkIdx = (resData as any)._chunkIndex ?? 0;
-                    const assignedAnalyst = analysts.find(a => a.role === item.workerId) || analysts[chunkIdx % analysts.length];
+                    const assignedAnalyst = analysts.find(a => a.role === item.workerId) || analysts.find(a => a.role === (resData as any).role) || analysts[chunkIdx % analysts.length];
                     const analystIdx = analysts.indexOf(assignedAnalyst);
                     if (analystIdx >= 0) {
                         allAnalystReports[analystIdx].push(resData);
@@ -330,16 +365,16 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
                 const speculativeCoordinator = new SpeculativeExecutionCoordinator();
                 const maxConcurrency = settings?.maxSpeculativeConcurrency || params.maxSpeculativeConcurrency || 4;
 
-                const specTasks: SpeculativeTask[] = chunks.map((chunk, i) => {
-                    const assignment = routingPlan.assignments.find(asn => asn.chunkIndex === i);
-                    const assignedAnalyst = analysts.find(a => a.role === assignment?.agentRole) || analysts[i % analysts.length];
-                    const node = depGraph.getNode(`chunk-${i}`);
+                const specTasks: SpeculativeTask[] = routingPlan.assignments.map((assignment, taskIdx) => {
+                    const chunk = chunks[assignment.chunkIndex] || chunks[0];
+                    const assignedAnalyst = analysts.find(a => a.role === assignment.agentRole) || analysts[taskIdx % analysts.length];
+                    const node = depGraph.getNode(`chunk-${assignment.chunkIndex}`);
                     return {
-                        id: `chunk-${i}`,
-                        chunkIndex: i,
+                        id: `chunk-${assignment.chunkIndex}-task-${taskIdx}`,
+                        chunkIndex: assignment.chunkIndex,
                         payload: chunk,
                         dependencies: node?.dependencies || [],
-                        execute: () => executeAnalyst(assignedAnalyst, chunk, i)
+                        execute: () => executeAnalyst(assignedAnalyst, chunk, assignment.chunkIndex)
                     };
                 });
 
@@ -354,9 +389,13 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
 
                 for (const resData of specResult.results) {
                     if (resData === null || resData === undefined) continue; // PS1: failed seat
-                    const chunkIdx = (resData as any)._chunkIndex ?? 0;
-                    const assignment = routingPlan.assignments.find(asn => asn.chunkIndex === chunkIdx);
-                    const assignedAnalyst = analysts.find(a => a.role === assignment?.agentRole) || analysts[chunkIdx % analysts.length];
+                    const seatRole = (resData as any).role || (resData as any).seat;
+                    let assignedAnalyst = analysts.find(a => a.role === seatRole || (a as any).id === seatRole);
+                    if (!assignedAnalyst) {
+                        const chunkIdx = (resData as any)._chunkIndex ?? 0;
+                        const assignment = routingPlan.assignments.find(asn => asn.chunkIndex === chunkIdx);
+                        assignedAnalyst = analysts.find(a => a.role === assignment?.agentRole) || analysts[chunkIdx % analysts.length];
+                    }
                     const analystIdx = analysts.indexOf(assignedAnalyst);
                     if (analystIdx >= 0) {
                         allAnalystReports[analystIdx].push(resData);
@@ -398,11 +437,11 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
             } else {
                 const usePool = optimizationEnabled && (optSettings?.workerPoolConcurrency ?? 4) > 1;
 
-                const chunkTasks = chunks.map((chunk, i) => {
-                    const assignment = routingPlan.assignments.find(asn => asn.chunkIndex === i);
-                    const assignedAnalyst = analysts.find(a => a.role === assignment?.agentRole) || analysts[i % analysts.length];
+                const chunkTasks = routingPlan.assignments.map((assignment, taskIdx) => {
+                    const chunk = chunks[assignment.chunkIndex] || chunks[0];
+                    const assignedAnalyst = analysts.find(a => a.role === assignment.agentRole) || analysts[taskIdx % analysts.length];
                     const analystIdx = analysts.indexOf(assignedAnalyst);
-                    return { chunk, i, assignedAnalyst, analystIdx };
+                    return { chunk, i: assignment.chunkIndex, assignedAnalyst, analystIdx };
                 });
 
                 const chunkReports = usePool

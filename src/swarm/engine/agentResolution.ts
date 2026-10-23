@@ -91,30 +91,27 @@ export function resolveSwarmAgents(
     // not only providers that already have a seat in this run.
     // Morning runs (morning_judge) do NOT borrow from the global pool: seat-model providers only (pre-PS3 behavior),
     // Groq first and never OpenRouter.
-    const availableFallbacks: ProviderCredential[] = settings?.disableFallback
-        ? []
-        : buildAnalystPool(
-            isMorningRun ? MORNING_POOL_PROVIDERS : ALL_PROVIDERS,
-            settings,
-            rawAgents,
-            defaultAi,
-            { seatModelsOnly: isMorningRun }
-        );
+    const availableFallbacks: ProviderCredential[] = buildAnalystPool(
+        isMorningRun ? MORNING_POOL_PROVIDERS : ALL_PROVIDERS,
+        settings,
+        rawAgents,
+        defaultAi,
+        { seatModelsOnly: isMorningRun }
+    );
 
     const { key: mKey, client: mClient } = resolveProvider(managerConfig.provider, settings, defaultAi);
     const finalMKey = managerConfig.apiKey ? sanitizeApiKey(managerConfig.apiKey) : mKey;
     validateProviderKey(managerConfig.provider, finalMKey, managerConfig.role || 'Manager Node');
     const managerModel = managerConfig.model || '';
-    const managerFallbacks = settings?.disableFallback
-        ? []
-        : mergeFallbacks(
-            buildManagerChain(defaultAi, { provider: managerConfig.provider, model: managerModel }),
-            availableFallbacks.filter(f => f.provider !== managerConfig.provider)
-        );
+    const managerFallbacks = mergeFallbacks(
+        buildManagerChain(defaultAi, { provider: managerConfig.provider, model: managerModel }),
+        availableFallbacks.filter(f => f.provider !== managerConfig.provider)
+    );
     const managerAgent = new Agent('Manager Node', managerModel, managerConfig.provider, finalMKey, mClient, managerFallbacks);
     managerAgent.preserveFallbackOrder = true;
     managerAgent.id = managerConfig.id || managerConfig.role || 'manager';
     managerAgent.maxTokens = managerConfig.maxTokens;
+    managerAgent.disableFallback = !!settings?.disableFallback;
 
     const analysts: Agent[] = [];
     for (const ac of analystConfigs) {
@@ -123,12 +120,11 @@ export function resolveSwarmAgents(
         const isMock = ac.provider === 'simulated' || ac.provider === 'mock' || ac.provider === 'custom-mock' || ac.provider.includes('mock') || ac.provider.includes('simulated');
         if (finalAKey || isMock) {
             const aModel = ac.model || '';
-            const aFallbacks = (ac as any).disableFallback || (ac as any).strictProvider
-                ? []
-                : availableFallbacks.filter(f => f.provider !== ac.provider);
+            const aFallbacks = availableFallbacks.filter(f => f.provider !== ac.provider);
             const analyst = new Agent(ac.role || 'Analyst', aModel, ac.provider, finalAKey, aClient, aFallbacks);
             analyst.id = ac.id || ac.role;
             analyst.maxTokens = ac.maxTokens;
+            analyst.disableFallback = !!(settings?.disableFallback || (ac as any).disableFallback || (ac as any).strictProvider);
             analysts.push(analyst);
         } else {
             console.warn(`Skipping ${ac.role}: missing API key for ${ac.provider}`);
@@ -146,6 +142,7 @@ export function resolveSwarmAgents(
             dedicatedCriticAgent = new Agent(dedicatedCriticConfig.role || 'Verification Critic', cModel, dedicatedCriticConfig.provider, finalCKey, cClient, cFallbacks);
             dedicatedCriticAgent.id = dedicatedCriticConfig.id || dedicatedCriticConfig.role || 'critic';
             dedicatedCriticAgent.maxTokens = dedicatedCriticConfig.maxTokens;
+            dedicatedCriticAgent.disableFallback = !!(settings?.disableFallback || (dedicatedCriticConfig as any).disableFallback || (dedicatedCriticConfig as any).strictProvider);
         }
     }
 

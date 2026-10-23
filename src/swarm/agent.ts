@@ -34,6 +34,7 @@ export class Agent {
     private loadBalancer?: AdaptiveLoadBalancer;
     /** PS3: when true, fallbacks run in the given order (manager chain) instead of load-balancer score order. */
     public preserveFallbackOrder = false;
+    public disableFallback = false;
 
     constructor(
         role: string,
@@ -289,14 +290,35 @@ export class Agent {
                     context.addEvent(errorEvent);
                     SwarmTracer.getInstance().logEvent(errorEvent);
 
+                    const isLimiterSkip = errMsg.includes('[LIMITER_SKIP]');
+                    const isRateLimit429 =
+                        errMsg.includes('429') ||
+                        errMsg.includes('RATE_LIMIT') ||
+                        errLower.includes('rate limit') ||
+                        errLower.includes('quota') ||
+                        errMsg.includes('RESOURCE_EXHAUSTED');
+
+                    const isTransientRateLimitOrSkip = isRateLimit429 || isLimiterSkip;
+
+                    const effectiveDisableFallback = Boolean(
+                        this.disableFallback ||
+                        config?.disableFallback ||
+                        (config as any)?.disableFallback
+                    );
+
+                    // Never disable provider fallbacks on transient rate limits (429) or limiter skips even if disableFallback is toggled
+                    if (effectiveDisableFallback && !isTransientRateLimitOrSkip) {
+                        targetIdx = targetChain.length;
+                        break;
+                    }
+
                     const isQuotaExhausted =
                         errMsg.includes('RESOURCE_EXHAUSTED') ||
                         errLower.includes('quota') ||
                         (errMsg.includes('429') && errLower.includes('quota'));
 
                     const isFailoverEligible = 
-                        errMsg.includes('429') ||
-                        errMsg.includes('RATE_LIMIT') ||
+                        isTransientRateLimitOrSkip ||
                         errMsg.includes('503') ||
                         errMsg.includes('502') ||
                         errMsg.includes('504') ||
@@ -306,8 +328,6 @@ export class Agent {
                         errMsg.includes('402') ||
                         errMsg.includes('403') ||
                         errMsg.includes('model_decommissioned') ||
-                        errLower.includes('rate limit') ||
-                        errLower.includes('quota') ||
                         errLower.includes('timeout') ||
                         errLower.includes('timed out') || // provider adapters emit "[TIMEOUT] ... timed out after Nms"
                         errLower.includes('high traffic') ||
@@ -330,14 +350,13 @@ export class Agent {
                         errLower.includes('unsupported model');
 
                     const hasNextProvider = targetIdx < targetChain.length - 1;
-                    const isLimiterSkip = errMsg.includes('[LIMITER_SKIP]');
 
                     if ((isFatal || isLimiterSkip) && !hasNextProvider) {
                         break; // Fatal error (like model not found) or limiter skip: retrying the same target cannot help
                     }
 
                     // If eligible for failover and a backup provider is ready, failover immediately without waiting
-                    if ((isFailoverEligible || isFatal) && hasNextProvider) {
+                    if ((isFailoverEligible || isFatal || isTransientRateLimitOrSkip) && hasNextProvider) {
                         const nextTarget = targetChain[targetIdx + 1];
                         context.addEvent({
                             agentRole: this.role,
