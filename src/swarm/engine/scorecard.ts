@@ -70,6 +70,16 @@ export function validateScorecard<T = AnalystScorecard>(
     if (typeof parsed.key_risk === 'string' && parsed.key_risk.length > 120) {
         parsed.key_risk = parsed.key_risk.slice(0, 120);
     }
+    // Models return confidence as a percentage and edge as text.
+    // Coerce both so a valid pick is not rejected and retried.
+    if (typeof parsed.confidence === 'number' && parsed.confidence > 1) {
+        parsed.confidence = parsed.confidence / 100;
+    }
+    if (typeof parsed.edge === 'string') {
+        const n = parseFloat(parsed.edge.replace('%', ''));
+        if (Number.isFinite(n)) parsed.edge = n;
+    }
+    if (!parsed.status) parsed.status = 'ok';
     const result = schema.safeParse({ ...parsed, seat });
     if (result.success) {
         return { ok: true, scorecard: result.data as T, text };
