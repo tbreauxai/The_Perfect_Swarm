@@ -23,7 +23,7 @@ Focus: Eliminate silent chunk dropping, support large data profiles, and preserv
 
 ---
 
-## Phase 2: Hierarchical Map-Reduce Batching & Specialist Wave Scheduling
+## Phase 2: Hierarchical Map-Reduce Batching & Specialist Wave Scheduling [checkpoint: bf4721b]
 Focus: Scale execution across large chunk counts without saturating system resources or dropping unassigned chunks.
 
 - [x] Task: Write Failing Tests for Multi-Wave Chunk Execution [1573772]
@@ -36,7 +36,7 @@ Focus: Scale execution across large chunk counts without saturating system resou
   - [x] Integrate intermediate cluster digests to roll up findings per wave into structured intermediate summaries.
   - [x] Run tests and verify all pass (Green Phase).
 
-- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+- [x] Task: Phase Verification & Checkpoint (Refer to workflow.md) [bf4721b]
 
 ---
 
