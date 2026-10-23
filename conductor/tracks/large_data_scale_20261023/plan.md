@@ -26,12 +26,12 @@ Focus: Eliminate silent chunk dropping, support large data profiles, and preserv
 ## Phase 2: Hierarchical Map-Reduce Batching & Specialist Wave Scheduling
 Focus: Scale execution across large chunk counts without saturating system resources or dropping unassigned chunks.
 
-- [ ] Task: Write Failing Tests for Multi-Wave Chunk Execution
-  - [ ] Create tests in `src/swarm/engine/clusterPipeline.largeData.test.ts` simulating 10+ chunks across analyst specialists.
-  - [ ] Test wave scheduling ensuring no active analyst is starved and chunks are processed in bounded concurrency waves.
-  - [ ] Confirm tests fail (Red Phase).
+- [x] Task: Write Failing Tests for Multi-Wave Chunk Execution [1573772]
+  - [x] Create tests in `src/swarm/engine/clusterPipeline.largeData.test.ts` simulating 10+ chunks across analyst specialists.
+  - [x] Test wave scheduling ensuring no active analyst is starved and chunks are processed in bounded concurrency waves.
+  - [x] Confirm tests fail (Red Phase).
 
-- [ ] Task: Implement Hierarchical Map-Reduce Batching
+- [~] Task: Implement Hierarchical Map-Reduce Batching
   - [ ] Update [src/swarm/engine/clusterPipeline.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/engine/clusterPipeline.ts) to batch chunk evaluations into sequential/pipelined waves when chunk count exceeds specialist capacity.
   - [ ] Integrate intermediate cluster digests to roll up findings per wave into structured intermediate summaries.
   - [ ] Run tests and verify all pass (Green Phase).
