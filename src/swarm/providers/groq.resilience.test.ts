@@ -152,4 +152,52 @@ describe('Adaptive Token Capping & Fallback Chain (groq.ts & agentResolution.ts)
             ).rejects.toThrow(/Bad request/);
         });
     });
+
+    describe('Adaptive inter-chunk rate pacing for rate-limited providers', () => {
+        it('applies inter-chunk delay for subsequent chunk calls (chunkIdx > 0) on rate-limited providers', async () => {
+            const { createAnalystExecutor } = await import('../engine/analystExecution.ts');
+            const { ToolRegistry } = await import('../tools/index.ts');
+
+            const analyst = new Agent('Data Specialist', 'model-groq', 'groq', 'k-mock');
+            let executedCalls = 0;
+            const callTimestamps: number[] = [];
+
+            vi.spyOn(analyst, 'run').mockImplementation(async () => {
+                executedCalls++;
+                callTimestamps.push(Date.now());
+                return {
+                    insights: ['chunk analysis'],
+                    anomalies: [],
+                    summary: 'summary'
+                };
+            });
+
+            const executor = createAnalystExecutor({
+                task: 'Multi-chunk analysis',
+                chunks: ['chunk0 data', 'chunk1 data'],
+                profile: {},
+                historicalContext: '',
+                targetAppId: 'test-app',
+                settings: {
+                    // Force a measurable inter-chunk pacing delay in test
+                    providerPacingMs: { groq: 40 }
+                } as any,
+                context: new SwarmContext(),
+                toolRegistry: new ToolRegistry(),
+                analystClusterMap: new Map(),
+                bypassCache: false
+            });
+
+            // Chunk 0 (first call)
+            await executor(analyst, 'chunk0 data', 0);
+            // Chunk 1 (subsequent call should apply pacing delay)
+            await executor(analyst, 'chunk1 data', 1);
+
+            expect(executedCalls).toBe(2);
+            expect(callTimestamps.length).toBe(2);
+            const interval = callTimestamps[1] - callTimestamps[0];
+            // Must have applied at least 30ms delay
+            expect(interval).toBeGreaterThanOrEqual(30);
+        });
+    });
 });

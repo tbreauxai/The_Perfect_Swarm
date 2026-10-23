@@ -389,4 +389,26 @@ describe('Contract Tests', () => {
         expect(typeof data.workflowId).toBe('string');
         expect(data.workflowId.length).toBeGreaterThan(0);
     });
+
+    it('accepts large 5MB+ payloads on /api/swarm/stream without 413 Payload Too Large', async () => {
+        const line = 'metric_data_record_identifier_timestamp_value_status_ok_sample\n';
+        const largeData = line.repeat(85_000); // ~5.4MB
+        const payload = {
+            task: 'Analyze 5MB dataset',
+            data: largeData
+        };
+
+        const req = new Request('http://localhost/api/swarm/stream', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer test-token-123'
+            },
+            body: JSON.stringify(payload)
+        });
+
+        const res = await contractApp.fetch(req, testEnv);
+        // Should not reject with 413 Payload Too Large
+        expect(res.status).not.toBe(413);
+    });
 });
