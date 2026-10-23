@@ -8,6 +8,7 @@ import type { SwarmStagePayload, SwarmWorkflowParams, SwarmWorkflowResult, Swarm
 export type { SwarmStagePayload, SwarmWorkflowParams, SwarmWorkflowResult, SwarmFeedbackReport };
 import { SwarmEngine } from "./SwarmEngine.ts";
 export { SwarmEngine };
+export * from "./toolExecutionHelper.ts";
 import { executeFastPath } from "./fastPath.ts";
 import { checkSubComputationCache, resolveEarlyCacheHit } from "./cachingPipeline.ts";
 import { runDataProfilingPipeline } from "./profilingPipeline.ts";

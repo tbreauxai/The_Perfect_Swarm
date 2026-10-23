@@ -1,3 +1,4 @@
+import { parseSseStream } from './utils/sseParser.ts';
 import { executeSwarmWorkflow, type SwarmWorkflowResult, type SwarmStagePayload, getOrCreateDefaultCortex } from './engine/index.ts';
 import { MemoryCortex, type RetrievalOptions, type MemorySnapshot, type ExportMemoriesOptions, type ImportMemoriesOptions, type ImportMemoriesResult, type MemoryMetadata } from './memory.ts';
 import { type SwarmEvent, formatActionableError } from './types.ts';
@@ -251,55 +252,22 @@ export class SwarmClient {
             throw new Error(`Remote SSE server connection failed ${res.status}: ${errText}`);
         }
 
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n\n');
-            buffer = lines.pop() || '';
-
-            for (const block of lines) {
-                if (!block.trim()) continue;
-                let eventType = 'message';
-                let dataStr = '';
-
-                for (const line of block.split('\n')) {
-                    if (line.startsWith('event:')) {
-                        eventType = line.replace('event:', '').trim();
-                    } else if (line.startsWith('data:')) {
-                        dataStr = line.replace('data:', '').trim();
-                    }
-                }
-
-                if (!dataStr) continue;
-
-                try {
-                    const parsedData = JSON.parse(dataStr);
-                    if (eventType === 'swarm_event') {
-                        yield { type: 'event', event: parsedData };
-                    } else if (eventType === 'swarm_stage') {
-                        yield { type: 'stage', stagePayload: parsedData };
-                    } else if (eventType === 'swarm_complete') {
-                        yield { type: 'complete', finalAnalysis: parsedData.finalAnalysis };
-                    } else if (eventType === 'swarm_error') {
-                        const errMsg = formatActionableError(parsedData.error || 'Swarm remote error');
-                        yield {
-                            type: 'error',
-                            error: errMsg,
-                            finalAnalysis: { ui_title: 'Execution Error', error: errMsg }
-                        };
-                    }
-                } catch {
-                    // ignore unparseable chunk
-                }
+                for await (const { event: eventType, data: parsedData } of parseSseStream(res.body)) {
+            if (eventType === 'swarm_event') {
+                yield { type: 'event', event: parsedData };
+            } else if (eventType === 'swarm_stage') {
+                yield { type: 'stage', stagePayload: parsedData };
+            } else if (eventType === 'swarm_complete') {
+                yield { type: 'complete', finalAnalysis: parsedData.finalAnalysis };
+            } else if (eventType === 'swarm_error') {
+                const errMsg = formatActionableError(parsedData.error || 'Swarm remote error');
+                yield {
+                    type: 'error',
+                    error: errMsg,
+                    finalAnalysis: { ui_title: 'Execution Error', error: errMsg }
+                };
             }
-        }
-    }
+        }   }
 
     /**
      * Memory Cortex access for continuous cross-app knowledge retrieval, few-shot distillation, and portable backups.

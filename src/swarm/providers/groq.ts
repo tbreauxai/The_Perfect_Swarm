@@ -1,4 +1,5 @@
-import { cleanToken, buildStandardMessages, parseStandardResponse, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
+import { cleanToken, buildStandardMessages, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
+import { executeOpenAiCompatibleChat } from './baseOpenAi.ts';
 import { LimiterSkipError } from './limiter.ts';
 
 /**
@@ -151,66 +152,18 @@ export class GroqAdapter implements ProviderAdapter {
         }
 
         const isJson = options.config?.responseMimeType === 'application/json';
-        const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 30000; // 30s default: fail fast on free-tier stalls instead of hanging for 2 minutes
+        const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 30000;
 
-        const makeRequest = async (useJson: boolean): Promise<Response> => {
-            return fetch('https://api.groq.com/openai/v1/chat/completions', {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${key}`,
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json'
-                },
-                body: JSON.stringify({
-                    model: options.modelName,
-                    messages,
-                    max_tokens: maxTokens,
-                    response_format: useJson ? { type: 'json_object' } : undefined
-                }),
-                signal: AbortSignal.timeout(timeoutMs)
-            });
-        };
-
-        const startTime = Date.now();
-        let response: Response;
-        let activeJson = isJson;
-        try {
-            response = await makeRequest(activeJson);
-            if (!response.ok && response.status === 400 && activeJson) {
-                const peekError = await response.clone().text().catch(() => '');
-                const isFormatRejection = !peekError ||
-                    peekError.toLowerCase().includes('response_format') ||
-                    peekError.toLowerCase().includes('format') ||
-                    peekError.toLowerCase().includes('schema') ||
-                    peekError.toLowerCase().includes('json');
-                if (isFormatRejection) {
-                    console.warn(`[Groq] Model '${options.modelName}' rejected response_format (${peekError}); retrying without format flag.`);
-                    activeJson = false;
-                    response = await makeRequest(false);
-                }
-            }
-        } catch (err: any) {
-            if (err.name === 'TimeoutError' || err.name === 'AbortError') {
-                throw new Error(`[TIMEOUT] Groq request timed out after ${timeoutMs}ms.`);
-            }
-            throw err;
-        }
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            if (response.status === 429) {
-                const retryAfter = response.headers.get('retry-after');
-                const retrySuffix = retryAfter ? ` (retry-after: ${retryAfter}s)` : '';
-                throw new Error(`[RATE_LIMIT_429] Groq rate limit / quota exceeded: ${errorText}${retrySuffix}`);
-            }
-            if (response.status >= 500) {
-                throw new Error(`[SERVER_ERROR_${response.status}] Groq service unavailable: ${errorText}`);
-            }
-            throw new Error(`Groq API Error (${response.status}): ${errorText}`);
-        }
-
-        const data = await response.json();
-        const durationMs = Date.now() - startTime;
-        return parseStandardResponse(data, this.providerName, options, isJson, undefined, durationMs);
+        return executeOpenAiCompatibleChat(options, {
+            providerName: this.providerName,
+            providerLabel: 'Groq',
+            endpoint: 'https://api.groq.com/openai/v1/chat/completions',
+            apiKey: key,
+            modelName: options.modelName,
+            messages,
+            maxTokens,
+            isJson,
+            timeoutMs
+        });
     }
 }

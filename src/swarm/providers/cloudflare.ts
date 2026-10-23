@@ -1,4 +1,5 @@
-import { cleanToken, buildStandardMessages, parseStandardResponse, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
+import { cleanToken, buildStandardMessages, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
+import { executeOpenAiCompatibleChat } from './baseOpenAi.ts';
 
 export function resolveCloudflareCredentials(key: string | undefined | null): { account: string; token: string } {
     let token = cleanToken(key);
@@ -27,61 +28,19 @@ export class CloudflareAdapter implements ProviderAdapter {
         const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 30000;
         const url = `https://api.cloudflare.com/client/v4/accounts/${account}/ai/v1/chat/completions`;
 
-        const makeRequest = async (useJson: boolean): Promise<Response> => {
-            const body: Record<string, any> = {
-                model: options.modelName,
-                messages,
-                max_tokens: options.config?.maxTokens || 2048
-            };
-            if (useJson) {
-                body.response_format = { type: 'json_object' };
-            }
-            return fetch(url, {
-                method: 'POST',
-                headers: {
-                    Authorization: `Bearer ${token}`,
-                    'Content-Type': 'application/json',
-                    Accept: 'application/json'
-                },
-                body: JSON.stringify(body),
-                signal: AbortSignal.timeout(timeoutMs)
-            });
-        };
-
-        const startTime = Date.now();
-        let response: Response;
-        let activeJson = isJson;
-        try {
-            response = await makeRequest(activeJson);
-            // If the model rejects response_format with 400, retry once without response_format
-            if (!response.ok && response.status === 400 && activeJson) {
-                const peekError = await response.clone().text().catch(() => '');
-                const isFormatRejection = !peekError ||
-                    peekError.toLowerCase().includes('response_format') ||
-                    peekError.toLowerCase().includes('format') ||
-                    peekError.toLowerCase().includes('schema') ||
-                    peekError.toLowerCase().includes('json');
-                if (isFormatRejection) {
-                    console.warn(`[Cloudflare] Model '${options.modelName}' rejected response_format (${peekError}); retrying without format flag.`);
-                    activeJson = false;
-                    response = await makeRequest(false);
-                }
-            }
-        } catch (err: any) {
-            if (err.name === 'TimeoutError' || err.name === 'AbortError') {
-                throw new Error(`[TIMEOUT] Cloudflare Workers AI timed out after ${timeoutMs}ms.`);
-            }
-            throw err;
-        }
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            if (response.status === 429) throw new Error(`[RATE_LIMIT_429] Cloudflare Workers AI rate limit: ${errorText}`);
-            if (response.status >= 500) throw new Error(`[SERVER_ERROR_${response.status}] Cloudflare Workers AI: ${errorText}`);
-            throw new Error(`Cloudflare Workers AI Error (${response.status}): ${errorText}`);
-        }
-
-        const data = await response.json();
-        return parseStandardResponse(data, this.providerName, options, isJson, undefined, Date.now() - startTime);
+        return executeOpenAiCompatibleChat(options, {
+            providerName: this.providerName,
+            providerLabel: 'Cloudflare Workers AI',
+            endpoint: url,
+            apiKey: token,
+            modelName: options.modelName,
+            messages,
+            maxTokens: options.config?.maxTokens || 2048,
+            isJson,
+            timeoutMs,
+            formatTimeoutError: (timeout) => `[TIMEOUT] Cloudflare Workers AI timed out after ${timeout}ms.`,
+            format429Error: (_status, errorText) => `[RATE_LIMIT_429] Cloudflare Workers AI rate limit: ${errorText}`,
+            format500Error: (status, errorText) => `[SERVER_ERROR_${status}] Cloudflare Workers AI: ${errorText}`
+        });
     }
 }

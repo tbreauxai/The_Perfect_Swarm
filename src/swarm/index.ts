@@ -9,6 +9,7 @@ export * from './schemas.ts';
 
 // Provider Adapters and Dynamic Registry
 export * from './providers/adapter.ts';
+export * from './providers/baseOpenAi.ts';
 export * from './providers/registry.ts';
 export * from './providers/gemini.ts';
 export * from './providers/groq.ts';

@@ -1,3 +1,4 @@
+import { processAndRecordToolCalls } from './toolExecutionHelper.ts';
 import { Agent } from '../agent.ts';
 import { SwarmContext } from '../context.ts';
 import type { AgentVariantConfig, ExperimentDecision } from '../experiment.ts';
@@ -145,42 +146,15 @@ export async function executeFastPath(
                 ...activeVariant?.parameters
             });
 
-            // Parse and execute deterministic tool calls
-            const rawStr = typeof rawOutput === 'string' ? rawOutput : JSON.stringify(rawOutput);
-            const toolCalls = toolRegistry.parseToolCalls(rawStr);
-            const toolResults = toolCalls.length > 0 ? await toolRegistry.executeAllToolCalls(toolCalls) : [];
+                        const { toolResults, strippedOutput } = await processAndRecordToolCalls({
+                rawOutput,
+                toolRegistry,
+                context,
+                memoryCortex,
+                task,
+                targetAppId
+            });
 
-            for (const tr of toolResults) {
-                context.addEvent({
-                    agentRole: 'Deterministic Tool Engine',
-                    action: `Executed Tool: ${tr.tool}`,
-                    modelName: 'Local/DeterministicTool',
-                    prompt: JSON.stringify(tr.parameters),
-                    output: tr.success ? tr.result : { error: tr.error },
-                    durationMs: tr.durationMs
-                });
-            }
-
-            // Cache Action Plan on tool execution for subsequent fast lookups
-            if (toolCalls.length > 0 && memoryCortex) {
-                try {
-                    await memoryCortex.cacheActionPlan(task, {
-                        intent: toolCalls[0].tool,
-                        entities: { ...(toolCalls[0].parameters || {}) },
-                        toolExecutionSteps: toolCalls.map(tc => ({
-                            tool: tc.tool,
-                            parameters: tc.parameters,
-                            dynamicFetchRequired: true
-                        })),
-                        targetAppId
-                    });
-                } catch {
-                    // Non-critical background cache write
-                }
-            }
-
-            // Guard output schema and append tool results
-            const strippedOutput = typeof rawOutput === 'string' ? toolRegistry.stripToolCalls(rawOutput) : rawOutput;
             const guarded = guardAnalystResponse(strippedOutput, fastAnalyst.role);
             for (const tr of toolResults) {
                 if (tr.success) {

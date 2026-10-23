@@ -1,3 +1,4 @@
+import { processAndRecordToolCalls } from './toolExecutionHelper.ts';
 import type { Agent } from '../agent.ts';
 import type { SwarmContext } from '../context.ts';
 import type { SwarmEngineSettings } from '../types.ts';
@@ -205,58 +206,17 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                 throw innerErr;
             }
             
-            // Parse and execute any tool calls emitted in output
-            const rawStr = typeof rawOutput === 'string' ? rawOutput : JSON.stringify(rawOutput);
-            const toolCalls = toolRegistry.parseToolCalls(rawStr);
-            const toolResults = toolCalls.length > 0 ? await toolRegistry.executeAllToolCalls(toolCalls) : [];
-
-            for (const tr of toolResults) {
-                context.addEvent({
-                    agentRole: 'Deterministic Tool Engine',
-                    action: `Executed Tool: ${tr.tool}`,
-                    modelName: 'Local/DeterministicTool',
-                    prompt: JSON.stringify(tr.parameters),
-                    output: tr.success ? tr.result : { error: tr.error },
-                    durationMs: tr.durationMs
-                });
-            }
-
-            // Cache Action Plan on cache miss for subsequent identical intents
-            if (toolCalls.length > 0 && memoryCortex) {
-                try {
-                    memoryCortex.cacheActionPlan(task, {
-                        intent: toolCalls[0].tool,
-                        entities: { ...(toolCalls[0].parameters || {}) },
-                        toolExecutionSteps: toolCalls.map(tc => ({
-                            tool: tc.tool,
-                            parameters: tc.parameters,
-                            dynamicFetchRequired: true
-                        })),
-                        targetAppId
-                    }).catch(() => {});
-                } catch {
-                    // Non-critical background cache write
-                }
-            } else if (toolCalls.length === 0 && memoryCortex && task && (task.toLowerCase().includes('odds') || task.toLowerCase().includes('implied probability'))) {
-                const oddsMatch = task.match(/(?:odds|for)\s+([0-9]+(?:\.[0-9]+)?(?:\/[0-9]+)?|[+-][0-9]+)/i);
-                if (oddsMatch && oddsMatch[1]) {
-                    try {
-                        memoryCortex.cacheActionPlan(task, {
-                            intent: 'probability_odds_converter',
-                            entities: { odds: oddsMatch[1] },
-                            toolExecutionSteps: [{
-                                tool: 'probability_odds_converter',
-                                parameters: { odds: oddsMatch[1] },
-                                dynamicFetchRequired: true
-                            }],
-                            targetAppId
-                        }).catch(() => {});
-                    } catch {}
-                }
-            }
+            const { toolResults, strippedOutput } = await processAndRecordToolCalls({
+                rawOutput,
+                toolRegistry,
+                context,
+                memoryCortex,
+                task,
+                targetAppId,
+                enableOddsPlanFallback: true
+            });
 
             // Resilient schema guard for Analyst output
-            const strippedOutput = typeof rawOutput === 'string' ? toolRegistry.stripToolCalls(rawOutput) : rawOutput;
             const resData = scorecardReport || guardAnalystResponse(strippedOutput, analyst.role);
             for (const tr of toolResults) {
                 if (tr.success) {

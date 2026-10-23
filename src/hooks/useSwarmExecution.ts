@@ -1,3 +1,4 @@
+import { parseSseStream } from '../swarm/utils/sseParser.ts';
 import { useState, useRef } from 'react';
 import type { SwarmTimelineEvent } from '../components/SwarmEventTimeline';
 import type { AppSettings } from '../components/SettingsModal';
@@ -128,10 +129,6 @@ export function useSwarmExecution() {
         throw new Error('No response stream returned by server.');
       }
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
       // 4. Stream reader loop: idle timeout reset on every chunk (generous 45s)
       const resetIdleTimeout = () => {
         if (idleTimer) clearTimeout(idleTimer);
@@ -143,74 +140,43 @@ export function useSwarmExecution() {
 
       resetIdleTimeout();
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        resetIdleTimeout();
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n\n');
-        buffer = lines.pop() || '';
-
-        for (const block of lines) {
-          if (!block.trim() || block.startsWith(':')) continue;
-
-          let eventType = 'message';
-          let dataStr = '';
-
-          for (const line of block.split('\n')) {
-            if (line.startsWith('event:')) {
-              eventType = line.replace('event:', '').trim();
-            } else if (line.startsWith('data:')) {
-              dataStr = line.replace('data:', '').trim();
-            }
+      for await (const { event: eventType, data: parsedData } of parseSseStream(response.body, resetIdleTimeout)) {
+        if (eventType === 'swarm_event') {
+          const truncatedEvent = parsedData && typeof parsedData === 'object' && typeof parsedData.prompt === 'string'
+            ? { ...parsedData, prompt: parsedData.prompt.slice(0, 800) }
+            : parsedData;
+          eventBufferRef.current.push(truncatedEvent);
+          if (rafIdRef.current === null) {
+            rafIdRef.current = requestAnimationFrame(() => {
+              flushEventBuffer();
+            });
           }
-
-          if (!dataStr) continue;
-
-          try {
-            const parsedData = JSON.parse(dataStr);
-            if (eventType === 'swarm_event') {
-              const truncatedEvent = parsedData && typeof parsedData === 'object' && typeof parsedData.prompt === 'string'
-                ? { ...parsedData, prompt: parsedData.prompt.slice(0, 800) }
-                : parsedData;
-              eventBufferRef.current.push(truncatedEvent);
-              if (rafIdRef.current === null) {
-                rafIdRef.current = requestAnimationFrame(() => {
-                  flushEventBuffer();
-                });
-              }
-            } else if (eventType === 'swarm_stage') {
-              flushEventBuffer();
-              setProgressiveStage(parsedData);
-            } else if (eventType === 'swarm_partial') {
-              // Explicitly ignore or consume swarm_partial events
-              flushEventBuffer();
-            } else if (eventType === 'swarm_complete') {
-              flushEventBuffer();
-              setProgressiveStage(null);
-              if (parsedData.finalAnalysis) {
-                setFinalAnalysis(parsedData.finalAnalysis);
-              }
-              if (parsedData.events && Array.isArray(parsedData.events)) {
-                const truncatedEvents = parsedData.events.map((e: any) =>
-                  e && typeof e === 'object' && typeof e.prompt === 'string'
-                    ? { ...e, prompt: e.prompt.slice(0, 800) }
-                    : e
-                );
-                setEvents(truncatedEvents);
-              }
-            } else if (eventType === 'swarm_error') {
-              flushEventBuffer();
-              setError(formatActionableError(parsedData.error || 'Swarm execution error'));
-            }
-          } catch (err) {
-            console.warn('Error parsing SSE block:', err, block);
+        } else if (eventType === 'swarm_stage') {
+          flushEventBuffer();
+          setProgressiveStage(parsedData);
+        } else if (eventType === 'swarm_partial') {
+          // Explicitly ignore or consume swarm_partial events
+          flushEventBuffer();
+        } else if (eventType === 'swarm_complete') {
+          flushEventBuffer();
+          setProgressiveStage(null);
+          if (parsedData.finalAnalysis) {
+            setFinalAnalysis(parsedData.finalAnalysis)
           }
+          if (parsedData.events && Array.isArray(parsedData.events)) {
+            const truncatedEvents = parsedData.events.map((e: any) =>
+              e && typeof e === 'object' && typeof e.prompt === 'string'
+                ? { ...e, prompt: e.prompt.slice(0, 800) }
+                : e
+            );
+            setEvents(truncatedEvents);
+          }
+        } else if (eventType === 'swarm_error') {
+          flushEventBuffer();
+          setError(formatActionableError(parsedData.error || 'Swarm execution error'));
         }
       }
-    } catch (err: any) {
+        } catch (err: any) {
       // 5. Abort/catch handling: show timeout message distinct from user cancel
       if (err.name === 'AbortError' || controller.signal.aborted) {
         if (abortReason === 'connect-timeout') {
