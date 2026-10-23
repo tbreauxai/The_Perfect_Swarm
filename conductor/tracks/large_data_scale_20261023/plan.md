@@ -31,10 +31,10 @@ Focus: Scale execution across large chunk counts without saturating system resou
   - [x] Test wave scheduling ensuring no active analyst is starved and chunks are processed in bounded concurrency waves.
   - [x] Confirm tests fail (Red Phase).
 
-- [~] Task: Implement Hierarchical Map-Reduce Batching
-  - [ ] Update [src/swarm/engine/clusterPipeline.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/engine/clusterPipeline.ts) to batch chunk evaluations into sequential/pipelined waves when chunk count exceeds specialist capacity.
-  - [ ] Integrate intermediate cluster digests to roll up findings per wave into structured intermediate summaries.
-  - [ ] Run tests and verify all pass (Green Phase).
+- [x] Task: Implement Hierarchical Map-Reduce Batching [bf4721b]
+  - [x] Update [src/swarm/engine/clusterPipeline.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/engine/clusterPipeline.ts) to batch chunk evaluations into sequential/pipelined waves when chunk count exceeds specialist capacity.
+  - [x] Integrate intermediate cluster digests to roll up findings per wave into structured intermediate summaries.
+  - [x] Run tests and verify all pass (Green Phase).
 
 - [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
