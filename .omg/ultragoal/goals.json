@@ -1,32 +1,38 @@
 [
   {
-    "id": "goal-1-profiling-zero-loss-chunking",
-    "description": "Phase 1: High-Volume Payload Profiling & Zero-Loss Chunking - Implement failing unit & stress tests and refactor dataProfiler.ts to eliminate silent chunk dropping, support 5MB+ payloads, and preserve CSV headers across chunks.",
+    "id": "goal-1-math-hash-token-dedup",
+    "description": "Foundational Zero-Risk Utility Deduplication: Extract djb2Hash (src/swarm/utils/hash.ts), probability math clamp/logit/sigmoid (src/swarm/math/probabilityMath.ts), consolidate vector cosine similarity (src/swarm/vectorIndex/metricMath.ts / vectorMath.ts), unify token estimation on TokenEstimator, and extract HTTP retry-after parser (src/swarm/utils/httpTimeouts.ts).",
     "status": "completed",
-    "verification": "All generated chunks (>8 chunks, 50k rows) are retained without middle-loss; CSV header propagation verified; profiler.test.ts passes."
+    "verification": "All extracted helpers unit tested; existing consumer modules updated; 100% test pass on affected modules; npm run lint passes with 0 errors."
   },
   {
-    "id": "goal-2-hierarchical-map-reduce-scheduling",
-    "description": "Phase 2: Hierarchical Map-Reduce Batching & Specialist Wave Scheduling - Implement failing tests and update clusterPipeline.ts / loadBalancer.ts to execute multi-chunk payloads in bounded specialist waves with intermediate cluster digests.",
-    "status": "completed",
-    "verification": "Multi-wave batching successfully schedules 10+ chunks across specialists without resource starvation or dropped chunks; unit tests pass."
+    "id": "goal-2-vector-cache-index-dedup",
+    "description": "Vector Index & Semantic Cache Deduplication: Extract abstract BaseVectorIndex<T> (src/swarm/vectorIndex/baseIndex.ts) for hnswIndex and vpTreeIndex; extract generic SemanticVectorCache<T> (src/swarm/cache/semanticVectorCache.ts) deduplicating LRU, TTL, and vector search across actionPlanCache and semanticCacheInterceptor.",
+    "status": "in-progress",
+    "verification": "HNSW, VPTree, ActionPlanCache, and SemanticCacheInterceptor pass all existing test suites without regression; tsc --noEmit passes."
   },
   {
-    "id": "goal-3-manager-synthesis-protection",
-    "description": "Phase 3: Adaptive Manager Synthesis & Context Ceiling Protection - Implement failing tests and enhance synthesisPipeline.ts with recursive synthesis reduction and provider context ceiling guards.",
-    "status": "completed",
-    "verification": "Compiled manager prompt never exceeds provider context limits (8k Groq, 32k Mistral, 128k Gemini) even with 20+ analyst reports; unit tests pass."
+    "id": "goal-3-provider-streaming-tool-dedup",
+    "description": "Provider Adapters, SSE Streaming & Engine Tool Execution: Implement shared OpenAI-compatible REST call helper (src/swarm/providers/baseOpenAi.ts) for Groq/Mistral/OpenRouter/Nvidia/Cloudflare; extract shared SSE stream parser (src/swarm/utils/sseParser.ts); extract tool execution and context event recording helper (src/swarm/engine/toolExecutionHelper.ts).",
+    "status": "todo",
+    "verification": "Provider adapters pass resilience and format rejection tests; SSE parser passes client tests; tool execution passes analyst execution tests."
   },
   {
-    "id": "goal-4-rate-pacing-server-hardening",
-    "description": "Phase 4: Provider TPM Rate Pacing & Express Ingestion Hardening - Implement failing tests and add adaptive dispatch delays in analystExecution.ts and configure 10MB body limits in app.ts.",
-    "status": "completed",
-    "verification": "Provider rate limits (TPM) are smoothed without 429 cascades; Express ingests 10MB payloads cleanly; tests pass."
+    "id": "goal-4-server-routes-and-cli-modularization",
+    "description": "Server Routes & CLI Decomposition: Decompose monolithic src/swarm/server/app.ts into modular Hono route controllers under src/swarm/server/routes/ (analyze.ts, feedback.ts, morning.ts, models.ts); modularize monolithic bin/cli.js into bin/commands/ with a clean command dispatcher.",
+    "status": "todo",
+    "verification": "src/swarm/server/app.test.ts (13/13) and bin/cli.js command invocations pass with identical behavior; server body parser limits intact."
   },
   {
-    "id": "goal-5-stress-verification-and-regression",
-    "description": "Phase 5: End-to-End Stress Verification & Regression Suite - Create test-large-data-simulation.ts executing 50k-row swarm analysis and verify full repository test suite and type check.",
-    "status": "completed",
-    "verification": "Zero silent truncation and clean exit on 50k rows; npm run lint and npm run test:unit pass 100%."
+    "id": "goal-5-ui-components-modularization",
+    "description": "Monolithic UI Components Modularization: Deduplicate OptimizationCombinationsTable and OptimizationHistoryTable into shared OptimizationResultsTable; decompose CortexDiagnosticsViewer into focused subcomponents; extract virtual list and timeline items from SwarmEventTimeline.",
+    "status": "todo",
+    "verification": "Frontend components compile cleanly; vitest component tests pass; no UI visual regressions."
+  },
+  {
+    "id": "goal-6-system-verification-and-benchmarking",
+    "description": "End-to-End System Verification & Regression Suite: Execute full repository verification suite including lint, unit tests, portable test suite, distribution bundle tests, production build, and 50k-row stress simulation.",
+    "status": "todo",
+    "verification": "npm run lint (0 errors), npm run test:unit (892/892 pass), npm run test:portable (pass), npm run test:dist (pass), npm run build:swarm (pass), test-large-data-simulation.ts (pass)."
   }
 ]
