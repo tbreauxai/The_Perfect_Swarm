@@ -214,3 +214,58 @@ describe('Swarm Benchmark Harness & Synthetic Workload Profiling', () => {
         expect(result.summary).toContain('Benchmark completed');
     });
 });
+
+describe('High-Volume Scale & Zero-Loss Chunking', () => {
+    it('preserves all chunks without middle-truncation for payloads exceeding 8 chunks', () => {
+        // Generate payload that produces 12 chunks (12 * 8000 tokens = ~96000 tokens = ~384,000 chars)
+        const line = 'metric_data_record_identifier_timestamp_value_status_'.repeat(20); // ~1080 chars = ~270 tokens
+        const lines: string[] = [];
+        for (let i = 0; i < 360; i++) {
+            lines.push(`record_${i}: ${line}`);
+        }
+        const largePayload = lines.join('\n');
+
+        const result = createTokenChunks(largePayload);
+
+        // Zero-loss: all generated chunks must be retained, no warning of dropped batches
+        expect(result.chunks.length).toBeGreaterThan(8);
+        expect(result.chunks.length).toBe(result.originalChunkCount);
+        expect(result.warning).toBeUndefined();
+
+        // Verify content from beginning, middle, and end exists across chunks
+        const combined = result.chunks.join('\n');
+        expect(combined).toContain('record_0:');
+        expect(combined).toContain('record_180:');
+        expect(combined).toContain('record_359:');
+    });
+
+    it('propagates CSV table headers across all chunks for tabular datasets', () => {
+        const header = 'id,timestamp,device_uuid,battery_level,temperature_c,status_code';
+        const rows: string[] = [header];
+        for (let i = 0; i < 200; i++) {
+            rows.push(`${i},2026-10-23T10:00:00Z,uuid-${i},98.5,24.2,OK_${'x'.repeat(200)}`);
+        }
+        const csvData = rows.join('\n');
+
+        const result = createTokenChunks(csvData, 2000);
+
+        expect(result.chunks.length).toBeGreaterThan(1);
+        // Every chunk must contain the CSV header row
+        for (let i = 0; i < result.chunks.length; i++) {
+            const chunkLines = result.chunks[i].split('\n');
+            expect(chunkLines[0]).toBe(header);
+        }
+    });
+
+    it('supports 5MB+ payloads in profileData without premature memory truncation', () => {
+        // 5.2 MB payload
+        const chunk5MB = 'A'.repeat(5_200_000);
+        const profiled = profileData(chunk5MB);
+
+        expect(profiled.rawInput.length).toBe(5_200_000);
+        expect(profiled.rawInput).not.toContain('...[TRUNCATED FOR MEMORY SAFETY]...');
+        expect(profiled.profile.charCount).toBe(5_200_000);
+        expect(profiled.profile.estimatedTokens).toBe(1_300_000);
+    });
+});
+
