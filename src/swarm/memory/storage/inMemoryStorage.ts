@@ -188,7 +188,8 @@ export class InMemoryStorageAdapter implements StorageBackend {
             return results.filter(r => r.vectorScore >= options.scoreThreshold!);
         }
 
-        return results.sort((a, b) => b.vectorScore - a.vectorScore).slice(0, options.limit || 10);
+        const candidateLimit = options.limit ? Math.max(options.limit * 5, 25) : 25;
+        return results.sort((a, b) => b.vectorScore - a.vectorScore).slice(0, candidateLimit);
     }
 
     async delete(ids: string[]): Promise<boolean> {

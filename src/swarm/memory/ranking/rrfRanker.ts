@@ -29,8 +29,8 @@ export class RrfRanker {
     constructor(config: RrfRankerConfig = {}) {
         this.rrfK = config.rrfK ?? 60;
         this.defaultWeights = config.defaultWeights ?? {
-            dense: 0.6,
-            sparse: 0.4
+            denseWeight: 0.6,
+            sparseWeight: 0.4
         };
     }
 
@@ -39,23 +39,23 @@ export class RrfRanker {
      */
     resolveWeights(weights?: RrfWeights, profile?: RrfProfile): { dense: number; sparse: number } {
         if (weights) {
-            const dense = weights.dense ?? weights.vector ?? 0.6;
-            const sparse = weights.sparse ?? weights.lexical ?? 0.4;
+            const dense = weights.denseWeight ?? 0.6;
+            const sparse = weights.sparseWeight ?? 0.4;
             const total = dense + sparse;
             return total > 0 ? { dense: dense / total, sparse: sparse / total } : { dense: 0.6, sparse: 0.4 };
         }
 
         if (profile && RRF_PRESETS[profile]) {
             const preset = RRF_PRESETS[profile];
-            const dense = preset.dense ?? preset.vector ?? 0.6;
-            const sparse = preset.sparse ?? preset.lexical ?? 0.4;
+            const dense = preset.denseWeight ?? 0.6;
+            const sparse = preset.sparseWeight ?? 0.4;
             const total = dense + sparse;
             return total > 0 ? { dense: dense / total, sparse: sparse / total } : { dense: 0.6, sparse: 0.4 };
         }
 
         return {
-            dense: this.defaultWeights.dense ?? 0.6,
-            sparse: this.defaultWeights.sparse ?? 0.4
+            dense: this.defaultWeights.denseWeight ?? 0.6,
+            sparse: this.defaultWeights.sparseWeight ?? 0.4
         };
     }
 

@@ -216,9 +216,10 @@ export async function runLearningPipeline(p: LearningPipelineParams): Promise<Le
             fastPath: false
         };
 
-        try {
-            memoryCortex.store(content, meta).then(storedId => {
-                if (params.onMemoryLearned && storedId) {
+        if (params.onMemoryLearned) {
+            try {
+                const storedId = await memoryCortex.store(content, meta);
+                if (storedId) {
                     params.onMemoryLearned({
                         appId: writeOriginApp,
                         content,
@@ -226,11 +227,17 @@ export async function runLearningPipeline(p: LearningPipelineParams): Promise<Le
                         metadata: meta
                     });
                 }
-            }).catch((err: any) => {
+            } catch (err: any) {
                 console.warn(`[Swarm] Memory storage failed:`, err);
-            });
-        } catch (err: any) {
-            console.warn(`[Swarm] Memory storage setup failed:`, err);
+            }
+        } else {
+            try {
+                memoryCortex.store(content, meta).catch((err: any) => {
+                    console.warn(`[Swarm] Memory storage failed:`, err);
+                });
+            } catch (err: any) {
+                console.warn(`[Swarm] Memory storage setup failed:`, err);
+            }
         }
     }
 

@@ -41,7 +41,7 @@ export class QdrantStorageAdapter implements StorageBackend {
                 });
                 this.available = true;
             } catch (err: any) {
-                console.warn(`[QdrantStorageAdapter] Invalid Qdrant URL '${config.url}': ${err.message || err}`);
+                console.warn(`[MemoryCortex] Invalid Qdrant URL '${config.url}', vector memory will run in disabled mode.`);
                 this.available = false;
             }
         }

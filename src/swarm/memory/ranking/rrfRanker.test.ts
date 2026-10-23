@@ -79,7 +79,7 @@ describe('RrfRanker', () => {
         const denseResult = ranker.fuse({
             denseHits,
             sparseHits,
-            weights: { dense: 0.9, sparse: 0.1 },
+            weights: { denseWeight: 0.9, sparseWeight: 0.1 },
             limit: 2
         });
         expect(denseResult[0].id).toBe('doc-dense-winner');
@@ -88,7 +88,7 @@ describe('RrfRanker', () => {
         const sparseResult = ranker.fuse({
             denseHits,
             sparseHits,
-            weights: { dense: 0.1, sparse: 0.9 },
+            weights: { denseWeight: 0.1, sparseWeight: 0.9 },
             limit: 2
         });
         expect(sparseResult[0].id).toBe('doc-sparse-winner');

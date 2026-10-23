@@ -32,7 +32,7 @@ export class CortexConsolidator {
 
         for (const pt of points) {
             inspected++;
-            const payload = pt.payload || {};
+            const payload: Record<string, any> = pt.payload || {};
             let shouldPrune = false;
 
             if (pruneLowQuality && (payload.qualityRating ?? 0) < minRating) {
