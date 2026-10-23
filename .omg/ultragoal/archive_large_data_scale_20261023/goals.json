@@ -1,0 +1,32 @@
+[
+  {
+    "id": "goal-1-profiling-zero-loss-chunking",
+    "description": "Phase 1: High-Volume Payload Profiling & Zero-Loss Chunking - Implement failing unit & stress tests and refactor dataProfiler.ts to eliminate silent chunk dropping, support 5MB+ payloads, and preserve CSV headers across chunks.",
+    "status": "completed",
+    "verification": "All generated chunks (>8 chunks, 50k rows) are retained without middle-loss; CSV header propagation verified; profiler.test.ts passes."
+  },
+  {
+    "id": "goal-2-hierarchical-map-reduce-scheduling",
+    "description": "Phase 2: Hierarchical Map-Reduce Batching & Specialist Wave Scheduling - Implement failing tests and update clusterPipeline.ts / loadBalancer.ts to execute multi-chunk payloads in bounded specialist waves with intermediate cluster digests.",
+    "status": "completed",
+    "verification": "Multi-wave batching successfully schedules 10+ chunks across specialists without resource starvation or dropped chunks; unit tests pass."
+  },
+  {
+    "id": "goal-3-manager-synthesis-protection",
+    "description": "Phase 3: Adaptive Manager Synthesis & Context Ceiling Protection - Implement failing tests and enhance synthesisPipeline.ts with recursive synthesis reduction and provider context ceiling guards.",
+    "status": "completed",
+    "verification": "Compiled manager prompt never exceeds provider context limits (8k Groq, 32k Mistral, 128k Gemini) even with 20+ analyst reports; unit tests pass."
+  },
+  {
+    "id": "goal-4-rate-pacing-server-hardening",
+    "description": "Phase 4: Provider TPM Rate Pacing & Express Ingestion Hardening - Implement failing tests and add adaptive dispatch delays in analystExecution.ts and configure 10MB body limits in app.ts.",
+    "status": "completed",
+    "verification": "Provider rate limits (TPM) are smoothed without 429 cascades; Express ingests 10MB payloads cleanly; tests pass."
+  },
+  {
+    "id": "goal-5-stress-verification-and-regression",
+    "description": "Phase 5: End-to-End Stress Verification & Regression Suite - Create test-large-data-simulation.ts executing 50k-row swarm analysis and verify full repository test suite and type check.",
+    "status": "completed",
+    "verification": "Zero silent truncation and clean exit on 50k rows; npm run lint and npm run test:unit pass 100%."
+  }
+]
