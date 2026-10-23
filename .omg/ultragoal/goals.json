@@ -20,13 +20,13 @@
   {
     "id": "goal-4-server-routes-and-cli-modularization",
     "description": "Server Routes & CLI Decomposition: Decompose monolithic src/swarm/server/app.ts into modular Hono route controllers under src/swarm/server/routes/ (analyze.ts, feedback.ts, morning.ts, models.ts); modularize monolithic bin/cli.js into bin/commands/ with a clean command dispatcher.",
-    "status": "in-progress",
+    "status": "completed",
     "verification": "src/swarm/server/app.test.ts (13/13) and bin/cli.js command invocations pass with identical behavior; server body parser limits intact."
   },
   {
     "id": "goal-5-ui-components-modularization",
     "description": "Monolithic UI Components Modularization: Deduplicate OptimizationCombinationsTable and OptimizationHistoryTable into shared OptimizationResultsTable; decompose CortexDiagnosticsViewer into focused subcomponents; extract virtual list and timeline items from SwarmEventTimeline.",
-    "status": "todo",
+    "status": "in-progress",
     "verification": "Frontend components compile cleanly; vitest component tests pass; no UI visual regressions."
   },
   {
