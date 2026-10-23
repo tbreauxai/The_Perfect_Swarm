@@ -43,12 +43,12 @@ Focus: Scale execution across large chunk counts without saturating system resou
 ## Phase 3: Adaptive Manager Synthesis & Context Ceiling Protection
 Focus: Prevent manager prompt blowups (`context_length_exceeded`) when consolidating massive analyst reports.
 
-- [ ] Task: Write Failing Tests for Manager Synthesis Protection
-  - [ ] Create unit tests in `src/swarm/engine/synthesisPipeline.test.ts` validating prompt budget constraints against various model limits (8k Groq, 32k Mistral, 128k Gemini).
-  - [ ] Simulate 20+ voluminous analyst reports and assert the compiled manager prompt never exceeds target token limits.
-  - [ ] Confirm tests fail (Red Phase).
+- [x] Task: Write Failing Tests for Manager Synthesis Protection [fc036c1]
+  - [x] Create unit tests in `src/swarm/engine/synthesisPipeline.test.ts` validating prompt budget constraints against various model limits (8k Groq, 32k Mistral, 128k Gemini).
+  - [x] Simulate 20+ voluminous analyst reports and assert the compiled manager prompt never exceeds target token limits.
+  - [x] Confirm tests fail (Red Phase).
 
-- [ ] Task: Implement Recursive Synthesis Reduction & Token Fitting
+- [~] Task: Implement Recursive Synthesis Reduction & Token Fitting
   - [ ] Update [src/swarm/engine/synthesisPipeline.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/engine/synthesisPipeline.ts) to automatically trigger hierarchical rollup/compression when uncompressed reports exceed 60% of the manager's context limit.
   - [ ] Implement fail-safe token trimming in `executeManagerSynthesis` to ensure prompts are strictly within provider bounds before dispatch.
   - [ ] Run tests and verify all pass (Green Phase).
