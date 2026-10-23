@@ -14,13 +14,13 @@
   {
     "id": "goal-3-provider-streaming-tool-dedup",
     "description": "Provider Adapters, SSE Streaming & Engine Tool Execution: Implement shared OpenAI-compatible REST call helper (src/swarm/providers/baseOpenAi.ts) for Groq/Mistral/OpenRouter/Nvidia/Cloudflare; extract shared SSE stream parser (src/swarm/utils/sseParser.ts); extract tool execution and context event recording helper (src/swarm/engine/toolExecutionHelper.ts).",
-    "status": "in-progress",
+    "status": "completed",
     "verification": "Provider adapters pass resilience and format rejection tests; SSE parser passes client tests; tool execution passes analyst execution tests."
   },
   {
     "id": "goal-4-server-routes-and-cli-modularization",
     "description": "Server Routes & CLI Decomposition: Decompose monolithic src/swarm/server/app.ts into modular Hono route controllers under src/swarm/server/routes/ (analyze.ts, feedback.ts, morning.ts, models.ts); modularize monolithic bin/cli.js into bin/commands/ with a clean command dispatcher.",
-    "status": "todo",
+    "status": "in-progress",
     "verification": "src/swarm/server/app.test.ts (13/13) and bin/cli.js command invocations pass with identical behavior; server body parser limits intact."
   },
   {
