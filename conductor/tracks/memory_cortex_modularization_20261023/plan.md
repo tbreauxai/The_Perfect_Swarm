@@ -22,18 +22,18 @@ Focus: Define `StorageBackend` contract and encapsulate raw storage operations.
 
 ---
 
-## Phase 2: Reciprocal Rank Fusion (RRF) Ranking Module
+## Phase 2: Reciprocal Rank Fusion (RRF) Ranking Module [checkpoint: 8a00219]
 Focus: Extract hybrid retrieval scoring and candidate fusion into an isolated ranking engine.
 
-- [ ] Task: Write Failing Unit Tests for RRF Ranker
-  - [ ] Create `src/swarm/memory/ranking/rrfRanker.test.ts` testing dense + lexical fusion, score normalization, tie-breaking, and top-K selection.
-  - [ ] Confirm tests fail (Red Phase).
+- [x] Task: Write Failing Unit Tests for RRF Ranker [8a00219]
+  - [x] Create `src/swarm/memory/ranking/rrfRanker.test.ts` testing dense + lexical fusion, score normalization, tie-breaking, and top-K selection.
+  - [x] Confirm tests fail (Red Phase).
 
-- [ ] Task: Implement RrfRanker
-  - [ ] Implement `RrfRanker` in `src/swarm/memory/ranking/rrfRanker.ts`.
-  - [ ] Run tests and verify all pass (Green Phase).
+- [x] Task: Implement RrfRanker [8a00219]
+  - [x] Implement `RrfRanker` in `src/swarm/memory/ranking/rrfRanker.ts`.
+  - [x] Run tests and verify all pass (Green Phase).
 
-- [ ] Task: Phase Verification & Checkpoint
+- [x] Task: Phase Verification & Checkpoint [8a00219]
 
 ---
 
