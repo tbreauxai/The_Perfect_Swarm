@@ -37,18 +37,18 @@ Focus: Extract hybrid retrieval scoring and candidate fusion into an isolated ra
 
 ---
 
-## Phase 3: Persistence & Serialization Manager
+## Phase 3: Persistence & Serialization Manager [checkpoint: f7c10f9]
 Focus: Extract disk snapshotting, JSON/JSONL serialization, and import/export mechanics.
 
-- [ ] Task: Write Failing Unit Tests for CortexPersistenceManager
-  - [ ] Create `src/swarm/memory/persistence/cortexPersistence.test.ts` testing atomic JSON writes, JSONL streaming, and schema validation.
-  - [ ] Confirm tests fail (Red Phase).
+- [x] Task: Write Failing Unit Tests for CortexPersistenceManager [f7c10f9]
+  - [x] Create `src/swarm/memory/persistence/cortexPersistence.test.ts` testing atomic JSON writes, JSONL streaming, and schema validation.
+  - [x] Confirm tests fail (Red Phase).
 
-- [ ] Task: Implement CortexPersistenceManager
-  - [ ] Implement `CortexPersistenceManager` in `src/swarm/memory/persistence/cortexPersistence.ts`.
-  - [ ] Run tests and verify all pass (Green Phase).
+- [x] Task: Implement CortexPersistenceManager [f7c10f9]
+  - [x] Implement `CortexPersistenceManager` in `src/swarm/memory/persistence/cortexPersistence.ts`.
+  - [x] Run tests and verify all pass (Green Phase).
 
-- [ ] Task: Phase Verification & Checkpoint
+- [x] Task: Phase Verification & Checkpoint [f7c10f9]
 
 ---
 
