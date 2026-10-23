@@ -11,3 +11,8 @@
 - ~~[x] **Track: Full Codebase Error Audit & Remediation**~~ *Link: [./archive/codebase_error_audit_20260915/index.md](./archive/codebase_error_audit_20260915/index.md)*
 
 - ~~[x] **Track: Full Application Modularization**~~ *Link: [./archive/app_modularization_20261002/index.md](./archive/app_modularization_20261002/index.md)*
+
+---
+- [ ] **Track: Large Data Scale Audit & Swarm Resilience Hardening**
+  *Link: [./tracks/large_data_scale_20261023/index.md](./tracks/large_data_scale_20261023/index.md)*
+
