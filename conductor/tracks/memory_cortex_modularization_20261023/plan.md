@@ -52,18 +52,18 @@ Focus: Extract disk snapshotting, JSON/JSONL serialization, and import/export me
 
 ---
 
-## Phase 4: Memory Consolidation & Few-Shot Distillation
+## Phase 4: Memory Consolidation & Few-Shot Distillation [checkpoint: 8b9000f]
 Focus: Extract low-quality pruning, clustering, and few-shot exemplar generation.
 
-- [ ] Task: Write Failing Unit Tests for CortexConsolidator
-  - [ ] Create `src/swarm/memory/consolidation/cortexConsolidator.test.ts` testing threshold pruning, exemplar formatting, and deduplication.
-  - [ ] Confirm tests fail (Red Phase).
+- [x] Task: Write Failing Unit Tests for CortexConsolidator [8b9000f]
+  - [x] Create `src/swarm/memory/consolidation/cortexConsolidator.test.ts` testing threshold pruning, exemplar formatting, and deduplication.
+  - [x] Confirm tests fail (Red Phase).
 
-- [ ] Task: Implement CortexConsolidator
-  - [ ] Implement `CortexConsolidator` in `src/swarm/memory/consolidation/cortexConsolidator.ts`.
-  - [ ] Run tests and verify all pass (Green Phase).
+- [x] Task: Implement CortexConsolidator [8b9000f]
+  - [x] Implement `CortexConsolidator` in `src/swarm/memory/consolidation/cortexConsolidator.ts`.
+  - [x] Run tests and verify all pass (Green Phase).
 
-- [ ] Task: Phase Verification & Checkpoint
+- [x] Task: Phase Verification & Checkpoint [8b9000f]
 
 ---
 
