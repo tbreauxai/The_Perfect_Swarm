@@ -14,10 +14,10 @@ Focus: Eliminate silent chunk dropping, support large data profiles, and preserv
   - [x] Add test cases verifying handling of 5MB+ raw string inputs without crashing `profileData`.
   - [x] Confirm tests fail (Red Phase).
 
-- [ ] Task: Implement Zero-Loss Chunking & Structure-Aware Segmentation
-  - [ ] Refactor `profileData` in [src/swarm/profiler/dataProfiler.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/profiler/dataProfiler.ts) to raise safe memory limits and avoid premature truncation.
-  - [ ] Refactor `createTokenChunks` in [src/swarm/profiler/dataProfiler.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/profiler/dataProfiler.ts) to remove the hard `maxChunks` truncation, adopting hierarchical chunk lists with CSV header repetition.
-  - [ ] Run tests and verify all pass (Green Phase).
+- [x] Task: Implement Zero-Loss Chunking & Structure-Aware Segmentation [0437282]
+  - [x] Refactor `profileData` in [src/swarm/profiler/dataProfiler.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/profiler/dataProfiler.ts) to raise safe memory limits and avoid premature truncation.
+  - [x] Refactor `createTokenChunks` in [src/swarm/profiler/dataProfiler.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/profiler/dataProfiler.ts) to remove the hard `maxChunks` truncation, adopting hierarchical chunk lists with CSV header repetition.
+  - [x] Run tests and verify all pass (Green Phase).
 
 - [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
