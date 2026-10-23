@@ -65,10 +65,10 @@ Focus: Prevent 429 rate limit errors under sustained load and ensure HTTP server
   - [x] Add tests in `src/swarm/server/app.test.ts` verifying 10MB payload ingestion and error handling.
   - [x] Confirm tests fail (Red Phase).
 
-- [~] Task: Implement Dynamic Dispatch Pacing & Server Payload Sizing
-  - [ ] Update [src/swarm/engine/analystExecution.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/engine/analystExecution.ts) with adaptive inter-call delays tailored to the provider's known RPM/TPM ceilings.
-  - [ ] Verify and configure body parser limits (10MB) in [src/swarm/server/app.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/server/app.ts) to handle high-volume JSON/CSV requests.
-  - [ ] Run tests and verify all pass (Green Phase).
+- [x] Task: Implement Dynamic Dispatch Pacing & Server Payload Sizing [50ea5fc]
+  - [x] Update [src/swarm/engine/analystExecution.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/engine/analystExecution.ts) with adaptive inter-call delays tailored to the provider's known RPM/TPM ceilings.
+  - [x] Verify and configure body parser limits (10MB) in [src/swarm/server/app.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/server/app.ts) to handle high-volume JSON/CSV requests.
+  - [x] Run tests and verify all pass (Green Phase).
 
 - [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
