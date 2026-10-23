@@ -158,7 +158,7 @@ describe("R2-S2 validation and repair", () => {
   });
 
   it("an invalid reply gets exactly one repair on the same seat, with the validation error", async () => {
-    const f = fakeAgent([{ ...VALID, confidence: 7 }, VALID]);
+    const f = fakeAgent([{ ...VALID, confidence: -1 }, VALID]);
     const ctx = new SwarmContext();
     const r = await runScorecardSeat({
       agent: f.agent,

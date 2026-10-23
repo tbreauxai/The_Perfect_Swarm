@@ -476,8 +476,8 @@ describe('Swarm Server & Feedback Attribution', () => {
         expect(data[0].id).toBe('simulated-swarm-v1');
     });
 
-    it('rejects payload > 2MB on /api/swarm/stream with 413 JSON', async () => {
-        const largeString = 'a'.repeat(2.1 * 1024 * 1024);
+    it('rejects payload > 10MB on /api/swarm/stream with 413 JSON', async () => {
+        const largeString = 'a'.repeat(10.5 * 1024 * 1024);
         const res = await fetch(`${baseUrl}/api/swarm/stream`, {
             method: 'POST',
             headers: {
@@ -491,8 +491,8 @@ describe('Swarm Server & Feedback Attribution', () => {
         expect(data).toEqual({ error: 'Payload Too Large' });
     });
 
-    it('rejects payload > 2MB on /api/swarm/analyze with 413 JSON', async () => {
-        const largeString = 'a'.repeat(2.1 * 1024 * 1024);
+    it('rejects payload > 10MB on /api/swarm/analyze with 413 JSON', async () => {
+        const largeString = 'a'.repeat(10.5 * 1024 * 1024);
         const res = await fetch(`${baseUrl}/api/swarm/analyze`, {
             method: 'POST',
             headers: {
