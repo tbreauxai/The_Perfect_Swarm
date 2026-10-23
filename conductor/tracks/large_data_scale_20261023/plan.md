@@ -57,7 +57,7 @@ Focus: Prevent manager prompt blowups (`context_length_exceeded`) when consolida
 
 ---
 
-## Phase 4: Provider TPM Rate Pacing & Express Ingestion Hardening
+## Phase 4: Provider TPM Rate Pacing & Express Ingestion Hardening [checkpoint: 50ea5fc]
 Focus: Prevent 429 rate limit errors under sustained load and ensure HTTP server accepts large payloads.
 
 - [x] Task: Write Failing Tests for Rate Pacing and Express Body Parsing [51ac4f4]
@@ -70,7 +70,7 @@ Focus: Prevent 429 rate limit errors under sustained load and ensure HTTP server
   - [x] Verify and configure body parser limits (10MB) in [src/swarm/server/app.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/server/app.ts) to handle high-volume JSON/CSV requests.
   - [x] Run tests and verify all pass (Green Phase).
 
-- [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
+- [x] Task: Phase Verification & Checkpoint (Refer to workflow.md) [50ea5fc]
 
 ---
 
