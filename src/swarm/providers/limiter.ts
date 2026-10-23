@@ -51,9 +51,11 @@ export class LimiterSkipError extends Error {
   }
 }
 
+import { TokenEstimator } from "../compression/tokenEstimator.ts";
+
 /** chars/4 token estimate (same heuristic the Groq adapter uses). */
 export function estimateTokens(chars: number): number {
-  return Math.ceil(Math.max(0, chars) / 4);
+  return TokenEstimator.estimateFromChars(chars);
 }
 
 export function nextUtcMidnight(nowMs: number): number {

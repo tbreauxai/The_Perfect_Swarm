@@ -1,5 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
 import type { EmbeddingProvider } from './types.ts';
+import { djb2Index } from '../utils/hash.ts';
 
 /**
  * Google AI Gemini dense embedding provider using text-embedding-004 / 005.
@@ -66,12 +67,7 @@ export class DeterministicLocalEmbeddingProvider implements EmbeddingProvider {
         if (tokens.length === 0) return vector;
 
         for (const token of tokens) {
-            let hash = 5381;
-            for (let i = 0; i < token.length; i++) {
-                hash = ((hash << 5) + hash) + token.charCodeAt(i);
-                hash |= 0;
-            }
-            const index = Math.abs(hash) % dimension;
+            const index = djb2Index(token, dimension);
             vector[index] += 1;
         }
 

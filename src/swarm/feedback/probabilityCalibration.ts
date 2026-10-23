@@ -24,24 +24,13 @@ export interface CalibrationFit {
   meanActual: number;
 }
 
+import { clampProbability, logit, sigmoid } from '../math/probabilityMath.ts';
+export { clampProbability, logit, sigmoid };
+
 const PRIOR_PRECISION = 8;
 const SPORT_MIN_SAMPLES = 12;
 
-export function clampProbability(p: number): number {
-  if (!Number.isFinite(p)) return 0.5;
-  return Math.min(0.98, Math.max(0.02, p));
-}
 
-export function logit(p: number): number {
-  const c = clampProbability(p);
-  return Math.log(c / (1 - c));
-}
-
-export function sigmoid(z: number): number {
-  if (z >= 0) return 1 / (1 + Math.exp(-z));
-  const ez = Math.exp(z);
-  return ez / (1 + ez);
-}
 
 export function fitLogitBias(rows: ProbabilityObservation[], priorPrecision = PRIOR_PRECISION): number {
   if (rows.length === 0) return 0;

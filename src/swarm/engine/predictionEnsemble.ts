@@ -8,6 +8,7 @@
 
 import type { Agent } from '../agent.ts';
 import { globalSpecialistProfiler } from '../loadBalancer.ts';
+import { clampProbability as clampProb, logit, invLogit } from '../math/probabilityMath.ts';
 
 export interface SeatCalibrationWeight {
     seatRole: string;
@@ -30,21 +31,7 @@ export interface CalibratedEnsembleDigest {
     seatWeights: SeatCalibrationWeight[];
 }
 
-function clampProb(p: number): number {
-    if (!Number.isFinite(p)) return 0.5;
-    if (p > 1 && p <= 100) p = p / 100;
-    return Math.max(0.01, Math.min(0.99, p));
-}
 
-function logit(p: number): number {
-    const clamped = clampProb(p);
-    return Math.log(clamped / (1 - clamped));
-}
-
-function invLogit(l: number): number {
-    const clampedL = Math.max(-8, Math.min(8, l));
-    return 1 / (1 + Math.exp(-clampedL));
-}
 
 /**
  * Counts verified row ID citations (`R1..Rn`) and quantitative grounding matches in a seat's report.

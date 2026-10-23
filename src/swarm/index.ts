@@ -42,4 +42,5 @@ export * from './health.ts';
 export * from './optimization.ts';
 export * from './actionPlanCache.ts';
 export * from './morning/index.ts';
-
+export * from './utils/index.ts';
+export * from './math/index.ts';

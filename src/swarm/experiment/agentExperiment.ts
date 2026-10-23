@@ -12,6 +12,7 @@ import type {
     ExperimentConfig
 } from './types.ts';
 import { StatisticalAnalyzer } from './statisticalAnalyzer.ts';
+import { djb2Hash } from '../utils/hash.ts';
 
 /**
  * Manages an individual A/B experiment with variants, traffic allocation,
@@ -109,12 +110,7 @@ export class AgentExperiment {
      * Fast hash function (DJB2) for deterministic key routing.
      */
     private static hashKey(key: string): number {
-        let hash = 5381;
-        for (let i = 0; i < key.length; i++) {
-            hash = ((hash << 5) + hash) + key.charCodeAt(i);
-            hash = hash & hash;
-        }
-        return Math.abs(hash);
+        return Math.abs(djb2Hash(key));
     }
 
     /**

@@ -1,4 +1,5 @@
 import type { DriftAlert, DriftType } from './types.ts';
+import { cosineSimilarity } from '../memory/vectorMath.ts';
 export class ConceptDriftDetector {
     // Page-Hinkley parameters for latency
     private latencyMean: number = 0;
@@ -194,18 +195,7 @@ export class ConceptDriftDetector {
     }
 
     private cosineSimilarity(vecA: number[], vecB: number[]): number {
-        let dot = 0;
-        let normA = 0;
-        let normB = 0;
-        for (let i = 0; i < vecA.length; i++) {
-            const a = vecA[i] || 0;
-            const b = vecB[i] || 0;
-            dot += a * b;
-            normA += a * a;
-            normB += b * b;
-        }
-        if (normA === 0 || normB === 0) return 0;
-        return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+        return cosineSimilarity(vecA, vecB);
     }
 
     public getAlerts(): DriftAlert[] {

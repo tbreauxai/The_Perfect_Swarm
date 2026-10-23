@@ -51,4 +51,17 @@ export class TokenEstimator {
         const lastSpace = sliced.lastIndexOf(' ');
         return (lastSpace > 0 ? sliced.slice(0, lastSpace) : sliced) + '...';
     }
+    /**
+     * Estimates token count directly from character count (default: chars / 4).
+     */
+    static estimateFromChars(chars: number, divisor: number = 4): number {
+        return Math.ceil(Math.max(0, chars) / divisor);
+    }
+
+    /**
+     * Estimates token count for arbitrary text (alias for countTokens).
+     */
+    static estimateFromText(text: string): number {
+        return this.countTokens(text);
+    }
 }

@@ -1,3 +1,4 @@
+import { TokenEstimator } from '../compression/tokenEstimator.ts';
 import type {
     BaselineDifference,
     TokenWeightReport
@@ -15,10 +16,10 @@ export class TokenWeightProfiler {
         if (input === null || input === undefined) return 0;
         if (typeof input === 'number' || typeof input === 'boolean') return 1;
         if (typeof input === 'string') {
-            return Math.max(1, Math.ceil(input.length / 3.8));
+            return TokenEstimator.estimateFromChars(input.length, 3.8);
         }
         const jsonStr = JSON.stringify(input);
-        return Math.max(1, Math.ceil(jsonStr.length / 3.8));
+        return TokenEstimator.estimateFromChars(jsonStr.length, 3.8);
     }
 
     public profile(input: any, baseline?: any): TokenWeightReport {

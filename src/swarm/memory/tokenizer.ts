@@ -1,4 +1,5 @@
 import type { SparseVector } from './types.ts';
+import { djb2Index } from '../utils/hash.ts';
 
 /**
  * Tokenizes text into sparse term frequency vector for BM25-style lexical search.
@@ -9,12 +10,7 @@ export class SparseTokenizer {
         const termFreqs: Record<number, number> = {};
 
         for (const token of tokens) {
-            let hash = 5381;
-            for (let i = 0; i < token.length; i++) {
-                hash = ((hash << 5) + hash) + token.charCodeAt(i);
-                hash |= 0;
-            }
-            const index = Math.abs(hash) % vocabSize;
+            const index = djb2Index(token, vocabSize);
             termFreqs[index] = (termFreqs[index] || 0) + 1;
         }
 

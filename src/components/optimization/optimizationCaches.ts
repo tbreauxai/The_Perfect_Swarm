@@ -2,6 +2,8 @@ import { checkProviderModelsHealth } from '../../services/providerService';
 import { getApiKeyForProvider } from '../AgentConfigurator';
 import { authHeaders } from '../../services/appAuthHeaders';
 
+import { parseRetryAfterHeader } from '../../swarm/utils/httpTimeouts.ts';
+
 export interface ProviderBackoffState {
     consecutive429: number;
     backoffUntil: number;
@@ -14,20 +16,9 @@ export function getProviderBackoff(provider: string): ProviderBackoffState | und
 }
 
 export function parseRetryAfterMs(headerVal: string | null): number | null {
-    if (!headerVal) return null;
-    const trimmed = headerVal.trim();
-    const asSeconds = Number(trimmed);
-    if (!isNaN(asSeconds) && asSeconds > 0) {
-        return Math.min(30000, Math.max(1000, Math.round(asSeconds * 1000)));
-    }
-    const parsedDate = Date.parse(trimmed);
-    if (!isNaN(parsedDate)) {
-        const diffMs = parsedDate - Date.now();
-        if (diffMs > 0) {
-            return Math.min(30000, Math.max(1000, diffMs));
-        }
-    }
-    return null;
+    const parsed = parseRetryAfterHeader(headerVal);
+    if (parsed === null) return null;
+    return Math.min(30000, Math.max(1000, parsed));
 }
 
 export function calculateBackoffMs(provider: string, retryAfterHeader?: string | null): number {

@@ -1,3 +1,4 @@
+import { djb2Index } from '../utils/hash.ts';
 /**
  * High-performance, zero-dependency lexical-semantic similarity engine.
  * Combines token set Jaccard matching with character trigram Dice coefficient.
@@ -125,12 +126,7 @@ export class SemanticSimilarityEngine {
         if (tokens.length === 0) return vector;
 
         for (const token of tokens) {
-            let hash = 5381;
-            for (let i = 0; i < token.length; i++) {
-                hash = ((hash << 5) + hash) + token.charCodeAt(i);
-                hash |= 0;
-            }
-            const index = Math.abs(hash) % dimension;
+            const index = djb2Index(token, dimension);
             vector[index] += 1;
         }
 
