@@ -5,20 +5,20 @@ A structured, test-driven refactoring plan to decompose the 1,245-line `MemoryCo
 
 ---
 
-## Phase 1: Storage Backend Abstraction & In-Memory / Qdrant Adapters
+## Phase 1: Storage Backend Abstraction & In-Memory / Qdrant Adapters [checkpoint: 77c61e2]
 Focus: Define `StorageBackend` contract and encapsulate raw storage operations.
 
-- [ ] Task: Define StorageBackend Interface & Write Unit Tests
-  - [ ] Create `src/swarm/memory/storage/types.ts` defining `StorageBackend`, `StoragePoint`, and filter types.
-  - [ ] Write unit tests in `src/swarm/memory/storage/inMemoryStorage.test.ts` testing insert, search, filter, and delete operations.
-  - [ ] Confirm tests fail (Red Phase).
+- [x] Task: Define StorageBackend Interface & Write Unit Tests [77c61e2]
+  - [x] Create `src/swarm/memory/storage/types.ts` defining `StorageBackend`, `StoragePoint`, and filter types.
+  - [x] Write unit tests in `src/swarm/memory/storage/inMemoryStorage.test.ts` testing insert, search, filter, and delete operations.
+  - [x] Confirm tests fail (Red Phase).
 
-- [ ] Task: Implement InMemoryStorageAdapter & QdrantStorageAdapter
-  - [ ] Implement `InMemoryStorageAdapter` in `src/swarm/memory/storage/inMemoryStorage.ts`.
-  - [ ] Implement `QdrantStorageAdapter` in `src/swarm/memory/storage/qdrantStorage.ts` encapsulating REST operations, health checks, and fallback triggers.
-  - [ ] Run tests and verify all pass (Green Phase).
+- [x] Task: Implement InMemoryStorageAdapter & QdrantStorageAdapter [77c61e2]
+  - [x] Implement `InMemoryStorageAdapter` in `src/swarm/memory/storage/inMemoryStorage.ts`.
+  - [x] Implement `QdrantStorageAdapter` in `src/swarm/memory/storage/qdrantStorage.ts` encapsulating REST operations, health checks, and fallback triggers.
+  - [x] Run tests and verify all pass (Green Phase).
 
-- [ ] Task: Phase Verification & Checkpoint
+- [x] Task: Phase Verification & Checkpoint [77c61e2]
 
 ---
 
