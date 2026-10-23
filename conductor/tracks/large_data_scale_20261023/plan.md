@@ -48,10 +48,10 @@ Focus: Prevent manager prompt blowups (`context_length_exceeded`) when consolida
   - [x] Simulate 20+ voluminous analyst reports and assert the compiled manager prompt never exceeds target token limits.
   - [x] Confirm tests fail (Red Phase).
 
-- [~] Task: Implement Recursive Synthesis Reduction & Token Fitting
-  - [ ] Update [src/swarm/engine/synthesisPipeline.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/engine/synthesisPipeline.ts) to automatically trigger hierarchical rollup/compression when uncompressed reports exceed 60% of the manager's context limit.
-  - [ ] Implement fail-safe token trimming in `executeManagerSynthesis` to ensure prompts are strictly within provider bounds before dispatch.
-  - [ ] Run tests and verify all pass (Green Phase).
+- [x] Task: Implement Recursive Synthesis Reduction & Token Fitting [04e71dd]
+  - [x] Update [src/swarm/engine/synthesisPipeline.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/engine/synthesisPipeline.ts) to automatically trigger hierarchical rollup/compression when uncompressed reports exceed 60% of the manager's context limit.
+  - [x] Implement fail-safe token trimming in `executeManagerSynthesis` to ensure prompts are strictly within provider bounds before dispatch.
+  - [x] Run tests and verify all pass (Green Phase).
 
 - [ ] Task: Phase Verification & Checkpoint (Refer to workflow.md)
 
