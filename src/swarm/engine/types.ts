@@ -13,7 +13,7 @@ import type { SwarmTool, ToolRegistry } from "../tools/index.ts";
 import type { AnalystConsensusDigest } from "./consensusPipeline.ts";
 import type { Blackboard } from "./blackboard.ts";
 export interface SwarmStagePayload {
-    stage: 'routing' | 'cluster_aggregation' | 'partial_prediction' | 'manager_synthesis' | 'critic_verification' | 'completed' | 'scorecard' | 'critic_scorecard';
+    stage: 'routing' | 'cluster_aggregation' | 'partial_prediction' | 'manager_synthesis' | 'critic_verification' | 'completed' | 'scorecard' | 'critic_scorecard' | 'wave_progress';
     task?: string;
     digests?: Record<string, ClusterDigest>;
     partialPrediction?: any;

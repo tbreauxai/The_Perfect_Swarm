@@ -105,7 +105,7 @@ describe('Hierarchical Map-Reduce & Specialist Wave Scheduling (clusterPipeline.
         expect(waveStageEvents.length).toBeGreaterThanOrEqual(2);
 
         // 5. Verify wave scheduler context event was logged
-        const events = result.context?.events || [];
+        const events = result.events || [];
         const waveEvents = events.filter((e: any) => e.agentRole === 'Hierarchical Wave Scheduler');
         expect(waveEvents.length).toBeGreaterThanOrEqual(1);
     });

@@ -435,7 +435,7 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
                     });
                 }
             } else {
-                const usePool = optimizationEnabled && (optSettings?.workerPoolConcurrency ?? 4) > 1;
+                const waveSize = Math.max(1, settings?.waveBatchSize || (optimizationEnabled ? optSettings?.workerPoolConcurrency : undefined) || 4);
 
                 const chunkTasks = routingPlan.assignments.map((assignment, taskIdx) => {
                     const chunk = chunks[assignment.chunkIndex] || chunks[0];
@@ -444,20 +444,69 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
                     return { chunk, i: assignment.chunkIndex, assignedAnalyst, analystIdx };
                 });
 
-                const chunkReports = usePool
-                    ? await globalPredictionWorkerPool.submitBatch(
-                        chunkTasks.map(taskItem => () => executeAnalyst(taskItem.assignedAnalyst, taskItem.chunk, taskItem.i))
-                    )
-                    : await Promise.all(
-                        chunkTasks.map(taskItem => executeAnalyst(taskItem.assignedAnalyst, taskItem.chunk, taskItem.i))
+                const totalWaves = Math.ceil(chunkTasks.length / waveSize);
+
+                for (let w = 0; w < totalWaves; w++) {
+                    const waveItems = chunkTasks.slice(w * waveSize, (w + 1) * waveSize);
+                    const waveReports = await Promise.all(
+                        waveItems.map(taskItem => executeAnalyst(taskItem.assignedAnalyst, taskItem.chunk, taskItem.i))
                     );
 
-                chunkTasks.forEach((taskItem, index) => {
-                    const rep = chunkReports[index];
-                    if (taskItem.analystIdx >= 0 && rep !== null && rep !== undefined) {
-                        allAnalystReports[taskItem.analystIdx].push(rep);
+                    waveItems.forEach((taskItem, index) => {
+                        const rep = waveReports[index];
+                        if (taskItem.analystIdx >= 0 && rep !== null && rep !== undefined) {
+                            allAnalystReports[taskItem.analystIdx].push(rep);
+                        }
+                    });
+
+                    // Intermediate cluster digest rollup for this wave
+                    const intermediateClusterReports: Record<string, SpecialistReportInput[]> = {};
+                    for (let a = 0; a < analysts.length; a++) {
+                        const analyst = analysts[a];
+                        const aId = analyst.id || analyst.role;
+                        const cluster = analystClusterMap.get(aId) || 'general-pod';
+                        if (!intermediateClusterReports[cluster]) intermediateClusterReports[cluster] = [];
+
+                        for (const rep of allAnalystReports[a]) {
+                            intermediateClusterReports[cluster].push({
+                                specialistRole: analyst.role,
+                                insights: rep.insights,
+                                anomalies: rep.anomalies,
+                                summary: rep.summary
+                            });
+                        }
                     }
-                });
+
+                    const waveDigests: Record<string, ClusterDigest> = {};
+                    for (const [cId, reps] of Object.entries(intermediateClusterReports)) {
+                        waveDigests[cId] = globalHierarchicalMessageBus.aggregateClusterReports(cId, reps);
+                    }
+
+                    params.onStage?.({
+                        stage: 'wave_progress',
+                        waveIndex: w + 1,
+                        totalWaves,
+                        waveSize: waveItems.length,
+                        completedChunks: Math.min((w + 1) * waveSize, chunkTasks.length),
+                        totalChunks: chunkTasks.length,
+                        digests: waveDigests
+                    });
+
+                    context.addEvent({
+                        agentRole: 'Hierarchical Wave Scheduler',
+                        action: 'Wave Executed',
+                        modelName: 'Local/WaveScheduler',
+                        prompt: `Executed wave ${w + 1}/${totalWaves} (${waveItems.length} chunks, concurrency limit: ${waveSize})`,
+                        output: {
+                            waveIndex: w + 1,
+                            totalWaves,
+                            chunksInWave: waveItems.length,
+                            chunkIndices: waveItems.map(item => item.i),
+                            digests: waveDigests
+                        },
+                        durationMs: 0
+                    });
+                }
             }
         } else {
             const usePool = optimizationEnabled && (optSettings?.workerPoolConcurrency ?? 4) > 1;

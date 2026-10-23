@@ -87,6 +87,8 @@ export interface SwarmEngineSettings {
     scorecardMode?: boolean;
     /** R2-S1: analyst max output tokens in scorecard mode (default 800; reasoning models count thinking toward it). Per-request override. */
     scorecardAnalystMaxTokens?: number;
+    /** Maximum chunks processed concurrently in a hierarchical wave (default 4). */
+    waveBatchSize?: number;
     [key: string]: any;
 }
 
