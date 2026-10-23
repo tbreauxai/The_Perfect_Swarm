@@ -25,6 +25,7 @@ export class ProviderRegistry {
         this.register(new SimulatedAdapter());
     }
     static register(adapter: ProviderAdapter): void {
+        this.init();
         this.adapters.set(adapter.providerName.toLowerCase(), adapter);
     }
 
