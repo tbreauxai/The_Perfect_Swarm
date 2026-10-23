@@ -60,12 +60,12 @@ Focus: Prevent manager prompt blowups (`context_length_exceeded`) when consolida
 ## Phase 4: Provider TPM Rate Pacing & Express Ingestion Hardening
 Focus: Prevent 429 rate limit errors under sustained load and ensure HTTP server accepts large payloads.
 
-- [ ] Task: Write Failing Tests for Rate Pacing and Express Body Parsing
-  - [ ] Add tests in `src/swarm/providers/groq.resilience.test.ts` testing sustained multi-chunk calls under simulated tight TPM quotas.
-  - [ ] Add tests in `src/swarm/server/app.test.ts` verifying 10MB payload ingestion and error handling.
-  - [ ] Confirm tests fail (Red Phase).
+- [x] Task: Write Failing Tests for Rate Pacing and Express Body Parsing [51ac4f4]
+  - [x] Add tests in `src/swarm/providers/groq.resilience.test.ts` testing sustained multi-chunk calls under simulated tight TPM quotas.
+  - [x] Add tests in `src/swarm/server/app.test.ts` verifying 10MB payload ingestion and error handling.
+  - [x] Confirm tests fail (Red Phase).
 
-- [ ] Task: Implement Dynamic Dispatch Pacing & Server Payload Sizing
+- [~] Task: Implement Dynamic Dispatch Pacing & Server Payload Sizing
   - [ ] Update [src/swarm/engine/analystExecution.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/engine/analystExecution.ts) with adaptive inter-call delays tailored to the provider's known RPM/TPM ceilings.
   - [ ] Verify and configure body parser limits (10MB) in [src/swarm/server/app.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/server/app.ts) to handle high-volume JSON/CSV requests.
   - [ ] Run tests and verify all pass (Green Phase).
