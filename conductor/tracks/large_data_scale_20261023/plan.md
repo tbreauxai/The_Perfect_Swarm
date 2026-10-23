@@ -8,11 +8,11 @@ A structured, test-driven implementation plan to audit and harden the Swarm engi
 ## Phase 1: High-Volume Payload Profiling & Zero-Loss Chunking
 Focus: Eliminate silent chunk dropping, support large data profiles, and preserve tabular structure (CSV headers, JSON delimiters).
 
-- [ ] Task: Write Failing Unit & Stress Tests for Data Profiling
-  - [ ] Write unit tests in `src/swarm/profiler.test.ts` for payloads exceeding 8 chunks (verifying all chunks are retained without middle-loss).
-  - [ ] Add test cases validating CSV header propagation across all generated chunks.
-  - [ ] Add test cases verifying handling of 5MB+ raw string inputs without crashing `profileData`.
-  - [ ] Confirm tests fail (Red Phase).
+- [x] Task: Write Failing Unit & Stress Tests for Data Profiling [edb50e9]
+  - [x] Write unit tests in `src/swarm/profiler.test.ts` for payloads exceeding 8 chunks (verifying all chunks are retained without middle-loss).
+  - [x] Add test cases validating CSV header propagation across all generated chunks.
+  - [x] Add test cases verifying handling of 5MB+ raw string inputs without crashing `profileData`.
+  - [x] Confirm tests fail (Red Phase).
 
 - [ ] Task: Implement Zero-Loss Chunking & Structure-Aware Segmentation
   - [ ] Refactor `profileData` in [src/swarm/profiler/dataProfiler.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/profiler/dataProfiler.ts) to raise safe memory limits and avoid premature truncation.
