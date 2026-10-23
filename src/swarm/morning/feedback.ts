@@ -3,6 +3,8 @@ import {
   outcomeToScore
 } from '../feedback/probabilityCalibration.ts';
 import { globalFeedbackEngine, analystLedger } from '../feedback.ts';
+import { globalSpecialistProfiler } from '../loadBalancer.ts';
+import type { MemoryCortex } from '../memory.ts';
 import { querySupabase, type SupabaseConfig } from './supabase.ts';
 import type { SlateGame } from './types.ts';
 
@@ -14,17 +16,28 @@ export interface FinalGameOutcome {
   sportKey: string;
   homeScore: number;
   awayScore: number;
+  brier?: number | null;
+  attributedSeats?: string[];
 }
+
+export const DEFAULT_MORNING_SWARM_SEATS = [
+  'Quant Proposer',
+  'Market Proposer',
+  'Risk Critic',
+  'GodView Compiler'
+] as const;
 
 /**
  * Checks judged games against ESPN final results, settles completed games,
- * and passes the learning signal to the continuous calibration engine.
+ * and passes the learning signal to the continuous calibration engine,
+ * per-seat analyst ledger, and UCB1 specialist capability profiler.
  */
 export async function gradeAndRecordFinalGames(
   cfg: SupabaseConfig | null,
   games: SlateGame[],
   gameDate: string,
-  fetchFn: typeof fetch = fetch
+  fetchFn: typeof fetch = fetch,
+  options?: { cortex?: MemoryCortex }
 ): Promise<FinalGameOutcome[]> {
   const settledOutcomes: FinalGameOutcome[] = [];
 
@@ -70,6 +83,16 @@ export async function gradeAndRecordFinalGames(
     const workflowId = judgment.workflow_id;
     const sportKey = judgment.sport || 'unknown';
 
+    // Determine participating seats from model_snapshot if present, plus default 4-seat Morning topology
+    const snapshotSeats: string[] = Array.isArray(judgment.model_snapshot?.participating_seats)
+      ? judgment.model_snapshot.participating_seats
+      : [...DEFAULT_MORNING_SWARM_SEATS];
+    const attributedSeats = Array.from(new Set([
+      ...snapshotSeats,
+      'Manager Node',
+      'Quant Specialist'
+    ]));
+
     // 1. Record in probability calibration engine (moves calibration after 8 samples)
     if (workflowId && !workflowId.startsWith('wf-judgment-')) {
       if (score != null && Number.isFinite(winProbHome) && winProbHome > 0 && winProbHome < 1) {
@@ -83,9 +106,17 @@ export async function gradeAndRecordFinalGames(
         });
       }
 
-      // 2. Feed into analyst ledger
-      analystLedger.recordOutcome('duelodds', 'Manager Node', outcome);
-      analystLedger.recordOutcome('duelodds', 'Quant Specialist', outcome);
+      // 2. Feed into analyst ledger & UCB1 specialist capability profiler for all participating seats
+      for (const seat of attributedSeats) {
+        analystLedger.recordOutcome('duelodds', seat, outcome);
+        globalSpecialistProfiler.recordAccuracy(seat, outcome);
+      }
+
+      const isPush = outcome === 'push' || homeScore === awayScore;
+      const homeWin = homeScore > awayScore;
+      const brier = Number.isFinite(winProbHome)
+        ? Math.round(Math.pow(winProbHome - (isPush ? 0.5 : (homeWin ? 1 : 0)), 2) * 1000) / 1000
+        : null;
 
       // 3. Persist outcome in continuous feedback knowledge repository
       try {
@@ -94,7 +125,9 @@ export async function gradeAndRecordFinalGames(
           appId: 'duelodds',
           task: `Morning Judgment: ${judgment.away_team} @ ${judgment.home_team}`,
           outcome,
-          agentRoles: ['Manager Node', 'Quant Specialist'],
+          predictedProbability: Number.isFinite(winProbHome) ? winProbHome : undefined,
+          sportKey,
+          agentRoles: attributedSeats,
           feedbackProcessed: true,
           metrics: {
             accuracyScore: outcome === 'win' ? 1.0 : outcome === 'loss' ? 0.0 : 0.5,
@@ -112,14 +145,26 @@ export async function gradeAndRecordFinalGames(
         // Non-fatal logging for knowledge repo persistence
       }
 
+      // 3b. Grade corresponding episodic memory in MemoryCortex when provided
+      if (options?.cortex) {
+        try {
+          await options.cortex.gradeMemoryByWorkflowId({
+            workflowId,
+            originApp: 'duelodds',
+            outcome,
+            brierScore: brier ?? undefined,
+            margin: homeScore - awayScore,
+            predictedProbability: Number.isFinite(winProbHome) ? winProbHome : undefined,
+            settledSummary: `${judgment.away_team} ${awayScore} @ ${judgment.home_team} ${homeScore} (${outcome.toUpperCase()})`
+          });
+        } catch {
+          // Non-fatal
+        }
+      }
+
       // 4. Mark row status = 'final' in Supabase
       // Same shape and Brier formula as the DuelOdds Worker grader (cloudflare/src/morningJudgments.ts), which
       // DuelOdds learningLedgers reads (result.home_win, result.margin, brier). A push counts as home_win false.
-      const isPush = outcome === 'push' || homeScore === awayScore;
-      const homeWin = homeScore > awayScore;
-      const brier = Number.isFinite(winProbHome)
-        ? Math.round(Math.pow(winProbHome - (isPush ? 0.5 : (homeWin ? 1 : 0)), 2) * 1000) / 1000
-        : null;
       if (cfg) {
         try {
           await querySupabase(
@@ -156,10 +201,13 @@ export async function gradeAndRecordFinalGames(
         winProbHome,
         sportKey,
         homeScore,
-        awayScore
+        awayScore,
+        brier,
+        attributedSeats
       });
     }
   }
 
   return settledOutcomes;
 }
+

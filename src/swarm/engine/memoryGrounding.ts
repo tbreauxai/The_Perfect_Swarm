@@ -89,10 +89,14 @@ export async function resolveMemoryGrounding(p: MemoryGroundingParams): Promise<
 
                 const readDomain = (p as any).domain || (p as any).settings?.domain;
                 const explicitEntities = (p as any).entityIds || (p as any).settings?.entityIds;
+                const disableMemoryRetrieval = Boolean((p as any).disableMemoryRetrieval || (p as any).settings?.disableMemoryRetrieval);
 
-                const [retrieved, exemplars] = bypassCache ? [[], ""] : await Promise.all([
+                const [retrieved, exemplars, contrastive] = disableMemoryRetrieval ? [[], "", { wins: [], losses: [], formattedBlock: "" }] : await Promise.all([
                     memoryCortex.retrieve(task, { appId: targetAppId, domain: readDomain, entityIds: explicitEntities, includeShared }, 3).catch(() => []),
-                    memoryCortex.retrieveExemplars(task, { appId: targetAppId, domain: readDomain, entityIds: explicitEntities, includeShared, limit: 2, minRating: 0.7 }).catch(() => "")
+                    memoryCortex.retrieveExemplars(task, { appId: targetAppId, domain: readDomain, entityIds: explicitEntities, includeShared, limit: 2, minRating: 0.7 }).catch(() => ""),
+                    typeof (memoryCortex as any).retrieveContrastivePostMortems === 'function'
+                        ? (memoryCortex as any).retrieveContrastivePostMortems(task, { appId: targetAppId, domain: readDomain, entityIds: explicitEntities, includeShared, limit: 2 }).catch(() => ({ wins: [], losses: [], formattedBlock: "" }))
+                        : Promise.resolve({ wins: [], losses: [], formattedBlock: "" })
                 ]);
 
                 historicalContext = retrieved.length > 0
@@ -104,12 +108,23 @@ export async function resolveMemoryGrounding(p: MemoryGroundingParams): Promise<
                     historicalContext += `\n\nHigh-Quality Exemplars from Past Runs:\n${exemplars}`;
                 }
 
+                if (contrastive?.formattedBlock) {
+                    historicalContext += `\n\n${contrastive.formattedBlock}`;
+                }
+
                 context.addEvent({
                     agentRole: 'System Orchestrator',
                     action: 'Cortex Retrieval Complete',
                     prompt: 'Retrieval completed',
                     modelName: cortexName,
-                    output: { recordsFound: retrieved.length, exemplarsIncluded: Boolean(exemplars), status: 'Success', message: historicalContext },
+                    output: {
+                        recordsFound: retrieved.length,
+                        exemplarsIncluded: Boolean(exemplars),
+                        contrastiveWins: contrastive?.wins?.length || 0,
+                        contrastiveLosses: contrastive?.losses?.length || 0,
+                        status: 'Success',
+                        message: historicalContext
+                    },
                     durationMs: 12
                 });
             } catch (err: any) {

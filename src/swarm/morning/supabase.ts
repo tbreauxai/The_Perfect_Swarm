@@ -1,8 +1,36 @@
 import type { SlateGame, MorningJudgeOutput, LineSnapshotInsert } from './types.ts';
+import {
+  recordProbabilityObservation,
+  outcomeToScore
+} from '../feedback/probabilityCalibration.ts';
 
 export interface SupabaseConfig {
   supabaseUrl: string;
   supabaseServiceKey: string;
+}
+
+export interface PregameLearningContext {
+  lineMovement: {
+    snapshotsCount: number;
+    openingSpread: number | null;
+    currentSpread: number | null;
+    spreadDelta: number | null;
+    openingTotal: number | null;
+    currentTotal: number | null;
+    totalDelta: number | null;
+    openingMlHome: number | null;
+    currentMlHome: number | null;
+    steamDirection: 'home_steam' | 'away_steam' | 'neutral';
+  } | null;
+  teamHistory: {
+    sampleCount: number;
+    wins: number;
+    losses: number;
+    avgBrier: number | null;
+    meanSpreadErrorHomePerspective: number | null;
+    recentNotes: string[];
+  } | null;
+  formattedBlock: string;
 }
 
 export function getSupabaseConfig(env: Record<string, string | undefined> = process.env): SupabaseConfig | null {
@@ -276,3 +304,237 @@ export async function insertBaselineLineSnapshots(
 
   return inserted;
 }
+
+/**
+ * Hydrates in-memory probability calibration from settled Supabase `game_judgments` rows
+ * so cold restarts immediately recover empirical logit bias and Brier telemetry.
+ */
+export async function hydrateCalibrationFromSupabase(
+  cfg: SupabaseConfig | null,
+  fetchFn: typeof fetch = fetch
+): Promise<number> {
+  if (!cfg) return 0;
+  try {
+    const rows = await querySupabase(
+      cfg,
+      'game_judgments?status=eq.final&brier=not.is.null&order=judged_at.desc&limit=200&select=event_id,workflow_id,win_prob_home,sport,result,judged_at',
+      { method: 'GET', headers: { Prefer: 'return=representation' } },
+      fetchFn
+    );
+    if (!Array.isArray(rows)) return 0;
+
+    let count = 0;
+    for (const r of rows) {
+      const wfId = r.workflow_id || `supabase-${r.event_id}`;
+      const prob = Number(r.win_prob_home);
+      const outcomeStr = r.result?.outcome || (r.result?.home_win === true ? 'win' : r.result?.home_win === false ? 'loss' : '');
+      const score = outcomeToScore(String(outcomeStr));
+      if (!Number.isFinite(prob) || prob <= 0 || prob >= 1 || score == null) continue;
+      recordProbabilityObservation({
+        workflowId: String(wfId),
+        appId: 'duelodds',
+        predictedProbability: prob,
+        outcome: score,
+        sportKey: typeof r.sport === 'string' ? r.sport : undefined,
+        gradedAt: String(r.judged_at || r.result?.settled_at || new Date().toISOString())
+      });
+      count++;
+    }
+    return count;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Queries Supabase `line_snapshots` and settled `game_judgments` for a matchup prior to judging:
+ * 1. Computes opening-to-current spread/total/ML steam movement for `game.eventId`.
+ * 2. Computes historical model spread error and Brier accuracy for `game.homeTeam` and `game.awayTeam`.
+ */
+export async function fetchPregameLearningContext(
+  cfg: SupabaseConfig | null,
+  game: SlateGame,
+  fetchFn: typeof fetch = fetch
+): Promise<PregameLearningContext> {
+  const empty: PregameLearningContext = {
+    lineMovement: null,
+    teamHistory: null,
+    formattedBlock: ''
+  };
+  if (!cfg) return empty;
+
+  let lineMovement: PregameLearningContext['lineMovement'] = null;
+  let teamHistory: PregameLearningContext['teamHistory'] = null;
+
+  // 1. Line movement lookup from line_snapshots
+  try {
+    const snaps = await querySupabase(
+      cfg,
+      `line_snapshots?event_id=eq.${encodeURIComponent(game.eventId)}&order=snapshot_at.asc&select=spread,total,ml_home,ml_away,snapshot_at,is_baseline`,
+      { method: 'GET', headers: { Prefer: 'return=representation' } },
+      fetchFn
+    );
+
+    if (Array.isArray(snaps) && snaps.length > 0) {
+      const baselineRow = snaps.find((s: any) => s.is_baseline) || snaps[0];
+      const latestRow = snaps[snaps.length - 1];
+
+      const openSpread = baselineRow.spread != null ? Number(baselineRow.spread) : null;
+      const currSpread = (game.oddsSnapshot?.spread ?? latestRow.spread) != null
+        ? Number(game.oddsSnapshot?.spread ?? latestRow.spread)
+        : null;
+      const spreadDelta = openSpread != null && currSpread != null && Number.isFinite(openSpread) && Number.isFinite(currSpread)
+        ? Math.round((currSpread - openSpread) * 100) / 100
+        : null;
+
+      const openTotal = baselineRow.total != null ? Number(baselineRow.total) : null;
+      const currTotal = (game.oddsSnapshot?.overUnder ?? latestRow.total) != null
+        ? Number(game.oddsSnapshot?.overUnder ?? latestRow.total)
+        : null;
+      const totalDelta = openTotal != null && currTotal != null && Number.isFinite(openTotal) && Number.isFinite(currTotal)
+        ? Math.round((currTotal - openTotal) * 100) / 100
+        : null;
+
+      const openMlHome = baselineRow.ml_home != null ? Number(baselineRow.ml_home) : null;
+      const currMlHome = (game.oddsSnapshot?.homeMoneyLine ?? latestRow.ml_home) != null
+        ? Number(game.oddsSnapshot?.homeMoneyLine ?? latestRow.ml_home)
+        : null;
+
+      let steamDirection: 'home_steam' | 'away_steam' | 'neutral' = 'neutral';
+      if (spreadDelta != null) {
+        // Home spread becoming more negative (e.g. -2.5 -> -4.0, delta = -1.5) means money steaming toward Home
+        if (spreadDelta <= -0.5) steamDirection = 'home_steam';
+        else if (spreadDelta >= 0.5) steamDirection = 'away_steam';
+      } else if (openMlHome != null && currMlHome != null) {
+        if (currMlHome - openMlHome <= -15) steamDirection = 'home_steam';
+        else if (currMlHome - openMlHome >= 15) steamDirection = 'away_steam';
+      }
+
+      lineMovement = {
+        snapshotsCount: snaps.length,
+        openingSpread: openSpread,
+        currentSpread: currSpread,
+        spreadDelta,
+        openingTotal: openTotal,
+        currentTotal: currTotal,
+        totalDelta,
+        openingMlHome: openMlHome,
+        currentMlHome: currMlHome,
+        steamDirection
+      };
+    }
+  } catch {
+    // Non-fatal
+  }
+
+  // 2. Historical team calibration lookup from settled game_judgments
+  try {
+    const settledRows = await querySupabase(
+      cfg,
+      `game_judgments?status=eq.final&sport=eq.${encodeURIComponent(game.sport)}&order=game_date.desc&limit=40&select=home_team,away_team,win_prob_home,fair_spread,result,brier`,
+      { method: 'GET', headers: { Prefer: 'return=representation' } },
+      fetchFn
+    );
+
+    if (Array.isArray(settledRows) && settledRows.length > 0) {
+      const norm = (s: string) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const targetHome = norm(game.homeTeam);
+      const targetAway = norm(game.awayTeam);
+
+      const matching = settledRows.filter((r: any) => {
+        const rh = norm(r.home_team || '');
+        const ra = norm(r.away_team || '');
+        return (
+          (targetHome && (rh.includes(targetHome) || targetHome.includes(rh) || ra.includes(targetHome) || targetHome.includes(ra))) ||
+          (targetAway && (rh.includes(targetAway) || targetAway.includes(rh) || ra.includes(targetAway) || targetAway.includes(ra)))
+        );
+      });
+
+      if (matching.length > 0) {
+        let wins = 0;
+        let losses = 0;
+        let brierSum = 0;
+        let brierCount = 0;
+        let spreadErrorSum = 0;
+        let spreadErrorCount = 0;
+        const recentNotes: string[] = [];
+
+        for (const r of matching.slice(0, 8)) {
+          const outcome = r.result?.outcome;
+          if (outcome === 'win') wins++;
+          else if (outcome === 'loss') losses++;
+
+          if (typeof r.brier === 'number' && Number.isFinite(r.brier)) {
+            brierSum += r.brier;
+            brierCount++;
+          }
+
+          const fairSpread = Number(r.fair_spread);
+          const actualMargin = Number(r.result?.margin);
+          if (Number.isFinite(fairSpread) && Number.isFinite(actualMargin)) {
+            // Projected home margin is -fairSpread; error = actualMargin - projectedMargin
+            const projectedMargin = -fairSpread;
+            spreadErrorSum += actualMargin - projectedMargin;
+            spreadErrorCount++;
+          }
+
+          if (recentNotes.length < 3 && r.home_team && r.away_team) {
+            const brierStr = typeof r.brier === 'number' ? `, Brier=${r.brier.toFixed(3)}` : '';
+            const marginStr = r.result?.margin != null ? `, Margin=${r.result.margin > 0 ? '+' : ''}${r.result.margin}` : '';
+            recentNotes.push(
+              `${r.away_team} @ ${r.home_team}: P(Home)=${(Number(r.win_prob_home ?? 0.5) * 100).toFixed(0)}%, FairSpread=${r.fair_spread ?? 'N/A'} -> ${outcome || 'settled'}${marginStr}${brierStr}`
+            );
+          }
+        }
+
+        teamHistory = {
+          sampleCount: matching.length,
+          wins,
+          losses,
+          avgBrier: brierCount > 0 ? Math.round((brierSum / brierCount) * 1000) / 1000 : null,
+          meanSpreadErrorHomePerspective: spreadErrorCount > 0 ? Math.round((spreadErrorSum / spreadErrorCount) * 100) / 100 : null,
+          recentNotes
+        };
+      }
+    }
+  } catch {
+    // Non-fatal
+  }
+
+  const lines: string[] = [];
+  if (lineMovement) {
+    const spreadDesc = lineMovement.openingSpread != null && lineMovement.currentSpread != null
+      ? `Spread ${lineMovement.openingSpread} -> ${lineMovement.currentSpread} (Δ=${lineMovement.spreadDelta != null && lineMovement.spreadDelta > 0 ? '+' : ''}${lineMovement.spreadDelta ?? 0})`
+      : 'Spread unchanged/unavailable';
+    const totalDesc = lineMovement.openingTotal != null && lineMovement.currentTotal != null
+      ? `Total ${lineMovement.openingTotal} -> ${lineMovement.currentTotal} (Δ=${lineMovement.totalDelta != null && lineMovement.totalDelta > 0 ? '+' : ''}${lineMovement.totalDelta ?? 0})`
+      : 'Total unchanged/unavailable';
+    lines.push(
+      `Line Movement (${lineMovement.snapshotsCount} snapshots, Signal=${lineMovement.steamDirection}): ${spreadDesc} | ${totalDesc}`
+    );
+  }
+
+  if (teamHistory && teamHistory.sampleCount > 0) {
+    const brierPart = teamHistory.avgBrier != null ? `, AvgBrier=${teamHistory.avgBrier.toFixed(3)}` : '';
+    const errPart = teamHistory.meanSpreadErrorHomePerspective != null
+      ? `, MeanMarginError=${teamHistory.meanSpreadErrorHomePerspective > 0 ? '+' : ''}${teamHistory.meanSpreadErrorHomePerspective} pts`
+      : '';
+    lines.push(
+      `Team Calibration History (${teamHistory.sampleCount} settled games: ${teamHistory.wins}W-${teamHistory.losses}L${brierPart}${errPart}):`
+    );
+    for (const note of teamHistory.recentNotes) {
+      lines.push(`  • ${note}`);
+    }
+  }
+
+  const formattedBlock = lines.length > 0
+    ? `[SUPABASE LIVE MARKET STEAM & TEAM CALIBRATION HISTORY]\n${lines.join('\n')}`
+    : '';
+
+  return {
+    lineMovement,
+    teamHistory,
+    formattedBlock
+  };
+}
+

@@ -12,6 +12,8 @@ import {
   partitionSlateGames,
   upsertGameJudgment,
   insertBaselineLineSnapshots,
+  fetchPregameLearningContext,
+  hydrateCalibrationFromSupabase,
   type SupabaseConfig
 } from './supabase.ts';
 import { gradeAndRecordFinalGames } from './feedback.ts';
@@ -153,6 +155,9 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
 
   // 2. Query Supabase and partition slate games
   const cfg: SupabaseConfig | null = getSupabaseConfig(env);
+  if (cfg) {
+    await hydrateCalibrationFromSupabase(cfg, fetchFn).catch(() => 0);
+  }
   const {
     gamesToJudge,
     gamesToReplace,
@@ -193,12 +198,21 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
     return true;
   });
 
+  const participatingSeatRoles = singleGroqSeatAgents.map(a => a.role);
+
   for (const item of unclaimedGames) {
     const { game, isReplace } = item;
     try {
-      // Proposers receive lean board and baseline; manager receives JSON contract via JUDGE_MANAGER_INSTRUCTION
-      const task = buildProposerPrompt(game);
-      const data = formatGameToColumnar(game);
+      // Fetch live line-movement steam delta and team-specific calibration history from Supabase when configured
+      const pregameContext = cfg
+        ? await fetchPregameLearningContext(cfg, game, fetchFn).catch(() => ({ lineMovement: null, teamHistory: null, formattedBlock: '' }))
+        : { lineMovement: null, teamHistory: null, formattedBlock: '' };
+
+      // Proposers receive lean board, baseline, and live Supabase steam/calibration context; manager receives JSON contract via JUDGE_MANAGER_INSTRUCTION
+      const baseTask = buildProposerPrompt(game);
+      const task = pregameContext.formattedBlock ? `${baseTask}\n\n${pregameContext.formattedBlock}` : baseTask;
+      const baseData = formatGameToColumnar(game);
+      const data = pregameContext.formattedBlock ? `${baseData}\n\n${pregameContext.formattedBlock}` : baseData;
 
       const workflowResult: any = await executeWorkflowFn({
         task,
@@ -242,7 +256,7 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
         continue;
       }
 
-      const modelSnapshot = computeModelSnapshot(game, parsed.winProbHome);
+      const modelSnapshot = computeModelSnapshot(game, parsed.winProbHome, parsed, participatingSeatRoles);
 
       // 4. Upsert game_judgment row
       if (cfg) {

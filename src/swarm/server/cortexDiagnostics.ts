@@ -1,12 +1,17 @@
 import type { MemoryCortex } from '../memory.ts';
 import { globalBenchmarker } from '../benchmark.ts';
 import { globalTelemetryCollector } from '../telemetry.ts';
+import { analystLedger } from '../feedback.ts';
+import { fitCalibration, observationsForApp } from '../feedback/probabilityCalibration.ts';
+import { globalSpecialistProfiler } from '../loadBalancer.ts';
+import { getSupabaseConfig } from '../morning/supabase.ts';
 
 /**
- * Builds enhanced diagnostic report with role recommendations and benchmark data.
+ * Builds enhanced diagnostic report with role recommendations, benchmark data,
+ * and closed-loop learning & calibration telemetry across Qdrant and Supabase.
  */
 export async function buildCortexDiagnostics(cortex: MemoryCortex, appId?: string): Promise<any> {
-    const diagnostics = await cortex.getDiagnostics(appId);
+    const diagnostics: any = await cortex.getDiagnostics(appId);
 
     // Generate structured role recommendations based on app's actual roles and benchmarks
     const bestModels = globalBenchmarker.getBestModels();
@@ -15,6 +20,72 @@ export async function buildCortexDiagnostics(cortex: MemoryCortex, appId?: strin
     diagnostics.latencyStats = telemetry.modelMs;
     diagnostics.cacheHitRatio = telemetry.cacheHitRatio;
     diagnostics.roleRecommendations = [];
+
+    // Closed-Loop Learning & Calibration Telemetry
+    const targetCalibrationApp = appId && appId !== 'global' ? appId : 'duelodds';
+    const calObservations = observationsForApp(targetCalibrationApp);
+    const calibrationFit = fitCalibration(calObservations);
+    const ledgerMetrics = analystLedger.getMetrics();
+    const specialistProfiles = globalSpecialistProfiler.getAllProfiles();
+
+    const seatAccuracy: Array<{
+        appId: string;
+        role: string;
+        wins: number;
+        losses: number;
+        pushes: number;
+        total: number;
+        winRate: number;
+        ucb1Score: number;
+        capabilityScore: number;
+    }> = [];
+
+    for (const [key, rec] of Object.entries(ledgerMetrics)) {
+        const sepIdx = key.indexOf(':');
+        const entryApp = sepIdx >= 0 ? key.slice(0, sepIdx) : 'global';
+        const role = sepIdx >= 0 ? key.slice(sepIdx + 1) : key;
+        if (appId && appId !== 'global' && entryApp !== appId) continue;
+        const total = (rec.wins || 0) + (rec.losses || 0) + (rec.pushes || 0);
+        const winRate = total > 0 ? Math.round((((rec.wins || 0) + 0.5 * (rec.pushes || 0)) / total) * 1000) / 1000 : 0.5;
+        seatAccuracy.push({
+            appId: entryApp,
+            role,
+            wins: rec.wins || 0,
+            losses: rec.losses || 0,
+            pushes: rec.pushes || 0,
+            total,
+            winRate,
+            ucb1Score: globalSpecialistProfiler.getUcb1Score(role),
+            capabilityScore: globalSpecialistProfiler.getCapabilityScore(role)
+        });
+    }
+
+    // Also include profiled seats that may not be in ledgerMetrics yet
+    for (const [role, prof] of Object.entries(specialistProfiles)) {
+        if (seatAccuracy.some(s => s.role === role)) continue;
+        const total = (prof.accuracyWins || 0) + (prof.accuracyLosses || 0) + (prof.accuracyPushes || 0);
+        if (total === 0 && (prof.trials || 0) === 0) continue;
+        seatAccuracy.push({
+            appId: targetCalibrationApp,
+            role,
+            wins: prof.accuracyWins || 0,
+            losses: prof.accuracyLosses || 0,
+            pushes: prof.accuracyPushes || 0,
+            total,
+            winRate: prof.accuracyScore ?? 0.5,
+            ucb1Score: globalSpecialistProfiler.getUcb1Score(role),
+            capabilityScore: globalSpecialistProfiler.getCapabilityScore(role)
+        });
+    }
+
+    seatAccuracy.sort((a, b) => b.total - a.total || b.winRate - a.winRate);
+
+    diagnostics.learningTelemetry = {
+        supabaseConfigured: Boolean(getSupabaseConfig()),
+        calibrationAppId: targetCalibrationApp,
+        calibration: calibrationFit,
+        seatAccuracy
+    };
 
     if (bestModels && Object.keys(diagnostics.storageByRole).length > 0) {
         for (const role of Object.keys(diagnostics.storageByRole)) {
@@ -69,3 +140,4 @@ export async function buildCortexDiagnostics(cortex: MemoryCortex, appId?: strin
 
     return diagnostics;
 }
+

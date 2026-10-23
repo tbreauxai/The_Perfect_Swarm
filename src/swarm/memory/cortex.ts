@@ -826,6 +826,114 @@ export class MemoryCortex {
     }
 
     /**
+     * Contrastive episodic retrieval: retrieves both validated winning judgments and graded failure
+     * post-mortems (losses / high-Brier misses) so proposers and the judge can correct recurring biases.
+     */
+    async retrieveContrastivePostMortems(
+        task: string,
+        options?: RetrievalOptions
+    ): Promise<{ wins: any[]; losses: any[]; formattedBlock: string }> {
+        await this.initialize();
+        const limit = options?.limit || 2;
+        const candidates = await this.retrieve(task, {
+            ...options,
+            limit: Math.max(limit * 4, 8)
+        }).catch(() => []);
+
+        const readerApp = options?.appId || options?.originApp || this.defaultAppId;
+        const requestedDomain = options?.domain ? normalizeDomain(options.domain) : undefined;
+        const queryEntities = extractEntityIds(task, options?.entityIds);
+
+        // Also scan fallbackStore for graded losses that may have been down-ranked by minRating/qualityRating
+        const fallbackCandidates: any[] = [];
+        for (const pt of this.fallbackStore) {
+            const p: Record<string, any> = (pt.payload || {}) as Record<string, any>;
+            if (options?.includeShared === false) {
+                const itemApp = p.originApp || p.appId;
+                if (itemApp !== readerApp) continue;
+            }
+            if (requestedDomain && normalizeDomain(p.domain) !== requestedDomain) continue;
+            const isGradedLoss =
+                p.outcome === 'loss' ||
+                (typeof p.brierScore === 'number' && p.brierScore >= 0.28) ||
+                (p.feedbackProcessed === true && typeof p.qualityRating === 'number' && p.qualityRating <= 0.25);
+            const isGradedWin =
+                p.outcome === 'win' ||
+                (p.feedbackProcessed === true && typeof p.qualityRating === 'number' && p.qualityRating >= 0.8);
+            if (!isGradedLoss && !isGradedWin) continue;
+
+            const itemEntities: string[] = Array.isArray(p.entityIds) ? p.entityIds : [];
+            const entityOverlap = queryEntities.length > 0
+                ? queryEntities.filter(e => itemEntities.includes(e)).length
+                : 0;
+            fallbackCandidates.push({
+                id: pt.id,
+                ...p,
+                _entityOverlap: entityOverlap
+            });
+        }
+
+        const mergedMap = new Map<string, any>();
+        for (const c of [...candidates, ...fallbackCandidates]) {
+            const key = String(c.workflowId || c.id || c.content || Math.random());
+            if (!mergedMap.has(key)) {
+                mergedMap.set(key, c);
+            }
+        }
+
+        const all = Array.from(mergedMap.values()).sort((a, b) => {
+            const overlapDiff = (b._entityOverlap || 0) - (a._entityOverlap || 0);
+            if (overlapDiff !== 0) return overlapDiff;
+            return (b.hybridScore ?? 0) - (a.hybridScore ?? 0);
+        });
+
+        const wins = all
+            .filter(m => m.outcome === 'win' || (m.qualityRating !== undefined && m.qualityRating >= 0.75 && m.outcome !== 'loss'))
+            .slice(0, limit);
+
+        const losses = all
+            .filter(m =>
+                m.outcome === 'loss' ||
+                (typeof m.brierScore === 'number' && m.brierScore >= 0.28) ||
+                (m.feedbackProcessed === true && typeof m.qualityRating === 'number' && m.qualityRating <= 0.25)
+            )
+            .slice(0, limit);
+
+        if (wins.length === 0 && losses.length === 0) {
+            return { wins: [], losses: [], formattedBlock: '' };
+        }
+
+        const sections: string[] = ['[Contrastive Episodic Memory: Validated Wins vs. Past Pitfalls]'];
+        if (wins.length > 0) {
+            sections.push(
+                'VALIDATED WINNING PATTERNS:\n' +
+                wins.map((w, i) => {
+                    const brierTag = typeof w.brierScore === 'number' ? `, Brier=${w.brierScore.toFixed(3)}` : '';
+                    const marginTag = typeof w.margin === 'number' ? `, FinalMargin=${w.margin > 0 ? '+' : ''}${w.margin}` : '';
+                    return `  + [Win #${i + 1}${brierTag}${marginTag}]: ${w.content || JSON.stringify(w)}`;
+                }).join('\n')
+            );
+        }
+        if (losses.length > 0) {
+            sections.push(
+                'GRADED LOSS POST-MORTEMS (AVOID REPEATING THESE BIASES):\n' +
+                losses.map((l, i) => {
+                    const brierTag = typeof l.brierScore === 'number' ? `, Brier=${l.brierScore.toFixed(3)}` : '';
+                    const marginTag = typeof l.margin === 'number' ? `, FinalMargin=${l.margin > 0 ? '+' : ''}${l.margin}` : '';
+                    const summaryTag = l.settledSummary ? ` | Settled: ${l.settledSummary}` : '';
+                    return `  - [Loss/Miss #${i + 1}${brierTag}${marginTag}]: ${l.content || JSON.stringify(l)}${summaryTag}`;
+                }).join('\n')
+            );
+        }
+
+        return {
+            wins,
+            losses,
+            formattedBlock: sections.join('\n')
+        };
+    }
+
+    /**
      * Consolidates and prunes memories based on minimum quality rating, expiration age, and optional appId filter.
      */
     async consolidateMemories(options?: ConsolidationOptions): Promise<ConsolidationResult> {
@@ -973,6 +1081,10 @@ export class MemoryCortex {
         originApp: string;
         outcome: 'win' | 'loss' | 'push';
         gradedAt?: string | number;
+        brierScore?: number;
+        margin?: number;
+        predictedProbability?: number;
+        settledSummary?: string;
     }): Promise<{ found: boolean; alreadyProcessed: boolean; point?: any; updatedScore?: number }> {
         await this.initialize();
         const targetWorkflowId = options.workflowId.trim();
@@ -1000,6 +1112,10 @@ export class MemoryCortex {
                     pt.payload.gradedAt = nowIso;
                     pt.payload.feedbackProcessed = true;
                     pt.payload.verified = outcomeScore >= 0.8;
+                    if (options.brierScore !== undefined) pt.payload.brierScore = options.brierScore;
+                    if (options.margin !== undefined) pt.payload.margin = options.margin;
+                    if (options.predictedProbability !== undefined) pt.payload.predictedProbability = options.predictedProbability;
+                    if (options.settledSummary !== undefined) pt.payload.settledSummary = options.settledSummary;
                 }
                 break;
             }
@@ -1044,7 +1160,11 @@ export class MemoryCortex {
                                     outcome: options.outcome,
                                     gradedAt: nowIso,
                                     feedbackProcessed: true,
-                                    verified: outcomeScore >= 0.8
+                                    verified: outcomeScore >= 0.8,
+                                    ...(options.brierScore !== undefined ? { brierScore: options.brierScore } : {}),
+                                    ...(options.margin !== undefined ? { margin: options.margin } : {}),
+                                    ...(options.predictedProbability !== undefined ? { predictedProbability: options.predictedProbability } : {}),
+                                    ...(options.settledSummary !== undefined ? { settledSummary: options.settledSummary } : {})
                                 }
                             }));
                         }

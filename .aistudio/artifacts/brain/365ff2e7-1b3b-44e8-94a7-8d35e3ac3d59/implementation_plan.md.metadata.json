@@ -1,6 +1,6 @@
 {
-  "summary":  "Architectural and product implementation plan for upgrading The Perfect Swarm with zero-LLM columnar pre-aggregation sketching, provider-aware adaptive chunk sharding, deterministic math and Monte Carlo forecasting grounding, evidence-weighted citation consensus, Brier-calibrated Bayesian/log-odds ensemble pooling, and live dashboard telemetry and controls.",
-  "updatedAt":  "2026-10-23T19:44:05.899002288Z",
+  "summary":  "Implementation plan for closed-loop Qdrant & DuelOdds (Supabase) hyper-intelligence learning upgrades: decoupling response cache bypass from Qdrant MemoryCortex retrieval, enriching Qdrant stored memory payloads with structured verdicts, contrastive win/loss post-mortem retrieval, live Supabase line-movement steam and team-specific residual bias enrichment, counterfactual per-seat Brier attribution, cold-start Supabase calibration hydration, and live Cortex Diagnostics UI telemetry.",
+  "updatedAt":  "2026-10-23T20:17:31.814162944Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

@@ -401,16 +401,37 @@ export function parseAndValidateJudgeOutput(
 }
 
 /**
- * Computes model snapshot metrics for game_judgments.
+ * Computes model snapshot metrics for game_judgments, including participating Swarm seats
+ * and argument advocate breakdown for per-seat Brier and accuracy attribution.
  */
-export function computeModelSnapshot(game: SlateGame, winProbHome: number = 0.5): Record<string, any> {
+export function computeModelSnapshot(
+  game: SlateGame,
+  winProbHome: number = 0.5,
+  judgment?: MorningJudgeOutput | null,
+  participatingSeats?: string[]
+): Record<string, any> {
   const spread = game.oddsSnapshot?.spread ?? null;
   const total = game.oddsSnapshot?.overUnder ?? null;
+
+  const advocateCounts: Record<string, number> = {};
+  if (judgment?.arguments && Array.isArray(judgment.arguments)) {
+    for (const arg of judgment.arguments) {
+      const adv = arg.advocate || 'judge';
+      advocateCounts[adv] = (advocateCounts[adv] || 0) + 1;
+    }
+  }
 
   return {
     model_win_prob_home: winProbHome,
     projected_margin: spread != null ? -spread : (winProbHome >= 0.5 ? 3.5 : -3.5),
     projected_total: total ?? 44.5,
-    derived_from: 'swarm_analysis_composite'
+    derived_from: 'swarm_analysis_composite',
+    ...(Array.isArray(participatingSeats) && participatingSeats.length > 0
+      ? { participating_seats: participatingSeats }
+      : {}),
+    ...(Object.keys(advocateCounts).length > 0
+      ? { advocate_breakdown: advocateCounts }
+      : {})
   };
 }
+

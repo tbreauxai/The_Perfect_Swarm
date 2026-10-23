@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Database, Server, Folder, Shield, Activity, RefreshCw, Zap, Cpu, Settings, Coins, Key } from 'lucide-react';
+import { Database, Server, Folder, Shield, Activity, RefreshCw, Zap, Cpu, Settings, Coins, Key, Target, Award, Sliders } from 'lucide-react';
 import { authHeaders } from '../services/appAuthHeaders';
 import { parseHttpError } from '../services/httpError';
 
@@ -8,6 +8,33 @@ interface RoleRecommendation {
   recommendedProvider: string;
   recommendedModel: string;
   reason: string;
+}
+
+interface SeatAccuracyEntry {
+  appId: string;
+  role: string;
+  wins: number;
+  losses: number;
+  pushes: number;
+  total: number;
+  winRate: number;
+  ucb1Score: number;
+  capabilityScore: number;
+}
+
+interface LearningTelemetry {
+  supabaseConfigured: boolean;
+  calibrationAppId: string;
+  calibration: {
+    globalBias: number;
+    sportBias: Record<string, number>;
+    sampleSize: number;
+    sportSamples: Record<string, number>;
+    brier: number;
+    meanPredicted: number;
+    meanActual: number;
+  };
+  seatAccuracy: SeatAccuracyEntry[];
 }
 
 interface CortexDiagnostics {
@@ -34,6 +61,7 @@ interface CortexDiagnostics {
   failureCount?: number;
   modelSuggestions?: string;
   roleRecommendations?: RoleRecommendation[];
+  learningTelemetry?: LearningTelemetry;
 }
 
 export function CortexDiagnosticsViewer() {
@@ -42,6 +70,40 @@ export function CortexDiagnosticsViewer() {
   const [error, setError] = useState<string | null>(null);
   const [isAuthError, setIsAuthError] = useState(false);
   const [selectedApp, setSelectedApp] = useState<string>('global');
+  const [calibrating, setCalibrating] = useState(false);
+  const [calibrationStatus, setCalibrationStatus] = useState<string | null>(null);
+
+  const handleCalibratePolicy = async () => {
+    setCalibrating(true);
+    setCalibrationStatus(null);
+    try {
+      const targetApp = selectedApp === 'global' ? undefined : selectedApp;
+      const res = await fetch('/api/swarm/calibrate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...authHeaders()
+        },
+        body: JSON.stringify({
+          appId: targetApp,
+          iterations: 400,
+          autoApply: true,
+          minSamples: 2
+        })
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setCalibrationStatus(payload?.message || payload?.error || 'Calibration requires more graded outcomes.');
+      } else {
+        setCalibrationStatus(`Calibrated policy weights (Brier / R² updated across ${payload?.sampleSize ?? 'active'} samples).`);
+        await fetchDiagnostics();
+      }
+    } catch (err: any) {
+      setCalibrationStatus(err?.message || 'Calibration request failed');
+    } finally {
+      setCalibrating(false);
+    }
+  };
 
   const fetchDiagnostics = async () => {
     setLoading(true);
@@ -191,6 +253,10 @@ export function CortexDiagnosticsViewer() {
 
   if (!diagnostics) return null;
 
+  const cal = diagnostics.learningTelemetry?.calibration;
+  const seatAccuracy = diagnostics.learningTelemetry?.seatAccuracy || [];
+  const supabaseConfigured = diagnostics.learningTelemetry?.supabaseConfigured ?? false;
+
   return (
     <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200 space-y-6">
       <div className="flex flex-col md:flex-row md:items-center justify-between border-b border-neutral-100 pb-4 gap-4">
@@ -303,6 +369,110 @@ export function CortexDiagnosticsViewer() {
         </div>
       </div>
 
+      {/* Closed-Loop Learning & Calibration Telemetry */}
+      <div className="border border-neutral-200 rounded-xl p-4 bg-neutral-50/70 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-semibold text-neutral-800 flex items-center gap-1.5">
+              <Target className="w-4 h-4 text-indigo-600" /> Closed-Loop Learning & Calibration Telemetry
+            </h3>
+            <p className="text-xs text-neutral-500 mt-0.5">
+              Contrastive Qdrant episodic post-mortems, Supabase line-movement steam & team bias, and per-seat Brier calibration
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className={`text-[11px] font-medium px-2 py-0.5 rounded border ${supabaseConfigured ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-neutral-100 text-neutral-600 border-neutral-200'}`}>
+              Supabase Sync: {supabaseConfigured ? 'Connected' : 'Local Mode'}
+            </span>
+            <button
+              onClick={handleCalibratePolicy}
+              disabled={calibrating}
+              className="text-xs bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-medium px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition"
+            >
+              <Sliders className="w-3.5 h-3.5" />
+              {calibrating ? 'Calibrating...' : 'Calibrate Policy Weights'}
+            </button>
+          </div>
+        </div>
+
+        {calibrationStatus && (
+          <div className="text-xs bg-white border border-indigo-100 text-indigo-800 px-3 py-2 rounded-lg">
+            {calibrationStatus}
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="bg-white p-3 rounded-lg border border-neutral-100 text-center">
+            <span className="text-[11px] text-neutral-500 font-medium block">Graded Samples</span>
+            <span className="text-lg font-bold font-mono text-neutral-800">
+              {cal ? cal.sampleSize : 0}
+            </span>
+            <span className="text-[10px] text-neutral-400 block mt-0.5">
+              {cal && cal.sampleSize >= 8 ? 'Active Logit Calibration' : 'Need 8+ for Bias Shift'}
+            </span>
+          </div>
+
+          <div className="bg-white p-3 rounded-lg border border-neutral-100 text-center">
+            <span className="text-[11px] text-neutral-500 font-medium block">Empirical Brier Score</span>
+            <span className="text-lg font-bold font-mono text-indigo-600">
+              {cal && cal.sampleSize > 0 ? cal.brier.toFixed(3) : '0.250'}
+            </span>
+            <span className="text-[10px] text-neutral-400 block mt-0.5">
+              Lower is sharper (0.25 = coinflip)
+            </span>
+          </div>
+
+          <div className="bg-white p-3 rounded-lg border border-neutral-100 text-center">
+            <span className="text-[11px] text-neutral-500 font-medium block">Global Logit Bias</span>
+            <span className="text-lg font-bold font-mono text-neutral-800">
+              {cal ? `${cal.globalBias >= 0 ? '+' : ''}${cal.globalBias.toFixed(3)}` : '+0.000'}
+            </span>
+            <span className="text-[10px] text-neutral-400 block mt-0.5">
+              Stated {cal ? `${(cal.meanPredicted * 100).toFixed(1)}%` : '50.0%'} vs Hit {cal ? `${(cal.meanActual * 100).toFixed(1)}%` : '50.0%'}
+            </span>
+          </div>
+
+          <div className="bg-white p-3 rounded-lg border border-neutral-100 text-center">
+            <span className="text-[11px] text-neutral-500 font-medium block">Tracked Specialist Seats</span>
+            <span className="text-lg font-bold font-mono text-emerald-600">
+              {seatAccuracy.length}
+            </span>
+            <span className="text-[10px] text-neutral-400 block mt-0.5">
+              Per-seat UCB1 & Brier pooling
+            </span>
+          </div>
+        </div>
+
+        {seatAccuracy.length > 0 && (
+          <div className="bg-white rounded-lg border border-neutral-200 overflow-hidden">
+            <div className="px-3 py-2 bg-neutral-50 border-b border-neutral-200 text-xs font-semibold text-neutral-700 flex items-center gap-1.5">
+              <Award className="w-3.5 h-3.5 text-indigo-600" /> Per-Seat Specialist Accuracy & UCB1 Weighting
+            </div>
+            <div className="divide-y divide-neutral-100">
+              {seatAccuracy.slice(0, 6).map((seat) => (
+                <div key={`${seat.appId}:${seat.role}`} className="px-3 py-2 flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-neutral-800">{seat.role}</span>
+                    <span className="text-[10px] text-neutral-400 font-mono">({seat.appId})</span>
+                  </div>
+                  <div className="flex items-center gap-4 font-mono">
+                    <span className="text-neutral-600">
+                      {seat.wins}W-{seat.losses}L{seat.pushes > 0 ? `-${seat.pushes}P` : ''}
+                    </span>
+                    <span className={`font-semibold ${seat.winRate >= 0.55 ? 'text-emerald-600' : seat.winRate < 0.45 ? 'text-amber-600' : 'text-neutral-700'}`}>
+                      {(seat.winRate * 100).toFixed(1)}% Win
+                    </span>
+                    <span className="text-indigo-600">
+                      UCB1 {seat.ucb1Score.toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
         <div className="space-y-3">
           <h3 className="text-sm font-medium text-neutral-700 flex items-center gap-2">
@@ -398,3 +568,4 @@ export function CortexDiagnosticsViewer() {
     </div>
   );
 }
+
