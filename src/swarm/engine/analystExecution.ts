@@ -114,6 +114,16 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
             await new Promise(resolve => setTimeout(resolve, startDelay));
         }
 
+        // Provider-aware inter-chunk pacing delay for chunkIdx > 0
+        if (chunkIdx > 0) {
+            const providerName = analyst.provider?.toLowerCase();
+            const providerPacingMs = (settings as any)?.providerPacingMs?.[providerName]
+                ?? (typeof process !== 'undefined' && process.env?.VITEST ? 0 : (providerName === 'groq' ? 500 : providerName === 'mistral' ? 1000 : 0));
+            if (providerPacingMs > 0) {
+                await new Promise(resolve => setTimeout(resolve, providerPacingMs));
+            }
+        }
+
         const nodeKey = (analyst as any).id || analyst.role;
         const capacitySlot = globalNodeCapacityManager.tryAcquireSlot(nodeKey) ||
                              globalNodeCapacityManager.tryAcquireSlot(analyst.provider);

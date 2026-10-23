@@ -515,7 +515,7 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
     });
 
     const swarmBodyLimit = bodyLimit({
-        maxSize: 2 * 1024 * 1024,
+        maxSize: 10 * 1024 * 1024, // Expanded to 10MB to support high-volume datasets
         onError: (c) => c.json({ error: 'Payload Too Large' }, 413)
     });
 
