@@ -8,13 +8,13 @@
   {
     "id": "goal-2-vector-cache-index-dedup",
     "description": "Vector Index & Semantic Cache Deduplication: Extract abstract BaseVectorIndex<T> (src/swarm/vectorIndex/baseIndex.ts) for hnswIndex and vpTreeIndex; extract generic SemanticVectorCache<T> (src/swarm/cache/semanticVectorCache.ts) deduplicating LRU, TTL, and vector search across actionPlanCache and semanticCacheInterceptor.",
-    "status": "in-progress",
+    "status": "completed",
     "verification": "HNSW, VPTree, ActionPlanCache, and SemanticCacheInterceptor pass all existing test suites without regression; tsc --noEmit passes."
   },
   {
     "id": "goal-3-provider-streaming-tool-dedup",
     "description": "Provider Adapters, SSE Streaming & Engine Tool Execution: Implement shared OpenAI-compatible REST call helper (src/swarm/providers/baseOpenAi.ts) for Groq/Mistral/OpenRouter/Nvidia/Cloudflare; extract shared SSE stream parser (src/swarm/utils/sseParser.ts); extract tool execution and context event recording helper (src/swarm/engine/toolExecutionHelper.ts).",
-    "status": "todo",
+    "status": "in-progress",
     "verification": "Provider adapters pass resilience and format rejection tests; SSE parser passes client tests; tool execution passes analyst execution tests."
   },
   {
