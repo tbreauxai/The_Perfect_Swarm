@@ -1,7 +1,9 @@
 import React from 'react';
-import { Trophy, Clock, CheckCircle, AlertCircle, Play, Loader2 } from 'lucide-react';
+import { Trophy, CheckCircle, AlertCircle, Play, Loader2 } from 'lucide-react';
 import type { OptimizationResult } from './OptimizationRunner';
 import { isModelResponseValid } from './optimizationScoring';
+import { OptimizationDurationBadge } from './OptimizationDurationBadge';
+import { OptimizationScoreCells } from './OptimizationScoreCells';
 
 export interface OptimizationCombinationsTableProps {
     results: OptimizationResult[];
@@ -76,14 +78,9 @@ export const OptimizationCombinationsTable: React.FC<OptimizationCombinationsTab
                                                 {r.model}
                                             </td>
                                             <td className="px-4 py-3">
-                                                <span className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium ${r.durationMs < 3000 ? 'bg-green-100 text-green-700' : r.durationMs < 8000 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>
-                                                    <Clock className="w-3 h-3" />
-                                                    {(r.durationMs / 1000).toFixed(1)}s
-                                                </span>
+                                                <OptimizationDurationBadge durationMs={r.durationMs} />
                                             </td>
-                                            <td className="px-4 py-3 font-semibold text-purple-700">{r.scores.speed || '-'}</td>
-                                            <td className="px-4 py-3 font-semibold text-blue-700">{r.scores.intelligence || '-'}</td>
-                                            <td className="px-4 py-3 font-semibold text-emerald-700">{r.scores.accuracy || '-'}</td>
+                                            <OptimizationScoreCells scores={r.scores} />
                                             <td className="px-4 py-3 max-w-xs truncate text-xs text-neutral-600 font-mono">
                                                 {r.error ? (
                                                     <span className="text-red-500 flex items-center gap-1"><AlertCircle className="w-3 h-3" /> {r.error}</span>
