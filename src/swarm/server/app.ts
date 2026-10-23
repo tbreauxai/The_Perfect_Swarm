@@ -212,9 +212,11 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
     );
 
     const serverEnv = typeof process !== 'undefined' ? (process.env as Record<string, any>) : {};
-    probeAllProviders(serverEnv).catch((err) =>
-        console.warn('[catalog] Background catalog warming failed:', err?.message || err)
-    );
+    if (serverEnv.SWARM_STARTUP_PROBE === '1' || serverEnv.SWARM_STARTUP_BENCHMARK === '1') {
+        probeAllProviders(serverEnv).catch((err) =>
+            console.warn('[catalog] Background catalog warming failed:', err?.message || err)
+        );
+    }
 
     // Catalog probe runs at 6 AM and 10 PM CT, not on every picker open.
     // Seats read the cache. A probe never competes with a live analysis.

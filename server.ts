@@ -23,7 +23,8 @@ const __dirname = path.dirname(__filename);
 
 export function createMainApp(options: { defaultAi?: any; defaultCortex?: any; serveStatic?: boolean } = {}) {
   const defaultAi = options.defaultAi || new GoogleGenAI({
-    apiKey: process.env.GEMINI_API_KEY || 'MISSING_KEY'
+    apiKey: process.env.GEMINI_API_KEY || 'MISSING_KEY',
+    httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
   });
 
   // 1. Create the Edge-compatible Swarm API
@@ -115,14 +116,22 @@ export function mountStaticHandlers(app: Hono, distDir = './dist') {
 }
 
 async function startServer() {
-  const port = Number(process.env.PORT) || 3000;
+  const isProd = process.env.NODE_ENV === "production";
+  const portArgIdx = process.argv.indexOf('--port');
+  const cliPort = portArgIdx !== -1 && process.argv[portArgIdx + 1] ? Number(process.argv[portArgIdx + 1]) : NaN;
+  const port = !Number.isNaN(cliPort) && cliPort > 0
+    ? cliPort
+    : (isProd ? (Number(process.env.PORT) || 3000) : 3000);
   
   const defaultAi = new GoogleGenAI({
-    apiKey: process.env.GEMINI_API_KEY || 'MISSING_KEY'
+    apiKey: process.env.GEMINI_API_KEY || 'MISSING_KEY',
+    httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
   });
   const defaultCortex = getOrCreateDefaultCortex('perfect-swarm', defaultAi);
 
-  const isProd = process.env.NODE_ENV === "production";
+  if (!isProd && !process.env.SWARM_APP_TOKENS && process.env.SWARM_AUTH_DISABLED === undefined) {
+    process.env.SWARM_AUTH_DISABLED = 'true';
+  }
 
   if (isProd && !process.env.SWARM_APP_TOKENS) {
     console.error('ERROR: NODE_ENV is production but SWARM_APP_TOKENS is not set. All protected routes will fail closed (503).');
@@ -131,19 +140,21 @@ async function startServer() {
   }
 
   const envVars = process.env;
-  if (envVars.GEMINI_API_KEY) fetchProviderModels('gemini', undefined, envVars).catch(() => {});
-  if (envVars.GROQ_API_KEY) fetchProviderModels('groq', undefined, envVars).catch(() => {});
-  if (envVars.OPENROUTER_API_KEY) fetchProviderModels('openrouter', undefined, envVars).catch(() => {});
+  if (envVars.SWARM_STARTUP_PROBE === '1' || envVars.SWARM_STARTUP_BENCHMARK === '1') {
+    if (envVars.GEMINI_API_KEY) fetchProviderModels('gemini', undefined, envVars).catch(() => {});
+    if (envVars.GROQ_API_KEY) fetchProviderModels('groq', undefined, envVars).catch(() => {});
+    if (envVars.OPENROUTER_API_KEY) fetchProviderModels('openrouter', undefined, envVars).catch(() => {});
 
-  // Warn (never exit) when a configured default/routing model id is unknown to its provider.
-  const configuredModels: Record<string, string[]> = {};
-  for (const provider of ['gemini', 'groq', 'openrouter', 'mistral'] as const) {
-    configuredModels[provider] = [
-      DEFAULT_PROVIDER_MODELS[provider],
-      ...(['instant', 'simple', 'formatting', 'complex'] as const).map((c) => ModelRouter.getRecommendedModel(provider as any, c))
-    ].filter(Boolean);
+    // Warn (never exit) when a configured default/routing model id is unknown to its provider.
+    const configuredModels: Record<string, string[]> = {};
+    for (const provider of ['gemini', 'groq', 'openrouter', 'mistral'] as const) {
+      configuredModels[provider] = [
+        DEFAULT_PROVIDER_MODELS[provider],
+        ...(['instant', 'simple', 'formatting', 'complex'] as const).map((c) => ModelRouter.getRecommendedModel(provider as any, c))
+      ].filter(Boolean);
+    }
+    warnUnknownConfiguredModels(configuredModels, envVars).catch(() => {});
   }
-  warnUnknownConfiguredModels(configuredModels, envVars).catch(() => {});
 
   const app = createMainApp({ defaultAi, defaultCortex, serveStatic: isProd });
 
@@ -152,7 +163,7 @@ async function startServer() {
 
   if (!isProd) {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, hmr: false, watch: null },
       appType: "spa",
     });
 

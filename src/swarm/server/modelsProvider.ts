@@ -97,7 +97,7 @@ export async function probeAllProviders(env: Record<string, any> = {}): Promise<
     }
 }
 
-const NON_CHAT = /tts|whisper|image|embed|ocr|lyria|transcribe|prompt-guard|orpheus|robotics|moderation|computer-use|realtime|speech|safeguard|deep-research|antigravity|nano-banana|clip-preview/i;
+const NON_CHAT = /tts|whisper|image|embed|ocr|lyria|transcribe|prompt-guard|orpheus|robotics|moderation|computer-use|realtime|speech|safeguard|deep-research|antigravity|nano-banana|clip-preview|omni|customtools/i;
 
 const availabilityCache = new Map<string, { state: 'ok' | 'limited' | 'dead'; at: number }>();
 const deadModels = new Set<string>();
@@ -157,6 +157,7 @@ export async function rankModelsForAccount(provider: string, models: any[], apiK
         // Priority boost: default model and free models must rank highest for probing
         if (isDefault) cap += 1000;
         else if (isFree && prov === 'openrouter') cap += 500;
+        else if (prov === 'gemini' && /flash/i.test(m.id) && !/pro/i.test(m.id)) cap += 400;
         return {
             ...m,
             free: isFree,
@@ -182,11 +183,11 @@ export async function rankModelsForAccount(provider: string, models: any[], apiK
     const PROBE_CAP = 20;
     const toProbe = ranked.slice(0, PROBE_CAP);
 
-    // OpenRouter free models rate limit fast. Probe fewer, slower, so some answer.
+    // OpenRouter/Gemini free models rate limit fast. Probe fewer so free-tier Flash models answer without hitting Pro 429s.
     const paced = prov === 'mistral' || prov === 'openrouter';
-    const cap = paced ? 8 : PROBE_CAP;
+    const cap = paced ? 8 : (prov === 'gemini' ? 8 : PROBE_CAP);
     const batch = toProbe.slice(0, cap);
-    await mapLimit(batch, paced ? 1 : 6, async (m) => {
+    await mapLimit(batch, paced ? 1 : (prov === 'gemini' ? 3 : 6), async (m) => {
         m.availability = await probeAvailability(provider, m.id, apiKey);
     });
 
@@ -278,7 +279,8 @@ async function pingModel(provider: string, modelId: string, apiKey: string): Pro
     const first = await probeOnce(provider, modelId, apiKey);
     if (first !== 'dead') return first;
     // A paced provider already spent its budget. Do not spend it again.
-    if (provider.toLowerCase() === 'mistral' || provider.toLowerCase() === 'openrouter') return first;
+    const prov = provider.toLowerCase();
+    if (prov === 'mistral' || prov === 'openrouter' || prov === 'gemini') return first;
     return probeOnce(provider, modelId, apiKey);
 }
 
@@ -295,7 +297,7 @@ async function probeOnce(provider: string, modelId: string, apiKey: string): Pro
             modelName: modelId,
             prompt: 'Reply with the single word ok.',
             apiKey,
-            timeoutMs: 15000,
+            timeoutMs: 6000,
             role: 'catalog-probe',
             config: { maxTokens: 64, maxTokensCap: 64, groqMode: 'chat' }
         });

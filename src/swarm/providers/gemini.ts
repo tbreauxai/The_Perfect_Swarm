@@ -11,7 +11,8 @@ export class GeminiAdapter implements ProviderAdapter {
 
         if (!client && key) {
             client = new GoogleGenAI({
-                apiKey: key
+                apiKey: key,
+                httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
             });
         }
 
@@ -20,7 +21,13 @@ export class GeminiAdapter implements ProviderAdapter {
         }
 
         const reqConfig: any = { ...options.config };
-        reqConfig.maxOutputTokens = options.config?.maxTokens || 8192;
+        delete reqConfig.maxTokens;
+        delete reqConfig.maxTokensCap;
+        delete reqConfig.groqMode;
+        delete reqConfig.timeoutMs;
+        reqConfig.maxOutputTokens = options.role === 'catalog-probe'
+            ? Math.max(options.config?.maxTokens || 256, 256)
+            : (options.config?.maxTokens || 8192);
         if (options.systemInstruction) {
             reqConfig.systemInstruction = options.systemInstruction;
         }
@@ -77,7 +84,6 @@ export class GeminiAdapter implements ProviderAdapter {
                 }
             }
         } catch (error: any) {
-            console.error(`[GEMINI ERROR] ${new Date().toISOString()}\nModel: ${options.modelName}\nError: ${JSON.stringify(error, null, 2)}\nFull Error Object: ${error}`);
             const errStr = String(error?.message || error || '');
             if (
                 error?.status === 429 ||

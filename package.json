@@ -185,7 +185,7 @@
     }
   },
   "scripts": {
-    "dev": "tsx watch server.ts",
+    "dev": "tsx server.ts",
     "dev:edge": "npm run build && wrangler pages dev dist",
     "deploy": "npm run build && wrangler pages deploy dist",
     "build:client": "vite build",

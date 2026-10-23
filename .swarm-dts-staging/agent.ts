@@ -1,0 +1,406 @@
+import type { GoogleGenAI } from '@google/genai';
+import type { Provider, AgentRunConfig, ProviderCredential } from './types.js';
+import { SwarmContext } from './context.js';
+import { ProviderRegistry } from './providers/registry.js';
+import { sanitizeModelOutput } from './providers/adapter.js';
+import { SwarmTracer } from './profiler.js';
+import { globalLoadBalancer, type AdaptiveLoadBalancer } from './loadBalancer.js';
+import { globalProviderLimiter, estimateTokens, PROVIDER_CALL_TIMEOUT_MS, MAX_BUDGET_WAIT_MS } from './providers/limiter.js';
+import { isModelDead, DEFAULT_PROVIDER_MODELS } from './server/modelsProvider.js';
+import { groqPromptCharCap } from './providers/groq.js';
+import { globalPayloadCache, PayloadCache } from './cache.js';
+import { parseJsonSafe, guardManagerResponse, guardAnalystResponse } from './parser.js';
+import { ManagerResponseSchema, AnalystResponseSchema } from './schemas.js';
+
+export { DEFAULT_PROVIDER_MODELS } from './server/modelsProvider.js';
+
+/**
+ * Autonomous Swarm Agent decoupled from specific LLM provider implementations.
+ * Features:
+ * - Dynamic execution via ProviderRegistry adapters
+ * - Multi-provider failover cascades on free-tier rate limits (429), timeouts, and 5xx errors
+ * - Robust reasoning model sanitization (<think> tag stripping)
+ */
+export class Agent {
+    public role: string;
+    public modelName: string;
+    public provider: Provider;
+    public id?: string;
+    public maxTokens?: number;
+    private apiKey: string;
+    private aiClient?: GoogleGenAI;
+    private systemInstruction?: string;
+    private fallbacks: ProviderCredential[] = [];
+    private loadBalancer?: AdaptiveLoadBalancer;
+    /** PS3: when true, fallbacks run in the given order (manager chain) instead of load-balancer score order. */
+    public preserveFallbackOrder = false;
+    public disableFallback = false;
+
+    constructor(
+        role: string,
+        modelName: string,
+        provider: Provider,
+        apiKey: string,
+        aiClient?: GoogleGenAI,
+        fallbacks: ProviderCredential[] = [],
+        loadBalancer?: AdaptiveLoadBalancer,
+        id?: string,
+        maxTokens?: number
+    ) {
+        this.role = role;
+        this.modelName = modelName;
+        this.provider = provider;
+        this.apiKey = apiKey;
+        this.aiClient = aiClient;
+        this.fallbacks = [...fallbacks];
+        this.loadBalancer = loadBalancer;
+        this.id = id;
+        this.maxTokens = maxTokens;
+    }
+
+    setSystemInstruction(instruction: string): void {
+        this.systemInstruction = instruction;
+    }
+
+    getSystemInstruction(): string | undefined {
+        return this.systemInstruction;
+    }
+
+    setFallbacks(fallbacks: ProviderCredential[]): void {
+        this.fallbacks = [...fallbacks];
+    }
+
+    addFallback(fallback: ProviderCredential): void {
+        this.fallbacks.push(fallback);
+    }
+
+    getFallbacks(): ProviderCredential[] {
+        return [...this.fallbacks];
+    }
+
+    async run(prompt: string, context: SwarmContext, config?: AgentRunConfig): Promise<any> {
+        const startTime = Date.now();
+        const timeoutMs = config?.timeoutMs || PROVIDER_CALL_TIMEOUT_MS; // 25s per call (PS2), then next fallback
+
+        const lb = (config?.loadBalancer as AdaptiveLoadBalancer) || this.loadBalancer || globalLoadBalancer;
+        const candidateFallbacks = config?.fallbackProviders || this.fallbacks;
+        const sortedFallbacks = candidateFallbacks.length > 1 && !this.preserveFallbackOrder
+            ? [...candidateFallbacks].sort((a, b) => lb.calculateScore(b.provider) - lb.calculateScore(a.provider))
+            : candidateFallbacks;
+
+        const targetChain: ProviderCredential[] = [
+            { provider: this.provider, modelName: this.modelName, apiKey: this.apiKey, aiClient: this.aiClient },
+            ...sortedFallbacks
+        ];
+
+        context.addEvent({
+            agentRole: this.role,
+            action: 'Started execution',
+            modelName: `${this.provider} / ${this.modelName}`,
+            prompt
+        });
+
+        let lastError: any = null;
+        let lastFailedProvider = this.provider;
+        let lastFailedModel = this.modelName;
+
+        for (let targetIdx = 0; targetIdx < targetChain.length; targetIdx++) {
+            const currentTarget = targetChain[targetIdx];
+            const isFallback = targetIdx > 0;
+            const targetModel = currentTarget.modelName || (currentTarget.provider === this.provider ? this.modelName : (DEFAULT_PROVIDER_MODELS[currentTarget.provider] || this.modelName));
+            // A model the probe proved dead (404) is skipped, even if it is assigned
+            // to this seat. The probe never opens the seat circuit; seats read its mark.
+            if (isModelDead(String(currentTarget.provider), targetModel)) {
+                lastFailedProvider = String(currentTarget.provider);
+                lastFailedModel = targetModel;
+                lastError = new Error(`model marked dead by catalog probe`);
+                continue;
+            }
+            // Don't call a provider the limiter already knows will refuse. A circuit,
+            // a dead model, or a token budget that needs more than the wait cap is not
+            // an error worth logging: move to the next target.
+            const knownSkip = globalProviderLimiter.getSkipReason(String(currentTarget.provider), targetModel);
+            const promptCharCap = currentTarget.provider === 'groq' ? groqPromptCharCap(config?.groqMode) : prompt.length;
+            const estChars = Math.min(prompt.length, promptCharCap) + (this.systemInstruction?.length || 0);
+            const budgetWait = globalProviderLimiter.budgetWaitMs(String(currentTarget.provider), estimateTokens(estChars));
+            if (knownSkip || budgetWait > MAX_BUDGET_WAIT_MS) {
+                lastFailedProvider = String(currentTarget.provider);
+                lastFailedModel = targetModel;
+                lastError = new Error(knownSkip || `token budget needs ${Math.ceil(budgetWait)}ms`);
+                continue;
+            }
+            // Two attempts max: fail fast on free-tier stalls. Fatal (4xx) errors
+            // never recover by retrying; transient (429/5xx/timeout) errors either
+            // fail over immediately (when a backup exists) or get one quick retry.
+            // config.noRetry (startup benchmark): one attempt per target, so a 429 is never retried.
+            const maxRetries = config?.noRetry ? 1 : 2;
+
+            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
+                    const adapter = ProviderRegistry.get(currentTarget.provider);
+                    
+                    const roleLower = this.role.toLowerCase();
+                    const defaultRoleTokens = roleLower.includes('grader') ? 60
+                        : roleLower.includes('prompt generator') ? 300
+                        : roleLower.includes('manager') ? 2000
+                        : 1500;
+
+                    const effectiveConfig: AgentRunConfig = {
+                        ...config,
+                        maxTokens: config?.maxTokens ?? this.maxTokens ?? defaultRoleTokens
+                    };
+
+                    const cacheFingerprint = PayloadCache.computeFingerprint(
+                        `agent_run:${this.role}`,
+                        prompt,
+                        { model: currentTarget.modelName || this.modelName, maxTokens: effectiveConfig.maxTokens }
+                    );
+                    
+                    let textOutput: string;
+                    const cachedText = effectiveConfig.bypassCache ? null : globalPayloadCache.get<string>(cacheFingerprint);
+                    
+                    if (cachedText) {
+                        textOutput = cachedText;
+                        
+                        const cacheHitEvent = {
+                            agentRole: this.role,
+                            action: 'Cache Hit',
+                            modelName: `${currentTarget.provider} / ${currentTarget.modelName || this.modelName}`,
+                            prompt: `[CACHE HIT] ${prompt.substring(0, 100)}...`
+                        };
+                        context.addEvent(cacheHitEvent);
+                        SwarmTracer.getInstance().logEvent(cacheHitEvent);
+                    } else {
+                        const targetModel = currentTarget.modelName || (currentTarget.provider === this.provider ? this.modelName : (DEFAULT_PROVIDER_MODELS[currentTarget.provider] || this.modelName));
+                        // Budget estimate (chars/4) uses what the adapter will actually send: Groq caps the prompt by mode (chat 18k / morning 6k).
+                        const promptCharCap = currentTarget.provider === 'groq' ? groqPromptCharCap(effectiveConfig.groqMode) : prompt.length;
+                        const estChars = Math.min(prompt.length, promptCharCap) + (this.systemInstruction?.length || 0);
+                        textOutput = await globalProviderLimiter.run(
+                            { provider: String(currentTarget.provider), model: targetModel, estTokens: estimateTokens(estChars) },
+                            () => lb.executeWithTelemetry(
+                                currentTarget.provider,
+                                () => adapter.call({
+                                    modelName: targetModel,
+                                    prompt,
+                                    systemInstruction: this.systemInstruction,
+                                    apiKey: currentTarget.apiKey,
+                                    aiClient: currentTarget.aiClient || this.aiClient,
+                                    config: effectiveConfig,
+                                    timeoutMs,
+                                    role: this.role
+                                })
+                            )
+                        );
+                        globalPayloadCache.set(cacheFingerprint, textOutput);
+                    }
+
+                    const durationMs = Date.now() - startTime;
+                    let parsedOutput: any = textOutput;
+                    let validationSuccess = true;
+
+                    if (config?.responseMimeType === 'application/json' || config?.zodSchema) {
+                        if (textOutput.includes('```tool_call') || textOutput.includes('[TOOL_CALL') || textOutput.includes('[TOOL_EXECUTION')) {
+                            parsedOutput = textOutput;
+                        } else {
+                            parsedOutput = parseJsonSafe(textOutput);
+                            
+                            if (config?.zodSchema) {
+                                let parsed = config.zodSchema.safeParse(parsedOutput);
+                                if (!parsed.success) {
+                                    // Resilient schema repair before declaring validation failure
+                                    if (
+                                        config.zodSchema === ManagerResponseSchema ||
+                                        (parsedOutput && typeof parsedOutput === 'object' && ('components' in (parsedOutput as any) || 'ui_title' in (parsedOutput as any)))
+                                    ) {
+                                        try {
+                                            const repaired = guardManagerResponse(parsedOutput);
+                                            parsed = config.zodSchema.safeParse(repaired);
+                                        } catch {
+                                            // Fall through to error reporting
+                                        }
+                                    } else if (
+                                        config.zodSchema === AnalystResponseSchema ||
+                                        (parsedOutput && typeof parsedOutput === 'object' && ('insights' in (parsedOutput as any) || 'anomalies' in (parsedOutput as any) || 'findings' in (parsedOutput as any)))
+                                    ) {
+                                        try {
+                                            const repaired = guardAnalystResponse(parsedOutput, this.role);
+                                            parsed = config.zodSchema.safeParse(repaired);
+                                        } catch {
+                                            // Fall through to error reporting
+                                        }
+                                    }
+                                }
+
+                                if (!parsed.success) {
+                                    const errors = parsed.error.issues.map((i: any) => `${i.path.join('.')}: ${i.message}`).join(', ');
+                                    validationSuccess = false;
+                                    
+                                    // Tracing the validation error
+                                    const valErrorEvent = {
+                                        agentRole: this.role,
+                                        action: 'Schema Validation Failed',
+                                        modelName: `${currentTarget.provider} / ${currentTarget.modelName || this.modelName}`,
+                                        prompt,
+                                        error: `Zod Error: ${errors}`
+                                    };
+                                    context.addEvent(valErrorEvent);
+                                    SwarmTracer.getInstance().logEvent(valErrorEvent);
+
+                                    throw new Error(`SCHEMA_VALIDATION_FAILED: ${errors}`);
+                                } else {
+                                    parsedOutput = parsed.data;
+                                }
+                            }
+                        }
+                    }
+
+                    const eventBase = {
+                        agentRole: this.role,
+                        action: isFallback ? `Completed execution via failover (${currentTarget.provider})` : 'Completed execution',
+                        modelName: `${currentTarget.provider} / ${currentTarget.modelName || this.modelName}`,
+                        prompt,
+                        output: parsedOutput,
+                        durationMs
+                    };
+                    context.addEvent(eventBase);
+                    SwarmTracer.getInstance().logEvent(eventBase);
+
+                    return parsedOutput;
+                } catch (err: any) {
+                    lastError = err;
+                    lastFailedProvider = currentTarget.provider;
+                    lastFailedModel = currentTarget.modelName || this.modelName;
+                    const errMsg = err?.message || String(err);
+                    const errLower = errMsg.toLowerCase();
+                    console.warn(`[${this.role}][${currentTarget.provider}] Attempt ${attempt}/${maxRetries} failed:`, errMsg);
+
+                    // Auto-correction for schema failures (retry same provider once)
+                    if (errMsg.includes('SCHEMA_VALIDATION_FAILED') && attempt < maxRetries) {
+                        prompt = `${prompt}\n\n[SYSTEM: Your previous response failed schema validation. Please correct the following errors and output STRICT JSON only: ${errMsg}]`;
+                        continue;
+                    }
+
+                    const errorEvent = {
+                        agentRole: this.role,
+                        action: `Provider Failover Triggered`,
+                        modelName: `${currentTarget.provider} / ${currentTarget.modelName || this.modelName}`,
+                        prompt,
+                        error: errMsg
+                    };
+                    context.addEvent(errorEvent);
+                    SwarmTracer.getInstance().logEvent(errorEvent);
+
+                    const isLimiterSkip = errMsg.includes('[LIMITER_SKIP]');
+                    const isRateLimit429 =
+                        errMsg.includes('429') ||
+                        errMsg.includes('RATE_LIMIT') ||
+                        errLower.includes('rate limit') ||
+                        errLower.includes('quota') ||
+                        errMsg.includes('RESOURCE_EXHAUSTED');
+
+                    const isTransientRateLimitOrSkip = isRateLimit429 || isLimiterSkip;
+
+                    const effectiveDisableFallback = Boolean(
+                        this.disableFallback ||
+                        config?.disableFallback ||
+                        (config as any)?.disableFallback
+                    );
+
+                    // Never disable provider fallbacks on transient rate limits (429) or limiter skips even if disableFallback is toggled
+                    if (effectiveDisableFallback && !isTransientRateLimitOrSkip) {
+                        targetIdx = targetChain.length;
+                        break;
+                    }
+
+                    const isQuotaExhausted =
+                        errMsg.includes('RESOURCE_EXHAUSTED') ||
+                        errLower.includes('quota') ||
+                        (errMsg.includes('429') && errLower.includes('quota'));
+
+                    const isFailoverEligible = 
+                        isTransientRateLimitOrSkip ||
+                        errMsg.includes('503') ||
+                        errMsg.includes('502') ||
+                        errMsg.includes('504') ||
+                        errMsg.includes('500') ||
+                        errMsg.includes('SERVER_ERROR') ||
+                        errMsg.includes('401') ||
+                        errMsg.includes('402') ||
+                        errMsg.includes('403') ||
+                        errMsg.includes('model_decommissioned') ||
+                        errLower.includes('timeout') ||
+                        errLower.includes('timed out') || // provider adapters emit "[TIMEOUT] ... timed out after Nms"
+                        errLower.includes('high traffic') ||
+                        errLower.includes('overloaded') ||
+                        errLower.includes('unavailable') ||
+                        errLower.includes('capacity');
+
+                    const isFatal = 
+                        errMsg.includes('404') || 
+                        errMsg.includes('NOT_FOUND') ||
+                        errMsg.includes('400') ||
+                        errMsg.includes('401') ||
+                        errMsg.includes('402') ||
+                        errMsg.includes('403') ||
+                        errMsg.includes('model_decommissioned') ||
+                        errLower.includes('api key not valid') ||
+                        errLower.includes('invalid api key') ||
+                        errLower.includes('not found') ||
+                        errLower.includes('does not exist') ||
+                        errLower.includes('unsupported model');
+
+                    const hasNextProvider = targetIdx < targetChain.length - 1;
+
+                    if ((isFatal || isLimiterSkip) && !hasNextProvider) {
+                        break; // Fatal error (like model not found) or limiter skip: retrying the same target cannot help
+                    }
+
+                    // If eligible for failover and a backup provider is ready, failover immediately without waiting
+                    if ((isFailoverEligible || isFatal || isTransientRateLimitOrSkip) && hasNextProvider) {
+                        const nextTarget = targetChain[targetIdx + 1];
+                        context.addEvent({
+                            agentRole: this.role,
+                            action: 'Provider Failover Triggered',
+                            modelName: `${currentTarget.provider} -> ${nextTarget.provider}`,
+                            prompt: `Cascading to backup provider due to error: ${errMsg}`,
+                            output: {
+                                failedProvider: currentTarget.provider,
+                                fallbackProvider: nextTarget.provider,
+                                reason: errMsg
+                            },
+                            failover: {
+                                fromProvider: String(currentTarget.provider),
+                                toProvider: String(nextTarget.provider),
+                                reason: errMsg
+                            }
+                        });
+                        break; // Exit retry loop to advance to next target in chain
+                    }
+
+                    // Quota exhaustion won't recover in seconds — surface immediately if no fallback
+                    if (isQuotaExhausted && !hasNextProvider) {
+                        break;
+                    }
+
+                    if (attempt < maxRetries) {
+                        await new Promise(resolve => setTimeout(resolve, 2000 * Math.pow(2, attempt - 1)));
+                    }
+                }
+            }
+        }
+
+        const durationMs = Date.now() - startTime;
+        const errorEvent = {
+            agentRole: this.role,
+            action: 'Failed execution',
+            modelName: `${lastFailedProvider} / ${lastFailedModel}`,
+            prompt,
+            error: lastError?.stack || lastError?.message || String(lastError),
+            durationMs
+        };
+        context.addEvent(errorEvent);
+        SwarmTracer.getInstance().logEvent(errorEvent);
+
+        throw lastError;
+    }
+}
