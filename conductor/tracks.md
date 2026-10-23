@@ -16,6 +16,5 @@
 - ~~[x] **Track: Large Data Scale Audit & Swarm Resilience Hardening**~~ *Link: [./archive/large_data_scale_20261023/index.md](./archive/large_data_scale_20261023/index.md)*
 
 ---
-- [ ] **Track: Memory Cortex & Storage Backend Decomposition**
-  *Link: [./tracks/memory_cortex_modularization_20261023/index.md](./tracks/memory_cortex_modularization_20261023/index.md)*
+- ~~[x] **Track: Memory Cortex & Storage Backend Decomposition**~~ *Link: [./archive/memory_cortex_modularization_20261023/index.md](./archive/memory_cortex_modularization_20261023/index.md)*
 
