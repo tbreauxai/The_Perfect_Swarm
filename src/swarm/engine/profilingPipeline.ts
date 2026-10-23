@@ -1,4 +1,12 @@
-import { profileData, createTokenChunks, type DataProfile } from '../profiler.ts';
+import {
+    profileData,
+    createTokenChunks,
+    sketchDataset,
+    planAdaptiveProviderShards,
+    type DataProfile,
+    type DatasetSketch,
+    type AdaptiveShardPlan
+} from '../profiler.ts';
 import {
     globalDomainPreFilter,
     globalTokenWeightProfiler,
@@ -8,6 +16,7 @@ import {
 import { globalTaskDecomposer, type TaskDecompositionPlan } from '../coordination.ts';
 import { SwarmContext } from '../context.ts';
 import { Agent } from '../agent.ts';
+import { runDeterministicMathGrounding, type QuantitativeGroundingReport } from './mathGrounding.ts';
 
 export interface ProfilingPipelineParams {
     task: string;
@@ -31,10 +40,14 @@ export interface ProfilingPipelineResult {
     maxTokensPerChunk: number;
     totalTokens: number;
     warning?: string;
+    datasetSketch?: DatasetSketch;
+    adaptiveShardPlan?: AdaptiveShardPlan;
+    mathGroundingReport?: QuantitativeGroundingReport;
 }
 
 /**
- * Modular data profiling, pre-filtering, token budgeting, and task decomposition pipeline.
+ * Modular data profiling, pre-filtering, columnar sketching, provider-aware sharding,
+ * deterministic math grounding, token budgeting, and task decomposition pipeline.
  */
 export function runDataProfilingPipeline(params: ProfilingPipelineParams): ProfilingPipelineResult {
     const { task, data, analysts, settings, optimizationEnabled, coordinationEnabled, context } = params;
@@ -85,7 +98,57 @@ export function runDataProfilingPipeline(params: ProfilingPipelineParams): Profi
         });
     }
 
-    // 2. Hierarchical Task Decomposition
+    // 2. Columnar Pre-Aggregation Sketching & Anomaly Extraction
+    const enableSketch = optSettings?.enablePreAggregationSketch !== false && Boolean(rawInput && rawInput.trim().length > 120);
+    let datasetSketch: DatasetSketch | undefined;
+    if (enableSketch) {
+        const sketchStart = Date.now();
+        datasetSketch = sketchDataset(rawInput);
+        if (datasetSketch.totalRows >= 3) {
+            context.addEvent({
+                agentRole: 'System Profiler',
+                action: 'Columnar Data Sketch & Anomaly Extraction',
+                modelName: 'Local/ColumnarSketcher',
+                prompt: `Sketched ${datasetSketch.totalRows.toLocaleString()} rows × ${datasetSketch.columnCount} columns (${datasetSketch.format}) — extracted ${datasetSketch.anomalyRows.length} outlier row(s) and saved ~${datasetSketch.tokensSaved.toLocaleString()} tokens (${Math.round(datasetSketch.compressionRatio * 100)}% compression)`,
+                output: {
+                    format: datasetSketch.format,
+                    totalRows: datasetSketch.totalRows,
+                    columnCount: datasetSketch.columnCount,
+                    originalTokens: datasetSketch.originalTokens,
+                    sketchTokens: datasetSketch.sketchTokens,
+                    tokensSaved: datasetSketch.tokensSaved,
+                    compressionRatio: datasetSketch.compressionRatio,
+                    columns: datasetSketch.columns,
+                    correlations: datasetSketch.correlations,
+                    anomalyRows: datasetSketch.anomalyRows
+                },
+                durationMs: Date.now() - sketchStart
+            });
+        }
+    }
+
+    // 3. Pre-Execution Deterministic Math & Forecasting Grounding
+    const enableMathGrounding = optSettings?.enableMathGrounding !== false;
+    let mathGroundingReport: QuantitativeGroundingReport | undefined;
+    if (enableMathGrounding && (rawInput || task)) {
+        mathGroundingReport = runDeterministicMathGrounding(task, rawInput, datasetSketch);
+        if (mathGroundingReport.seriesAnchors.length > 0 || mathGroundingReport.oddsAnchors.length > 0) {
+            context.addEvent({
+                agentRole: 'Quantitative Grounding Engine',
+                action: 'Deterministic Math & Forecast Grounding',
+                modelName: 'Local/ForecastingSuite',
+                prompt: `Computed deterministic math anchors for ${mathGroundingReport.seriesAnchors.length} numeric series and ${mathGroundingReport.oddsAnchors.length} market odds reference(s)`,
+                output: {
+                    seriesAnchors: mathGroundingReport.seriesAnchors,
+                    oddsAnchors: mathGroundingReport.oddsAnchors,
+                    processingTimeMs: mathGroundingReport.processingTimeMs
+                },
+                durationMs: mathGroundingReport.processingTimeMs
+            });
+        }
+    }
+
+    // 4. Hierarchical Task Decomposition
     let workflowDecompositionPlan: TaskDecompositionPlan | undefined;
     if (coordinationEnabled && coordinationSettings?.hierarchicalDecomposition !== false) {
         const specialistRoles = analysts.map(a => a.role);
@@ -106,14 +169,40 @@ export function runDataProfilingPipeline(params: ProfilingPipelineParams): Profi
         });
     }
 
-    // 3. Token Budgeting & Batch Planning
-    const { chunks, originalChunkCount, maxTokensPerChunk, totalTokens, warning } = createTokenChunks(rawInput);
+    // 5. Token Budgeting & Provider-Aware Adaptive Sharding
+    const { chunks: rawChunks, originalChunkCount, maxTokensPerChunk, totalTokens, warning } = createTokenChunks(rawInput);
+
+    const enableProviderSharding = optSettings?.enableProviderSharding === true;
+    const adaptiveShardPlan = planAdaptiveProviderShards({
+        rawInput,
+        chunks: rawChunks,
+        sketch: datasetSketch,
+        analysts: analysts.map(a => ({ id: (a as any).id, role: a.role, provider: a.provider })),
+        enablePreAggregationSketch: optSettings?.enablePreAggregationSketch === true,
+        enableProviderSharding
+    });
+
+    const effectiveChunks = (optSettings?.enablePreAggregationSketch === true || enableProviderSharding)
+        ? adaptiveShardPlan.shards
+        : rawChunks;
+
     context.addEvent({
         agentRole: 'System Profiler',
         action: 'Token Budgeting',
         modelName: 'Local/TypeScript',
-        prompt: `Data exceeds single-pass threshold? ${chunks.length > 1 ? 'Yes' : 'No'}`,
-        output: { chunks: chunks.length, originalChunks: originalChunkCount, maxTokensPerChunk, totalTokens, warning },
+        prompt: `Data exceeds single-pass threshold? ${effectiveChunks.length > 1 ? 'Yes' : 'No'}`,
+        output: {
+            chunks: effectiveChunks.length,
+            originalChunks: originalChunkCount,
+            maxTokensPerChunk,
+            totalTokens,
+            warning,
+            adaptiveSharding: {
+                sketchUsed: adaptiveShardPlan.sketchUsed,
+                tokensSavedBySketching: adaptiveShardPlan.tokensSavedBySketching,
+                seatAllocations: adaptiveShardPlan.seatAllocations
+            }
+        },
         durationMs: 0
     });
 
@@ -124,10 +213,13 @@ export function runDataProfilingPipeline(params: ProfilingPipelineParams): Profi
         profile,
         tokenWeightReport,
         workflowDecompositionPlan,
-        chunks,
+        chunks: effectiveChunks,
         originalChunkCount,
         maxTokensPerChunk,
         totalTokens,
-        warning
+        warning,
+        datasetSketch,
+        adaptiveShardPlan,
+        mathGroundingReport
     };
 }

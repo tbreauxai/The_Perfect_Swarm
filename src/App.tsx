@@ -61,6 +61,38 @@ export default function App() {
     runSwarm(task, data, settings);
   };
 
+  const handleLoadSampleDataset = () => {
+    const sampleRows = [
+      'week,region,revenue_usd,latency_p99_ms,churn_rate,conversion_prob',
+      '2026-W01,NA-East,142500,118,0.021,0.142',
+      '2026-W02,NA-East,146800,121,0.020,0.145',
+      '2026-W03,NA-East,151200,119,0.019,0.149',
+      '2026-W04,NA-East,155900,124,0.020,0.152',
+      '2026-W05,NA-East,160400,122,0.018,0.156',
+      '2026-W06,NA-East,164100,125,0.019,0.158',
+      '2026-W07,NA-East,169300,120,0.017,0.163',
+      '2026-W08,NA-East,174800,489,0.068,0.091',
+      '2026-W09,NA-East,178200,123,0.018,0.166',
+      '2026-W10,NA-East,183600,119,0.017,0.171',
+      '2026-W11,NA-East,189100,121,0.016,0.175',
+      '2026-W12,NA-East,194500,118,0.016,0.179',
+      '2026-W13,NA-East,199800,120,0.015,0.183',
+      '2026-W14,NA-East,205400,117,0.015,0.188',
+      '2026-W15,NA-East,211000,119,0.014,0.192',
+      '2026-W16,NA-East,216900,116,0.014,0.196',
+    ].join('\n');
+    setData(sampleRows);
+    setTask('Forecast revenue_usd for the next 3 weeks, isolate the W08 latency/churn anomaly row, and estimate probability of exceeding $230k revenue.');
+    updateSetting('optimizationSettings', {
+      ...(settings.optimizationSettings || {}),
+      enablePreAggregationSketch: true,
+      enableProviderSharding: true,
+      enableMathGrounding: true,
+    });
+  };
+
+  const optSettings = settings.optimizationSettings || {};
+
   return (
     <div className="min-h-screen bg-neutral-50 text-neutral-900 p-8 font-sans">
       <div className="max-w-6xl mx-auto space-y-8">
@@ -89,10 +121,19 @@ export default function App() {
           {/* Left Column: Input Form */}
           <div className="lg:col-span-4 space-y-6">
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-neutral-200 sticky top-8">
-              <h2 className="text-xl font-medium mb-4 flex items-center gap-2">
-                <FileText className="w-5 h-5 text-neutral-500" />
-                Input Data & Task
-              </h2>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-medium flex items-center gap-2">
+                  <FileText className="w-5 h-5 text-neutral-500" />
+                  Input Data & Task
+                </h2>
+                <button
+                  type="button"
+                  onClick={handleLoadSampleDataset}
+                  className="text-xs font-medium text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-2.5 py-1 rounded-lg transition-colors"
+                >
+                  Load Quant Sample
+                </button>
+              </div>
 
               <div className="space-y-4">
                 <div>
@@ -100,7 +141,7 @@ export default function App() {
                     <label className="block text-sm font-medium text-neutral-700">
                       Raw Data
                     </label>
-                    <span className={`text-xs ${isDataOverLimit ? 'text-red-600 font-semibold' : 'text-neutral-500'}`}>
+                    <span className={`text-xs font-mono tabular-nums ${isDataOverLimit ? 'text-red-600 font-semibold' : 'text-neutral-500'}`}>
                       {`${data.length.toLocaleString()} / ${MAX_DATA_CHARS.toLocaleString()}`}
                     </span>
                   </div>
@@ -121,7 +162,7 @@ export default function App() {
                     <label className="block text-sm font-medium text-neutral-700">
                       Objective / Task
                     </label>
-                    <span className={`text-xs ${isTaskOverLimit ? 'text-red-600 font-semibold' : 'text-neutral-500'}`}>
+                    <span className={`text-xs font-mono tabular-nums ${isTaskOverLimit ? 'text-red-600 font-semibold' : 'text-neutral-500'}`}>
                       {`${task.length.toLocaleString()} / ${MAX_TASK_CHARS.toLocaleString()}`}
                     </span>
                   </div>
@@ -136,6 +177,51 @@ export default function App() {
                     value={task}
                     onChange={(e) => setTask(e.target.value)}
                   />
+                </div>
+
+                {/* Large-Data & Quantitative Pipeline Controls */}
+                <div className="pt-2 border-t border-neutral-100 space-y-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-neutral-500 block">
+                    Ingestion & Intelligence Pipeline
+                  </span>
+                  <div className="grid grid-cols-1 gap-1.5 text-xs">
+                    <label className="flex items-center justify-between py-1 px-2 rounded-lg hover:bg-neutral-50 cursor-pointer">
+                      <span className="text-neutral-700">Pre-Aggregation Columnar Sketch</span>
+                      <input
+                        type="checkbox"
+                        className="h-3.5 w-3.5 accent-indigo-600 rounded"
+                        checked={optSettings.enablePreAggregationSketch ?? false}
+                        onChange={(e) => updateSetting('optimizationSettings', {
+                          ...optSettings,
+                          enablePreAggregationSketch: e.target.checked
+                        })}
+                      />
+                    </label>
+                    <label className="flex items-center justify-between py-1 px-2 rounded-lg hover:bg-neutral-50 cursor-pointer">
+                      <span className="text-neutral-700">Provider-Aware Adaptive Shards</span>
+                      <input
+                        type="checkbox"
+                        className="h-3.5 w-3.5 accent-indigo-600 rounded"
+                        checked={optSettings.enableProviderSharding ?? false}
+                        onChange={(e) => updateSetting('optimizationSettings', {
+                          ...optSettings,
+                          enableProviderSharding: e.target.checked
+                        })}
+                      />
+                    </label>
+                    <label className="flex items-center justify-between py-1 px-2 rounded-lg hover:bg-neutral-50 cursor-pointer">
+                      <span className="text-neutral-700">Deterministic Math & Forecast Grounding</span>
+                      <input
+                        type="checkbox"
+                        className="h-3.5 w-3.5 accent-indigo-600 rounded"
+                        checked={optSettings.enableMathGrounding !== false}
+                        onChange={(e) => updateSetting('optimizationSettings', {
+                          ...optSettings,
+                          enableMathGrounding: e.target.checked
+                        })}
+                      />
+                    </label>
+                  </div>
                 </div>
 
                 {isOverLimit && (
@@ -256,6 +342,7 @@ export default function App() {
                       finalAnalysis={finalAnalysis}
                       interimDigests={progressiveStage?.digests}
                       isSynthesizing={loading && progressiveStage?.stage === 'manager_synthesis'}
+                      events={events}
                     />
                   </div>
                 ) : loading ? (

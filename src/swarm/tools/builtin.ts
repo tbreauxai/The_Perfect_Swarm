@@ -4,12 +4,19 @@ import { statsSummaryTool, varianceTool, standardDeviationTool, probabilityTool,
 import { regexMatchTool, computeLevenshteinDistance, stringSimilarityTool } from './stringTools.ts';
 import { extractJsonPath, jsonExtractTool, dataFilterTool } from './dataTools.ts';
 import { dateMathTool } from './dateTools.ts';
+import {
+    holtWintersForecastTool,
+    autocorrelationRegimeTool,
+    kellyEdgeSizerTool,
+    monteCarloBootstrapTool
+} from './forecastingTools.ts';
 
 export * from './mathTools.ts';
 export * from './statsTools.ts';
 export * from './stringTools.ts';
 export * from './dataTools.ts';
 export * from './dateTools.ts';
+export * from './forecastingTools.ts';
 
 export const standardBuiltinTools: SwarmTool[] = [
     calculatorTool,
@@ -22,5 +29,9 @@ export const standardBuiltinTools: SwarmTool[] = [
     varianceTool,
     standardDeviationTool,
     probabilityTool,
-    trendSlopeTool
+    trendSlopeTool,
+    holtWintersForecastTool,
+    autocorrelationRegimeTool,
+    kellyEdgeSizerTool,
+    monteCarloBootstrapTool
 ];

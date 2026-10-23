@@ -1,20 +1,88 @@
 import React from 'react';
 import { BarChart, Layers, ShieldAlert, CheckCircle2, Loader2 } from 'lucide-react';
 import { ComponentRegistry } from './generative/ComponentRegistry';
+import type { SwarmTimelineEvent } from './SwarmEventTimeline';
 
 interface AnalysisViewerProps {
     finalAnalysis: any;
     interimDigests?: Record<string, any> | null;
     isSynthesizing?: boolean;
+    events?: SwarmTimelineEvent[];
 }
 
-export const AnalysisViewer: React.FC<AnalysisViewerProps> = ({ finalAnalysis, interimDigests, isSynthesizing }) => {
-    if (!finalAnalysis && (!interimDigests || Object.keys(interimDigests).length === 0)) {
+export const AnalysisViewer: React.FC<AnalysisViewerProps> = ({ finalAnalysis, interimDigests, isSynthesizing, events = [] }) => {
+    const sketchEvent = events.find(e => e.action === 'Columnar Data Sketch & Anomaly Extraction');
+    const mathEvent = events.find(e => e.action === 'Deterministic Math & Forecast Grounding');
+    const consensusEvent = events.find(e => e.action === 'Cross-Analyst Consensus Synthesized');
+
+    if (!finalAnalysis && (!interimDigests || Object.keys(interimDigests).length === 0) && !sketchEvent && !mathEvent && !consensusEvent) {
         return null;
     }
 
     return (
         <div className="mt-8 pt-6 border-t border-neutral-200 space-y-6">
+            {/* Quantitative Ingestion & Ensemble Telemetry Strip */}
+            {(sketchEvent?.output || mathEvent?.output || consensusEvent?.output) && (
+                <div className="border border-neutral-200 rounded-xl p-4 bg-neutral-50/60 space-y-3">
+                    <div className="flex items-center justify-between border-b border-neutral-200/80 pb-2">
+                        <span className="text-xs font-semibold uppercase tracking-wider text-neutral-700">
+                            Quantitative Grounding & Ensemble Telemetry
+                        </span>
+                        {consensusEvent?.output?.agreementLevel && (
+                            <span className="text-xs font-mono tabular-nums text-neutral-600">
+                                Agreement: <strong className="uppercase text-neutral-900">{consensusEvent.output.agreementLevel}</strong>
+                            </span>
+                        )}
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 font-mono tabular-nums">
+                        {sketchEvent?.output && (
+                            <div>
+                                <span className="text-[10px] font-sans uppercase tracking-wider text-neutral-500 block">Sketch Compression</span>
+                                <span className="text-sm font-bold text-teal-700">
+                                    {Math.round((sketchEvent.output.compressionRatio || 0) * 100)}% saved
+                                </span>
+                                <span className="text-[11px] text-neutral-500 block">
+                                    {sketchEvent.output.totalRows?.toLocaleString()} rows • {sketchEvent.output.anomalyRows?.length ?? sketchEvent.output.anomalyCount ?? 0} outliers
+                                </span>
+                            </div>
+                        )}
+                        {mathEvent?.output && (
+                            <div>
+                                <span className="text-[10px] font-sans uppercase tracking-wider text-neutral-500 block">Math Grounding</span>
+                                <span className="text-sm font-bold text-indigo-700">
+                                    {mathEvent.output.seriesAnchors?.length ?? 0} series anchored
+                                </span>
+                                <span className="text-[11px] text-neutral-500 block">
+                                    {mathEvent.output.seriesAnchors?.[0] ? `Next Est: ${mathEvent.output.seriesAnchors[0].forecastNext3?.[0]}` : `${mathEvent.output.processingTimeMs ?? 0}ms`}
+                                </span>
+                            </div>
+                        )}
+                        {consensusEvent?.output && (
+                            <div>
+                                <span className="text-[10px] font-sans uppercase tracking-wider text-neutral-500 block">Evidence Consensus</span>
+                                <span className="text-sm font-bold text-neutral-900">
+                                    {Math.round(((consensusEvent.output.evidenceWeightedScore ?? consensusEvent.output.consensusScore) || 0) * 100)}%
+                                </span>
+                                <span className="text-[11px] text-neutral-500 block">
+                                    {consensusEvent.output.verifiedCitationsCount ?? 0} verified citations
+                                </span>
+                            </div>
+                        )}
+                        {consensusEvent?.output?.calibratedEnsemble?.pooledProbability !== undefined && (
+                            <div>
+                                <span className="text-[10px] font-sans uppercase tracking-wider text-neutral-500 block">Log-Odds Pool</span>
+                                <span className="text-sm font-bold text-amber-800">
+                                    {(consensusEvent.output.calibratedEnsemble.pooledProbability * 100).toFixed(1)}%
+                                </span>
+                                <span className="text-[11px] text-neutral-500 block">
+                                    95% CI [{Math.round((consensusEvent.output.calibratedEnsemble.confidenceInterval95?.[0] || 0) * 100)}%, {Math.round((consensusEvent.output.calibratedEnsemble.confidenceInterval95?.[1] || 0) * 100)}%]
+                                </span>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+
             {/* Interim Progressive Cluster Digest View during Manager Synthesis */}
             {!finalAnalysis && interimDigests && Object.keys(interimDigests).length > 0 && (
                 <div className="bg-indigo-50/50 border border-indigo-100 rounded-2xl p-5 space-y-4">
@@ -44,7 +112,7 @@ export const AnalysisViewer: React.FC<AnalysisViewerProps> = ({ finalAnalysis, i
                                         {clusterId}
                                     </span>
                                     {typeof digest.tokenReductionRatio === 'number' && digest.tokenReductionRatio > 0 && (
-                                        <span className="text-[11px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
+                                        <span className="text-[11px] font-mono tabular-nums font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
                                             {Math.round(digest.tokenReductionRatio * 100)}% token reduction
                                         </span>
                                     )}
@@ -125,3 +193,4 @@ export const AnalysisViewer: React.FC<AnalysisViewerProps> = ({ finalAnalysis, i
         </div>
     );
 };
+

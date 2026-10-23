@@ -8,16 +8,27 @@
 
 import type { Agent } from '../agent.ts';
 import type { SwarmContext } from '../context.ts';
+import {
+    computeCalibratedEnsemble,
+    countVerifiedCitations,
+    type CalibratedEnsembleDigest
+} from './predictionEnsemble.ts';
+
+export type { CalibratedEnsembleDigest };
 
 export interface AnalystConsensusDigest {
     totalAnalysts: number;
     consensusScore: number; // 0.0 to 1.0 (mean agreement ratio)
+    evidenceWeightedScore?: number; // 0.0 to 1.0 (weighted by verified citations & Brier skill)
     agreementLevel: 'strong' | 'moderate' | 'divergent';
     majorityFindings: string[]; // Findings supported by >= 50% of analysts
     dissentingOpinions: string[]; // High-signal findings flagged by only 1 analyst
     unanimousFindings: string[]; // Findings supported by 100% of analysts
     confidenceScore: number; // 0.0 to 1.0
     summaryText: string;
+    verifiedCitationsCount?: number;
+    citationCountsBySeat?: Record<string, number>;
+    calibratedEnsemble?: CalibratedEnsembleDigest;
 }
 
 const STOP_WORDS = new Set([
@@ -105,7 +116,8 @@ export function extractAnalystInsights(reports: any[]): string[] {
 }
 
 /**
- * Analyzes specialist reports across all analysts and computes consensus, majority agreements, and dissenting observations.
+ * Analyzes specialist reports across all analysts and computes consensus, majority agreements,
+ * dissenting observations, evidence citation weights, and Brier-calibrated log-odds ensemble pooling.
  */
 export function extractAnalystConsensus(
     allAnalystReports: any[][],
@@ -117,13 +129,22 @@ export function extractAnalystConsensus(
         return {
             totalAnalysts: 0,
             consensusScore: 1.0,
+            evidenceWeightedScore: 1.0,
             agreementLevel: 'strong',
             majorityFindings: [],
             dissentingOpinions: [],
             unanimousFindings: [],
             confidenceScore: 0.5,
-            summaryText: 'No active analyst reports available for consensus synthesis.'
+            summaryText: 'No active analyst reports available for consensus synthesis.',
+            verifiedCitationsCount: 0,
+            citationCountsBySeat: {}
         };
+    }
+
+    const calibratedEnsemble = computeCalibratedEnsemble(allAnalystReports, analysts);
+    const citationCountsBySeat: Record<string, number> = {};
+    for (const sw of calibratedEnsemble.seatWeights) {
+        citationCountsBySeat[sw.seatRole] = sw.verifiedCitationsCount;
     }
 
     if (activeAnalystCount === 1) {
@@ -131,12 +152,16 @@ export function extractAnalystConsensus(
         return {
             totalAnalysts: 1,
             consensusScore: 1.0,
+            evidenceWeightedScore: 1.0,
             agreementLevel: 'strong',
             majorityFindings: singleInsights.slice(0, 5),
             dissentingOpinions: [],
             unanimousFindings: singleInsights.slice(0, 5),
             confidenceScore: 0.85,
-            summaryText: `Single specialist analysis [${analysts[0]?.role}]: ${singleInsights.length} findings extracted.`
+            summaryText: `Single specialist analysis [${analysts[0]?.role}]: ${singleInsights.length} findings extracted.`,
+            verifiedCitationsCount: calibratedEnsemble.totalVerifiedCitations,
+            citationCountsBySeat,
+            calibratedEnsemble
         };
     }
 
@@ -146,6 +171,7 @@ export function extractAnalystConsensus(
         insights: string[];
         tokenSets: Set<string>[];
         combinedTokens: Set<string>;
+        citations: number;
     }> = [];
 
     for (let i = 0; i < activeAnalystCount; i++) {
@@ -156,11 +182,13 @@ export function extractAnalystConsensus(
         for (const set of tokenSets) {
             for (const t of set) combinedTokens.add(t);
         }
+        const citations = (allAnalystReports[i] || []).reduce((acc, r) => acc + countVerifiedCitations(r), 0);
         perAnalystData.push({
             role,
             insights: rawInsights,
             tokenSets,
-            combinedTokens
+            combinedTokens,
+            citations
         });
     }
 
@@ -208,23 +236,27 @@ export function extractAnalystConsensus(
 
     const rawPairwiseScore = pairCount > 0 ? totalPairwiseSim / pairCount : 0.5;
 
-    // 2. Map Insight Overlap & Support Frequency
+    // 2. Map Insight Overlap & Citation-Weighted Support Frequency
     const allIndividualInsights: Array<{
         text: string;
         sourceRole: string;
         tokens: Set<string>;
         supportCount: number;
         supportingRoles: Set<string>;
+        evidenceBonus: number;
     }> = [];
 
     for (const data of perAnalystData) {
         for (let k = 0; k < data.insights.length; k++) {
+            const insightText = data.insights[k];
+            const itemCitations = countVerifiedCitations(insightText);
             allIndividualInsights.push({
-                text: data.insights[k],
+                text: insightText,
                 sourceRole: data.role,
                 tokens: data.tokenSets[k],
                 supportCount: 1,
-                supportingRoles: new Set([data.role])
+                supportingRoles: new Set([data.role]),
+                evidenceBonus: itemCitations * 0.25
             });
         }
     }
@@ -265,8 +297,8 @@ export function extractAnalystConsensus(
         return true;
     };
 
-    // Sort insights by support count descending
-    allIndividualInsights.sort((x, y) => y.supportCount - x.supportCount);
+    // Sort insights by support count + evidence citation bonus descending
+    allIndividualInsights.sort((x, y) => (y.supportCount + y.evidenceBonus) - (x.supportCount + x.evidenceBonus));
 
     const majorityThreshold = Math.ceil(activeAnalystCount / 2);
 
@@ -294,7 +326,8 @@ export function extractAnalystConsensus(
                                  lower.includes('discrepancy') ||
                                  lower.includes('spike') ||
                                  lower.includes('variance') ||
-                                 lower.includes('unexpected');
+                                 lower.includes('unexpected') ||
+                                 /\br\d+\b/i.test(clean);
 
             if (isHighSignal && isDistinctFromAccepted(clean, dissentingOpinions)) {
                 dissentingOpinions.push(`[${item.sourceRole}]: ${clean}`);
@@ -303,7 +336,7 @@ export function extractAnalystConsensus(
         }
     }
 
-    // 3. Compute Final Calibrated Consensus & Confidence Scores
+    // 3. Compute Final Calibrated Consensus & Evidence-Weighted Confidence Scores
     const acceptedCount = unanimousFindings.length + majorityFindings.length;
     const consensusRatio = acceptedCount > 0
         ? (unanimousFindings.length * 1.0 + majorityFindings.length * 0.8) /
@@ -311,6 +344,8 @@ export function extractAnalystConsensus(
         : 0.1;
 
     const normalizedConsensus = Math.min(1.0, Math.max(0.1, Number(((rawPairwiseScore * 0.3) + (consensusRatio * 0.7)).toFixed(3))));
+    const citationBoost = Math.min(0.15, calibratedEnsemble.totalVerifiedCitations * 0.015);
+    const evidenceWeightedScore = Math.min(1.0, Number((normalizedConsensus + citationBoost).toFixed(3)));
 
     let agreementLevel: 'strong' | 'moderate' | 'divergent';
     if (normalizedConsensus >= 0.60 || unanimousFindings.length >= 2) {
@@ -328,34 +363,57 @@ export function extractAnalystConsensus(
     )).toFixed(2));
 
     const summaryParts: string[] = [
-        `Cross-Analyst Consensus: ${agreementLevel.toUpperCase()} (Score: ${(normalizedConsensus * 100).toFixed(0)}%, Confidence: ${confidenceScore})`,
+        `Cross-Analyst Consensus: ${agreementLevel.toUpperCase()} (Score: ${(normalizedConsensus * 100).toFixed(0)}%, Evidence-Weighted: ${(evidenceWeightedScore * 100).toFixed(0)}%, Confidence: ${confidenceScore})`,
         `Specialists Analyzed: ${activeAnalystCount}`,
         `Unanimous Findings: ${unanimousFindings.length}`,
         `Majority Findings: ${majorityFindings.length}`,
-        `Dissenting Observations: ${dissentingOpinions.length}`
+        `Dissenting Observations: ${dissentingOpinions.length}`,
+        `Verified Citations: ${calibratedEnsemble.totalVerifiedCitations}`
     ];
 
     return {
         totalAnalysts: activeAnalystCount,
         consensusScore: normalizedConsensus,
+        evidenceWeightedScore,
         agreementLevel,
         majorityFindings: majorityFindings.slice(0, 6),
         dissentingOpinions: dissentingOpinions.slice(0, 4),
         unanimousFindings: unanimousFindings.slice(0, 6),
         confidenceScore,
-        summaryText: summaryParts.join(' | ')
+        summaryText: summaryParts.join(' | '),
+        verifiedCitationsCount: calibratedEnsemble.totalVerifiedCitations,
+        citationCountsBySeat,
+        calibratedEnsemble
     };
 }
 
 /**
- * Formats the consensus digest into a prompt block for the Manager Node.
+ * Formats the consensus digest and Brier-calibrated ensemble into a prompt block for the Manager Node.
  */
 export function renderPromptConsensusBlock(digest: AnalystConsensusDigest): string {
     if (!digest || digest.totalAnalysts <= 1) return '';
 
     const lines: string[] = [
-        `[Cross-Analyst Consensus & Arbitration (Agreement: ${(digest.consensusScore * 100).toFixed(0)}%, Level: ${digest.agreementLevel}, Confidence: ${digest.confidenceScore})]:`
+        `[Cross-Analyst Consensus & Arbitration (Agreement: ${(digest.consensusScore * 100).toFixed(0)}%, Evidence-Weighted: ${((digest.evidenceWeightedScore ?? digest.consensusScore) * 100).toFixed(0)}%, Level: ${digest.agreementLevel}, Confidence: ${digest.confidenceScore})]:`
     ];
+
+    if (digest.calibratedEnsemble) {
+        const ens = digest.calibratedEnsemble;
+        const hasProbSeats = ens.seatWeights.some(s => s.rawProbability !== undefined);
+        if (hasProbSeats) {
+            lines.push(
+                `• Brier-Calibrated Log-Odds Ensemble: Pooled Probability=${(ens.pooledProbability * 100).toFixed(1)}% ` +
+                `(95% Credible Band: [${(ens.confidenceInterval95[0] * 100).toFixed(1)}%, ${(ens.confidenceInterval95[1] * 100).toFixed(1)}%], ` +
+                `Raw Mean: ${(ens.rawMeanProbability * 100).toFixed(1)}%, Extremizing k=${ens.extremizingFactorK}, Pooled Edge: ${ens.pooledEdgePercent}%)`
+            );
+        }
+        if (ens.totalVerifiedCitations > 0) {
+            const seatCitText = ens.seatWeights
+                .map(s => `${s.seatRole}: ${s.verifiedCitationsCount} cit (w=${(s.normalizedWeight * 100).toFixed(0)}%)`)
+                .join(', ');
+            lines.push(`• Verified Evidence & Seat Calibration Weights: ${seatCitText}`);
+        }
+    }
 
     if (digest.unanimousFindings.length > 0) {
         lines.push('• Unanimous Consensus (100% Specialist Agreement):');
@@ -382,7 +440,7 @@ export function renderPromptConsensusBlock(digest: AnalystConsensusDigest): stri
         lines.push('• High Divergence Warning: Specialist opinions sharply diverge with low consensus confidence (< 0.45). Directive: Evaluate a no_play / pass rating rather than forcing low-conviction picks.');
     }
 
-    lines.push('Directives: Give highest synthesis weight to Unanimous and Majority findings. Address Dissenting Observations if corroborated by data.');
+    lines.push('Directives: Give highest synthesis weight to Unanimous and Majority findings corroborated by verified citations and Brier-calibrated seat weights. Address Dissenting Observations if corroborated by data.');
 
     return lines.join('\n');
 }

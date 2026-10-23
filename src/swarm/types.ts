@@ -102,6 +102,9 @@ export interface SwarmOptimizationSettings {
     enableSubComputationCache?: boolean;
     enablePreFiltering?: boolean;
     emitEarlyPartialResults?: boolean;
+    enablePreAggregationSketch?: boolean;
+    enableProviderSharding?: boolean;
+    enableMathGrounding?: boolean;
 }
 
 export interface SwarmCoordinationSettings {

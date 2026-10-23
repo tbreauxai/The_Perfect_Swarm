@@ -1,0 +1,6 @@
+{
+  "summary":  "Architectural and product implementation plan for upgrading The Perfect Swarm with zero-LLM columnar pre-aggregation sketching, provider-aware adaptive chunk sharding, deterministic math and Monte Carlo forecasting grounding, evidence-weighted citation consensus, Brier-calibrated Bayesian/log-odds ensemble pooling, and live dashboard telemetry and controls.",
+  "updatedAt":  "2026-10-23T19:44:05.899002288Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}

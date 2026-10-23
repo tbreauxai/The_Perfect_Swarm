@@ -17,6 +17,13 @@ export interface AppSettings {
     disableFallback?: boolean;
     forceFullSwarm?: boolean;
     ephemeralKeys?: boolean;
+    optimizationSettings?: {
+        enabled?: boolean;
+        enablePreAggregationSketch?: boolean;
+        enableProviderSharding?: boolean;
+        enableMathGrounding?: boolean;
+        [key: string]: any;
+    };
     agents: AgentConfig[];
 }
 
@@ -241,6 +248,56 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                     />
                                     <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
                                 </label>
+                            </div>
+                            <div className="bg-neutral-50 border border-neutral-200 p-4 rounded-xl space-y-3">
+                                <div className="text-xs font-semibold uppercase tracking-wider text-neutral-600">
+                                    Large-Data & Quantitative Intelligence
+                                </div>
+                                <div className="flex items-center justify-between pt-1">
+                                    <div>
+                                        <h4 className="text-xs font-semibold text-neutral-800">Pre-Aggregation Sketcher & Anomaly Extractor</h4>
+                                        <p className="text-[11px] text-neutral-500">Compresses large CSV/JSON tables into statistical sketches + |z| ≥ 2.2 outlier rows.</p>
+                                    </div>
+                                    <input
+                                        type="checkbox"
+                                        className="h-4 w-4 accent-indigo-600 rounded cursor-pointer"
+                                        checked={settings.optimizationSettings?.enablePreAggregationSketch ?? false}
+                                        onChange={(e) => onUpdateSetting('optimizationSettings', {
+                                            ...(settings.optimizationSettings || {}),
+                                            enablePreAggregationSketch: e.target.checked
+                                        })}
+                                    />
+                                </div>
+                                <div className="flex items-center justify-between border-t border-neutral-200/80 pt-2.5">
+                                    <div>
+                                        <h4 className="text-xs font-semibold text-neutral-800">Provider-Aware Adaptive Sharding</h4>
+                                        <p className="text-[11px] text-neutral-500">Sizes data shards to each specialist's live TPM headroom (Groq/Mistral/Gemini).</p>
+                                    </div>
+                                    <input
+                                        type="checkbox"
+                                        className="h-4 w-4 accent-indigo-600 rounded cursor-pointer"
+                                        checked={settings.optimizationSettings?.enableProviderSharding ?? false}
+                                        onChange={(e) => onUpdateSetting('optimizationSettings', {
+                                            ...(settings.optimizationSettings || {}),
+                                            enableProviderSharding: e.target.checked
+                                        })}
+                                    />
+                                </div>
+                                <div className="flex items-center justify-between border-t border-neutral-200/80 pt-2.5">
+                                    <div>
+                                        <h4 className="text-xs font-semibold text-neutral-800">Pre-Execution Deterministic Math Grounding</h4>
+                                        <p className="text-[11px] text-neutral-500">Injects OLS regression, Holt-Winters forecasts, and Monte Carlo VaR before LLM calls.</p>
+                                    </div>
+                                    <input
+                                        type="checkbox"
+                                        className="h-4 w-4 accent-indigo-600 rounded cursor-pointer"
+                                        checked={settings.optimizationSettings?.enableMathGrounding !== false}
+                                        onChange={(e) => onUpdateSetting('optimizationSettings', {
+                                            ...(settings.optimizationSettings || {}),
+                                            enableMathGrounding: e.target.checked
+                                        })}
+                                    />
+                                </div>
                             </div>
                             <AgentConfigurator agents={settings.agents} onUpdateAgent={onUpdateAgent} settings={settings} />
                         </div>

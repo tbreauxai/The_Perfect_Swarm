@@ -13,6 +13,10 @@ import { checkSubComputationCache, resolveEarlyCacheHit } from "./cachingPipelin
 import { runDataProfilingPipeline } from "./profilingPipeline.ts";
 import { extractAnalystConsensus, renderPromptConsensusBlock, type AnalystConsensusDigest } from "./consensusPipeline.ts";
 export { extractAnalystConsensus, renderPromptConsensusBlock, type AnalystConsensusDigest };
+import { runDeterministicMathGrounding, type QuantitativeGroundingReport } from "./mathGrounding.ts";
+export { runDeterministicMathGrounding, type QuantitativeGroundingReport };
+import { computeCalibratedEnsemble, countVerifiedCitations, type CalibratedEnsembleDigest } from "./predictionEnsemble.ts";
+export { computeCalibratedEnsemble, countVerifiedCitations, type CalibratedEnsembleDigest };
 import { bindCortexAndTools } from "./cortexBinding.ts";
 import { resolveExperimentVariant, resolveSwarmAgents } from "./agentResolution.ts";
 import { resolveMemoryGrounding } from "./memoryGrounding.ts";
@@ -197,8 +201,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 context
             });
 
-            // Step 3: Targeted Memory Grounding
-            const { historicalContext } = await resolveMemoryGrounding({
+            // Step 3: Targeted Memory Grounding + Pre-Execution Deterministic Math Grounding
+            const { historicalContext: rawHistoricalContext } = await resolveMemoryGrounding({
                 memoryCortex,
                 task,
                 targetAppId,
@@ -209,6 +213,11 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 context,
                 domain: (params as any).domain || settings?.domain
             } as any);
+
+            const mathBlock = profilingResult.mathGroundingReport?.promptBlock;
+            const historicalContext = mathBlock
+                ? `${rawHistoricalContext}\n\n${mathBlock}`
+                : rawHistoricalContext;
 
             // Step 4: Run Cluster Pipeline
             const clusterResult = await runClusterPipeline({
