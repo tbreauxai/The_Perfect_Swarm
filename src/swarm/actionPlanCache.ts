@@ -10,7 +10,7 @@
  * is retrieved in ~2ms and dynamic live data fetches/tools are executed on-the-fly.
  */
 
-import { createVectorIndex, type VectorIndex } from './vectorIndex.ts';
+import { SemanticVectorCache, type BaseCacheEntry, type SemanticVectorCacheConfig } from './cache/semanticVectorCache.ts';
 
 export interface ActionExecutionStep {
     tool: string;
@@ -19,7 +19,7 @@ export interface ActionExecutionStep {
     description?: string;
 }
 
-export interface ActionPlan {
+export interface ActionPlan extends BaseCacheEntry {
     id: string;
     intent: string;                                 // e.g. "market_odds_calculation", "odds_conversion"
     entities: Record<string, any>;                  // extracted query entities (teams, fixture, market, format)
@@ -40,11 +40,7 @@ export interface ActionPlanInput {
     metadata?: Record<string, any>;
 }
 
-export interface ActionPlanCacheConfig {
-    similarityThreshold?: number; // default: 0.96
-    maxEntries?: number;          // default: 500
-    defaultTtlMs?: number;        // default: 30 minutes (1,800,000 ms)
-}
+export type ActionPlanCacheConfig = SemanticVectorCacheConfig;
 
 export interface ActionPlanCacheLookupResult {
     hit: boolean;
@@ -64,23 +60,16 @@ export interface ActionPlanCacheStats {
     dynamicFetchesExecuted: number;
 }
 
-export class ActionPlanCacheInterceptor {
-    private threshold: number;
-    private maxEntries: number;
-    private defaultTtlMs: number;
-    private entries: Map<string, ActionPlan> = new Map();
-    private vectorIndex: VectorIndex<ActionPlan>;
-    private hitsCount: number = 0;
-    private missesCount: number = 0;
-    private evictionsCount: number = 0;
-    private totalLatencySavedMs: number = 0;
+export class ActionPlanCacheInterceptor extends SemanticVectorCache<ActionPlan> {
     private dynamicFetchesCount: number = 0;
 
     constructor(config?: ActionPlanCacheConfig) {
-        this.threshold = config?.similarityThreshold ?? 0.96;
-        this.maxEntries = config?.maxEntries ?? 500;
-        this.defaultTtlMs = config?.defaultTtlMs ?? 30 * 60 * 1000;
-        this.vectorIndex = createVectorIndex<ActionPlan>('vptree', { metric: 'cosine' });
+        super({
+            similarityThreshold: config?.similarityThreshold ?? 0.96,
+            maxEntries: config?.maxEntries ?? 500,
+            defaultTtlMs: config?.defaultTtlMs ?? 30 * 60 * 1000,
+            estimatedLatencySavingsMs: 43
+        });
     }
 
     /**
@@ -89,7 +78,7 @@ export class ActionPlanCacheInterceptor {
     lookup(queryVector: number[], targetAppId?: string): ActionPlanCacheLookupResult {
         const start = performance.now();
         if (!queryVector || queryVector.length === 0 || this.entries.size === 0) {
-            this.missesCount++;
+            this.recordMiss();
             return { hit: false, latencyMs: Number((performance.now() - start).toFixed(2)) };
         }
 
@@ -108,18 +97,12 @@ export class ActionPlanCacheInterceptor {
                 // Expired
                 this.entries.delete(plan.id);
                 this.vectorIndex.delete(plan.id);
-                this.missesCount++;
+                this.recordMiss();
                 return { hit: false, latencyMs: Number((performance.now() - start).toFixed(2)) };
             }
 
-            // Cache hit: update LRU position
-            plan.hits++;
-            plan.lastAccessedAt = now;
-            this.entries.delete(plan.id);
-            this.entries.set(plan.id, plan);
-
-            this.hitsCount++;
-            this.totalLatencySavedMs += 43; // 45ms Qdrant search bypassed - 2ms cache retrieval = 43ms net saved
+            // Cache hit: update LRU position and latency
+            this.recordHit(plan);
 
             return {
                 hit: true,
@@ -129,25 +112,8 @@ export class ActionPlanCacheInterceptor {
             };
         }
 
-        this.missesCount++;
+        this.recordMiss();
         return { hit: false, latencyMs: Number((performance.now() - start).toFixed(2)) };
-    }
-
-    /**
-     * Purges all expired entries from cache.
-     * Returns count of purged expired entries.
-     */
-    purgeExpired(): number {
-        const now = Date.now();
-        let purged = 0;
-        for (const [id, plan] of this.entries.entries()) {
-            if (now > plan.expiresAt) {
-                this.entries.delete(id);
-                this.vectorIndex.delete(id);
-                purged++;
-            }
-        }
-        return purged;
     }
 
     /**
@@ -163,19 +129,8 @@ export class ActionPlanCacheInterceptor {
         const duration = ttlMs ?? this.defaultTtlMs;
         const id = `plan-${crypto.randomUUID()}-${now}`;
 
-        // 1. If at capacity, first purge any expired entries
-        if (this.entries.size >= this.maxEntries) {
-            this.purgeExpired();
-        }
-
-        // 2. If still at capacity, evict LRU (oldest accessed entry)
-        while (this.entries.size >= this.maxEntries) {
-            const oldestKey = this.entries.keys().next().value;
-            if (!oldestKey) break;
-            this.entries.delete(oldestKey);
-            this.vectorIndex.delete(oldestKey);
-            this.evictionsCount++;
-        }
+        // Ensure LRU capacity bounds
+        this.evictLruIfNeeded();
 
         // Sanitize entities and steps: NEVER store volatile live odds responses or raw analysis text
         const sanitizedEntities: Record<string, any> = {};
@@ -237,12 +192,7 @@ export class ActionPlanCacheInterceptor {
      * Clears all cache entries and resets metrics.
      */
     clear(): void {
-        this.entries.clear();
-        this.vectorIndex.clear();
-        this.hitsCount = 0;
-        this.missesCount = 0;
-        this.evictionsCount = 0;
-        this.totalLatencySavedMs = 0;
+        super.clear();
         this.dynamicFetchesCount = 0;
     }
 
@@ -250,15 +200,9 @@ export class ActionPlanCacheInterceptor {
      * Retrieves current cache hit/miss and latency statistics.
      */
     getStats(): ActionPlanCacheStats {
-        const total = this.hitsCount + this.missesCount;
+        const base = super.getStats();
         return {
-            size: this.entries.size,
-            maxEntries: this.maxEntries,
-            hits: this.hitsCount,
-            misses: this.missesCount,
-            evictions: this.evictionsCount,
-            hitRatio: total === 0 ? 0 : Number((this.hitsCount / total).toFixed(4)),
-            estimatedLatencySavedMs: this.totalLatencySavedMs,
+            ...base,
             dynamicFetchesExecuted: this.dynamicFetchesCount
         };
     }

@@ -8,6 +8,7 @@ import type {
     HnswConfig
 } from './types.ts';
 import { MetricMath } from './metricMath.ts';
+import { BaseVectorIndex } from './baseIndex.ts';
 
 interface HnswNode<T> {
     id: string;
@@ -21,20 +22,17 @@ interface HnswNode<T> {
  * Multi-layer proximity graph supporting sub-linear O(log n) approximate nearest neighbor
  * routing with high recall and logarithmic greedy traversal.
  */
-export class HnswVectorIndex<T = any> implements VectorIndex<T> {
+export class HnswVectorIndex<T = any> extends BaseVectorIndex<T> implements VectorIndex<T> {
     private nodes: Map<string, HnswNode<T>> = new Map();
     private entryPointId?: string;
     private maxLevel: number = 0;
-    private metric: VectorDistanceMetric;
     private m: number;
     private efConstruction: number;
     private efSearch: number;
     private mL: number;
-    private cachedDimension: number = 0;
-    private lastSearchComparisons: number = 0;
 
     constructor(config?: HnswConfig) {
-        this.metric = config?.metric ?? 'cosine';
+        super(config?.metric ?? 'cosine');
         this.m = config?.m ?? 16;
         this.efConstruction = config?.efConstruction ?? 64;
         this.efSearch = config?.efSearch ?? 32;
@@ -49,18 +47,7 @@ export class HnswVectorIndex<T = any> implements VectorIndex<T> {
         return this.cachedDimension;
     }
 
-    private computeDistance(a: number[], b: number[]): number {
-        this.lastSearchComparisons++;
-        return MetricMath.distance(a, b, this.metric);
-    }
-
-    private similarityFromDistance(distance: number): number {
-        if (this.metric === 'cosine' || this.metric === 'angular') {
-            return Math.min(1.0, Math.max(0.0, 1.0 - distance));
-        } else {
-            return Math.min(1.0, Math.max(0.0, 1.0 / (1.0 + distance)));
-        }
-    }
+    
 
     private randomLevel(): number {
         let r = Math.random();
@@ -328,30 +315,7 @@ export class HnswVectorIndex<T = any> implements VectorIndex<T> {
         });
     }
 
-    findWithinRadius(
-        queryVector: number[],
-        maxDistance: number,
-        filter?: (item: VectorIndexItem<T>) => boolean
-    ): VectorSearchResult<T>[] {
-        return this.search(queryVector, {
-            k: this.nodes.size,
-            maxDistance,
-            filter
-        });
-    }
-
-    findMostSimilar(
-        queryVector: number[],
-        threshold: number = 0.0,
-        filter?: (item: VectorIndexItem<T>) => boolean
-    ): VectorSearchResult<T> | null {
-        const res = this.search(queryVector, {
-            k: 1,
-            minSimilarity: threshold,
-            filter
-        });
-        return res.length > 0 ? res[0] : null;
-    }
+    
 
     getMetrics(): VectorIndexMetrics {
         return {
@@ -372,11 +336,5 @@ export class HnswVectorIndex<T = any> implements VectorIndex<T> {
         };
     }
 
-    deserialize(data: any): void {
-        this.clear();
-        if (data?.metric) this.metric = data.metric;
-        if (Array.isArray(data?.items)) {
-            this.insertBatch(data.items);
-        }
-    }
+    
 }

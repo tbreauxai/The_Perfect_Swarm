@@ -5,15 +5,12 @@
  * to intercept queries before executing expensive dense/sparse vector searches against Qdrant.
  */
 
-import { createVectorIndex, type VectorIndex } from './vectorIndex.ts';
+import { SemanticVectorCache, type BaseCacheEntry, type SemanticVectorCacheConfig, type SemanticVectorCacheStats } from './cache/semanticVectorCache.ts';
 
-export interface SemanticCacheInterceptorConfig {
-    similarityThreshold?: number; // default: 0.96
-    maxEntries?: number;          // default: 500
-    defaultTtlMs?: number;        // default: 30 minutes (1,800,000 ms)
-}
+export type SemanticCacheInterceptorConfig = SemanticVectorCacheConfig;
+export type SemanticCacheStats = SemanticVectorCacheStats;
 
-export interface SemanticCacheEntry<T = any> {
+export interface SemanticCacheEntry<T = any> extends BaseCacheEntry {
     id: string;
     queryVector: number[];
     payload: T;
@@ -25,32 +22,14 @@ export interface SemanticCacheEntry<T = any> {
     filterKey?: string;
 }
 
-export interface SemanticCacheStats {
-    size: number;
-    maxEntries: number;
-    hits: number;
-    misses: number;
-    evictions: number;
-    hitRatio: number;
-    estimatedLatencySavedMs: number;
-}
-
-export class SemanticCacheInterceptor {
-    private threshold: number;
-    private maxEntries: number;
-    private defaultTtlMs: number;
-    private entries: Map<string, SemanticCacheEntry> = new Map();
-    private vectorIndex: VectorIndex<SemanticCacheEntry>;
-    private hitsCount: number = 0;
-    private missesCount: number = 0;
-    private evictionsCount: number = 0;
-    private totalLatencySavedMs: number = 0;
-
+export class SemanticCacheInterceptor extends SemanticVectorCache<SemanticCacheEntry> {
     constructor(config?: SemanticCacheInterceptorConfig) {
-        this.threshold = config?.similarityThreshold ?? 0.96;
-        this.maxEntries = config?.maxEntries ?? 500;
-        this.defaultTtlMs = config?.defaultTtlMs ?? 30 * 60 * 1000;
-        this.vectorIndex = createVectorIndex<SemanticCacheEntry>('vptree', { metric: 'cosine' });
+        super({
+            similarityThreshold: config?.similarityThreshold ?? 0.96,
+            maxEntries: config?.maxEntries ?? 500,
+            defaultTtlMs: config?.defaultTtlMs ?? 30 * 60 * 1000,
+            estimatedLatencySavingsMs: 45
+        });
     }
 
     /**
@@ -58,7 +37,7 @@ export class SemanticCacheInterceptor {
      */
     lookup<T = any>(queryVector: number[], appId?: string): { hit: boolean; payload?: T; similarity?: number } {
         if (!queryVector || queryVector.length === 0 || this.entries.size === 0) {
-            this.missesCount++;
+            this.recordMiss();
             return { hit: false };
         }
 
@@ -77,18 +56,12 @@ export class SemanticCacheInterceptor {
             if (now > entry.expiresAt) {
                 this.entries.delete(entry.id);
                 this.vectorIndex.delete(entry.id);
-                this.missesCount++;
+                this.recordMiss();
                 return { hit: false };
             }
 
             // Cache hit: update LRU position and hit count
-            entry.hits++;
-            entry.lastAccessedAt = now;
-            this.entries.delete(entry.id);
-            this.entries.set(entry.id, entry);
-
-            this.hitsCount++;
-            this.totalLatencySavedMs += 45; // Estimated 45ms Qdrant search saved
+            this.recordHit(entry);
 
             return {
                 hit: true,
@@ -97,25 +70,8 @@ export class SemanticCacheInterceptor {
             };
         }
 
-        this.missesCount++;
+        this.recordMiss();
         return { hit: false };
-    }
-
-    /**
-     * Purges all expired entries from cache.
-     * Returns count of purged expired entries.
-     */
-    purgeExpired(): number {
-        const now = Date.now();
-        let purged = 0;
-        for (const [id, entry] of this.entries.entries()) {
-            if (now > entry.expiresAt) {
-                this.entries.delete(id);
-                this.vectorIndex.delete(id);
-                purged++;
-            }
-        }
-        return purged;
     }
 
     /**
@@ -128,19 +84,8 @@ export class SemanticCacheInterceptor {
         const duration = ttlMs ?? this.defaultTtlMs;
         const id = `semcache-${crypto.randomUUID()}-${now}`;
 
-        // 1. If at capacity, first purge any expired entries
-        if (this.entries.size >= this.maxEntries) {
-            this.purgeExpired();
-        }
-
-        // 2. If still at capacity, evict oldest accessed
-        while (this.entries.size >= this.maxEntries) {
-            const oldestKey = this.entries.keys().next().value;
-            if (!oldestKey) break;
-            this.entries.delete(oldestKey);
-            this.vectorIndex.delete(oldestKey);
-            this.evictionsCount++;
-        }
+        // Ensure LRU capacity bounds
+        this.evictLruIfNeeded();
 
         const entry: SemanticCacheEntry<T> = {
             id,
@@ -155,33 +100,5 @@ export class SemanticCacheInterceptor {
 
         this.entries.set(id, entry);
         this.vectorIndex.insert(id, queryVector, entry);
-    }
-
-    /**
-     * Clears all cache entries and resets statistics.
-     */
-    clear(): void {
-        this.entries.clear();
-        this.vectorIndex.clear();
-        this.hitsCount = 0;
-        this.missesCount = 0;
-        this.evictionsCount = 0;
-        this.totalLatencySavedMs = 0;
-    }
-
-    /**
-     * Returns cache performance statistics.
-     */
-    getStats(): SemanticCacheStats {
-        const total = this.hitsCount + this.missesCount;
-        return {
-            size: this.entries.size,
-            maxEntries: this.maxEntries,
-            hits: this.hitsCount,
-            misses: this.missesCount,
-            evictions: this.evictionsCount,
-            hitRatio: total === 0 ? 0 : Number((this.hitsCount / total).toFixed(4)),
-            estimatedLatencySavedMs: this.totalLatencySavedMs
-        };
     }
 }

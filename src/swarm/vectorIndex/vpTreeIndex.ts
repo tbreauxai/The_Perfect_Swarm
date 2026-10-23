@@ -8,6 +8,7 @@ import type {
     VpTreeConfig
 } from './types.ts';
 import { MetricMath } from './metricMath.ts';
+import { BaseVectorIndex } from './baseIndex.ts';
 
 interface VpTreeNode<T> {
     item: VectorIndexItem<T>;
@@ -25,17 +26,14 @@ interface VpTreeNode<T> {
  * Partitions metric space recursively around chosen vantage points.
  * Guarantees exact pruning via the triangle inequality with O(log n) search time.
  */
-export class VpTreeIndex<T = any> implements VectorIndex<T> {
+export class VpTreeIndex<T = any> extends BaseVectorIndex<T> implements VectorIndex<T> {
     private root?: VpTreeNode<T>;
     private itemsMap: Map<string, VectorIndexItem<T>> = new Map();
-    private metric: VectorDistanceMetric;
     private rebuildThreshold: number;
     private unindexedCount: number = 0;
-    private cachedDimension: number = 0;
-    private lastSearchComparisons: number = 0;
 
     constructor(config?: VpTreeConfig) {
-        this.metric = config?.metric ?? 'cosine';
+        super(config?.metric ?? 'cosine');
         this.rebuildThreshold = config?.rebuildThreshold ?? 50;
     }
 
@@ -47,21 +45,7 @@ export class VpTreeIndex<T = any> implements VectorIndex<T> {
         return this.cachedDimension;
     }
 
-    private computeDistance(a: number[], b: number[]): number {
-        this.lastSearchComparisons++;
-        return MetricMath.distance(a, b, this.metric);
-    }
-
-    private similarityFromDistance(distance: number): number {
-        if (this.metric === 'cosine') {
-            return Math.min(1.0, Math.max(0.0, 1.0 - distance));
-        } else if (this.metric === 'angular') {
-            return Math.min(1.0, Math.max(0.0, 1.0 - distance));
-        } else {
-            // Euclidean similarity normalization: 1 / (1 + distance)
-            return Math.min(1.0, Math.max(0.0, 1.0 / (1.0 + distance)));
-        }
-    }
+    
 
     private maxDistanceForSimilarity(minSimilarity: number): number {
         if (this.metric === 'cosine' || this.metric === 'angular') {
@@ -382,33 +366,7 @@ export class VpTreeIndex<T = any> implements VectorIndex<T> {
     /**
      * Finds all points within a maximum distance radius (useful for deduplication).
      */
-    findWithinRadius(
-        queryVector: number[],
-        maxDistance: number,
-        filter?: (item: VectorIndexItem<T>) => boolean
-    ): VectorSearchResult<T>[] {
-        return this.search(queryVector, {
-            k: this.itemsMap.size,
-            maxDistance,
-            filter
-        });
-    }
-
-    /**
-     * Finds the single most similar item above an optional similarity threshold.
-     */
-    findMostSimilar(
-        queryVector: number[],
-        threshold: number = 0.0,
-        filter?: (item: VectorIndexItem<T>) => boolean
-    ): VectorSearchResult<T> | null {
-        const res = this.search(queryVector, {
-            k: 1,
-            minSimilarity: threshold,
-            filter
-        });
-        return res.length > 0 ? res[0] : null;
-    }
+    
 
     private computeTreeDepth(node?: VpTreeNode<T>): number {
         if (!node) return 0;
@@ -434,11 +392,5 @@ export class VpTreeIndex<T = any> implements VectorIndex<T> {
         };
     }
 
-    deserialize(data: any): void {
-        this.clear();
-        if (data?.metric) this.metric = data.metric;
-        if (Array.isArray(data?.items)) {
-            this.insertBatch(data.items);
-        }
-    }
+    
 }
