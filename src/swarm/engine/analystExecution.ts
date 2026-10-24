@@ -5,6 +5,7 @@ import type { SwarmEngineSettings } from '../types.ts';
 import type { AgentVariantConfig } from '../experiment.ts';
 import type { ToolRegistry } from '../tools/index.ts';
 import { PROVIDER_LIMITS, estimateTokens } from '../providers/limiter.ts';
+import { TokenEstimator } from '../compression/tokenEstimator.ts';
 import type { MemoryCortex } from '../memory.ts';
 import type { SwarmStagePayload } from './types.ts';
 import {
@@ -55,27 +56,35 @@ export interface AnalystExecutorConfig {
 }
 
 /**
- * Trim a data chunk to the provider's per-call input budget.
- * Groq's room is computed from its token minute and the prompt already
- * built, so the trim tracks the real limit instead of a fixed number.
+ * Dynamic Provider-Aware Chunk Sizing:
+ * Calculates max input token limit and target chunk threshold
+ * targetChunkTokens = Math.min(providerMaxInputTokens * 0.75, 6000).
  */
-function fitChunkToProvider(chunk: string, provider: string, total: number, idx: number, overheadChars = 0): string {
-    const p = provider?.toLowerCase();
+export function getProviderChunkLimits(provider: string): { maxInputTokens: number; targetChunkTokens: number } {
+    const p = provider?.toLowerCase() || '';
+    const maxInputTokens = PROVIDER_LIMITS[p]?.maxInputTokens || 8000;
+    const targetChunkTokens = Math.min(Math.floor(maxInputTokens * 0.75), 6000);
+    return { maxInputTokens, targetChunkTokens };
+}
+
+/**
+ * Trim or fit a data chunk to the provider's dynamic per-call input budget.
+ * Guarantees that chunks never overflow the target model's input token budget.
+ */
+export function fitChunkToProvider(chunk: string, provider: string, total: number, idx: number, overheadChars = 0): string {
+    const p = provider?.toLowerCase() || '';
     const header = total > 1 ? `Chunk ${idx + 1}/${total}\n` : '';
-    let budgetChars: number;
-    if (p === 'groq') {
-        // 7000 TPM, leave 800 for the answer. The rest is the prompt.
-        const room = (7000 - 800) * 4 - overheadChars;
-        budgetChars = Math.max(1000, room);
-    } else {
-        const budget = PROVIDER_LIMITS[p]?.maxInputTokens;
-        if (!budget) return header + chunk;
-        budgetChars = budget * 4;
-    }
-    if (chunk.length <= budgetChars) return header + chunk;
-    const trimmed = chunk.slice(0, budgetChars);
+    const { maxInputTokens, targetChunkTokens } = getProviderChunkLimits(p);
+
+    const overheadTokens = TokenEstimator.estimatePayloadTokens(overheadChars ? 'x'.repeat(overheadChars) : '');
+    const availableTokens = Math.max(250, Math.min(targetChunkTokens, maxInputTokens - overheadTokens));
+
+    const estTokens = TokenEstimator.estimatePayloadTokens(chunk);
+    if (estTokens <= availableTokens) return header + chunk;
+
+    const trimmed = TokenEstimator.truncateToTokens(chunk, availableTokens);
     const lastBreak = Math.max(trimmed.lastIndexOf('\n'), trimmed.lastIndexOf('|'));
-    const cut = lastBreak > budgetChars * 0.6 ? trimmed.slice(0, lastBreak) : trimmed;
+    const cut = lastBreak > trimmed.length * 0.6 ? trimmed.slice(0, lastBreak) : trimmed;
     return `${header}${cut}\n[trimmed to fit ${p}]`;
 }
 

@@ -10,6 +10,8 @@ export interface ProviderLimitConfig {
   tokensPerMinute?: number;
   /** Max input tokens a single seat call should send. The seat trims data to fit. */
   maxInputTokens?: number;
+  /** Max milliseconds to wait for sliding token budget before skipping. Default: 65,000ms (strict backpressure). */
+  maxBudgetWaitMs?: number;
 }
 
 export const PROVIDER_LIMITS: Record<string, ProviderLimitConfig> = {
@@ -26,6 +28,8 @@ export const PROVIDER_LIMITS: Record<string, ProviderLimitConfig> = {
 export const BREAKER_FAILURE_THRESHOLD = 3;
 export const BREAKER_OPEN_MS = 5 * 60 * 1000;
 export const DEAD_MODEL_MS = 24 * 60 * 60 * 1000;
+export const DEFAULT_STRICT_BUDGET_WAIT_MS = 65_000;
+export const INTERACTIVE_MAX_BUDGET_WAIT_MS = 10_000;
 export const MAX_BUDGET_WAIT_MS = 10_000;
 export const PROVIDER_CALL_TIMEOUT_MS = 25_000;
 export const RETRY_503_BACKOFF_MS = 1_000;
@@ -53,9 +57,16 @@ export class LimiterSkipError extends Error {
 
 import { TokenEstimator } from "../compression/tokenEstimator.ts";
 
-/** chars/4 token estimate (same heuristic the Groq adapter uses). */
-export function estimateTokens(chars: number): number {
-  return TokenEstimator.estimateFromChars(chars);
+/**
+ * Estimates token count for numeric character counts, text strings, or structured payload objects.
+ * Numeric character counts fall back to chars/4 for backwards compatibility.
+ * Text strings and structured objects use syntax-aware parsing with a 1.12x JSON safety buffer.
+ */
+export function estimateTokens(input: number | string | object | unknown): number {
+  if (typeof input === "number") {
+    return TokenEstimator.estimateFromChars(input);
+  }
+  return TokenEstimator.estimatePayloadTokens(input);
 }
 
 export function nextUtcMidnight(nowMs: number): number {
@@ -74,6 +85,8 @@ export function nextUtcMidnight(nowMs: number): number {
 export type ProviderFailureKind =
   | "daily_quota"
   | "model_dead"
+  | "rate_limit"
+  | "server_error"
   | "rate_or_server"
   | "other";
 
@@ -94,10 +107,18 @@ export function classifyProviderError(
   if (
     msg.includes("RATE_LIMIT") ||
     /\b429\b/.test(msg) ||
-    msg.includes("SERVER_ERROR") ||
-    /\b50[0234]\b/.test(msg)
+    lower.includes("resource_exhausted") ||
+    lower.includes("rate limit") ||
+    lower.includes("quota exceeded")
   ) {
-    return "rate_or_server";
+    return "rate_limit";
+  }
+  if (
+    msg.includes("SERVER_ERROR") ||
+    /\b50[0234]\b/.test(msg) ||
+    /\b500\b/.test(msg)
+  ) {
+    return "server_error";
   }
   return "other";
 }
@@ -123,6 +144,7 @@ export interface LimiterRunRequest {
   provider: string;
   model: string;
   estTokens: number;
+  maxBudgetWaitMs?: number;
 }
 
 export class ProviderLimiter {
@@ -200,7 +222,7 @@ export class ProviderLimiter {
     this.state(provider).consecutiveFailures = 0;
   }
 
-  recordFailure(provider: string, model: string, message: string): void {
+  recordFailure(provider: string, model: string, message: string, isFinalAttempt: boolean = true): void {
     if (!this.isManaged(provider)) return;
     const s = this.state(provider);
     const t = this.now();
@@ -212,15 +234,35 @@ export class ProviderLimiter {
     } else if (kind === "model_dead") {
       if (model)
         this.deadModels.set(`${provider}::${model}`, t + DEAD_MODEL_MS);
-    } else if (kind === "rate_or_server") {
+    } else if (kind === "server_error" || kind === "rate_or_server") {
       s.consecutiveFailures += 1;
       if (s.consecutiveFailures >= BREAKER_FAILURE_THRESHOLD) {
         s.openUntil = t + BREAKER_OPEN_MS;
-        s.openReason = `${s.consecutiveFailures} consecutive 429/5xx`;
+        s.openReason = `${s.consecutiveFailures} consecutive 5xx server errors`;
         s.consecutiveFailures = 0;
+      }
+    } else if (kind === "rate_limit") {
+      if (isFinalAttempt) {
+        s.consecutiveFailures += 1;
+        if (s.consecutiveFailures >= BREAKER_FAILURE_THRESHOLD) {
+          s.openUntil = t + BREAKER_OPEN_MS;
+          s.openReason = `${s.consecutiveFailures} consecutive 429 rate limit errors (retries exhausted)`;
+          s.consecutiveFailures = 0;
+        }
       }
     }
     // 'other' (timeouts, 400s, parse errors) leaves the breaker untouched.
+  }
+
+  getMaxBudgetWaitMs(provider: string, requestWaitMs?: number): number {
+    if (typeof requestWaitMs === "number" && requestWaitMs > 0) {
+      return requestWaitMs;
+    }
+    const cfgWait = this.limits[provider]?.maxBudgetWaitMs;
+    if (typeof cfgWait === "number" && cfgWait > 0) {
+      return cfgWait;
+    }
+    return MAX_BUDGET_WAIT_MS;
   }
 
   private tokensUsed(s: ProviderState, t: number): number {
@@ -276,12 +318,13 @@ export class ProviderLimiter {
 
     await this.acquireSlot(provider);
     try {
+      const maxBudgetWait = this.getMaxBudgetWaitMs(provider, req.maxBudgetWaitMs);
       const wait = this.budgetWaitMs(provider, estTokens);
-      if (wait > MAX_BUDGET_WAIT_MS) {
+      if (wait > maxBudgetWait) {
         throw new LimiterSkipError(
           provider,
           model,
-          `token budget needs ${Number.isFinite(wait) ? Math.ceil(wait) + "ms" : "more than a full minute"} of waiting (max ${MAX_BUDGET_WAIT_MS}ms); skipping to next fallback`,
+          `token budget needs ${Number.isFinite(wait) ? Math.ceil(wait) + "ms" : "more than a full minute"} of waiting (max ${maxBudgetWait}ms); skipping to next fallback`,
         );
       }
       if (wait > 0) await this.sleep(wait);

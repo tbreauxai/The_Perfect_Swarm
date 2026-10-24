@@ -1,0 +1,38 @@
+[
+  {
+    "id": "goal-1-math-hash-token-dedup",
+    "description": "Foundational Zero-Risk Utility Deduplication: Extract djb2Hash (src/swarm/utils/hash.ts), probability math clamp/logit/sigmoid (src/swarm/math/probabilityMath.ts), consolidate vector cosine similarity (src/swarm/vectorIndex/metricMath.ts / vectorMath.ts), unify token estimation on TokenEstimator, and extract HTTP retry-after parser (src/swarm/utils/httpTimeouts.ts).",
+    "status": "completed",
+    "verification": "All extracted helpers unit tested; existing consumer modules updated; 100% test pass on affected modules; npm run lint passes with 0 errors."
+  },
+  {
+    "id": "goal-2-vector-cache-index-dedup",
+    "description": "Vector Index & Semantic Cache Deduplication: Extract abstract BaseVectorIndex<T> (src/swarm/vectorIndex/baseIndex.ts) for hnswIndex and vpTreeIndex; extract generic SemanticVectorCache<T> (src/swarm/cache/semanticVectorCache.ts) deduplicating LRU, TTL, and vector search across actionPlanCache and semanticCacheInterceptor.",
+    "status": "completed",
+    "verification": "HNSW, VPTree, ActionPlanCache, and SemanticCacheInterceptor pass all existing test suites without regression; tsc --noEmit passes."
+  },
+  {
+    "id": "goal-3-provider-streaming-tool-dedup",
+    "description": "Provider Adapters, SSE Streaming & Engine Tool Execution: Implement shared OpenAI-compatible REST call helper (src/swarm/providers/baseOpenAi.ts) for Groq/Mistral/OpenRouter/Nvidia/Cloudflare; extract shared SSE stream parser (src/swarm/utils/sseParser.ts); extract tool execution and context event recording helper (src/swarm/engine/toolExecutionHelper.ts).",
+    "status": "completed",
+    "verification": "Provider adapters pass resilience and format rejection tests; SSE parser passes client tests; tool execution passes analyst execution tests."
+  },
+  {
+    "id": "goal-4-server-routes-and-cli-modularization",
+    "description": "Server Routes & CLI Decomposition: Decompose monolithic src/swarm/server/app.ts into modular Hono route controllers under src/swarm/server/routes/ (analyze.ts, feedback.ts, morning.ts, models.ts); modularize monolithic bin/cli.js into bin/commands/ with a clean command dispatcher.",
+    "status": "completed",
+    "verification": "src/swarm/server/app.test.ts (13/13) and bin/cli.js command invocations pass with identical behavior; server body parser limits intact."
+  },
+  {
+    "id": "goal-5-ui-components-modularization",
+    "description": "Monolithic UI Components Modularization: Deduplicate OptimizationCombinationsTable and OptimizationHistoryTable into shared OptimizationResultsTable; decompose CortexDiagnosticsViewer into focused subcomponents; extract virtual list and timeline items from SwarmEventTimeline.",
+    "status": "completed",
+    "verification": "Frontend components compile cleanly; vitest component tests pass; no UI visual regressions."
+  },
+  {
+    "id": "goal-6-system-verification-and-benchmarking",
+    "description": "End-to-End System Verification & Regression Suite: Execute full repository verification suite including lint, unit tests, portable test suite, distribution bundle tests, production build, and 50k-row stress simulation.",
+    "status": "completed",
+    "verification": "npm run lint (0 errors), npm run test:unit (926/926 pass across 104 files), npm run test:portable (pass), npm run test:dist (pass), npm run build:swarm (pass), test-large-data-simulation.ts (pass)."
+  }
+]

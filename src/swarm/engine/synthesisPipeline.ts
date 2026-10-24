@@ -9,6 +9,7 @@ import { guardManagerResponse } from '../parser.ts';
 import { ManagerResponseSchema } from '../schemas.ts';
 import { MANAGER_SYSTEM_INSTRUCTION } from './constants.ts';
 import { renderPromptConsensusBlock, type AnalystConsensusDigest } from './consensusPipeline.ts';
+import { TokenEstimator } from '../compression/tokenEstimator.ts';
 
 export interface SynthesisPipelineParams {
     task: string;
@@ -67,27 +68,67 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
     let workflowPromptTokensSaved = 0;
     let workflowDeduplicatedCount = 0;
 
-    const compiledReports = analysts.map((a, i) => {
-        const reports = allAnalystReports[i];
-        if (!reports || reports.length === 0) return null;
-        const combinedStr = reports
-            .map((r) => {
-                const chunkLabel = r._chunkIndex !== undefined ? `--- Chunk ${r._chunkIndex + 1} ---` : '--- Report ---';
-                const content = typeof r === 'string' ? r : JSON.stringify(r, null, 2);
-                return `${chunkLabel}\n${content}`;
-            })
-            .join('\n\n');
-        return `[${a.role} Report]:\n${combinedStr}`;
-    }).filter(Boolean).join('\n\n');
+    const totalChunkReports = allAnalystReports.reduce((sum, r) => sum + (r ? r.length : 0), 0);
+    const isHierarchicalTreeReduction = totalChunkReports > 6 || Object.keys(clusterDigests).length > 4;
 
-    const clusterDigestText = Object.values(clusterDigests).length > 0
-        ? `Cluster Digests:\n` + Object.values(clusterDigests).map(d =>
-            `[Cluster: ${d.clusterId}] (Specialists: ${d.specialistRoles.join(', ')} | Token Reduction: ${Math.round(d.tokenReductionRatio * 100)}%)\n` +
-            `• Key Findings: ${d.keyFindings.join('; ')}\n` +
-            `• Anomalies: ${d.anomalies.length > 0 ? d.anomalies.join('; ') : 'None'}\n` +
-            `• Summary: ${d.summary}`
-        ).join('\n\n') + '\n\n'
-        : '';
+    let compiledReports = '';
+    let clusterDigestText = '';
+
+    if (isHierarchicalTreeReduction) {
+        // Module 6: Hierarchical Map-Reduce Synthesis
+        // The root manager synthesizes only the resulting ClusterDigests.
+        compiledReports = `[Hierarchical Map-Reduce]: Synthesized ${totalChunkReports} specialist chunk reports into ${Object.keys(clusterDigests).length} intermediate cluster digests below.`;
+
+        // Calculate original tokens from raw reports to track reduction metrics
+        const originalRawTokens = allAnalystReports.reduce((acc, reps) => {
+            if (!reps || reps.length === 0) return acc;
+            return acc + reps.reduce((s: number, r: any) => s + TokenEstimator.estimatePayloadTokens(typeof r === 'string' ? r : JSON.stringify(r)), 0);
+        }, 0);
+
+        // Strict token capping on intermediate summaries (< 4,000 tokens for root manager input)
+        const digestsList = Object.values(clusterDigests);
+        const maxTokensForDigests = 3200;
+        const tokensPerDigest = Math.max(100, Math.floor(maxTokensForDigests / Math.max(1, digestsList.length)));
+
+        clusterDigestText = `Cluster Digests:\n` + digestsList.map(d => {
+            const findings = d.keyFindings.slice(0, 5).join('; ');
+            const anomalies = d.anomalies.length > 0 ? d.anomalies.slice(0, 3).join('; ') : 'None';
+            const rawSummary = d.summary.length > 300 ? d.summary.slice(0, 300) + '...' : d.summary;
+            const digestEntry = `[Cluster: ${d.clusterId}] (Specialists: ${d.specialistRoles.join(', ')} | Token Reduction: ${Math.round(d.tokenReductionRatio * 100)}%)\n` +
+                `• Key Findings: ${findings}\n` +
+                `• Anomalies: ${anomalies}\n` +
+                `• Summary: ${rawSummary}`;
+            return TokenEstimator.truncateToTokens(digestEntry, tokensPerDigest);
+        }).join('\n\n') + '\n\n';
+
+        const reducedTokens = TokenEstimator.estimatePayloadTokens(compiledReports) + TokenEstimator.estimatePayloadTokens(clusterDigestText);
+        const saved = Math.max(0, originalRawTokens - reducedTokens);
+        workflowPromptTokensSaved += saved;
+        workflowOriginalPromptTokens += originalRawTokens;
+        workflowCompressedPromptTokens += reducedTokens;
+    } else {
+        compiledReports = analysts.map((a, i) => {
+            const reports = allAnalystReports[i];
+            if (!reports || reports.length === 0) return null;
+            const combinedStr = reports
+                .map((r) => {
+                    const chunkLabel = r._chunkIndex !== undefined ? `--- Chunk ${r._chunkIndex + 1} ---` : '--- Report ---';
+                    const content = typeof r === 'string' ? r : JSON.stringify(r, null, 2);
+                    return `${chunkLabel}\n${content}`;
+                })
+                .join('\n\n');
+            return `[${a.role} Report]:\n${combinedStr}`;
+        }).filter(Boolean).join('\n\n');
+
+        clusterDigestText = Object.values(clusterDigests).length > 0
+            ? `Cluster Digests:\n` + Object.values(clusterDigests).map(d =>
+                `[Cluster: ${d.clusterId}] (Specialists: ${d.specialistRoles.join(', ')} | Token Reduction: ${Math.round(d.tokenReductionRatio * 100)}%)\n` +
+                `• Key Findings: ${d.keyFindings.join('; ')}\n` +
+                `• Anomalies: ${d.anomalies.length > 0 ? d.anomalies.join('; ') : 'None'}\n` +
+                `• Summary: ${d.summary}`
+            ).join('\n\n') + '\n\n'
+            : '';
+    }
 
     const consensusPromptBlock = workflowConsensus ? renderPromptConsensusBlock(workflowConsensus) : '';
     const consensusSection = consensusPromptBlock ? `${consensusPromptBlock}\n\n` : '';
@@ -114,7 +155,7 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
     let effectiveHistoricalContext = historicalContext;
 
     const targetCeiling = getManagerContextTokenCeiling(managerAgent.provider);
-    const estimatedPromptTokens = Math.ceil(dynamicPrompt.length / 4);
+    const estimatedPromptTokens = TokenEstimator.estimatePayloadTokens(dynamicPrompt);
     const shouldCompress = Boolean(settings?.compressionSettings?.enabled || estimatedPromptTokens > (targetCeiling * 0.60));
 
     if (shouldCompress) {
@@ -199,6 +240,10 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
         } else {
             effectiveDynamicPrompt = rawSynthesisPrompt;
         }
+    }
+
+    if (isHierarchicalTreeReduction && TokenEstimator.estimatePayloadTokens(effectiveDynamicPrompt) >= 4000) {
+        effectiveDynamicPrompt = TokenEstimator.truncateToTokens(effectiveDynamicPrompt, 3900);
     }
 
     return {

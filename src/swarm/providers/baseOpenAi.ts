@@ -1,4 +1,5 @@
 import { parseStandardResponse, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
+import { parseRetryAfterHeader, parseRetryAfterMs } from '../utils/httpTimeouts.ts';
 
 export interface OpenAiCompatibleConfig {
     providerName: string;
@@ -112,6 +113,28 @@ export async function executeOpenAiCompatibleChat(
             throw new Error(msg);
         }
         throw err;
+    }
+
+    if (!response.ok) {
+        if (response.status === 429) {
+            const rawHeader = response.headers?.get
+                ? (response.headers.get('retry-after') || response.headers.get('x-ratelimit-reset'))
+                : (response.headers as any)?.['retry-after'];
+            let retryMs = parseRetryAfterHeader(rawHeader);
+            if (retryMs === null && typeof (response as any).clone === 'function') {
+                const errorClone = await (response as any).clone().text().catch(() => '');
+                retryMs = parseRetryAfterMs(errorClone, 0, 100, 30000);
+            }
+            if (retryMs !== null && retryMs > 0 && retryMs <= 8000) {
+                const jitterMs = Math.floor(Math.random() * 600) + 200; // 200-800ms jitter
+                await new Promise((r) => setTimeout(r, retryMs + jitterMs));
+                try {
+                    response = await attemptFetch(activeJson);
+                } catch {
+                    // fall through to error handling below
+                }
+            }
+        }
     }
 
     if (!response.ok) {

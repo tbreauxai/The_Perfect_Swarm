@@ -1,38 +1,44 @@
 [
   {
-    "id": "goal-1-math-hash-token-dedup",
-    "description": "Foundational Zero-Risk Utility Deduplication: Extract djb2Hash (src/swarm/utils/hash.ts), probability math clamp/logit/sigmoid (src/swarm/math/probabilityMath.ts), consolidate vector cosine similarity (src/swarm/vectorIndex/metricMath.ts / vectorMath.ts), unify token estimation on TokenEstimator, and extract HTTP retry-after parser (src/swarm/utils/httpTimeouts.ts).",
+    "id": "goal-1-token-estimator",
+    "description": "Syntax-Aware Token Estimator & Limiter Integration: Implement estimatePayloadTokens in TokenEstimator distinguishing JSON/punctuation (len/2.2), uppercase/keys (len/2.8), and natural text (len/4.0) with a 1.12x JSON safety buffer; update limiter.ts estimateTokens to accept structured payloads.",
     "status": "completed",
-    "verification": "All extracted helpers unit tested; existing consumer modules updated; 100% test pass on affected modules; npm run lint passes with 0 errors."
+    "verification": "Unit tests for estimatePayloadTokens pass; dense JSON payload estimation error within ±8%; limiter.estimateTokens supports string/object; tsc --noEmit passes.",
+    "evidence": "src/swarm/compression/tokenEstimator.ts updated with estimatePayloadTokens; src/swarm/providers/limiter.ts estimateTokens delegates string/object; src/swarm/agent.ts LimiterRunRequest tokens updated. 9/9 unit tests pass in src/swarm/compression/tokenEstimator.test.ts with <8% error margin on dense JSON. Full vitest suite 110/110 passed (959/959)."
   },
   {
-    "id": "goal-2-vector-cache-index-dedup",
-    "description": "Vector Index & Semantic Cache Deduplication: Extract abstract BaseVectorIndex<T> (src/swarm/vectorIndex/baseIndex.ts) for hnswIndex and vpTreeIndex; extract generic SemanticVectorCache<T> (src/swarm/cache/semanticVectorCache.ts) deduplicating LRU, TTL, and vector search across actionPlanCache and semanticCacheInterceptor.",
+    "id": "goal-2-token-backpressure-circuit-isolation",
+    "description": "Resilient Token Backpressure & Circuit Breaker Isolation: Introduce configurable maxBudgetWaitMs in ProviderLimitConfig (default 65s); replace immediate LimiterSkipError with await sleep(wait) when wait <= maxBudgetWaitMs; split classifyProviderError into rate_limit vs server_error to prevent transient 429s from tripping circuit breaker; parse Retry-After/x-ratelimit-reset with jitter retry.",
     "status": "completed",
-    "verification": "HNSW, VPTree, ActionPlanCache, and SemanticCacheInterceptor pass all existing test suites without regression; tsc --noEmit passes."
+    "verification": "15,000 token load on Groq waits without skip error; simulated 429 with Retry-After retries successfully without incrementing breaker failure count; unit tests pass.",
+    "evidence": "Introduced maxBudgetWaitMs (65s strict, 10s interactive). Queueing via sleep(wait) replaces premature failovers. classifyProviderError splits rate_limit vs server_error, preventing 429 bursts from opening circuit. Retry-After / x-ratelimit-reset parsed with 200-800ms jitter retry in baseOpenAi.ts & gemini.ts. AC-02 and AC-03 verified in src/swarm/providers/limiterBackpressure.test.ts (5/5 pass). Full suite: 111/111 files, 964/964 tests pass."
   },
   {
-    "id": "goal-3-provider-streaming-tool-dedup",
-    "description": "Provider Adapters, SSE Streaming & Engine Tool Execution: Implement shared OpenAI-compatible REST call helper (src/swarm/providers/baseOpenAi.ts) for Groq/Mistral/OpenRouter/Nvidia/Cloudflare; extract shared SSE stream parser (src/swarm/utils/sseParser.ts); extract tool execution and context event recording helper (src/swarm/engine/toolExecutionHelper.ts).",
+    "id": "goal-3-dynamic-chunk-sizing",
+    "description": "Dynamic Provider-Aware Chunk Sizing: In clusterPipeline.ts & analystExecution.ts, dynamically calculate chunk threshold based on PROVIDER_LIMITS[provider].maxInputTokens (min(providerMax * 0.75, 6000)), guaranteeing no chunk overflows target provider input context.",
     "status": "completed",
-    "verification": "Provider adapters pass resilience and format rejection tests; SSE parser passes client tests; tool execution passes analyst execution tests."
+    "verification": "Groq chunk allocations never exceed 1,500 tokens; Gemini chunk allocations scale up to 6,000 tokens; unit and cluster tests pass.",
+    "evidence": "Implemented getProviderChunkLimits, fitChunkToProvider, and partitionChunkForProvider in analystExecution.ts and clusterPipeline.ts with targetChunkTokens = Math.min(providerMaxInputTokens * 0.75, 6000). Upgraded TokenEstimator.truncateToTokens to syntax-aware estimation. AC-04 verified in dynamicChunkSizing.test.ts. Full suite: 112/112 files, 967/967 tests passed."
   },
   {
-    "id": "goal-4-server-routes-and-cli-modularization",
-    "description": "Server Routes & CLI Decomposition: Decompose monolithic src/swarm/server/app.ts into modular Hono route controllers under src/swarm/server/routes/ (analyze.ts, feedback.ts, morning.ts, models.ts); modularize monolithic bin/cli.js into bin/commands/ with a clean command dispatcher.",
+    "id": "goal-4-wave-budget-pacing",
+    "description": "Pre-Flight Wave Budget Pacing: In clusterPipeline.ts, sum wave estimated tokens by target provider before Promise.all dispatch, query limiter.budgetWaitMs, and pace dispatches sequentially or introduce micro-spacing delays when budget is tight.",
     "status": "completed",
-    "verification": "src/swarm/server/app.test.ts (13/13) and bin/cli.js command invocations pass with identical behavior; server body parser limits intact."
+    "verification": "Wave concurrency does not trigger simultaneous burst rate limits on single-concurrency / low-TPM providers; pipeline execution tests pass.",
+    "evidence": "Implemented pre-flight wave token budget aggregation and sequential pacing in clusterPipeline.ts with micro-delays when globalProviderLimiter.budgetWaitMs > 0. Verified in waveBudgetPacing.test.ts (2/2 pass). Full suite: 113/113 files, 969/969 tests passed."
   },
   {
-    "id": "goal-5-ui-components-modularization",
-    "description": "Monolithic UI Components Modularization: Deduplicate OptimizationCombinationsTable and OptimizationHistoryTable into shared OptimizationResultsTable; decompose CortexDiagnosticsViewer into focused subcomponents; extract virtual list and timeline items from SwarmEventTimeline.",
+    "id": "goal-5-capacity-routing-affinity",
+    "description": "Context-Capacity Routing Affinity: In SpecialistAffinityRouter (router.ts), evaluate chunk token weight prior to role affinity; filter out low-capacity models (maxInputTokens <= 1500) when chunk payload > 1,500 tokens, directing large payloads to high-capacity providers (Gemini, NVIDIA).",
     "status": "completed",
-    "verification": "Frontend components compile cleanly; vitest component tests pass; no UI visual regressions."
+    "verification": "Chunks > 1,500 tokens are never routed to Groq; routing affinity tests pass with 100% adherence to model limits without blacklisting.",
+    "evidence": "Implemented context-capacity filtering in SpecialistAffinityRouter.planDistribution (filtering out maxInputTokens <= 1500 providers when chunk > 1,500 tokens) using TokenEstimator. Re-exported router from router.ts. Verified in capacityRoutingAffinity.test.ts (5/5 pass). Full suite: 114/114 files, 974/974 tests passed."
   },
   {
-    "id": "goal-6-system-verification-and-benchmarking",
-    "description": "End-to-End System Verification & Regression Suite: Execute full repository verification suite including lint, unit tests, portable test suite, distribution bundle tests, production build, and 50k-row stress simulation.",
+    "id": "goal-6-hierarchical-map-reduce-and-verification",
+    "description": "Hierarchical Map-Reduce Synthesis & End-to-End Verification: For chunk counts > 6, construct 2-tier tree reduction in clusterPipeline.ts synthesizing batches of 3-4 analyst chunk reports into intermediate ClusterDigests before root synthesis; verify all AC-01 to AC-06 criteria, run full test suite and benchmark simulation.",
     "status": "completed",
-    "verification": "npm run lint (0 errors), npm run test:unit (926/926 pass across 104 files), npm run test:portable (pass), npm run test:dist (pass), npm run build:swarm (pass), test-large-data-simulation.ts (pass)."
+    "verification": "Tree reduction keeps root manager input under 4,000 tokens for 20+ chunks; AC-01 to AC-06 verified; npm run lint passes (0 errors); all unit and portable test suites pass.",
+    "evidence": "Constructed 2-tier tree reduction in clusterPipeline.ts partitioning reports into sub-manager intermediate ClusterDigests. Updated compileSynthesisPrompt in synthesisPipeline.ts so root manager synthesizes only the resulting ClusterDigests with strict token capping (< 4000 tokens) using TokenEstimator. Verified in hierarchicalMapReduce.test.ts (2/2 pass). Full test verification passed: npm run lint (0 errors), npm run test:unit (115/115 files, 976/976 tests), npm run test:portable, npm run test:simulation, npm run test:dist, npm run test:cli, npm run test:server."
   }
 ]

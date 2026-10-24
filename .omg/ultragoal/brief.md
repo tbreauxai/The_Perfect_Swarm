@@ -1,38 +1,51 @@
-# Ultragoal Brief: Code Audit Modularization & Deduplication
+# Ultragoal Brief: Zero-Failover & High-Throughput Swarm Engine for Massive Datasets
 
 ## Core Objective
-Implement the modularization changes and code deduplications identified in the comprehensive Code Audit Report ([code_audit_report.md](file:///C:/Users/psych/.gemini/antigravity-ide/brain/8544bb9d-6f65-443d-bd6b-6591f662ddf3/code_audit_report.md)). Transform monolithic modules into high-cohesion, single-responsibility units, and extract shared utilities across math, hashing, token estimation, vector indexing, caching, provider adapters, SSE streaming, server routes, and frontend diagnostic components with 100% backward compatibility and zero test regressions.
+Eliminate model failover cascades, rate-limit drops (HTTP 429/503), and circuit breaker lockouts across heterogeneous provider tiers (Groq, Gemini, Mistral, OpenRouter, NVIDIA, Cloudflare) when processing high-volume structured payloads (>500KB, 20+ chunks) as defined in [plans/prd_swarm_zero_failover.md](file:///C:/Dev/Workspaces/The_Perfect_Swarm/plans/prd_swarm_zero_failover.md).
 
-## Scope & Key Phases
-1. **Phase 1: Foundational Zero-Risk Utility Deduplication (`goal-1-math-hash-token-dedup`)**:
-   - Extract `djb2Hash` in [src/swarm/utils/hash.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/utils/hash.ts) (unifying [tokenizer.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/memory/tokenizer.ts), [embeddings.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/memory/embeddings.ts), [agentExperiment.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/experiment/agentExperiment.ts), [semanticSimilarityEngine.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/cache/semanticSimilarityEngine.ts)).
-   - Extract probability math (`clampProbability`, `logit`, `sigmoid`) in [src/swarm/math/probabilityMath.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/math/probabilityMath.ts) (unifying [probabilityCalibration.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/feedback/probabilityCalibration.ts) and [predictionEnsemble.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/engine/predictionEnsemble.ts)).
-   - Consolidate vector cosine similarity on [src/swarm/vectorIndex/metricMath.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/vectorIndex/metricMath.ts) and [src/swarm/memory/vectorMath.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/memory/vectorMath.ts), removing duplicate loops in [conceptDriftDetector.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/feedback/conceptDriftDetector.ts) and [cortex.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/memory/cortex.ts).
-   - Consolidate token counting onto [TokenEstimator](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/compression/tokenEstimator.ts) with `estimateFromChars` and `estimateFromText`.
-   - Extract HTTP `retry-after` parser to [src/swarm/utils/httpTimeouts.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/utils/httpTimeouts.ts) (unifying [adaptiveLoadBalancer.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/loadBalancer/adaptiveLoadBalancer.ts) and [optimizationCaches.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/components/optimization/optimizationCaches.ts)).
+## Key Success Metrics (KPIs)
+- **Zero Premature Failovers**: 0 failovers caused by token budget estimation errors or arbitrary wait caps (`MAX_BUDGET_WAIT_MS`).
+- **Zero False Circuit Tripping**: Circuit breaker only opens on persistent fatal 5xx or exhausted daily quotas, never on transient 429 bursts with short `Retry-After` headers.
+- **Provider Capacity Alignment**: 100% adherence of chunk sizes to target provider `maxInputTokens`.
+- **Token Estimation Precision**: Token estimation error margin reduced from ±45% to <±8% on structured JSON and log streams.
 
-2. **Phase 2: Vector Index & Semantic Cache Deduplication (`goal-2-vector-cache-index-dedup`)**:
-   - Extract `BaseVectorIndex<T>` in [src/swarm/vectorIndex/baseIndex.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/vectorIndex/baseIndex.ts) for [hnswIndex.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/vectorIndex/hnswIndex.ts) and [vpTreeIndex.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/vectorIndex/vpTreeIndex.ts).
-   - Extract generic `SemanticVectorCache<T>` in [src/swarm/cache/semanticVectorCache.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/cache/semanticVectorCache.ts) deduplicating shared LRU, TTL, and vector search in [actionPlanCache.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/actionPlanCache.ts) and [semanticCacheInterceptor.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/semanticCacheInterceptor.ts).
+## Scope & Micro-Goals
+1. **Goal 1: Syntax-Aware Token Estimator (`goal-1-token-estimator`)**:
+   - Add `estimatePayloadTokens(input: string | object | unknown): number` to `TokenEstimator`.
+   - Fast regex heuristics distinguishing punctuation/keys (`len / 2.2`), uppercase/identifiers (`len / 2.8`), and natural language (`len / 4.0`) with 1.12x JSON safety buffer.
+   - Update `src/swarm/providers/limiter.ts` so `estimateTokens` accepts payload strings/objects and delegates to `estimatePayloadTokens`.
+   - Update `LimiterRunRequest` token estimation accuracy.
+   - Verification: AC-01 (±8% token precision against dense JSON payloads).
 
-3. **Phase 3: Provider Adapters, SSE Streaming & Engine Tool Execution (`goal-3-provider-streaming-tool-dedup`)**:
-   - Shared OpenAI-compatible REST call executor / base adapter in [src/swarm/providers/baseOpenAi.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/providers/baseOpenAi.ts) deduplicating 400 rejection retry, timeout handling, and 429 parsing across [groq.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/providers/groq.ts), [mistral.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/providers/mistral.ts), [openrouter.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/providers/openrouter.ts), [nvidia.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/providers/nvidia.ts), and [cloudflare.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/providers/cloudflare.ts).
-   - Shared SSE stream parser in [src/swarm/utils/sseParser.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/utils/sseParser.ts) unifying [client.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/client.ts) and [useSwarmExecution.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/hooks/useSwarmExecution.ts).
-   - Shared tool execution & context event recorder helper [src/swarm/engine/toolExecutionHelper.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/engine/toolExecutionHelper.ts) unifying [analystExecution.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/engine/analystExecution.ts), [fastPath.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/engine/fastPath.ts), and [clusterPipeline.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/engine/clusterPipeline.ts).
+2. **Goal 2: Resilient Token Backpressure & Circuit Breaker Isolation (`goal-2-token-backpressure-circuit-isolation`)**:
+   - Add configurable `maxBudgetWaitMs` in `ProviderLimitConfig` (default 65,000ms for strict backpressure, 10,000ms for interactive fail-fast).
+   - Await `sleep(wait)` when `budgetWaitMs > 0` but `<= maxBudgetWaitMs` rather than throwing `LimiterSkipError`.
+   - Split `classifyProviderError` into `rate_limit` (429) vs `server_error` (5xx). Transient 429s must NOT trip breaker unless all retries fail.
+   - Parse `retry-after` and `x-ratelimit-reset` in provider adapters (`groq.ts`, `gemini.ts`, `adapter.ts`); sleep `retry-after + randomJitter(200-800ms)` and retry before failing over.
+   - Verification: AC-02, AC-03 (zero premature failover under Groq 7,000 TPM limit, 429 Retry-After handling).
 
-4. **Phase 4: Server Routes & CLI Decomposition (`goal-4-server-routes-and-cli-modularization`)**:
-   - Decompose monolithic [src/swarm/server/app.ts](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/swarm/server/app.ts) into modular Hono route handlers under `src/swarm/server/routes/` (`analyze.ts`, `feedback.ts`, `morning.ts`, `models.ts`).
-   - Modularize monolithic [bin/cli.js](file:///C:/Dev/Workspaces/The_Perfect_Swarm/bin/cli.js) into `bin/commands/` (`doctor.js`, `init.js`, `run.js`, `bench.js`, etc.) with a clean command dispatcher.
+3. **Goal 3: Dynamic Provider-Aware Chunk Sizing (`goal-3-dynamic-chunk-sizing`)**:
+   - In `clusterPipeline.ts` & `analystExecution.ts`, read `PROVIDER_LIMITS[assignedProvider].maxInputTokens`.
+   - Calculate dynamic chunk threshold: `targetChunkTokens = Math.min(providerMaxInputTokens * 0.75, 6000)`.
+   - Guarantee no chunk exceeds assigned model's input budget.
+   - Verification: AC-04 (Groq <= 1,500 tokens, Gemini <= 6,000 tokens).
 
-5. **Phase 5: Monolithic UI Components Modularization (`goal-5-ui-components-modularization`)**:
-   - Deduplicate [OptimizationCombinationsTable.tsx](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/components/optimization/OptimizationCombinationsTable.tsx) and [OptimizationHistoryTable.tsx](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/components/optimization/OptimizationHistoryTable.tsx) into shared `<OptimizationResultsTable />`.
-   - Decompose [CortexDiagnosticsViewer.tsx](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/components/CortexDiagnosticsViewer.tsx) into focused subcomponents (`CortexOverviewCard`, `SeatAccuracyTable`, `CalibrationPanel`).
-   - Extract timeline item and virtual list helpers from [SwarmEventTimeline.tsx](file:///C:/Dev/Workspaces/The_Perfect_Swarm/src/components/SwarmEventTimeline.tsx).
+4. **Goal 4: Pre-Flight Wave Budget Pacing (`goal-4-wave-budget-pacing`)**:
+   - In `clusterPipeline.ts`, calculate sum of estimated tokens across wave items grouped by target provider.
+   - Query `globalProviderLimiter.budgetWaitMs(provider, waveSumTokens)`.
+   - Pace chunk dispatches sequentially or introduce micro-delays between tasks to avoid simultaneous TPM consumption.
 
-6. **Phase 6: End-to-End System Verification & Regression Suite (`goal-6-system-verification-and-benchmarking`)**:
-   - Run `npm run lint` (`tsc --noEmit`), `npm run test:unit`, `npm run test:portable`, `npm run test:dist`, and `npm run build:swarm`.
+5. **Goal 5: Context-Capacity Routing Affinity (`goal-5-capacity-routing-affinity`)**:
+   - In `SpecialistAffinityRouter` (`src/swarm/router.ts`), evaluate payload token weight before evaluating role affinity.
+   - Filter out low-capacity providers (`maxInputTokens <= 1500`) when chunk tokens > 1,500.
+   - Route high-volume chunks to high-capacity providers (Gemini, NVIDIA) and reserve Groq for synthesis, routing, and short scorecards.
 
-## Constraints & Architectural Invariants
-- 100% Backward Compatibility: Preserving all root facades, export paths in `package.json`, and function signatures.
-- Zero Test Regressions: 98/98 test files (892/892 tests) must pass after every micro-goal.
-- Preserved Model & Provider Policies: Strict adherence to existing provider chains, timeouts, and rate pacing.
+6. **Goal 6: Hierarchical Map-Reduce Synthesis & End-to-End Verification (`goal-6-hierarchical-map-reduce-and-verification`)**:
+   - In `clusterPipeline.ts`, build 2-tier tree reduction for chunk count > 6: sub-managers synthesize batches of 3-4 analyst chunk reports into intermediate `ClusterDigest` summaries, then root manager synthesizes digests.
+   - Enforce strict token capping on intermediate summaries (< 4,000 tokens).
+   - Verification: AC-05, AC-06 (`npm test`, `npm run lint`, full regression suite and benchmark simulation).
+
+## Architectural Invariants & Constraints
+- **Zero Model Blacklisting**: Never ban, blacklist, or silently substitute user-configured models (`MEMORY.md`).
+- **Zero Removal of User Models**: User-specified model strings must pass through `isValidModel` without modification.
+- **Zero Test Regressions**: All existing unit and portable test suites must pass without regression.

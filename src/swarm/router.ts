@@ -191,3 +191,12 @@ export class ModelRouter {
         return agent;
     }
 }
+
+
+export { SpecialistAffinityRouter, globalSpecialistRouter } from './loadBalancer/specialistAffinityRouter.ts';
+export type {
+    SpecialistCandidate,
+    SpecialistRoutingPlan,
+    ChunkAssignment,
+    SpecialistDomainRule
+} from './loadBalancer/specialistAffinityRouter.ts';

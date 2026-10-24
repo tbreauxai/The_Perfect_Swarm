@@ -2,6 +2,8 @@ import { TokenBudgetManager, globalTokenBudgetManager } from './tokenBudgetManag
 import { SpecialistCapabilityProfiler, globalSpecialistProfiler } from './specialistCapabilityProfiler.ts';
 import { NodeCapacityManager, globalNodeCapacityManager } from './nodeCapacityManager.ts';
 import { AdaptiveLoadBalancer, globalLoadBalancer } from './adaptiveLoadBalancer.ts';
+import { TokenEstimator } from '../compression/tokenEstimator.ts';
+import { PROVIDER_LIMITS } from '../providers/limiter.ts';
 export interface SpecialistDomainRule {
     domain: string;
     roleKeywords: string[];
@@ -171,11 +173,40 @@ export class SpecialistAffinityRouter {
 
         for (let i = 0; i < chunks.length; i++) {
             const chunk = chunks[i];
-            const estTokens = Math.max(10, Math.ceil(chunk.length / 4));
+            const estTokens = Math.max(10, TokenEstimator.estimatePayloadTokens(chunk));
             totalEstTokens += estTokens;
             const combinedContent = `${task}\n${chunk}`;
 
-            const candidates = agents.map(agent => {
+            // Context-Capacity Filtering:
+            // Evaluate payload token weight prior to role affinity.
+            // If chunk estimated tokens > 1,500, filter out low-capacity providers (maxInputTokens <= 1500, e.g. Groq)
+            // from the candidate pool, directing large payloads to high-capacity providers (Gemini, NVIDIA).
+            let eligibleAgents = agents;
+            if (estTokens > 1500) {
+                const highCapacityAgents = agents.filter(agent => {
+                    const provKey = (agent.provider || '').toLowerCase();
+                    const limit = PROVIDER_LIMITS[provKey];
+                    if (limit && typeof limit.maxInputTokens === 'number') {
+                        return limit.maxInputTokens > 1500 && limit.maxInputTokens >= estTokens;
+                    }
+                    return true;
+                });
+
+                if (highCapacityAgents.length > 0) {
+                    eligibleAgents = highCapacityAgents;
+                } else {
+                    const fallbackHigh = agents.filter(agent => {
+                        const provKey = (agent.provider || '').toLowerCase();
+                        const limit = PROVIDER_LIMITS[provKey];
+                        return !limit || (limit.maxInputTokens ?? Infinity) > 1500;
+                    });
+                    if (fallbackHigh.length > 0) {
+                        eligibleAgents = fallbackHigh;
+                    }
+                }
+            }
+
+            const candidates = eligibleAgents.map(agent => {
                 const nodeKey = agent.id || agent.role;
                 const { score: affinity, matchedDomain } = this.scoreAffinity(agent.role, combinedContent);
 

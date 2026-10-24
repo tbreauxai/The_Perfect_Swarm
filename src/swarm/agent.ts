@@ -5,7 +5,8 @@ import { ProviderRegistry } from './providers/registry.ts';
 import { sanitizeModelOutput } from './providers/adapter.ts';
 import { SwarmTracer } from './profiler.ts';
 import { globalLoadBalancer, type AdaptiveLoadBalancer } from './loadBalancer.ts';
-import { globalProviderLimiter, estimateTokens, PROVIDER_CALL_TIMEOUT_MS, MAX_BUDGET_WAIT_MS } from './providers/limiter.ts';
+import { globalProviderLimiter, estimateTokens, PROVIDER_CALL_TIMEOUT_MS, MAX_BUDGET_WAIT_MS, DEFAULT_STRICT_BUDGET_WAIT_MS, INTERACTIVE_MAX_BUDGET_WAIT_MS } from './providers/limiter.ts';
+import { parseRetryAfterMs } from './utils/httpTimeouts.ts';
 import { isModelDead, DEFAULT_PROVIDER_MODELS } from './server/modelsProvider.ts';
 import { groqPromptCharCap } from './providers/groq.ts';
 import { globalPayloadCache, PayloadCache } from './cache.ts';
@@ -119,11 +120,19 @@ export class Agent {
             // Don't call a provider the limiter already knows will refuse. A circuit,
             // a dead model, or a token budget that needs more than the wait cap is not
             // an error worth logging: move to the next target.
+            const maxBudgetWait = config?.interactive
+                ? INTERACTIVE_MAX_BUDGET_WAIT_MS
+                : (config?.maxBudgetWaitMs ?? DEFAULT_STRICT_BUDGET_WAIT_MS);
             const knownSkip = globalProviderLimiter.getSkipReason(String(currentTarget.provider), targetModel);
             const promptCharCap = currentTarget.provider === 'groq' ? groqPromptCharCap(config?.groqMode) : prompt.length;
-            const estChars = Math.min(prompt.length, promptCharCap) + (this.systemInstruction?.length || 0);
-            const budgetWait = globalProviderLimiter.budgetWaitMs(String(currentTarget.provider), estimateTokens(estChars));
-            if (knownSkip || budgetWait > MAX_BUDGET_WAIT_MS) {
+            const effectivePrompt = currentTarget.provider === 'groq' && prompt.length > promptCharCap
+                ? prompt.slice(0, promptCharCap)
+                : prompt;
+            const payloadToEstimate = this.systemInstruction
+                ? `${this.systemInstruction}\n${effectivePrompt}`
+                : effectivePrompt;
+            const budgetWait = globalProviderLimiter.budgetWaitMs(String(currentTarget.provider), estimateTokens(payloadToEstimate));
+            if (knownSkip || budgetWait > maxBudgetWait) {
                 lastFailedProvider = String(currentTarget.provider);
                 lastFailedModel = targetModel;
                 lastError = new Error(knownSkip || `token budget needs ${Math.ceil(budgetWait)}ms`);
@@ -174,9 +183,19 @@ export class Agent {
                         const targetModel = currentTarget.modelName || (currentTarget.provider === this.provider ? this.modelName : (DEFAULT_PROVIDER_MODELS[currentTarget.provider] || this.modelName));
                         // Budget estimate (chars/4) uses what the adapter will actually send: Groq caps the prompt by mode (chat 18k / morning 6k).
                         const promptCharCap = currentTarget.provider === 'groq' ? groqPromptCharCap(effectiveConfig.groqMode) : prompt.length;
-                        const estChars = Math.min(prompt.length, promptCharCap) + (this.systemInstruction?.length || 0);
+                        const effectivePrompt = currentTarget.provider === 'groq' && prompt.length > promptCharCap
+                            ? prompt.slice(0, promptCharCap)
+                            : prompt;
+                        const payloadToEstimate = this.systemInstruction
+                            ? `${this.systemInstruction}\n${effectivePrompt}`
+                            : effectivePrompt;
                         textOutput = await globalProviderLimiter.run(
-                            { provider: String(currentTarget.provider), model: targetModel, estTokens: estimateTokens(estChars) },
+                            {
+                                provider: String(currentTarget.provider),
+                                model: targetModel,
+                                estTokens: estimateTokens(payloadToEstimate),
+                                maxBudgetWaitMs: maxBudgetWait
+                            },
                             () => lb.executeWithTelemetry(
                                 currentTarget.provider,
                                 () => adapter.call({

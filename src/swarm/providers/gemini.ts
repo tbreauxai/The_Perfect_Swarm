@@ -1,6 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 import { cleanToken, sanitizeModelOutput, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
 import { globalTelemetryCollector, estimateTokens } from '../telemetry.ts';
+import { parseRetryAfterMs } from '../utils/httpTimeouts.ts';
 
 export class GeminiAdapter implements ProviderAdapter {
     readonly providerName = 'gemini';
@@ -91,11 +92,22 @@ export class GeminiAdapter implements ProviderAdapter {
                 errStr.includes('RESOURCE_EXHAUSTED') ||
                 errStr.includes('quota')
             ) {
-                if (!errStr.startsWith('[RATE_LIMIT_429]')) {
+                const retryMs = parseRetryAfterMs(error, 0, 100, 30000);
+                if (retryMs > 0 && retryMs <= 8000) {
+                    const jitterMs = Math.floor(Math.random() * 600) + 200;
+                    await new Promise(r => setTimeout(r, retryMs + jitterMs));
+                    try {
+                        response = await executeGeneration(activeConfig);
+                    } catch (retryErr: any) {
+                        const retryErrStr = String(retryErr?.message || retryErr || '');
+                        throw new Error(`[RATE_LIMIT_429] Gemini quota/rate limit exceeded: ${retryErrStr}`);
+                    }
+                } else if (!errStr.startsWith('[RATE_LIMIT_429]')) {
                     throw new Error(`[RATE_LIMIT_429] Gemini quota/rate limit exceeded: ${errStr}`);
                 }
+            } else {
+                throw error;
             }
-            throw error;
         }
 
         const durationMs = Date.now() - startTime;

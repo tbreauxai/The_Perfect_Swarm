@@ -39,7 +39,9 @@ import {
 import { publishInteragentCoordination } from './coordinationPipeline.ts';
 import type { MemoryCortex } from '../memory.ts';
 import { setupClusterTopology } from './clusterTopology.ts';
-import { createAnalystExecutor } from './analystExecution.ts';
+import { createAnalystExecutor, getProviderChunkLimits } from './analystExecution.ts';
+import { TokenEstimator } from '../compression/tokenEstimator.ts';
+import { globalProviderLimiter, PROVIDER_LIMITS } from '../providers/limiter.ts';
 import { isScorecardMode } from './scorecard.ts';
 import { evaluateEarlyExit } from './earlyExit.ts';
 
@@ -79,6 +81,37 @@ export interface ClusterPipelineResult {
     workflowCompressedPromptTokens: number;
     workflowPromptTokensSaved: number;
     workflowDeduplicatedCount: number;
+}
+
+/**
+ * Splits or partitions payload segments based on assigned provider token capacity:
+ * targetChunkTokens = Math.min(providerMaxInputTokens * 0.75, 6000).
+ * Guarantees no chunk exceeds the assigned model's input budget.
+ */
+export function partitionChunkForProvider(chunk: string, provider: string): string[] {
+    const { maxInputTokens, targetChunkTokens } = getProviderChunkLimits(provider);
+    const estTokens = TokenEstimator.estimatePayloadTokens(chunk);
+    if (estTokens <= maxInputTokens) {
+        return [chunk];
+    }
+
+    const lines = chunk.split('\n');
+    const parts: string[] = [];
+    let current = '';
+
+    for (const line of lines) {
+        const test = current ? `${current}\n${line}` : line;
+        if (TokenEstimator.estimatePayloadTokens(test) > targetChunkTokens && current.length > 0) {
+            parts.push(current);
+            current = line;
+        } else {
+            current = test;
+        }
+    }
+    if (current.trim().length > 0) {
+        parts.push(current);
+    }
+    return parts.length > 0 ? parts : [chunk];
 }
 
 export async function runClusterPipeline(p: ClusterPipelineParams): Promise<ClusterPipelineResult> {
@@ -140,9 +173,19 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
             const unassigned = analysts.filter(a => !assignedRoles.has(a.role));
             if (unassigned.length > 0) {
                 unassigned.forEach((analyst, uIdx) => {
-                    const chunkIdx = uIdx % chunks.length;
+                    const provLimit = PROVIDER_LIMITS[analyst.provider?.toLowerCase()];
+                    const maxCap = provLimit?.maxInputTokens ?? Infinity;
+                    let chunkIdx = uIdx % chunks.length;
+
+                    if (maxCap <= 1500) {
+                        const fittingIdx = chunks.findIndex(c => TokenEstimator.estimatePayloadTokens(c) <= maxCap);
+                        if (fittingIdx >= 0) {
+                            chunkIdx = fittingIdx;
+                        }
+                    }
+
                     const chunk = chunks[chunkIdx];
-                    const estTokens = Math.max(10, Math.ceil(chunk.length / 4));
+                    const estTokens = Math.max(10, TokenEstimator.estimatePayloadTokens(chunk));
                     const { score: affinity, matchedDomain } = globalSpecialistRouter.scoreAffinity(analyst.role, `${task}\n${chunk}`);
                     globalTokenBudgetManager.recordUsage(analyst.provider, estTokens, analyst.role);
                     routingPlan.assignments.push({
@@ -171,7 +214,7 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
                 });
             }
         } else {
-            const estTokens = Math.max(10, Math.ceil(chunks[0].length / 4));
+            const estTokens = Math.max(10, TokenEstimator.estimatePayloadTokens(chunks[0]));
             const assignments = analysts.map(analyst => {
                 const { score: affinity, matchedDomain } = globalSpecialistRouter.scoreAffinity(analyst.role, `${task}\n${chunks[0]}`);
                 globalTokenBudgetManager.recordUsage(analyst.provider, estTokens, analyst.role);
@@ -297,7 +340,7 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
                 schedTasks = routingPlan.assignments.map((assignment, taskIdx) => {
                     const chunk = chunks[assignment.chunkIndex] || chunks[0];
                     const assignedAnalyst = analysts.find(a => a.role === assignment.agentRole) || analysts[taskIdx % analysts.length];
-                    const estTokens = assignment.estimatedTokens || Math.max(10, Math.ceil(chunk.length / 4));
+                    const estTokens = assignment.estimatedTokens || Math.max(10, TokenEstimator.estimatePayloadTokens(chunk));
                     return {
                         id: `chunk-task-${taskIdx}`,
                         priority: (assignment.chunkIndex === 0 ? 'high' : 'normal') as TaskPriority,
@@ -310,7 +353,7 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
                     };
                 });
             } else {
-                const estTokens = Math.max(10, Math.ceil(chunks[0].length / 4));
+                const estTokens = Math.max(10, TokenEstimator.estimatePayloadTokens(chunks[0]));
                 schedTasks = analysts.map((analyst, i) => {
                     return {
                         id: `analyst-task-${i}`,
@@ -448,9 +491,64 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
 
                 for (let w = 0; w < totalWaves; w++) {
                     const waveItems = chunkTasks.slice(w * waveSize, (w + 1) * waveSize);
-                    const waveReports = await Promise.all(
-                        waveItems.map(taskItem => executeAnalyst(taskItem.assignedAnalyst, taskItem.chunk, taskItem.i))
-                    );
+
+                    // Pre-Flight Wave Budget Pacing:
+                    // 1. Sum estimated tokens of all items in the wave grouped by target provider.
+                    const waveTokensByProvider = new Map<string, number>();
+                    for (const item of waveItems) {
+                        const prov = item.assignedAnalyst.provider?.toLowerCase() || 'default';
+                        const tokens = TokenEstimator.estimatePayloadTokens(item.chunk);
+                        waveTokensByProvider.set(prov, (waveTokensByProvider.get(prov) || 0) + tokens);
+                    }
+
+                    // 2. Query globalProviderLimiter.budgetWaitMs(provider, waveSumTokens).
+                    let requiresSequentialPacing = false;
+                    let maxProviderWaitMs = 0;
+                    for (const [prov, sumTokens] of waveTokensByProvider.entries()) {
+                        const wait = globalProviderLimiter.budgetWaitMs(prov, sumTokens);
+                        if (wait > 0) {
+                            requiresSequentialPacing = true;
+                            if (wait > maxProviderWaitMs) maxProviderWaitMs = wait;
+                        }
+                    }
+
+                    // 3. Pace dispatches sequentially with micro-delays or execute concurrently
+                    let waveReports: any[];
+                    if (requiresSequentialPacing) {
+                        context.addEvent({
+                            agentRole: 'Hierarchical Wave Scheduler',
+                            action: 'Wave Budget Pacing',
+                            modelName: 'Local/WaveScheduler',
+                            prompt: `Wave ${w + 1}/${totalWaves}: pacing ${waveItems.length} task(s) sequentially due to token budget backpressure (projected wait: ${Math.ceil(maxProviderWaitMs)}ms)`,
+                            output: {
+                                waveIndex: w + 1,
+                                waveSize: waveItems.length,
+                                tokensByProvider: Object.fromEntries(waveTokensByProvider.entries()),
+                                maxWaitMs: maxProviderWaitMs
+                            },
+                            durationMs: 0
+                        });
+
+                        waveReports = [];
+                        for (let idx = 0; idx < waveItems.length; idx++) {
+                            const taskItem = waveItems[idx];
+                            if (idx > 0) {
+                                const prov = taskItem.assignedAnalyst.provider?.toLowerCase() || '';
+                                const itemTokens = TokenEstimator.estimatePayloadTokens(taskItem.chunk);
+                                const itemWait = globalProviderLimiter.budgetWaitMs(prov, itemTokens);
+                                const microSpacing = itemWait > 0 ? Math.min(itemWait, 1000) : 100;
+                                if (microSpacing > 0) {
+                                    await new Promise(r => setTimeout(r, microSpacing));
+                                }
+                            }
+                            const rep = await executeAnalyst(taskItem.assignedAnalyst, taskItem.chunk, taskItem.i);
+                            waveReports.push(rep);
+                        }
+                    } else {
+                        waveReports = await Promise.all(
+                            waveItems.map(taskItem => executeAnalyst(taskItem.assignedAnalyst, taskItem.chunk, taskItem.i))
+                        );
+                    }
 
                     waveItems.forEach((taskItem, index) => {
                         const rep = waveReports[index];
@@ -534,6 +632,9 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
     }
 
     // 5. Hierarchical Communication Layer: Aggregate Cluster Digests
+    const totalReports = allAnalystReports.reduce((sum, reps) => sum + (reps ? reps.length : 0), 0);
+    const isHierarchicalTreeReduction = chunks.length > 6 || totalReports > 6;
+
     const clusterReportsMap: Record<string, SpecialistReportInput[]> = {};
     for (let a = 0; a < analysts.length; a++) {
         const analyst = analysts[a];
@@ -552,8 +653,40 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
     }
 
     const clusterDigests: Record<string, ClusterDigest> = {};
-    for (const [cId, reps] of Object.entries(clusterReportsMap)) {
-        clusterDigests[cId] = globalHierarchicalMessageBus.aggregateClusterReports(cId, reps);
+    if (isHierarchicalTreeReduction) {
+        // Module 6: 2-Tier Tree Reduction
+        // Sub-managers synthesize batches of 3-4 analyst chunk reports into intermediate ClusterDigest summaries
+        const batchSize = 4;
+        let subManagerIndex = 1;
+
+        for (const [cId, reps] of Object.entries(clusterReportsMap)) {
+            if (reps.length <= batchSize) {
+                clusterDigests[cId] = globalHierarchicalMessageBus.aggregateClusterReports(cId, reps);
+            } else {
+                for (let b = 0; b < reps.length; b += batchSize) {
+                    const batch = reps.slice(b, b + batchSize);
+                    const subClusterId = `${cId}-tier1-sub${subManagerIndex++}`;
+                    clusterDigests[subClusterId] = globalHierarchicalMessageBus.aggregateClusterReports(subClusterId, batch);
+                }
+            }
+        }
+
+        context.addEvent({
+            agentRole: 'Hierarchical Map-Reduce Coordinator',
+            action: 'Tree Reduction Synthesized',
+            modelName: 'Local/MapReduceCoordinator',
+            prompt: `2-tier tree reduction: partitioned ${totalReports} chunk report(s) into ${Object.keys(clusterDigests).length} intermediate sub-manager digest(s) (batch size: ${batchSize})`,
+            output: {
+                totalReports,
+                intermediateDigestsCount: Object.keys(clusterDigests).length,
+                digests: clusterDigests
+            },
+            durationMs: 0
+        });
+    } else {
+        for (const [cId, reps] of Object.entries(clusterReportsMap)) {
+            clusterDigests[cId] = globalHierarchicalMessageBus.aggregateClusterReports(cId, reps);
+        }
     }
     const latestClusterDigests = clusterDigests;
     const busMetrics = globalHierarchicalMessageBus.getMetrics();
