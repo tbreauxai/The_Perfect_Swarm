@@ -1,44 +1,44 @@
 [
   {
-    "id": "goal-1-token-estimator",
-    "description": "Syntax-Aware Token Estimator & Limiter Integration: Implement estimatePayloadTokens in TokenEstimator distinguishing JSON/punctuation (len/2.2), uppercase/keys (len/2.8), and natural text (len/4.0) with a 1.12x JSON safety buffer; update limiter.ts estimateTokens to accept structured payloads.",
+    "id": "goal-1-branch-and-startup-smoke",
+    "description": "Step 1: Create branch fix/judge-crosscheck from main 31f9aaa, verify scripts/smoke-start.mjs exists, create empty commit 'step 1'.",
     "status": "completed",
-    "verification": "Unit tests for estimatePayloadTokens pass; dense JSON payload estimation error within ±8%; limiter.estimateTokens supports string/object; tsc --noEmit passes.",
-    "evidence": "src/swarm/compression/tokenEstimator.ts updated with estimatePayloadTokens; src/swarm/providers/limiter.ts estimateTokens delegates string/object; src/swarm/agent.ts LimiterRunRequest tokens updated. 9/9 unit tests pass in src/swarm/compression/tokenEstimator.test.ts with <8% error margin on dense JSON. Full vitest suite 110/110 passed (959/959)."
+    "verification": "git ls-files scripts/smoke-start.mjs prints 1 line; git log -1 --format=%s is 'step 1'; npm run lint passes.",
+    "evidence": "Created branch fix/judge-crosscheck at 31f9aaa. scripts/smoke-start.mjs confirmed on disk. Empty commit step 1 created (8d69f48). npm run lint passed with 0 errors."
   },
   {
-    "id": "goal-2-token-backpressure-circuit-isolation",
-    "description": "Resilient Token Backpressure & Circuit Breaker Isolation: Introduce configurable maxBudgetWaitMs in ProviderLimitConfig (default 65s); replace immediate LimiterSkipError with await sleep(wait) when wait <= maxBudgetWaitMs; split classifyProviderError into rate_limit vs server_error to prevent transient 429s from tripping circuit breaker; parse Retry-After/x-ratelimit-reset with jitter retry.",
+    "id": "goal-2-cross-check-helpers",
+    "description": "Step 2: Add JUDGE_TOTAL_RANGES, JUDGE_MARKET_CAPS, JudgeMarketLines, and crossCheckJudgeOutput helper to src/swarm/morning/judgePrompt.ts.",
     "status": "completed",
-    "verification": "15,000 token load on Groq waits without skip error; simulated 429 with Retry-After retries successfully without incrementing breaker failure count; unit tests pass.",
-    "evidence": "Introduced maxBudgetWaitMs (65s strict, 10s interactive). Queueing via sleep(wait) replaces premature failovers. classifyProviderError splits rate_limit vs server_error, preventing 429 bursts from opening circuit. Retry-After / x-ratelimit-reset parsed with 200-800ms jitter retry in baseOpenAi.ts & gemini.ts. AC-02 and AC-03 verified in src/swarm/providers/limiterBackpressure.test.ts (5/5 pass). Full suite: 111/111 files, 964/964 tests pass."
+    "verification": "npm run lint passes; npx vitest run src/swarm/server/morning.test.ts passes; commit 'step 2'.",
+    "evidence": "Inserted JUDGE_TOTAL_RANGES, JUDGE_MARKET_CAPS, JudgeMarketLines, and crossCheckJudgeOutput into src/swarm/morning/judgePrompt.ts. npm run lint passed; morning.test.ts passed (28/28); commit 6be220f created."
   },
   {
-    "id": "goal-3-dynamic-chunk-sizing",
-    "description": "Dynamic Provider-Aware Chunk Sizing: In clusterPipeline.ts & analystExecution.ts, dynamically calculate chunk threshold based on PROVIDER_LIMITS[provider].maxInputTokens (min(providerMax * 0.75, 6000)), guaranteeing no chunk overflows target provider input context.",
+    "id": "goal-3-parser-rejection-wiring",
+    "description": "Step 3: Update parseAndValidateJudgeOutput in src/swarm/morning/judgePrompt.ts to accept market lines, track namedWinner, check sport range for fairTotal, and execute crossCheckJudgeOutput.",
     "status": "completed",
-    "verification": "Groq chunk allocations never exceed 1,500 tokens; Gemini chunk allocations scale up to 6,000 tokens; unit and cluster tests pass.",
-    "evidence": "Implemented getProviderChunkLimits, fitChunkToProvider, and partitionChunkForProvider in analystExecution.ts and clusterPipeline.ts with targetChunkTokens = Math.min(providerMaxInputTokens * 0.75, 6000). Upgraded TokenEstimator.truncateToTokens to syntax-aware estimation. AC-04 verified in dynamicChunkSizing.test.ts. Full suite: 112/112 files, 967/967 tests passed."
+    "verification": "npm run lint passes; npx vitest run src/swarm/server/morning.test.ts passes; commit 'step 3'.",
+    "evidence": "Added market parameter, namedWinner tracking, fairTotal positive & sport range check, and crossCheckJudgeOutput call in parseAndValidateJudgeOutput. Lint passed; morning.test.ts passed (28/28); commit acdd2e5 created."
   },
   {
-    "id": "goal-4-wave-budget-pacing",
-    "description": "Pre-Flight Wave Budget Pacing: In clusterPipeline.ts, sum wave estimated tokens by target provider before Promise.all dispatch, query limiter.budgetWaitMs, and pace dispatches sequentially or introduce micro-spacing delays when budget is tight.",
+    "id": "goal-4-judge-prompts-tuning",
+    "description": "Step 4: Update buildJudgePrompt and JUDGE_MANAGER_INSTRUCTION in src/swarm/morning/judgePrompt.ts to add NCAAF (30-80) and NCAAB (110-180) and replace 215.5 example with null.",
     "status": "completed",
-    "verification": "Wave concurrency does not trigger simultaneous burst rate limits on single-concurrency / low-TPM providers; pipeline execution tests pass.",
-    "evidence": "Implemented pre-flight wave token budget aggregation and sequential pacing in clusterPipeline.ts with micro-delays when globalProviderLimiter.budgetWaitMs > 0. Verified in waveBudgetPacing.test.ts (2/2 pass). Full suite: 113/113 files, 969/969 tests passed."
+    "verification": "npm run lint passes; git grep 215.5 in judgePrompt.ts prints nothing; git grep NCAAF: 30-80 prints 1 line; commit 'step 4'.",
+    "evidence": "Updated buildJudgePrompt and JUDGE_MANAGER_INSTRUCTION: added NCAAF: 30-80 and NCAAB: 110-180 ranges, replaced 215.5 with null. Greps confirmed 0 instances of 215.5 and 1 line for NCAAF. morning.test.ts passed (28/28); commit c6756bb created."
   },
   {
-    "id": "goal-5-capacity-routing-affinity",
-    "description": "Context-Capacity Routing Affinity: In SpecialistAffinityRouter (router.ts), evaluate chunk token weight prior to role affinity; filter out low-capacity models (maxInputTokens <= 1500) when chunk payload > 1,500 tokens, directing large payloads to high-capacity providers (Gemini, NVIDIA).",
+    "id": "goal-5-downstream-market-wiring",
+    "description": "Step 5: In src/swarm/morning/index.ts pass market lines to parseAndValidateJudgeOutput and update rejection error text; update tests in morning.test.ts and morningCacheBypass.test.ts.",
     "status": "completed",
-    "verification": "Chunks > 1,500 tokens are never routed to Groq; routing affinity tests pass with 100% adherence to model limits without blacklisting.",
-    "evidence": "Implemented context-capacity filtering in SpecialistAffinityRouter.planDistribution (filtering out maxInputTokens <= 1500 providers when chunk > 1,500 tokens) using TokenEstimator. Re-exported router from router.ts. Verified in capacityRoutingAffinity.test.ts (5/5 pass). Full suite: 114/114 files, 974/974 tests passed."
+    "verification": "npm run lint passes; npx vitest run src/swarm/server/morning.test.ts src/swarm/server/morningCacheBypass.test.ts green; commit 'step 5'.",
+    "evidence": "Passed market lines { spread, total } to parseAndValidateJudgeOutput in runMorningSlate. Updated rejection error message. Updated expected error assertion in morning.test.ts and flipped game 2 spread in morningCacheBypass.test.ts. Lint passed; vitest 30/30 passed; commit 1b91593 created."
   },
   {
-    "id": "goal-6-hierarchical-map-reduce-and-verification",
-    "description": "Hierarchical Map-Reduce Synthesis & End-to-End Verification: For chunk counts > 6, construct 2-tier tree reduction in clusterPipeline.ts synthesizing batches of 3-4 analyst chunk reports into intermediate ClusterDigests before root synthesis; verify all AC-01 to AC-06 criteria, run full test suite and benchmark simulation.",
+    "id": "goal-6-cross-check-test-and-verification",
+    "description": "Step 6: Create src/swarm/server/judgeCrossCheck.test.ts, commit 'step 6', and run complete final verification (lint, unit tests, simulation, build, smoke, strip-types scans).",
     "status": "completed",
-    "verification": "Tree reduction keeps root manager input under 4,000 tokens for 20+ chunks; AC-01 to AC-06 verified; npm run lint passes (0 errors); all unit and portable test suites pass.",
-    "evidence": "Constructed 2-tier tree reduction in clusterPipeline.ts partitioning reports into sub-manager intermediate ClusterDigests. Updated compileSynthesisPrompt in synthesisPipeline.ts so root manager synthesizes only the resulting ClusterDigests with strict token capping (< 4000 tokens) using TokenEstimator. Verified in hierarchicalMapReduce.test.ts (2/2 pass). Full test verification passed: npm run lint (0 errors), npm run test:unit (115/115 files, 976/976 tests), npm run test:portable, npm run test:simulation, npm run test:dist, npm run test:cli, npm run test:server."
+    "verification": "judgeCrossCheck.test.ts 8/8 pass; lint passes; unit tests all green; simulation passes; build passes; smoke-start passes; strip scans 0 non-erasable.",
+    "evidence": "judgeCrossCheck.test.ts 8/8 passed. Commit d1ebd08 'step 6' created. Full final verification passed: lint (0 errors), test:unit (116 files, 984 passed), test:simulation (exit 0), build (exit 0), smoke-start (exit 0), strip scan 1 (363 files, 0 non-erasable), strip scan 2 (0 errors in changed files), greps (0 for 215.5, 2 lines for crossCheckJudgeOutput), diff stat (5 files, +333 -12), git log (6 commits step 1..6)."
   }
 ]
