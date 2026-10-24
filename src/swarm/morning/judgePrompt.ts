@@ -276,6 +276,74 @@ function extractCandidateFromString(str: string): any {
 }
 
 /**
+ * Livetest 2026-10-24 bug 1: per-sport total ranges (same numbers as DuelOdds src/utils/meritVerdict.ts SPORT_TOTAL_SANITY_RANGES).
+ */
+export const JUDGE_TOTAL_RANGES: Record<string, { min: number; max: number }> = {
+  americanfootball_nfl: { min: 30, max: 65 },
+  americanfootball_ncaaf: { min: 30, max: 80 },
+  basketball_nba: { min: 190, max: 260 },
+  basketball_ncaab: { min: 110, max: 180 },
+  basketball_wnba: { min: 130, max: 190 },
+  baseball_mlb: { min: 5, max: 14 },
+  baseball_ncaa: { min: 5, max: 18 },
+  icehockey_nhl: { min: 4, max: 8 },
+};
+
+/** Max |fair - market| before a judgment is rejected (same caps as DuelOdds MODEL_DISAGREEMENT_CAPS). */
+export const JUDGE_MARKET_CAPS = { spread: 10, total: 12 };
+
+/** Posted market lines for the cross-check. spread is HOME perspective (negative = home favored), like fairSpread. */
+export type JudgeMarketLines = { spread?: number | null; total?: number | null } | null | undefined;
+
+function finiteOrNull(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Cross-checks a judgment's fields against each other, the sport and the market.
+ * Returns the reason it must be rejected, or null when it is coherent.
+ * - sign(fairSpread) (home perspective) must agree with winProbHome (> 0.5 = home favored) and with an explicitly named winner;
+ * - |fairSpread - market spread| <= 10;
+ * - fairTotal (when given) inside the sport's range and |fairTotal - market total| <= 12.
+ */
+export function crossCheckJudgeOutput(
+  judgment: { winProbHome: number; fairSpread: number; fairTotal: number | null; namedWinner: 'home' | 'away' | null },
+  sportKey?: string,
+  market?: JudgeMarketLines
+): string | null {
+  const { winProbHome, fairSpread, fairTotal, namedWinner } = judgment;
+  if (winProbHome > 0.5 && fairSpread > 0) {
+    return `fairSpread ${fairSpread} favors the away team but winProbHome is ${winProbHome}`;
+  }
+  if (winProbHome < 0.5 && fairSpread < 0) {
+    return `fairSpread ${fairSpread} favors the home team but winProbHome is ${winProbHome}`;
+  }
+  if (namedWinner === 'home' && winProbHome < 0.5) {
+    return `likelyWinner is the home team but winProbHome is ${winProbHome}`;
+  }
+  if (namedWinner === 'away' && winProbHome > 0.5) {
+    return `likelyWinner is the away team but winProbHome is ${winProbHome}`;
+  }
+  const marketSpread = finiteOrNull(market?.spread);
+  if (marketSpread !== null && Math.abs(fairSpread - marketSpread) > JUDGE_MARKET_CAPS.spread) {
+    return `fairSpread ${fairSpread} is ${Math.abs(fairSpread - marketSpread)} from the market ${marketSpread} (cap ${JUDGE_MARKET_CAPS.spread})`;
+  }
+  if (fairTotal !== null) {
+    const range = sportKey ? JUDGE_TOTAL_RANGES[sportKey.toLowerCase().trim()] : undefined;
+    if (range && (fairTotal < range.min || fairTotal > range.max)) {
+      return `fairTotal ${fairTotal} is outside the ${sportKey} range ${range.min}-${range.max}`;
+    }
+    const marketTotal = finiteOrNull(market?.total);
+    if (marketTotal !== null && Math.abs(fairTotal - marketTotal) > JUDGE_MARKET_CAPS.total) {
+      return `fairTotal ${fairTotal} is ${Math.abs(fairTotal - marketTotal)} from the market ${marketTotal} (cap ${JUDGE_MARKET_CAPS.total})`;
+    }
+  }
+  return null;
+}
+
+/**
  * Safely parses and validates the judge output from the Swarm analysis.
  * Strict validation: never defaults missing probabilities or fair spread to 50%/0.
  */
