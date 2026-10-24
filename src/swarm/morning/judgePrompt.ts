@@ -352,7 +352,8 @@ export function parseAndValidateJudgeOutput(
   homeTeam: string,
   awayTeam: string,
   sportKey?: string,
-  swarmWorkflowId?: string | null
+  swarmWorkflowId?: string | null,
+  market?: JudgeMarketLines
 ): MorningJudgeOutput | null {
   if (!rawResponse) return null;
 
@@ -393,10 +394,13 @@ export function parseAndValidateJudgeOutput(
 
   // Likely Winner
   let likelyWinner = String(parsed.likelyWinner || parsed.winner || parsed.likely_winner || '').trim();
+  let namedWinner: 'home' | 'away' | null = null;
   if (areTeamsEqual(likelyWinner, normHome)) {
     likelyWinner = normHome;
+    namedWinner = 'home';
   } else if (areTeamsEqual(likelyWinner, normAway)) {
     likelyWinner = normAway;
+    namedWinner = 'away';
   } else {
     // Names neither team (e.g. a verdict copied from another game): keep the probability-based pick, but say so.
     if (likelyWinner) {
@@ -405,11 +409,32 @@ export function parseAndValidateJudgeOutput(
     likelyWinner = winProbHome >= 0.5 ? normHome : normAway;
   }
 
-  // Fair total
+  // Fair total: null when absent or not a number (the prompt allows null); a numeric total must be > 0 and
+  // inside the sport's range (cross-check below), so 135.5 for NCAAF is rejected instead of accepted as "> 0".
   let fairTotal: number | null = null;
   const rawTotal = parsed.fairTotal ?? parsed.fair_total;
-  if (rawTotal != null && !isNaN(Number(rawTotal)) && Number(rawTotal) > 0) {
-    fairTotal = Number(rawTotal);
+  const totalNum = rawTotal == null || rawTotal === "" ? NaN : Number(rawTotal);
+  if (Number.isFinite(totalNum)) {
+    if (totalNum <= 0) {
+      console.warn(
+        `[MorningJudge] Rejected judgment for ${normAway} @ ${normHome}: fairTotal ${totalNum} is not positive`,
+      );
+      return null;
+    }
+    fairTotal = totalNum;
+  }
+
+  // Livetest 2026-10-24 bug 1: cross-check spread / win probability / winner / totals before anything is written
+  const rejection = crossCheckJudgeOutput(
+    { winProbHome, fairSpread: fairSpreadNum, fairTotal, namedWinner },
+    sportKey,
+    market,
+  );
+  if (rejection) {
+    console.warn(
+      `[MorningJudge] Rejected judgment for ${normAway} @ ${normHome}: ${rejection}`,
+    );
+    return null;
   }
 
   // Total lean
