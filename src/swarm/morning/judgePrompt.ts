@@ -69,7 +69,7 @@ Output STRICT JSON ONLY. Do NOT wrap in markdown codeblocks (no \`\`\`json). Out
   "winProbHome": 0.55,
   "winProbAway": 0.45,
   "fairSpread": -3.5,
-  "fairTotal": 215.5,
+  "fairTotal": null,
   "totalLean": "over",
   "arguments": [
     {
@@ -90,7 +90,7 @@ STRICT CONVENTIONS:
    - Negative means HOME is favored (e.g., -4.5 means ${game.homeTeam} favored by 4.5).
    - Positive means AWAY is favored (e.g., +3.5 means ${game.awayTeam} favored by 3.5).
 2. "winProbHome" and "winProbAway": Clamped between 0.01 and 0.99, summing to 1.00.
-3. "fairTotal": Must be a realistic game total appropriate to this sport (e.g. NFL: 30-65, NBA: 190-260, MLB: 5-14, NHL: 4-8) or null if unable to estimate.
+3. "fairTotal": Must be a realistic game total appropriate to this sport (e.g. NFL: 30-65, NCAAF: 30-80, NBA: 190-260, NCAAB: 110-180, MLB: 5-14, NHL: 4-8) or null if unable to estimate.
 4. "totalLean": Must be strictly "over", "under", or "none".
 5. "likelyWinner": Must strictly equal "${game.homeTeam}" or "${game.awayTeam}".
 6. Do NOT output any explanatory text before or after the JSON.`;
@@ -105,7 +105,7 @@ Output STRICT JSON ONLY. Do NOT wrap in markdown codeblocks (no \`\`\`json). Out
   "winProbHome": 0.55,
   "winProbAway": 0.45,
   "fairSpread": -3.5,
-  "fairTotal": 215.5,
+  "fairTotal": null,
   "totalLean": "over",
   "arguments": [
     {
@@ -124,7 +124,7 @@ Output STRICT JSON ONLY. Do NOT wrap in markdown codeblocks (no \`\`\`json). Out
 STRICT CONVENTIONS:
 1. "fairSpread": MUST be from the HOME perspective. Negative means HOME favored, positive means AWAY favored.
 2. "winProbHome" and "winProbAway": Must be numbers between 0.01 and 0.99, summing to 1.00.
-3. "fairTotal": Realistic game total or null.
+3. "fairTotal": Realistic total inside the sport range in prompt rule 3, or null.
 4. "totalLean": "over", "under", or "none".
 5. Do NOT output any explanatory text before or after the JSON.`;
 
