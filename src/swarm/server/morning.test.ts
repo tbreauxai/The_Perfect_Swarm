@@ -836,7 +836,7 @@ describe('Morning Slate Engine - Unit & Integration Tests', () => {
       expect(result.judged).toBe(0);
       expect(result.replaced).toBe(0);
       expect(result.errors).toEqual([
-        { eventId: 'nfl-game-unjudged-1', error: 'judge output missing winProbHome or fairSpread' }
+        { eventId: 'nfl-game-unjudged-1', error: 'judge output missing, malformed or inconsistent (see [MorningJudge] warning)' }
       ]);
     });
 

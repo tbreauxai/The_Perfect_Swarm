@@ -27,7 +27,7 @@ const GAMES = [
     id: "nba-g2",
     home: "Boston Bruins Hoops",
     away: "New York Nets",
-    spread: -2.5,
+    spread: 2.5, // away favored: matches winProbHome 0.41 (the judge cross-check rejects a mismatched sign)
     total: 219.5,
     winProbHome: 0.41,
   },

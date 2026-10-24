@@ -245,13 +245,17 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
         game.homeTeam,
         game.awayTeam,
         game.sport,
-        workflowResult?.workflowId
+        workflowResult?.workflowId,
+        // ESPN's spread is home perspective like fairSpread; used for the |fair - market| caps (livetest bug 1)
+        { spread: game.oddsSnapshot?.spread ?? null, total: game.oddsSnapshot?.overUnder ?? null }
       );
 
       if (!parsed) {
+        // Nothing is written for this game (the upsert below is skipped). No retry or fallback judge in this run:
+        // the game stays claimed for MORNING_CLAIM_TTL_MS and the next run judges it again.
         errors.push({
           eventId: game.eventId,
-          error: "judge output missing winProbHome or fairSpread"
+          error: "judge output missing, malformed or inconsistent (see [MorningJudge] warning)"
         });
         continue;
       }
