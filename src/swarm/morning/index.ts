@@ -5,12 +5,19 @@ import {
   formatGameToColumnar,
   parseAndValidateJudgeOutput,
   computeModelSnapshot,
-  JUDGE_MANAGER_INSTRUCTION
+  JUDGE_MANAGER_INSTRUCTION,
+  buildProposerPromptV2,
+  parseAndValidateJudgeOutputV2,
+  computeModelSnapshotV2,
+  JUDGE_MANAGER_INSTRUCTION_V2
 } from './judgePrompt.ts';
+import { isJudgmentSchemaV2 } from './judgment.ts';
 import {
   getSupabaseConfig,
   partitionSlateGames,
   upsertGameJudgment,
+  upsertGameJudgmentV2,
+  recordRejectedJudgmentV2,
   insertBaselineLineSnapshots,
   fetchPregameLearningContext,
   hydrateCalibrationFromSupabase,
@@ -21,11 +28,12 @@ import type { MorningBatchResult, SlateGame } from './types.ts';
 import { morningClaimKey, type MorningClaimStore } from "./singleFlight.ts";
 import { executeSwarmWorkflow } from '../engine/index.ts';
 
-export * from './types.ts';
-export * from './espnSlate.ts';
-export * from './judgePrompt.ts';
-export * from './supabase.ts';
-export * from './feedback.ts';
+export * from "./types.ts";
+export * from "./espnSlate.ts";
+export * from "./judgePrompt.ts";
+export * from "./judgment.ts";
+export * from "./supabase.ts";
+export * from "./feedback.ts";
 export * from "./singleFlight.ts";
 
 export interface MorningAgentConfig {
@@ -155,14 +163,18 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
 
   // 2. Query Supabase and partition slate games
   const cfg: SupabaseConfig | null = getSupabaseConfig(env);
+  // JUDGMENT_SCHEMA_V2 (default off): off = v1 prompts, parse, columns and selects exactly as before.
+  // Do not set it until the DuelOdds game_judgments v2 migration and backfill are applied.
+  const v2 = isJudgmentSchemaV2(env);
   if (cfg) {
     await hydrateCalibrationFromSupabase(cfg, fetchFn).catch(() => 0);
   }
   const {
     gamesToJudge,
     gamesToReplace,
-    skippedCount
-  } = await partitionSlateGames(cfg, slate.games, gameDate, fetchFn);
+    skippedCount,
+    existingJudgments
+  } = await partitionSlateGames(cfg, slate.games, gameDate, fetchFn, v2);
 
   const gamesToProcess: Array<{ game: SlateGame; isReplace: boolean }> = [
     ...gamesToReplace.map((g) => ({ game: g, isReplace: true })),
@@ -209,7 +221,8 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
         : { lineMovement: null, teamHistory: null, formattedBlock: '' };
 
       // Proposers receive lean board, baseline, and live Supabase steam/calibration context; manager receives JSON contract via JUDGE_MANAGER_INSTRUCTION
-      const baseTask = buildProposerPrompt(game);
+      const baseTask = v2 ? buildProposerPromptV2(game) : buildProposerPrompt(game);
+      const managerInstruction = v2 ? JUDGE_MANAGER_INSTRUCTION_V2 : JUDGE_MANAGER_INSTRUCTION;
       const task = pregameContext.formattedBlock ? `${baseTask}\n\n${pregameContext.formattedBlock}` : baseTask;
       const baseData = formatGameToColumnar(game);
       const data = pregameContext.formattedBlock ? `${baseData}\n\n${pregameContext.formattedBlock}` : baseData;
@@ -224,10 +237,10 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
         settings: {
           domain: 'sports-betting',
           responseSchema: 'morning_judge',
-          managerInstruction: JUDGE_MANAGER_INSTRUCTION,
+          managerInstruction,
           systemPrompts: {
-            manager: JUDGE_MANAGER_INSTRUCTION,
-            'GodView Compiler': JUDGE_MANAGER_INSTRUCTION
+            manager: managerInstruction,
+            'GodView Compiler': managerInstruction
           },
           agents: singleGroqSeatAgents,
           geminiApiKey: env.GEMINI_API_KEY,
@@ -239,6 +252,32 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
           qdrantApiKey: env.QDRANT_API_KEY
         }
       });
+
+      if (v2) {
+        const v2Result = parseAndValidateJudgeOutputV2(workflowResult?.finalAnalysis ?? workflowResult, game);
+        if (v2Result.ok === false) {
+          // No in-run retry and no extra call. Failure 1: rejudge_count 1, re-judged next run.
+          // Failure 2: stored as 'pass' with validation_flag 'validation_failed' and never re-judged.
+          const prior = Number(existingJudgments?.get(game.eventId)?.rejudge_count ?? 0);
+          const count = cfg ? await recordRejectedJudgmentV2(cfg, game, prior, fetchFn) : prior + 1;
+          const f = v2Result as { reason: string };
+          errors.push({
+            eventId: game.eventId,
+            error: `judge v2 output rejected (${f.reason}); failure ${count} of 2 (see [MorningJudge] warning)`
+          });
+          continue;
+        }
+        const j = (v2Result as { judgment: any }).judgment;
+        if (cfg) {
+          await upsertGameJudgmentV2(cfg, game, j, computeModelSnapshotV2(j, participatingSeatRoles), workflowResult?.workflowId, fetchFn);
+        }
+        if (isReplace) {
+          replacedCount++;
+        } else {
+          judgedCount++;
+        }
+        continue;
+      }
 
       const parsed = parseAndValidateJudgeOutput(
         workflowResult?.finalAnalysis ?? workflowResult,
