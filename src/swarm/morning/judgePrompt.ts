@@ -1,4 +1,5 @@
 import type { MorningArgument, MorningJudgeOutput, SlateGame } from './types.ts';
+import { parseAndValidateJudgmentV2, type JudgmentV2, type JudgmentV2Result } from './judgment.ts';
 
 /**
  * Builds a single-line columnar representation for a slate game.
@@ -559,5 +560,22 @@ export function computeModelSnapshot(
       ? { advocate_breakdown: advocateCounts }
       : {})
   };
+}
+
+/**
+ * Judgment v2 parse (rule a) + validate (rules b, c). Replaces parseAndValidateJudgeOutput + crossCheckJudgeOutput
+ * when JUDGMENT_SCHEMA_V2 is on. A rejection logs one warning and returns { ok: false }; nothing is retried in-run.
+ */
+export function parseAndValidateJudgeOutputV2(raw: unknown, game: SlateGame): JudgmentV2Result {
+  const r = parseAndValidateJudgmentV2(
+    raw,
+    { eventId: game.eventId, sport: game.sport },
+    { spread: game.oddsSnapshot?.spread ?? null, total: game.oddsSnapshot?.overUnder ?? null }
+  );
+  if (r.ok === false) {
+    const f = r as { reason: string; detail: string };
+    console.warn(`[MorningJudge] Rejected v2 judgment for ${game.awayTeam} @ ${game.homeTeam}: ${f.reason}: ${f.detail}`);
+  }
+  return r;
 }
 

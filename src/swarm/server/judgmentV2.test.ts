@@ -104,3 +104,35 @@ describe("judgment v2 prompts", () => {
     expect(JUDGE_MANAGER_INSTRUCTION_V2).not.toContain('"fairSpread"');
   });
 });
+
+import { parseAndValidateJudgeOutputV2 } from "../morning/judgePrompt.ts";
+import { vi } from "vitest";
+
+describe("parseAndValidateJudgeOutputV2", () => {
+  const game: any = {
+    eventId: "e9", sport: "americanfootball_nfl", homeTeam: "H", awayTeam: "A", commenceTime: "t",
+    oddsSnapshot: { spread: -3, overUnder: 45 },
+  };
+  it("accepts a coherent reply with the game's ids and market", () => {
+    const r = parseAndValidateJudgeOutputV2(
+      { finalAnalysis: JSON.stringify({ side: "home", projMargin: 4, projTotal: 46, totalLean: "over", confidence: 0.6, reasons: ["r"] }) },
+      game,
+    );
+    expect(r.ok).toBe(true);
+    expect((r as any).judgment.eventId).toBe("e9");
+  });
+  it("rejects a v1 reply (winProbHome) and logs once", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const r = parseAndValidateJudgeOutputV2(JSON.stringify({ winProbHome: 0.6, fairSpread: -3 }), game);
+    expect(r.ok).toBe(false);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+  it("rejects a margin 11 off the market spread", () => {
+    const r = parseAndValidateJudgeOutputV2(
+      JSON.stringify({ side: "home", projMargin: 14, projTotal: 46, totalLean: "over", confidence: 0.6, reasons: ["r"] }),
+      game,
+    );
+    expect((r as any).reason).toBe("margin_vs_market");
+  });
+});
