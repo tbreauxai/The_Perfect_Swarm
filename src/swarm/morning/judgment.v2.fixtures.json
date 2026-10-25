@@ -1,0 +1,243 @@
+{
+  "note": "Shared contract: byte-identical in The_Perfect_Swarm src/swarm/morning/ and DuelOdds src/math/. Canonical copy: DuelOdds.",
+  "ids": { "eventId": "evt-1", "sport": "americanfootball_nfl" },
+  "valid": [
+    {
+      "name": "home by 3, over",
+      "raw": {
+        "side": "home",
+        "projMargin": 3,
+        "projTotal": 47,
+        "totalLean": "over",
+        "confidence": 0.6,
+        "reasons": ["Home OL healthy"]
+      },
+      "market": { "spread": -2.5, "total": 45.5 }
+    },
+    {
+      "name": "away by 7, under",
+      "raw": {
+        "side": "away",
+        "projMargin": -7,
+        "projTotal": 40,
+        "totalLean": "under",
+        "confidence": 0.5,
+        "reasons": ["Wind", "Away D"]
+      },
+      "market": { "spread": 3, "total": 43 }
+    },
+    {
+      "name": "dead-band pass both",
+      "raw": {
+        "side": "pass",
+        "projMargin": 0.4,
+        "projTotal": 44.8,
+        "totalLean": "pass",
+        "confidence": 0.3,
+        "reasons": ["Coin flip"]
+      },
+      "market": { "spread": 0, "total": 44.5 }
+    },
+    {
+      "name": "no market: any lean, ranges ok",
+      "raw": {
+        "side": "home",
+        "projMargin": 34,
+        "projTotal": 64,
+        "totalLean": "under",
+        "confidence": 0.9,
+        "reasons": ["Mismatch"]
+      },
+      "market": {}
+    },
+    {
+      "name": "code-owned ids overwritten",
+      "raw": {
+        "eventId": "wrong",
+        "sport": "x",
+        "schemaVersion": 1,
+        "side": "away",
+        "projMargin": -1,
+        "projTotal": 45,
+        "totalLean": "pass",
+        "confidence": 0.5,
+        "reasons": ["r"]
+      },
+      "market": { "spread": 1, "total": 45 }
+    }
+  ],
+  "invalid": [
+    {
+      "reason": "schema",
+      "name": "extra key fairLine",
+      "raw": {
+        "side": "home",
+        "projMargin": 3,
+        "projTotal": 47,
+        "totalLean": "over",
+        "confidence": 0.6,
+        "reasons": ["r"],
+        "fairLine": -3
+      },
+      "market": { "spread": -3, "total": 45 }
+    },
+    {
+      "reason": "schema",
+      "name": "extra key prob",
+      "raw": {
+        "side": "home",
+        "projMargin": 3,
+        "projTotal": 47,
+        "totalLean": "over",
+        "confidence": 0.6,
+        "reasons": ["r"],
+        "prob": 0.6
+      },
+      "market": {}
+    },
+    {
+      "reason": "schema",
+      "name": "projTotal not > 0",
+      "raw": {
+        "side": "home",
+        "projMargin": 3,
+        "projTotal": 0,
+        "totalLean": "pass",
+        "confidence": 0.6,
+        "reasons": ["r"]
+      },
+      "market": {}
+    },
+    {
+      "reason": "schema",
+      "name": "4 reasons",
+      "raw": {
+        "side": "home",
+        "projMargin": 3,
+        "projTotal": 47,
+        "totalLean": "pass",
+        "confidence": 0.6,
+        "reasons": ["a", "b", "c", "d"]
+      },
+      "market": {}
+    },
+    {
+      "reason": "schema",
+      "name": "confidence > 1",
+      "raw": {
+        "side": "home",
+        "projMargin": 3,
+        "projTotal": 47,
+        "totalLean": "pass",
+        "confidence": 62,
+        "reasons": ["a"]
+      },
+      "market": {}
+    },
+    {
+      "reason": "schema",
+      "name": "no v2 object",
+      "raw": "no json here",
+      "market": {}
+    },
+    {
+      "reason": "side_mismatch",
+      "name": "home side, away margin",
+      "raw": {
+        "side": "home",
+        "projMargin": -3,
+        "projTotal": 47,
+        "totalLean": "over",
+        "confidence": 0.6,
+        "reasons": ["r"]
+      },
+      "market": { "spread": 3, "total": 45 }
+    },
+    {
+      "reason": "side_mismatch",
+      "name": "side set inside dead-band",
+      "raw": {
+        "side": "home",
+        "projMargin": 0.3,
+        "projTotal": 47,
+        "totalLean": "over",
+        "confidence": 0.6,
+        "reasons": ["r"]
+      },
+      "market": { "spread": 0, "total": 45 }
+    },
+    {
+      "reason": "total_lean_mismatch",
+      "name": "over but projTotal below market",
+      "raw": {
+        "side": "home",
+        "projMargin": 3,
+        "projTotal": 42,
+        "totalLean": "over",
+        "confidence": 0.6,
+        "reasons": ["r"]
+      },
+      "market": { "spread": -3, "total": 45 }
+    },
+    {
+      "reason": "total_vs_market",
+      "name": "total 13 above market",
+      "raw": {
+        "side": "home",
+        "projMargin": 3,
+        "projTotal": 58,
+        "totalLean": "over",
+        "confidence": 0.6,
+        "reasons": ["r"]
+      },
+      "market": { "spread": -3, "total": 45 }
+    },
+    {
+      "reason": "margin_vs_market",
+      "name": "margin 11 off market",
+      "raw": {
+        "side": "home",
+        "projMargin": 14,
+        "projTotal": 47,
+        "totalLean": "over",
+        "confidence": 0.6,
+        "reasons": ["r"]
+      },
+      "market": { "spread": -3, "total": 45 }
+    },
+    {
+      "reason": "margin_range",
+      "name": "NFL margin 36 no market",
+      "raw": {
+        "side": "home",
+        "projMargin": 36,
+        "projTotal": 47,
+        "totalLean": "over",
+        "confidence": 0.6,
+        "reasons": ["r"]
+      },
+      "market": {}
+    },
+    {
+      "reason": "total_range",
+      "name": "NFL total 70 no market",
+      "raw": {
+        "side": "home",
+        "projMargin": 3,
+        "projTotal": 70,
+        "totalLean": "over",
+        "confidence": 0.6,
+        "reasons": ["r"]
+      },
+      "market": {}
+    }
+  ],
+  "sideEvColumn": [
+    { "side": "home", "column": "ev_home" },
+    { "side": "away", "column": "ev_away" },
+    { "side": "over", "column": "ev_over" },
+    { "side": "under", "column": "ev_under" },
+    { "side": "pass", "column": null },
+    { "side": null, "column": null }
+  ]
+}
