@@ -275,3 +275,60 @@ describe("JUDGMENT_SCHEMA_V2 on: rejections (no in-run retry)", () => {
     expect(result.skipped).toBe(1);
   });
 });
+
+/** S8: every PostgREST column a URL names (select lists, filters, order) and every key a body writes. */
+function columnsUsed(gets: string[], writes: { url: string; body: any }[]): Set<string> {
+  const cols = new Set<string>();
+  for (const u of [...gets, ...writes.map((w) => w.url)]) {
+    const q = decodeURIComponent(u.split("?")[1] ?? "");
+    for (const part of q.split("&")) {
+      const [k, v = ""] = part.split("=");
+      if (k === "select" || k === "order") v.split(",").forEach((c) => cols.add(c.split(".")[0]));
+      else if (k) cols.add(k);
+    }
+  }
+  for (const w of writes) {
+    const rows = Array.isArray(w.body) ? w.body : [w.body];
+    for (const r of rows) if (r && typeof r === "object") Object.keys(r).forEach((k) => cols.add(k));
+  }
+  return cols;
+}
+
+describe("JUDGMENT_SCHEMA_V2 off (default): v1 exactly as before", () => {
+  for (const flag of [undefined, "", "0", "false"]) {
+    it(`flag ${JSON.stringify(flag)}: no v2 column in any select, filter or insert`, async () => {
+      const { gets, writes } = await runSlate({ flag, reply: GOOD_V1 });
+      expect(gets.length).toBeGreaterThan(0);
+      const used = columnsUsed(gets, writes);
+      for (const c of V2_COLUMNS) expect(used.has(c), c).toBe(false);
+    });
+  }
+
+  it("writes the v1 row (win_prob_* / fair_*) with the v1 prompts", async () => {
+    const { result, judgmentWrites, executeWorkflowFn } = await runSlate({ reply: GOOD_V1 });
+    expect(result.errors).toEqual([]);
+    const p = executeWorkflowFn.mock.calls[0][0];
+    expect(p.settings.managerInstruction).toContain('"winProbHome"');
+    expect(p.task).toContain("win probability");
+    expect(judgmentWrites).toHaveLength(1);
+    expect(judgmentWrites[0]).toMatchObject({
+      event_id: "nfl-g1", win_prob_home: 0.6, win_prob_away: 0.4, fair_spread: -3, fair_total: 48, judge_source: "swarm",
+    });
+  });
+
+  it("a v2-shaped reply is rejected by the v1 parser and nothing is written (no rejudge_count)", async () => {
+    const { result, judgmentWrites } = await runSlate({ reply: GOOD_V2 });
+    expect(result.ok).toBe(false);
+    expect(judgmentWrites).toHaveLength(0);
+  });
+});
+
+describe("JUDGMENT_SCHEMA_V2 on: the v2 columns do appear", () => {
+  it("partition select and write use v2 names", async () => {
+    const { gets, writes } = await runSlate({ flag: "1", reply: GOOD_V2 });
+    const used = columnsUsed(gets, writes);
+    for (const c of ["schema_version", "proj_margin", "proj_total", "side", "confidence", "reasons", "validation_flag", "rejudge_count"]) {
+      expect(used.has(c), c).toBe(true);
+    }
+  });
+});
