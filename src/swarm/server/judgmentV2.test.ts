@@ -136,3 +136,18 @@ describe("parseAndValidateJudgeOutputV2", () => {
     expect((r as any).reason).toBe("margin_vs_market");
   });
 });
+
+import { computeModelSnapshot, computeModelSnapshotV2 } from "../morning/judgePrompt.ts";
+
+describe("computeModelSnapshotV2", () => {
+  const j: any = { schemaVersion: 2, eventId: "e", sport: "x", side: "away", projMargin: -6, projTotal: 51, totalLean: "pass", confidence: 0.4, reasons: ["r"] };
+  it("stores the judge's projections, no fallbacks, no win prob", () => {
+    const s = computeModelSnapshotV2(j, ["Quant Proposer"]);
+    expect(s).toEqual({ projected_margin: -6, projected_total: 51, derived_from: "swarm_judgment_v2", participating_seats: ["Quant Proposer"] });
+  });
+  it("v1 snapshot is unchanged (fallbacks kept for flag off)", () => {
+    const s = computeModelSnapshot({ eventId: "e" } as any, 0.6);
+    expect(s.projected_margin).toBe(3.5);
+    expect(s.projected_total).toBe(44.5);
+  });
+});

@@ -579,3 +579,18 @@ export function parseAndValidateJudgeOutputV2(raw: unknown, game: SlateGame): Ju
   return r;
 }
 
+/**
+ * Judgment v2 model snapshot: the judge's own projections, no hardcoded 3.5 / 44.5 fallbacks and no
+ * model_win_prob_home (DuelOdds derives win_prob_home_code from proj_margin).
+ */
+export function computeModelSnapshotV2(judgment: JudgmentV2, participatingSeats?: string[]): Record<string, any> {
+  return {
+    projected_margin: judgment.projMargin,
+    projected_total: judgment.projTotal,
+    derived_from: 'swarm_judgment_v2',
+    ...(Array.isArray(participatingSeats) && participatingSeats.length > 0
+      ? { participating_seats: participatingSeats }
+      : {})
+  };
+}
+
