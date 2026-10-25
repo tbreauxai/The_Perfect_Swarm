@@ -79,3 +79,28 @@ describe("judgment v2 helpers", () => {
     expect(isJudgmentSchemaV2({ JUDGMENT_SCHEMA_V2: "TRUE" })).toBe(true);
   });
 });
+
+import {
+  buildProposerPrompt,
+  buildProposerPromptV2,
+  JUDGE_MANAGER_INSTRUCTION,
+  JUDGE_MANAGER_INSTRUCTION_V2,
+} from "../morning/judgePrompt.ts";
+
+describe("judgment v2 prompts", () => {
+  const game: any = { eventId: "e", sport: "americanfootball_nfl", homeTeam: "H", awayTeam: "A", commenceTime: "t" };
+  it("proposer v2 asks for no probabilities; v1 unchanged", () => {
+    expect(buildProposerPrompt(game)).toContain("win probability");
+    const v2 = buildProposerPromptV2(game);
+    expect(v2).not.toContain("win probability");
+    expect(v2).toContain("project the final margin");
+  });
+  it("manager v2 is no longer than v1 and asks for the v2 keys only", () => {
+    expect(JUDGE_MANAGER_INSTRUCTION_V2.length).toBeLessThanOrEqual(JUDGE_MANAGER_INSTRUCTION.length);
+    for (const k of ["projMargin", "projTotal", "side", "totalLean", "confidence", "reasons"]) {
+      expect(JUDGE_MANAGER_INSTRUCTION_V2).toContain(`"${k}"`);
+    }
+    expect(JUDGE_MANAGER_INSTRUCTION_V2).not.toContain('"winProbHome"');
+    expect(JUDGE_MANAGER_INSTRUCTION_V2).not.toContain('"fairSpread"');
+  });
+});

@@ -31,6 +31,16 @@ Analyze this matchup thoroughly. Evaluate team strengths, injuries, market movem
 }
 
 /**
+ * Judgment v2 (JUDGMENT_SCHEMA_V2): same board, but proposers project the score; no probabilities or fair lines.
+ */
+export function buildProposerPromptV2(game: SlateGame): string {
+  return buildProposerPrompt(game).replace(
+    'to assess fair lines, spread, total, and win probability from your specialist perspective.',
+    'to project the final margin (home minus away) and the game total from your specialist perspective. Do not give probabilities, fair lines, odds or stakes.'
+  );
+}
+
+/**
  * Clean judge prompt matching DuelOdds buildJudgePrompt.
  * Raw game data only; no prior verdict.
  */
@@ -95,6 +105,29 @@ STRICT CONVENTIONS:
 5. "likelyWinner": Must strictly equal "${game.homeTeam}" or "${game.awayTeam}".
 6. Do NOT output any explanatory text before or after the JSON.`;
 }
+
+/**
+ * Judgment v2 manager contract (JUDGMENT_SCHEMA_V2). Code derives probabilities, fair lines and EV.
+ * Keep it no longer than JUDGE_MANAGER_INSTRUCTION (Groq 7000 TPM limiter in morningCacheBypass).
+ */
+export const JUDGE_MANAGER_INSTRUCTION_V2 = `You are the Morning Swarm Judge (GodView Compiler) for DuelOdds.
+Synthesize the debate into a score projection. Code computes probabilities, fair lines and EV.
+Output STRICT JSON ONLY, no markdown, one raw object with exactly these keys:
+{
+  "side": "home",
+  "projMargin": 3.5,
+  "projTotal": 47.5,
+  "totalLean": "over",
+  "confidence": 0.6,
+  "reasons": ["Key claim that survived critic review"]
+}
+RULES:
+1. "projMargin": projected home score minus away score. Positive = home wins.
+2. "side": "home" if projMargin >= 0.5, "away" if <= -0.5, else "pass".
+3. "projTotal": projected combined score, realistic for the sport.
+4. "totalLean": "over" if projTotal is 0.5+ above the posted total, "under" if 0.5+ below, else "pass".
+5. "confidence": 0 to 1. "reasons": 1 to 3 strings, max 140 chars each.
+6. No other keys: no probabilities, fair lines, odds, EV or stakes. No text outside the JSON.`;
 
 export const JUDGE_MANAGER_INSTRUCTION = `You are the Morning Swarm Judge (GodView Compiler) for DuelOdds.
 You must synthesize the full debate and determine fair lines and win probabilities.
