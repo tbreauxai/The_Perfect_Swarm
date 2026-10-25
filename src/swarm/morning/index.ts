@@ -167,7 +167,7 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
   // Do not set it until the DuelOdds game_judgments v2 migration and backfill are applied.
   const v2 = isJudgmentSchemaV2(env);
   if (cfg) {
-    await hydrateCalibrationFromSupabase(cfg, fetchFn).catch(() => 0);
+    await hydrateCalibrationFromSupabase(cfg, fetchFn, v2).catch(() => 0);
   }
   const {
     gamesToJudge,
@@ -217,7 +217,7 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
     try {
       // Fetch live line-movement steam delta and team-specific calibration history from Supabase when configured
       const pregameContext = cfg
-        ? await fetchPregameLearningContext(cfg, game, fetchFn).catch(() => ({ lineMovement: null, teamHistory: null, formattedBlock: '' }))
+        ? await fetchPregameLearningContext(cfg, game, fetchFn, v2).catch(() => ({ lineMovement: null, teamHistory: null, formattedBlock: '' }))
         : { lineMovement: null, teamHistory: null, formattedBlock: '' };
 
       // Proposers receive lean board, baseline, and live Supabase steam/calibration context; manager receives JSON contract via JUDGE_MANAGER_INSTRUCTION
@@ -334,7 +334,7 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
   // 6. Learn from finished games
   let settledCount = 0;
   try {
-    const settled = await gradeAndRecordFinalGames(cfg, slate.games, gameDate, fetchFn);
+    const settled = await gradeAndRecordFinalGames(cfg, slate.games, gameDate, fetchFn, v2 ? { v2 } : undefined);
     settledCount = settled.length;
   } catch (feedbackErr: any) {
     console.warn('[Morning Swarm] Final game grading feedback failed:', feedbackErr);

@@ -37,7 +37,8 @@ export async function gradeAndRecordFinalGames(
   games: SlateGame[],
   gameDate: string,
   fetchFn: typeof fetch = fetch,
-  options?: { cortex?: MemoryCortex }
+  /** v2: JUDGMENT_SCHEMA_V2 grades on win_prob_home_code and skips rows without math_version. */
+  options?: { cortex?: MemoryCortex; v2?: boolean }
 ): Promise<FinalGameOutcome[]> {
   const settledOutcomes: FinalGameOutcome[] = [];
 
@@ -62,7 +63,7 @@ export async function gradeAndRecordFinalGames(
       // Query judgments that are not yet marked as 'final'
       const data = await querySupabase(
         cfg,
-        `game_judgments?game_date=eq.${encodeURIComponent(gameDate)}&status=neq.final&select=event_id,workflow_id,win_prob_home,sport,home_team,away_team`,
+        `game_judgments?game_date=eq.${encodeURIComponent(gameDate)}&status=neq.final&select=${options?.v2 ? 'event_id,workflow_id,win_prob_home_code,math_version,sport,home_team,away_team&math_version=not.is.null' : 'event_id,workflow_id,win_prob_home,sport,home_team,away_team'}`,
         { method: 'GET', headers: { Prefer: 'return=representation' } },
         fetchFn
       );
@@ -75,11 +76,12 @@ export async function gradeAndRecordFinalGames(
   for (const judgment of unfinalizedJudgments) {
     const scoreData = completedGamesMap.get(judgment.event_id);
     if (!scoreData) continue;
+    if (options?.v2 && (judgment.math_version == null || judgment.win_prob_home_code == null)) continue;
 
     const { homeScore, awayScore } = scoreData;
     const outcome: 'win' | 'loss' | 'push' = homeScore > awayScore ? 'win' : homeScore < awayScore ? 'loss' : 'push';
     const score = outcomeToScore(outcome);
-    const winProbHome = Number(judgment.win_prob_home ?? 0.5);
+    const winProbHome = Number((options?.v2 ? judgment.win_prob_home_code : judgment.win_prob_home) ?? 0.5);
     const workflowId = judgment.workflow_id;
     const sportKey = judgment.sport || 'unknown';
 

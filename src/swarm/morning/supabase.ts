@@ -411,13 +411,17 @@ export async function insertBaselineLineSnapshots(
  */
 export async function hydrateCalibrationFromSupabase(
   cfg: SupabaseConfig | null,
-  fetchFn: typeof fetch = fetch
+  fetchFn: typeof fetch = fetch,
+  /** JUDGMENT_SCHEMA_V2: calibrate on DuelOdds' code probability; rows without math_version are skipped. */
+  v2: boolean = false
 ): Promise<number> {
   if (!cfg) return 0;
   try {
     const rows = await querySupabase(
       cfg,
-      'game_judgments?status=eq.final&brier=not.is.null&order=judged_at.desc&limit=200&select=event_id,workflow_id,win_prob_home,sport,result,judged_at',
+      v2
+        ? 'game_judgments?status=eq.final&brier=not.is.null&math_version=not.is.null&order=judged_at.desc&limit=200&select=event_id,workflow_id,win_prob_home_code,math_version,sport,result,judged_at'
+        : 'game_judgments?status=eq.final&brier=not.is.null&order=judged_at.desc&limit=200&select=event_id,workflow_id,win_prob_home,sport,result,judged_at',
       { method: 'GET', headers: { Prefer: 'return=representation' } },
       fetchFn
     );
@@ -426,7 +430,8 @@ export async function hydrateCalibrationFromSupabase(
     let count = 0;
     for (const r of rows) {
       const wfId = r.workflow_id || `supabase-${r.event_id}`;
-      const prob = Number(r.win_prob_home);
+      if (v2 && r.math_version == null) continue;
+      const prob = Number(v2 ? r.win_prob_home_code : r.win_prob_home);
       const outcomeStr = r.result?.outcome || (r.result?.home_win === true ? 'win' : r.result?.home_win === false ? 'loss' : '');
       const score = outcomeToScore(String(outcomeStr));
       if (!Number.isFinite(prob) || prob <= 0 || prob >= 1 || score == null) continue;
@@ -454,7 +459,9 @@ export async function hydrateCalibrationFromSupabase(
 export async function fetchPregameLearningContext(
   cfg: SupabaseConfig | null,
   game: SlateGame,
-  fetchFn: typeof fetch = fetch
+  fetchFn: typeof fetch = fetch,
+  /** JUDGMENT_SCHEMA_V2: history from win_prob_home_code + proj_margin; rows without math_version are skipped. */
+  v2: boolean = false
 ): Promise<PregameLearningContext> {
   const empty: PregameLearningContext = {
     lineMovement: null,
@@ -531,7 +538,7 @@ export async function fetchPregameLearningContext(
   try {
     const settledRows = await querySupabase(
       cfg,
-      `game_judgments?status=eq.final&sport=eq.${encodeURIComponent(game.sport)}&order=game_date.desc&limit=40&select=home_team,away_team,win_prob_home,fair_spread,result,brier`,
+      `game_judgments?status=eq.final&sport=eq.${encodeURIComponent(game.sport)}&order=game_date.desc&limit=40&select=${v2 ? 'home_team,away_team,win_prob_home_code,proj_margin,math_version,result,brier&math_version=not.is.null' : 'home_team,away_team,win_prob_home,fair_spread,result,brier'}`,
       { method: 'GET', headers: { Prefer: 'return=representation' } },
       fetchFn
     );
@@ -542,6 +549,7 @@ export async function fetchPregameLearningContext(
       const targetAway = norm(game.awayTeam);
 
       const matching = settledRows.filter((r: any) => {
+        if (v2 && r.math_version == null) return false;
         const rh = norm(r.home_team || '');
         const ra = norm(r.away_team || '');
         return (
@@ -569,11 +577,11 @@ export async function fetchPregameLearningContext(
             brierCount++;
           }
 
-          const fairSpread = Number(r.fair_spread);
+          // v2: proj_margin is the judge's home margin; v1: projected home margin is -fairSpread
+          const projectedMargin = v2 ? Number(r.proj_margin) : -Number(r.fair_spread);
           const actualMargin = Number(r.result?.margin);
-          if (Number.isFinite(fairSpread) && Number.isFinite(actualMargin)) {
-            // Projected home margin is -fairSpread; error = actualMargin - projectedMargin
-            const projectedMargin = -fairSpread;
+          if (r[v2 ? 'proj_margin' : 'fair_spread'] != null && Number.isFinite(projectedMargin) && Number.isFinite(actualMargin)) {
+            // error = actualMargin - projectedMargin
             spreadErrorSum += actualMargin - projectedMargin;
             spreadErrorCount++;
           }
@@ -582,7 +590,9 @@ export async function fetchPregameLearningContext(
             const brierStr = typeof r.brier === 'number' ? `, Brier=${r.brier.toFixed(3)}` : '';
             const marginStr = r.result?.margin != null ? `, Margin=${r.result.margin > 0 ? '+' : ''}${r.result.margin}` : '';
             recentNotes.push(
-              `${r.away_team} @ ${r.home_team}: P(Home)=${(Number(r.win_prob_home ?? 0.5) * 100).toFixed(0)}%, FairSpread=${r.fair_spread ?? 'N/A'} -> ${outcome || 'settled'}${marginStr}${brierStr}`
+              v2
+                ? `${r.away_team} @ ${r.home_team}: P(Home)=${(Number(r.win_prob_home_code ?? 0.5) * 100).toFixed(0)}%, ProjMargin=${r.proj_margin ?? 'N/A'} -> ${outcome || 'settled'}${marginStr}${brierStr}`
+                : `${r.away_team} @ ${r.home_team}: P(Home)=${(Number(r.win_prob_home ?? 0.5) * 100).toFixed(0)}%, FairSpread=${r.fair_spread ?? 'N/A'} -> ${outcome || 'settled'}${marginStr}${brierStr}`
             );
           }
         }
