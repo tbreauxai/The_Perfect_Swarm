@@ -1,4 +1,5 @@
 import type { MorningArgument, MorningJudgeOutput, SlateGame } from './types.ts';
+import { parseAndValidateJudgmentV2, type JudgmentV2, type JudgmentV2Result } from './judgment.ts';
 
 /**
  * Builds a single-line columnar representation for a slate game.
@@ -28,6 +29,16 @@ WEATHER: ${weatherStr}
 POSTED BOARD: ${oddsStr}
 
 Analyze this matchup thoroughly. Evaluate team strengths, injuries, market movement, and tempo to assess fair lines, spread, total, and win probability from your specialist perspective.`;
+}
+
+/**
+ * Judgment v2 (JUDGMENT_SCHEMA_V2): same board, but proposers project the score; no probabilities or fair lines.
+ */
+export function buildProposerPromptV2(game: SlateGame): string {
+  return buildProposerPrompt(game).replace(
+    'to assess fair lines, spread, total, and win probability from your specialist perspective.',
+    'to project the final margin (home minus away) and the game total from your specialist perspective. Do not give probabilities, fair lines, odds or stakes.'
+  );
 }
 
 /**
@@ -95,6 +106,29 @@ STRICT CONVENTIONS:
 5. "likelyWinner": Must strictly equal "${game.homeTeam}" or "${game.awayTeam}".
 6. Do NOT output any explanatory text before or after the JSON.`;
 }
+
+/**
+ * Judgment v2 manager contract (JUDGMENT_SCHEMA_V2). Code derives probabilities, fair lines and EV.
+ * Keep it no longer than JUDGE_MANAGER_INSTRUCTION (Groq 7000 TPM limiter in morningCacheBypass).
+ */
+export const JUDGE_MANAGER_INSTRUCTION_V2 = `You are the Morning Swarm Judge (GodView Compiler) for DuelOdds.
+Synthesize the debate into a score projection. Code computes probabilities, fair lines and EV.
+Output STRICT JSON ONLY, no markdown, one raw object with exactly these keys:
+{
+  "side": "home",
+  "projMargin": 3.5,
+  "projTotal": 47.5,
+  "totalLean": "over",
+  "confidence": 0.6,
+  "reasons": ["Key claim that survived critic review"]
+}
+RULES:
+1. "projMargin": projected home score minus away score. Positive = home wins.
+2. "side": "home" if projMargin >= 0.5, "away" if <= -0.5, else "pass".
+3. "projTotal": projected combined score, realistic for the sport.
+4. "totalLean": "over" if projTotal is 0.5+ above the posted total, "under" if 0.5+ below, else "pass".
+5. "confidence": 0 to 1. "reasons": 1 to 3 strings, max 140 chars each.
+6. No other keys: no probabilities, fair lines, odds, EV or stakes. No text outside the JSON.`;
 
 export const JUDGE_MANAGER_INSTRUCTION = `You are the Morning Swarm Judge (GodView Compiler) for DuelOdds.
 You must synthesize the full debate and determine fair lines and win probabilities.
@@ -524,6 +558,38 @@ export function computeModelSnapshot(
       : {}),
     ...(Object.keys(advocateCounts).length > 0
       ? { advocate_breakdown: advocateCounts }
+      : {})
+  };
+}
+
+/**
+ * Judgment v2 parse (rule a) + validate (rules b, c). Replaces parseAndValidateJudgeOutput + crossCheckJudgeOutput
+ * when JUDGMENT_SCHEMA_V2 is on. A rejection logs one warning and returns { ok: false }; nothing is retried in-run.
+ */
+export function parseAndValidateJudgeOutputV2(raw: unknown, game: SlateGame): JudgmentV2Result {
+  const r = parseAndValidateJudgmentV2(
+    raw,
+    { eventId: game.eventId, sport: game.sport },
+    { spread: game.oddsSnapshot?.spread ?? null, total: game.oddsSnapshot?.overUnder ?? null }
+  );
+  if (r.ok === false) {
+    const f = r as { reason: string; detail: string };
+    console.warn(`[MorningJudge] Rejected v2 judgment for ${game.awayTeam} @ ${game.homeTeam}: ${f.reason}: ${f.detail}`);
+  }
+  return r;
+}
+
+/**
+ * Judgment v2 model snapshot: the judge's own projections, no hardcoded 3.5 / 44.5 fallbacks and no
+ * model_win_prob_home (DuelOdds derives win_prob_home_code from proj_margin).
+ */
+export function computeModelSnapshotV2(judgment: JudgmentV2, participatingSeats?: string[]): Record<string, any> {
+  return {
+    projected_margin: judgment.projMargin,
+    projected_total: judgment.projTotal,
+    derived_from: 'swarm_judgment_v2',
+    ...(Array.isArray(participatingSeats) && participatingSeats.length > 0
+      ? { participating_seats: participatingSeats }
       : {})
   };
 }

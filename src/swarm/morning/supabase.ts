@@ -1,4 +1,5 @@
 import type { SlateGame, MorningJudgeOutput, LineSnapshotInsert } from './types.ts';
+import type { JudgmentV2 } from './judgment.ts';
 import {
   recordProbabilityObservation,
   outcomeToScore
@@ -86,7 +87,9 @@ export async function partitionSlateGames(
   cfg: SupabaseConfig | null,
   games: SlateGame[],
   gameDate: string,
-  fetchFn: typeof fetch = fetch
+  fetchFn: typeof fetch = fetch,
+  /** JUDGMENT_SCHEMA_V2: also read the v2 bookkeeping columns. Off = the select is exactly as before. */
+  v2: boolean = false
 ): Promise<{
   gamesToJudge: SlateGame[];
   gamesToReplace: SlateGame[];
@@ -107,7 +110,7 @@ export async function partitionSlateGames(
   try {
     const data = await querySupabase(
       cfg,
-      `game_judgments?game_date=eq.${encodeURIComponent(gameDate)}&select=event_id,judge_source,workflow_id,status,win_prob_home,likely_winner,home_team,away_team`,
+      `game_judgments?game_date=eq.${encodeURIComponent(gameDate)}&select=event_id,judge_source,workflow_id,status,win_prob_home,likely_winner,home_team,away_team${v2 ? ',schema_version,side,rejudge_count,validation_flag' : ''}`,
       { method: 'GET', headers: { Prefer: 'return=representation' } },
       fetchFn
     );
@@ -131,6 +134,12 @@ export async function partitionSlateGames(
     const existing = rowMap.get(game.eventId);
     if (!existing) {
       gamesToJudge.push(game);
+    } else if (v2 && existing.validation_flag === 'validation_failed') {
+      // v2: failed validation on 2 runs; stored as 'pass', never re-judged.
+      skippedCount++;
+    } else if (v2 && Number(existing.schema_version) === 2 && existing.side == null) {
+      // v2: a rejected judgment left only rejudge_count; judge it again on this run.
+      gamesToReplace.push(game);
     } else if (existing.judge_source === 'swarm' && (existing.status !== 'awaiting_lines' || !game.oddsSnapshot)) {
       // R3-S1: a swarm judgment today is never redone. The one exception is an awaiting_lines row once the
       // scoreboard has lines (re-judged once; the new row is 'judged'). Before, awaiting_lines games were re-judged every run.
@@ -204,6 +213,97 @@ export async function upsertGameJudgment(
     },
     fetchFn
   );
+}
+
+/** v2 failures allowed (one per run) before a game is stored as 'pass' with validation_flag 'validation_failed'. */
+export const JUDGMENT_V2_MAX_FAILURES = 2;
+
+function v2BaseRow(game: SlateGame): Record<string, any> {
+  const inputs = ['swarm_intelligence'];
+  if (game.oddsSnapshot) inputs.push('odds');
+  if (game.weatherSnapshot) inputs.push('weather');
+  return {
+    game_date: game.gameDate,
+    sport: game.sport,
+    event_id: game.eventId,
+    home_team: game.homeTeam,
+    away_team: game.awayTeam,
+    commence_time: game.commenceTime,
+    weather_snapshot: game.weatherSnapshot ?? { isIndoor: true },
+    odds_snapshot: game.oddsSnapshot,
+    status: game.oddsSnapshot ? 'judged' : 'awaiting_lines',
+    inputs_present: inputs,
+    schema_version: 2
+  };
+}
+
+async function postJudgmentRow(cfg: SupabaseConfig, row: Record<string, any>, fetchFn: typeof fetch): Promise<void> {
+  await querySupabase(
+    cfg,
+    'game_judgments?on_conflict=game_date,event_id',
+    {
+      method: 'POST',
+      headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify(row)
+    },
+    fetchFn
+  );
+}
+
+/**
+ * JUDGMENT_SCHEMA_V2 upsert: the judge's projections only. Writes no win_prob_* / fair_* (DuelOdds code derives
+ * win_prob_home_code, fair_*_code, devig_home and ev_* and stamps math_version). rejudge_count is left as is.
+ */
+export async function upsertGameJudgmentV2(
+  cfg: SupabaseConfig,
+  game: SlateGame,
+  judgment: JudgmentV2,
+  modelSnapshot: Record<string, any>,
+  workflowId: string | null | undefined,
+  fetchFn: typeof fetch = fetch
+): Promise<void> {
+  const likelyWinner = judgment.side === 'home' ? game.homeTeam : judgment.side === 'away' ? game.awayTeam : null;
+  await postJudgmentRow(cfg, {
+    ...v2BaseRow(game),
+    workflow_id: workflowId || null,
+    judge_source: 'swarm',
+    likely_winner: likelyWinner,
+    total_lean: judgment.totalLean === 'pass' ? 'none' : judgment.totalLean,
+    arguments: judgment.reasons.map(claim => ({ claim, advocate: 'judge', weight: 'medium' })),
+    invalidation_conditions: [],
+    judged_at: new Date().toISOString(),
+    data_as_of: new Date().toISOString(),
+    model_snapshot: modelSnapshot,
+    proj_margin: judgment.projMargin,
+    proj_total: judgment.projTotal,
+    side: judgment.side,
+    confidence: judgment.confidence,
+    reasons: judgment.reasons,
+    validation_flag: null
+  }, fetchFn);
+}
+
+/**
+ * JUDGMENT_SCHEMA_V2 rejection bookkeeping (no in-run retry). Failure 1: the row gets rejudge_count 1 and no side,
+ * so the next run judges it again. Failure 2: side 'pass' + validation_flag 'validation_failed', never re-judged.
+ * Returns the new rejudge_count.
+ */
+export async function recordRejectedJudgmentV2(
+  cfg: SupabaseConfig,
+  game: SlateGame,
+  priorRejudgeCount: number,
+  fetchFn: typeof fetch = fetch
+): Promise<number> {
+  const count = (Number.isFinite(priorRejudgeCount) && priorRejudgeCount > 0 ? Math.floor(priorRejudgeCount) : 0) + 1;
+  const row: Record<string, any> = { ...v2BaseRow(game), rejudge_count: count };
+  if (count >= JUDGMENT_V2_MAX_FAILURES) {
+    row.judge_source = 'swarm';
+    row.side = 'pass';
+    row.validation_flag = 'validation_failed';
+    row.judged_at = new Date().toISOString();
+  }
+  await postJudgmentRow(cfg, row, fetchFn);
+  return count;
 }
 
 /**
@@ -311,13 +411,17 @@ export async function insertBaselineLineSnapshots(
  */
 export async function hydrateCalibrationFromSupabase(
   cfg: SupabaseConfig | null,
-  fetchFn: typeof fetch = fetch
+  fetchFn: typeof fetch = fetch,
+  /** JUDGMENT_SCHEMA_V2: calibrate on DuelOdds' code probability; rows without math_version are skipped. */
+  v2: boolean = false
 ): Promise<number> {
   if (!cfg) return 0;
   try {
     const rows = await querySupabase(
       cfg,
-      'game_judgments?status=eq.final&brier=not.is.null&order=judged_at.desc&limit=200&select=event_id,workflow_id,win_prob_home,sport,result,judged_at',
+      v2
+        ? 'game_judgments?status=eq.final&brier=not.is.null&math_version=not.is.null&order=judged_at.desc&limit=200&select=event_id,workflow_id,win_prob_home_code,math_version,sport,result,judged_at'
+        : 'game_judgments?status=eq.final&brier=not.is.null&order=judged_at.desc&limit=200&select=event_id,workflow_id,win_prob_home,sport,result,judged_at',
       { method: 'GET', headers: { Prefer: 'return=representation' } },
       fetchFn
     );
@@ -326,7 +430,8 @@ export async function hydrateCalibrationFromSupabase(
     let count = 0;
     for (const r of rows) {
       const wfId = r.workflow_id || `supabase-${r.event_id}`;
-      const prob = Number(r.win_prob_home);
+      if (v2 && r.math_version == null) continue;
+      const prob = Number(v2 ? r.win_prob_home_code : r.win_prob_home);
       const outcomeStr = r.result?.outcome || (r.result?.home_win === true ? 'win' : r.result?.home_win === false ? 'loss' : '');
       const score = outcomeToScore(String(outcomeStr));
       if (!Number.isFinite(prob) || prob <= 0 || prob >= 1 || score == null) continue;
@@ -354,7 +459,9 @@ export async function hydrateCalibrationFromSupabase(
 export async function fetchPregameLearningContext(
   cfg: SupabaseConfig | null,
   game: SlateGame,
-  fetchFn: typeof fetch = fetch
+  fetchFn: typeof fetch = fetch,
+  /** JUDGMENT_SCHEMA_V2: history from win_prob_home_code + proj_margin; rows without math_version are skipped. */
+  v2: boolean = false
 ): Promise<PregameLearningContext> {
   const empty: PregameLearningContext = {
     lineMovement: null,
@@ -431,7 +538,7 @@ export async function fetchPregameLearningContext(
   try {
     const settledRows = await querySupabase(
       cfg,
-      `game_judgments?status=eq.final&sport=eq.${encodeURIComponent(game.sport)}&order=game_date.desc&limit=40&select=home_team,away_team,win_prob_home,fair_spread,result,brier`,
+      `game_judgments?status=eq.final&sport=eq.${encodeURIComponent(game.sport)}&order=game_date.desc&limit=40&select=${v2 ? 'home_team,away_team,win_prob_home_code,proj_margin,math_version,result,brier&math_version=not.is.null' : 'home_team,away_team,win_prob_home,fair_spread,result,brier'}`,
       { method: 'GET', headers: { Prefer: 'return=representation' } },
       fetchFn
     );
@@ -442,6 +549,7 @@ export async function fetchPregameLearningContext(
       const targetAway = norm(game.awayTeam);
 
       const matching = settledRows.filter((r: any) => {
+        if (v2 && r.math_version == null) return false;
         const rh = norm(r.home_team || '');
         const ra = norm(r.away_team || '');
         return (
@@ -469,11 +577,11 @@ export async function fetchPregameLearningContext(
             brierCount++;
           }
 
-          const fairSpread = Number(r.fair_spread);
+          // v2: proj_margin is the judge's home margin; v1: projected home margin is -fairSpread
+          const projectedMargin = v2 ? Number(r.proj_margin) : -Number(r.fair_spread);
           const actualMargin = Number(r.result?.margin);
-          if (Number.isFinite(fairSpread) && Number.isFinite(actualMargin)) {
-            // Projected home margin is -fairSpread; error = actualMargin - projectedMargin
-            const projectedMargin = -fairSpread;
+          if (r[v2 ? 'proj_margin' : 'fair_spread'] != null && Number.isFinite(projectedMargin) && Number.isFinite(actualMargin)) {
+            // error = actualMargin - projectedMargin
             spreadErrorSum += actualMargin - projectedMargin;
             spreadErrorCount++;
           }
@@ -482,7 +590,9 @@ export async function fetchPregameLearningContext(
             const brierStr = typeof r.brier === 'number' ? `, Brier=${r.brier.toFixed(3)}` : '';
             const marginStr = r.result?.margin != null ? `, Margin=${r.result.margin > 0 ? '+' : ''}${r.result.margin}` : '';
             recentNotes.push(
-              `${r.away_team} @ ${r.home_team}: P(Home)=${(Number(r.win_prob_home ?? 0.5) * 100).toFixed(0)}%, FairSpread=${r.fair_spread ?? 'N/A'} -> ${outcome || 'settled'}${marginStr}${brierStr}`
+              v2
+                ? `${r.away_team} @ ${r.home_team}: P(Home)=${(Number(r.win_prob_home_code ?? 0.5) * 100).toFixed(0)}%, ProjMargin=${r.proj_margin ?? 'N/A'} -> ${outcome || 'settled'}${marginStr}${brierStr}`
+                : `${r.away_team} @ ${r.home_team}: P(Home)=${(Number(r.win_prob_home ?? 0.5) * 100).toFixed(0)}%, FairSpread=${r.fair_spread ?? 'N/A'} -> ${outcome || 'settled'}${marginStr}${brierStr}`
             );
           }
         }
