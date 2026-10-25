@@ -227,6 +227,10 @@ export const CriticScorecardSchema = AnalystScorecardSchema.extend({
 });
 export type CriticScorecard = z.infer<typeof CriticScorecardSchema>;
 
+/** JUDGMENT_SCHEMA_V2: scorecards carry no LLM edge (edge is code-derived: game_judgments ev_*). */
+export const AnalystScorecardSchemaV2 = AnalystScorecardSchema.omit({ edge: true });
+export const CriticScorecardSchemaV2 = CriticScorecardSchema.omit({ edge: true });
+
 export interface LearnedMemoryEvent {
     appId: string;
     content: string;

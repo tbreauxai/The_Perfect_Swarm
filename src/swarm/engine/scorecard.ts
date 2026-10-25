@@ -1,9 +1,16 @@
-import type { Agent } from '../agent.ts';
-import type { SwarmContext } from '../context.ts';
-import type { AgentRunConfig, SwarmEngineSettings } from '../types.ts';
-import { AnalystScorecardSchema, type AnalystScorecard } from '../types.ts';
-import { parseJsonSafe } from '../parser.ts';
-import { recordDegraded } from './partialResult.ts';
+import type { Agent } from "../agent.ts";
+import type { SwarmContext } from "../context.ts";
+import type { AgentRunConfig, SwarmEngineSettings } from "../types.ts";
+import {
+  AnalystScorecardSchema,
+  AnalystScorecardSchemaV2,
+  CriticScorecardSchema,
+  CriticScorecardSchemaV2,
+  type AnalystScorecard,
+} from "../types.ts";
+import { isJudgmentSchemaV2, sideEvColumn } from "../morning/judgment.ts";
+import { parseJsonSafe } from "../parser.ts";
+import { recordDegraded } from "./partialResult.ts";
 
 /** R2-S1: analyst max output tokens in scorecard mode (a scorecard is ~150 tokens). */
 export const SCORECARD_ANALYST_MAX_TOKENS = 800;
@@ -24,8 +31,34 @@ export function scorecardAnalystMaxTokens(settings?: SwarmEngineSettings): numbe
     return Number.isFinite(n) && n > 0 ? Math.floor(n) : SCORECARD_ANALYST_MAX_TOKENS;
 }
 
+/** JUDGMENT_SCHEMA_V2 for the engine (read at call time; default off). */
+export function scorecardV2(env: Record<string, string | undefined> | undefined = typeof process !== 'undefined' ? process.env : {}): boolean {
+    return isJudgmentSchemaV2(env);
+}
+
+/**
+ * S7: the code edge for a pick, from a game_judgments row (flag on only): the picked side's EV column
+ * (home -> ev_home, away -> ev_away, over -> ev_over, under -> ev_under). null = skip the code edge.
+ */
+export function codeEdgeForPick(row: Record<string, any> | null | undefined, side: string | null | undefined, v2: boolean = scorecardV2()): number | null {
+    if (!v2 || !row) return null;
+    const col = sideEvColumn(side);
+    if (!col) return null;
+    const v = row[col];
+    return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
 /** R2-S2: appended at the very END of the analyst prompt (after any compression). */
-export function renderScorecardInstruction(seat: string): string {
+export function renderScorecardInstruction(seat: string, v2: boolean = scorecardV2()): string {
+    if (v2) return `\n\nOUTPUT FORMAT (scorecard mode, this overrides any other output format above):
+Reply with ONE JSON object and nothing else:
+{"seat":"${seat}","picks":[{"row":"R12","note":"max 60 chars"}],"parlay":{"rows":["R12","R40"],"targetFit":"in"},"key_risk":"max 120 chars","confidence":0.62,"status":"ok"}
+Rules:
+- Cite rows ONLY by the row ids from the tables above (R1..Rn). At most 8 picks.
+- "parlay" is optional. targetFit is one of "in", "near", "none".
+- No edge field (code computes it). "confidence" is a number from 0 to 1.
+- "status" is "ok" or "no_play" (use "no_play" with "picks": [] when nothing qualifies).
+JSON only.`;
     return `\n\nOUTPUT FORMAT (scorecard mode, this overrides any other output format above):
 Reply with ONE JSON object and nothing else:
 {"seat":"${seat}","picks":[{"row":"R12","note":"max 60 chars"}],"parlay":{"rows":["R12","R40"],"targetFit":"in"},"edge":3.5,"key_risk":"max 120 chars","confidence":0.62,"status":"ok"}
@@ -58,8 +91,14 @@ function isScorecardLike(obj: any): boolean {
 export function validateScorecard<T = AnalystScorecard>(
     raw: unknown,
     seat: string,
-    schema: { safeParse: (data: unknown) => any } = AnalystScorecardSchema
+    schema: { safeParse: (data: unknown) => any } = AnalystScorecardSchema,
+    v2: boolean = scorecardV2()
 ): ScorecardValidation<T> {
+    if (v2) {
+        // S7: the LLM edge is dropped; the v1 schemas map to their no-edge v2 twins.
+        if (schema === AnalystScorecardSchema) schema = AnalystScorecardSchemaV2;
+        else if (schema === CriticScorecardSchema) schema = CriticScorecardSchemaV2;
+    }
     const text = toText(raw);
     const parsed = parseJsonSafe<any>(raw, null);
     if (!isScorecardLike(parsed)) {
@@ -104,7 +143,7 @@ export function validateScorecard<T = AnalystScorecard>(
             const synthesized: any = {
                 seat,
                 picks,
-                edge,
+                ...(v2 ? {} : { edge }),
                 key_risk,
                 confidence,
                 status: 'ok',
@@ -133,7 +172,9 @@ export function validateScorecard<T = AnalystScorecard>(
     if (typeof parsed.confidence === 'number' && parsed.confidence > 1) {
         parsed.confidence = parsed.confidence / 100;
     }
-    if (typeof parsed.edge === 'string') {
+    if (v2) {
+        delete parsed.edge;
+    } else if (typeof parsed.edge === 'string') {
         const n = parseFloat(parsed.edge.replace('%', ''));
         if (Number.isFinite(n)) parsed.edge = n;
     }
@@ -246,12 +287,22 @@ export async function runScorecardSeat<T = AnalystScorecard>(opts: {
  * Wraps a scorecard result in the analyst report shape the rest of the engine already reads
  * (insights / anomalies / summary), so consensus, the PS1 partial fallback and the hierarchy bus keep working.
  */
-export function scorecardToAnalystReport(result: ScorecardSeatResult<AnalystScorecard>, role: string): any {
+export function scorecardToAnalystReport(
+    result: ScorecardSeatResult<AnalystScorecard>,
+    role: string,
+    /** S7 flag on: codeEdgeForPick(...) for the seat's pick; null/undefined = no code edge shown. */
+    codeEdge?: number | null,
+    v2: boolean = scorecardV2()
+): any {
     if (result.scorecard) {
         const sc = result.scorecard;
         const insights = sc.picks.map(p => (p.note ? `${p.row}: ${p.note}` : p.row));
         if (sc.parlay) insights.push(`Parlay ${sc.parlay.rows.join(' + ')} (target fit: ${sc.parlay.targetFit})`);
-        const headline = sc.status === 'no_play' ? 'No play' : `Edge ${sc.edge}%`;
+        const headline = sc.status === 'no_play'
+            ? 'No play'
+            : v2
+                ? (typeof codeEdge === 'number' && Number.isFinite(codeEdge) ? `Code edge ${codeEdge}%` : 'Play')
+                : `Edge ${sc.edge}%`;
         const summary = result.unstructured
             ? `${headline} | ${result.unstructured}`
             : `${headline} | confidence ${sc.confidence} | key risk: ${sc.key_risk}`;
