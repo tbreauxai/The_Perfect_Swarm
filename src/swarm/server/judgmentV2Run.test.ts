@@ -244,6 +244,7 @@ describe("JUDGMENT_SCHEMA_V2 on: rejections (no in-run retry)", () => {
       schema_version: 2,
       rejudge_count: 1,
     });
+    expect(judgmentWrites[0].status).toBe("awaiting_lines");
     expect(judgmentWrites[0]).not.toHaveProperty("side");
     expect(judgmentWrites[0]).not.toHaveProperty("judge_source");
     expect(judgmentWrites[0]).not.toHaveProperty("validation_flag");
@@ -297,7 +298,21 @@ describe("JUDGMENT_SCHEMA_V2 on: rejections (no in-run retry)", () => {
       side: "pass",
       validation_flag: "validation_failed",
       judge_source: "swarm",
+      status: "awaiting_lines",
     });
+  });
+
+  it("the picker retries a placeholder ('awaiting_lines' or old 'judged', rejudge_count 0 or 1)", async () => {
+    for (const [status, rejudge_count] of [["awaiting_lines", 1], ["judged", 1], ["awaiting_lines", 0]] as const) {
+      const rows = [
+        { event_id: "nfl-g1", judge_source: null, status, schema_version: 2, side: null, rejudge_count, validation_flag: null },
+      ];
+      const { result, executeWorkflowFn, judgmentWrites } = await runSlate({ flag: "1", rows, reply: GOOD_V2 });
+      expect(executeWorkflowFn).toHaveBeenCalledTimes(1);
+      expect(result.replaced).toBe(1);
+      expect(result.skipped).toBe(0);
+      expect(judgmentWrites[0]).toMatchObject({ judge_source: "swarm", side: "home", status: "judged" });
+    }
   });
 
   it("a validation_failed row is never re-judged", async () => {
