@@ -26,7 +26,7 @@ export const V2_COLUMNS = [
   "ev_under",
 ];
 
-const event = (id: string) => ({
+const event = (id: string, noSpread = false) => ({
   id,
   date: "2026-10-15T18:00:00Z",
   competitions: [
@@ -35,7 +35,11 @@ const event = (id: string) => ({
         { homeAway: "home", team: { displayName: `Home ${id}` } },
         { homeAway: "away", team: { displayName: `Away ${id}` } },
       ],
-      odds: [{ details: "HOME -3.0", spread: -3.0, overUnder: 48.0 }],
+      odds: [
+        noSpread
+          ? { details: "", overUnder: 48.0 }
+          : { details: "HOME -3.0", spread: -3.0, overUnder: 48.0 },
+      ],
     },
   ],
 });
@@ -48,13 +52,23 @@ export const GOOD_V2 = JSON.stringify({
   confidence: 0.6,
   reasons: ["Home pass rush"],
 });
+/** Still rejected after the total-lean fix: projTotal 75 is 27 off the market 48 (cap 12). */
 export const BAD_V2 = JSON.stringify({
-  side: "away",
+  side: "home",
   projMargin: 4,
-  projTotal: 50,
+  projTotal: 75,
   totalLean: "over",
   confidence: 0.6,
-  reasons: ["sign flipped"],
+  reasons: ["off market"],
+});
+/** Live 2026-10-26 shape: labels contradict the numbers (lean 'pass' at +6 over 48; side 'away' though +4 covers home -3). */
+export const MISLABELED_V2 = JSON.stringify({
+  side: "away",
+  projMargin: 4,
+  projTotal: 54,
+  totalLean: "pass",
+  confidence: 0.6,
+  reasons: ["labels wrong"],
 });
 export const GOOD_V1 = JSON.stringify({
   likelyWinner: "Home g1",
@@ -70,6 +84,7 @@ export async function runSlate(opts: {
   flag?: string;
   rows?: any[];
   reply: string;
+  noSpread?: boolean;
 }) {
   const gets: string[] = [];
   const writes: { url: string; body: any }[] = [];
@@ -78,7 +93,7 @@ export async function runSlate(opts: {
     .mockImplementation(async (url: string, init?: any) => {
       const u = String(url);
       if (u.includes("/sports/football/nfl/"))
-        return new Response(JSON.stringify({ events: [event("g1")] }), {
+        return new Response(JSON.stringify({ events: [event("g1", opts.noSpread)] }), {
           status: 200,
         });
       if (u.includes("apis/site/v2/sports/"))
@@ -183,6 +198,37 @@ describe("JUDGMENT_SCHEMA_V2 on: write path", () => {
   });
 });
 
+describe("JUDGMENT_SCHEMA_V2 on: mislabeled side/totalLean is corrected, not rejected", () => {
+  it("writes the derived side + lean and logs the model's values", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { result, judgmentWrites } = await runSlate({ flag: "1", reply: MISLABELED_V2 });
+    expect(result.errors).toEqual([]);
+    expect(judgmentWrites).toHaveLength(1);
+    expect(judgmentWrites[0]).toMatchObject({
+      side: "home",
+      total_lean: "over",
+      likely_winner: "Home g1",
+      proj_total: 54,
+      judge_source: "swarm",
+      validation_flag: null,
+    });
+    const logs = warn.mock.calls.map((c) => String(c[0]) + " " + String(c[1] ?? ""));
+    const lean = logs.find((l) => l.includes("v2 label corrected") && l.includes('"field":"totalLean"'))!;
+    expect(lean).toContain('"model":"pass"');
+    expect(lean).toContain('"derived":"over"');
+    expect(logs.some((l) => l.includes('"field":"side"') && l.includes('"derived":"home"'))).toBe(true);
+    expect(logs.some((l) => l.includes("Rejected v2"))).toBe(false);
+  });
+
+  it("no market spread: side from the margin sign, and that fallback is logged", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { judgmentWrites } = await runSlate({ flag: "1", reply: MISLABELED_V2, noSpread: true });
+    expect(judgmentWrites[0]).toMatchObject({ side: "home", likely_winner: "Home g1" });
+    const logs = warn.mock.calls.map((c) => String(c[0]) + " " + String(c[1] ?? ""));
+    expect(logs.some((l) => l.includes("v2 side from margin sign (no market spread)") && l.includes('"projMargin":4'))).toBe(true);
+  });
+});
+
 describe("JUDGMENT_SCHEMA_V2 on: rejections (no in-run retry)", () => {
   it("failure 1: one call, rejudge_count 1, no side, game re-judged next run", async () => {
     const { result, judgmentWrites, executeWorkflowFn } = await runSlate({
@@ -191,13 +237,14 @@ describe("JUDGMENT_SCHEMA_V2 on: rejections (no in-run retry)", () => {
     });
     expect(executeWorkflowFn).toHaveBeenCalledTimes(1);
     expect(result.ok).toBe(false);
-    expect(result.errors[0].error).toContain("side_mismatch");
+    expect(result.errors[0].error).toContain("total_vs_market");
     expect(judgmentWrites).toHaveLength(1);
     expect(judgmentWrites[0]).toMatchObject({
       event_id: "nfl-g1",
       schema_version: 2,
       rejudge_count: 1,
     });
+    expect(judgmentWrites[0].status).toBe("awaiting_lines");
     expect(judgmentWrites[0]).not.toHaveProperty("side");
     expect(judgmentWrites[0]).not.toHaveProperty("judge_source");
     expect(judgmentWrites[0]).not.toHaveProperty("validation_flag");
@@ -251,7 +298,21 @@ describe("JUDGMENT_SCHEMA_V2 on: rejections (no in-run retry)", () => {
       side: "pass",
       validation_flag: "validation_failed",
       judge_source: "swarm",
+      status: "awaiting_lines",
     });
+  });
+
+  it("the picker retries a placeholder ('awaiting_lines' or old 'judged', rejudge_count 0 or 1)", async () => {
+    for (const [status, rejudge_count] of [["awaiting_lines", 1], ["judged", 1], ["awaiting_lines", 0]] as const) {
+      const rows = [
+        { event_id: "nfl-g1", judge_source: null, status, schema_version: 2, side: null, rejudge_count, validation_flag: null },
+      ];
+      const { result, executeWorkflowFn, judgmentWrites } = await runSlate({ flag: "1", rows, reply: GOOD_V2 });
+      expect(executeWorkflowFn).toHaveBeenCalledTimes(1);
+      expect(result.replaced).toBe(1);
+      expect(result.skipped).toBe(0);
+      expect(judgmentWrites[0]).toMatchObject({ judge_source: "swarm", side: "home", status: "judged" });
+    }
   });
 
   it("a validation_failed row is never re-judged", async () => {

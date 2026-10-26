@@ -1,5 +1,5 @@
 import type { MorningArgument, MorningJudgeOutput, SlateGame } from './types.ts';
-import { parseAndValidateJudgmentV2, type JudgmentV2, type JudgmentV2Result } from './judgment.ts';
+import { parseDeriveAndValidateJudgmentV2, type JudgmentV2, type JudgmentV2Result } from './judgment.ts';
 
 /**
  * Builds a single-line columnar representation for a slate game.
@@ -567,16 +567,39 @@ export function computeModelSnapshot(
  * when JUDGMENT_SCHEMA_V2 is on. A rejection logs one warning and returns { ok: false }; nothing is retried in-run.
  */
 export function parseAndValidateJudgeOutputV2(raw: unknown, game: SlateGame): JudgmentV2Result {
-  const r = parseAndValidateJudgmentV2(
-    raw,
-    { eventId: game.eventId, sport: game.sport },
-    { spread: game.oddsSnapshot?.spread ?? null, total: game.oddsSnapshot?.overUnder ?? null }
-  );
+  const market = { spread: game.oddsSnapshot?.spread ?? null, total: game.oddsSnapshot?.overUnder ?? null };
+  // side (ATS cover vs the home spread) and totalLean are derived from the numbers; a label mismatch is logged, not rejected.
+  const r = parseDeriveAndValidateJudgmentV2(raw, { eventId: game.eventId, sport: game.sport }, market);
   if (r.ok === false) {
     const f = r as { reason: string; detail: string };
     console.warn(`[MorningJudge] Rejected v2 judgment for ${game.awayTeam} @ ${game.homeTeam}: ${f.reason}: ${f.detail}`);
+    return r;
   }
-  return r;
+  const j = (r as { judgment: JudgmentV2 }).judgment;
+  if (r.sideBasis === 'margin_fallback') {
+    console.warn('[MorningJudge] v2 side from margin sign (no market spread)', JSON.stringify({
+      eventId: game.eventId,
+      sport: game.sport,
+      matchup: `${game.awayTeam} @ ${game.homeTeam}`,
+      projMargin: j.projMargin,
+      side: j.side
+    }));
+  }
+  for (const c of r.corrections ?? []) {
+    console.warn('[MorningJudge] v2 label corrected', JSON.stringify({
+      eventId: game.eventId,
+      sport: game.sport,
+      matchup: `${game.awayTeam} @ ${game.homeTeam}`,
+      field: c.field,
+      model: c.model,
+      derived: c.derived,
+      projMargin: j.projMargin,
+      projTotal: j.projTotal,
+      marketSpread: market.spread,
+      marketTotal: market.total
+    }));
+  }
+  return { ok: true, judgment: j };
 }
 
 /**

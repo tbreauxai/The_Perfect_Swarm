@@ -137,6 +137,15 @@ export async function partitionSlateGames(
     } else if (v2 && existing.validation_flag === 'validation_failed') {
       // v2: failed validation on 2 runs; stored as 'pass', never re-judged.
       skippedCount++;
+    } else if (
+      v2 &&
+      Number(existing.schema_version) === 2 &&
+      existing.judge_source == null &&
+      Number(existing.rejudge_count ?? 0) < JUDGMENT_V2_MAX_FAILURES
+    ) {
+      // v2 placeholder (a rejected judgment: no judge_source, status 'awaiting_lines'): judge it again on this run
+      // while rejudge_count < JUDGMENT_V2_MAX_FAILURES, whatever its status (old placeholders were 'judged').
+      gamesToReplace.push(game);
     } else if (v2 && Number(existing.schema_version) === 2 && existing.side == null) {
       // v2: a rejected judgment left only rejudge_count; judge it again on this run.
       gamesToReplace.push(game);
@@ -295,7 +304,9 @@ export async function recordRejectedJudgmentV2(
   fetchFn: typeof fetch = fetch
 ): Promise<number> {
   const count = (Number.isFinite(priorRejudgeCount) && priorRejudgeCount > 0 ? Math.floor(priorRejudgeCount) : 0) + 1;
-  const row: Record<string, any> = { ...v2BaseRow(game), rejudge_count: count };
+  // Never 'judged': a placeholder / rejected row is 'awaiting_lines' (allowed by game_judgments_status_check), which
+  // DuelOdds' unjudged query (status=neq.awaiting_lines) and this partition both treat as not judged yet.
+  const row: Record<string, any> = { ...v2BaseRow(game), rejudge_count: count, status: 'awaiting_lines' };
   if (count >= JUDGMENT_V2_MAX_FAILURES) {
     row.judge_source = 'swarm';
     row.side = 'pass';

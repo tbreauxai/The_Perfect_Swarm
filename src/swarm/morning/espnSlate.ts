@@ -10,14 +10,28 @@ export const ESPN_LEAGUES: readonly EspnLeagueConfig[] = [
   { sport: 'basketball', league: 'mens-college-basketball', sportKey: 'basketball_ncaab' }
 ] as const;
 
+/** From this America/Chicago hour on, the default slate is the NEXT day (the 10 PM CT morning cron judges tomorrow). */
+export const NEXT_DAY_SLATE_HOUR_CT = 22;
+
 /**
- * Returns today's slate date formatted as YYYY-MM-DD in America/Chicago.
+ * Returns the slate date as YYYY-MM-DD in America/Chicago: today, or tomorrow from 10 PM CT on.
  */
-export function getDefaultSlateDate(): string {
+export function getDefaultSlateDate(now: Date = new Date()): string {
   try {
-    return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(new Date());
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Chicago',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      hourCycle: 'h23'
+    }).formatToParts(now);
+    const get = (t: string) => Number(parts.find(p => p.type === t)?.value);
+    const day = new Date(Date.UTC(get('year'), get('month') - 1, get('day')));
+    if (get('hour') >= NEXT_DAY_SLATE_HOUR_CT) day.setUTCDate(day.getUTCDate() + 1);
+    return day.toISOString().split('T')[0];
   } catch {
-    return new Date().toISOString().split('T')[0];
+    return now.toISOString().split('T')[0];
   }
 }
 

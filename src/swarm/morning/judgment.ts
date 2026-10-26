@@ -65,6 +65,42 @@ export const JUDGMENT_MARKET_CAPS = { margin: 10, total: 12 };
 /** |projMargin| below this means side must be 'pass'; |projTotal - marketTotal| below this means totalLean 'pass'. */
 export const JUDGMENT_DEAD_BAND = 0.5;
 
+/**
+ * Sport-aware pass bands used when the swarm DERIVES side and totalLean from the projections (total-lean fix,
+ * 2026-10-26). |projMargin + home spread| < margin → side 'pass'; |projTotal - market total| < total → totalLean 'pass'.
+ * Values decided by Tyler 2026-10-26; sports not listed use JUDGMENT_DEAD_BAND.
+ */
+export const JUDGMENT_LEAN_THRESHOLDS: Record<
+  string,
+  { margin: number; total: number }
+> = {
+  americanfootball_nfl: { margin: 1, total: 1.5 },
+  americanfootball_ncaaf: { margin: 1.5, total: 2 },
+  basketball_nba: { margin: 1.5, total: 2 },
+  basketball_ncaab: { margin: 1.5, total: 2 },
+  basketball_wnba: { margin: 1.5, total: 2 },
+  baseball_mlb: { margin: 0.25, total: 0.5 },
+  baseball_ncaa: { margin: 0.5, total: 0.5 },
+  icehockey_nhl: { margin: 0.25, total: 0.25 },
+};
+
+/** The pass band for a sport (unknown sport → JUDGMENT_DEAD_BAND for both). */
+export function judgmentLeanBand(sport: string): {
+  margin: number;
+  total: number;
+} {
+  return (
+    JUDGMENT_LEAN_THRESHOLDS[
+      String(sport ?? "")
+        .toLowerCase()
+        .trim()
+    ] ?? {
+      margin: JUDGMENT_DEAD_BAND,
+      total: JUDGMENT_DEAD_BAND,
+    }
+  );
+}
+
 export type JudgmentV2Failure =
   | "schema"
   | "side_mismatch"
@@ -163,11 +199,13 @@ export function parseJudgmentV2(
 export function validateJudgmentV2(
   j: JudgmentV2,
   market?: JudgmentMarket,
+  /** false = skip the side/totalLean label checks (the swarm derive path set them from the numbers). Default true (canonical). */
+  checkLabels: boolean = true,
 ): JudgmentV2Result {
   const m = j.projMargin;
   const wantSide =
     Math.abs(m) < JUDGMENT_DEAD_BAND ? "pass" : m > 0 ? "home" : "away";
-  if (j.side !== wantSide) {
+  if (checkLabels && j.side !== wantSide) {
     return {
       ok: false,
       reason: "side_mismatch",
@@ -182,7 +220,7 @@ export function validateJudgmentV2(
     const d = j.projTotal - mt;
     const wantLean =
       Math.abs(d) < JUDGMENT_DEAD_BAND ? "pass" : d > 0 ? "over" : "under";
-    if (j.totalLean !== wantLean) {
+    if (checkLabels && j.totalLean !== wantLean) {
       return {
         ok: false,
         reason: "total_lean_mismatch",
@@ -235,6 +273,71 @@ export function parseAndValidateJudgmentV2(
 ): JudgmentV2Result {
   const p = parseJudgmentV2(raw, ids);
   return p.ok ? validateJudgmentV2(p.judgment, market) : p;
+}
+
+/** One field the swarm overrode: what the model said vs what its own projections imply. */
+export interface JudgmentV2Correction {
+  field: "side" | "totalLean";
+  model: string;
+  derived: string;
+}
+
+/**
+ * Derives side and totalLean from the numbers with the sport band, instead of trusting the model's labels.
+ * Side = ATS cover: the market spread is HOME perspective (-3 = home favored by 3, the same convention as
+ * JUDGMENT_MARKET_CAPS / rule c, where the market margin is -spread), so cover = projMargin + spread;
+ * |cover| < band.margin → 'pass', cover > 0 → 'home', < 0 → 'away'. No finite spread (moneyline only) → the sign
+ * of projMargin with the same band (sideBasis 'margin_fallback'). totalLean = projTotal vs the market total; without
+ * a finite total the model's totalLean is kept. Never touches numbers.
+ */
+export function deriveJudgmentV2Picks(
+  j: JudgmentV2,
+  market?: JudgmentMarket,
+): {
+  judgment: JudgmentV2;
+  corrections: JudgmentV2Correction[];
+  sideBasis: "spread" | "margin_fallback";
+} {
+  const band = judgmentLeanBand(j.sport);
+  const ms = market?.spread;
+  const hasSpread = typeof ms === "number" && Number.isFinite(ms);
+  const cover = hasSpread ? j.projMargin + ms : j.projMargin;
+  const side: JudgmentV2["side"] =
+    Math.abs(cover) < band.margin ? "pass" : cover > 0 ? "home" : "away";
+  let totalLean = j.totalLean;
+  const mt = market?.total;
+  if (typeof mt === "number" && Number.isFinite(mt)) {
+    const d = j.projTotal - mt;
+    totalLean = Math.abs(d) < band.total ? "pass" : d > 0 ? "over" : "under";
+  }
+  const corrections: JudgmentV2Correction[] = [];
+  if (side !== j.side) corrections.push({ field: "side", model: j.side, derived: side });
+  if (totalLean !== j.totalLean)
+    corrections.push({ field: "totalLean", model: j.totalLean, derived: totalLean });
+  return {
+    judgment: { ...j, side, totalLean },
+    corrections,
+    sideBasis: hasSpread ? "spread" : "margin_fallback",
+  };
+}
+
+/**
+ * Swarm runtime path: parse (a), derive side/totalLean (no rejection for a label mismatch), then rule c only.
+ * Missing / NaN numbers (schema) and out-of-range or off-market numbers are still rejected.
+ */
+export function parseDeriveAndValidateJudgmentV2(
+  raw: unknown,
+  ids: { eventId: string; sport: string },
+  market?: JudgmentMarket,
+): JudgmentV2Result & {
+  corrections?: JudgmentV2Correction[];
+  sideBasis?: "spread" | "margin_fallback";
+} {
+  const p = parseJudgmentV2(raw, ids);
+  if (p.ok === false) return p;
+  const d = deriveJudgmentV2Picks((p as { judgment: JudgmentV2 }).judgment, market);
+  const v = validateJudgmentV2(d.judgment, market, false);
+  return v.ok ? { ...v, corrections: d.corrections, sideBasis: d.sideBasis } : v;
 }
 
 export type EvColumn = "ev_home" | "ev_away" | "ev_over" | "ev_under";
