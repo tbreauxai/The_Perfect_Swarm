@@ -8,6 +8,7 @@ import {
   JUDGMENT_TOTAL_RANGES,
 } from "../morning/judgment.ts";
 import { JUDGE_TOTAL_RANGES } from "../morning/judgePrompt.ts";
+import { codeEdgeForPick } from "../engine/scorecard.ts";
 
 const fx = JSON.parse(
   readFileSync(
@@ -18,28 +19,71 @@ const fx = JSON.parse(
   ),
 );
 
+// Fixtures are byte-identical to DuelOdds src/math/judgment.v2.fixtures.json (b264058f, "input" layout).
+// The swarm owns eventId/sport/schemaVersion in code (parseJudgmentV2 overwrites them), so ids come
+// from each case's input, with DuelOdds sport labels mapped to the swarm's odds-api sport keys.
+const SPORT_KEY: Record<string, string> = { NFL: "americanfootball_nfl", NBA: "basketball_nba" };
+function idsOf(input: unknown): { eventId: string; sport: string } {
+  const o: any = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+  const sport = typeof o.sport === "string" ? o.sport : "NFL";
+  return { eventId: typeof o.eventId === "string" ? o.eventId : "evt-1", sport: SPORT_KEY[sport] ?? sport };
+}
+const IDS = { eventId: "evt-1", sport: "americanfootball_nfl" };
+
+// DuelOdds reports granular parse reasons; the swarm folds every rule-a (strict schema) failure into
+// "schema" and names the no-market clamps margin_range/total_range. Logic is not changed here.
+const SWARM_REASON: Record<string, string> = {
+  not_json: "schema",
+  not_object: "schema",
+  extra_key: "schema",
+  bad_side: "schema",
+  bad_number: "schema",
+  proj_total_nonpositive: "schema",
+  bad_total_lean: "schema",
+  bad_confidence: "schema",
+  bad_reasons: "schema",
+  total_out_of_range: "total_range",
+  margin_out_of_range: "margin_range",
+};
+
+// SKIPPED: the swarm has no such rule, it overwrites code-owned ids instead of rejecting them.
+const SKIP_INVALID = new Set(["bad_schema_version", "bad_event_id", "bad_sport"]);
+// SKIPPED: the swarm's sideEvColumn has no spread columns (feature not in the swarm).
+const SKIP_SIDES = new Set(["spread_home", "spread_away"]);
+// SKIPPED: swarm codeEdgeForPick accepts finite numbers only; DuelOdds also reads numeric strings.
+const SKIP_CODE_EDGE = new Set(["numeric string (PostgREST numeric)"]);
+
 describe("judgment v2 shared fixtures", () => {
   for (const c of fx.valid) {
     it(`valid: ${c.name}`, () => {
-      const r = parseAndValidateJudgmentV2(c.raw, fx.ids, c.market);
+      const ids = idsOf(c.input);
+      const r = parseAndValidateJudgmentV2(c.input, ids, c.market);
       expect(r.ok, JSON.stringify(r)).toBe(true);
       if (r.ok) {
-        expect(r.judgment.eventId).toBe(fx.ids.eventId);
-        expect(r.judgment.sport).toBe(fx.ids.sport);
+        expect(r.judgment.eventId).toBe(ids.eventId);
+        expect(r.judgment.sport).toBe(ids.sport);
         expect(r.judgment.schemaVersion).toBe(2);
       }
     });
   }
   for (const c of fx.invalid) {
-    it(`invalid (${c.reason}): ${c.name}`, () => {
-      const r = parseAndValidateJudgmentV2(c.raw, fx.ids, c.market);
+    const t = SKIP_INVALID.has(c.reason) ? it.skip : it;
+    t(`invalid (${c.reason}): ${c.name}`, () => {
+      const r = parseAndValidateJudgmentV2(c.input, idsOf(c.input), c.market);
       expect(r.ok).toBe(false);
-      expect((r as any).reason).toBe(c.reason);
+      expect((r as any).reason).toBe(SWARM_REASON[c.reason] ?? c.reason);
     });
   }
   for (const c of fx.sideEvColumn) {
-    it(`sideEvColumn(${c.side}) = ${c.column}`, () => {
+    const t = SKIP_SIDES.has(c.side) ? it.skip : it;
+    t(`sideEvColumn(${c.side}) = ${c.column}`, () => {
       expect(sideEvColumn(c.side)).toBe(c.column);
+    });
+  }
+  for (const c of fx.codeEdge) {
+    const t = SKIP_CODE_EDGE.has(c.name) ? it.skip : it;
+    t(`codeEdge: ${c.name}`, () => {
+      expect(codeEdgeForPick(c.row, c.side, true)).toBe(c.edge);
     });
   }
 });
@@ -57,13 +101,13 @@ describe("judgment v2 helpers", () => {
     expect(
       parseAndValidateJudgmentV2(
         "```json\n" + JSON.stringify(body) + "\n```",
-        fx.ids,
+        IDS,
       ).ok,
     ).toBe(true);
     expect(
       parseAndValidateJudgmentV2(
         { finalAnalysis: JSON.stringify(body) },
-        fx.ids,
+        IDS,
       ).ok,
     ).toBe(true);
   });
