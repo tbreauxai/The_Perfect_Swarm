@@ -1,243 +1,557 @@
 {
-  "note": "Shared contract: byte-identical in The_Perfect_Swarm src/swarm/morning/ and DuelOdds src/math/. Canonical copy: DuelOdds.",
-  "ids": { "eventId": "evt-1", "sport": "americanfootball_nfl" },
+  "_comment": "Shared contract fixtures for judgment schema v2. Byte-identical in DuelOdds src/math/judgment.v2.fixtures.json and The Perfect Swarm. Edit both together.",
   "valid": [
     {
-      "name": "home by 3, over",
-      "raw": {
+      "name": "home with market",
+      "input": {
+        "schemaVersion": 2,
+        "eventId": "evt-1",
+        "sport": "NFL",
         "side": "home",
-        "projMargin": 3,
-        "projTotal": 47,
+        "projMargin": 4,
+        "projTotal": 45,
         "totalLean": "over",
         "confidence": 0.6,
-        "reasons": ["Home OL healthy"]
+        "reasons": ["Home OL healthy; 3 starters back"]
       },
-      "market": { "spread": -2.5, "total": 45.5 }
+      "market": {
+        "spread": -3.5,
+        "total": 44
+      }
     },
     {
-      "name": "away by 7, under",
-      "raw": {
+      "name": "pass in dead band",
+      "input": {
+        "schemaVersion": 2,
+        "eventId": "evt-1",
+        "sport": "NFL",
+        "side": "pass",
+        "projMargin": -0.4,
+        "projTotal": 44.2,
+        "totalLean": "pass",
+        "confidence": 0.6,
+        "reasons": ["Home OL healthy; 3 starters back"]
+      },
+      "market": {
+        "spread": -3.5,
+        "total": 44
+      }
+    },
+    {
+      "name": "away, no market, any lean",
+      "input": {
+        "schemaVersion": 2,
+        "eventId": "evt-1",
+        "sport": "NFL",
         "side": "away",
         "projMargin": -7,
-        "projTotal": 40,
+        "projTotal": 50,
         "totalLean": "under",
-        "confidence": 0.5,
-        "reasons": ["Wind", "Away D"]
-      },
-      "market": { "spread": 3, "total": 43 }
-    },
-    {
-      "name": "dead-band pass both",
-      "raw": {
-        "side": "pass",
-        "projMargin": 0.4,
-        "projTotal": 44.8,
-        "totalLean": "pass",
-        "confidence": 0.3,
-        "reasons": ["Coin flip"]
-      },
-      "market": { "spread": 0, "total": 44.5 }
-    },
-    {
-      "name": "no market: any lean, ranges ok",
-      "raw": {
-        "side": "home",
-        "projMargin": 34,
-        "projTotal": 64,
-        "totalLean": "under",
-        "confidence": 0.9,
-        "reasons": ["Mismatch"]
+        "confidence": 0.6,
+        "reasons": ["Home OL healthy; 3 starters back"]
       },
       "market": {}
     },
     {
-      "name": "code-owned ids overwritten",
-      "raw": {
-        "eventId": "wrong",
-        "sport": "x",
-        "schemaVersion": 1,
-        "side": "away",
-        "projMargin": -1,
-        "projTotal": 45,
+      "name": "NBA no market",
+      "input": {
+        "schemaVersion": 2,
+        "eventId": "evt-1",
+        "sport": "NBA",
+        "side": "home",
+        "projMargin": 6.5,
+        "projTotal": 228,
         "totalLean": "pass",
-        "confidence": 0.5,
-        "reasons": ["r"]
+        "confidence": 0.6,
+        "reasons": ["Home OL healthy; 3 starters back"]
       },
-      "market": { "spread": 1, "total": 45 }
+      "market": {}
+    },
+    {
+      "name": "digits in reasons allowed",
+      "input": {
+        "schemaVersion": 2,
+        "eventId": "evt-1",
+        "sport": "NFL",
+        "side": "home",
+        "projMargin": 4,
+        "projTotal": 45,
+        "totalLean": "over",
+        "confidence": 0.6,
+        "reasons": ["Won 7 of last 8", "QB 112.4 rating"]
+      },
+      "market": {
+        "spread": -3.5,
+        "total": 44
+      }
     }
   ],
   "invalid": [
     {
-      "reason": "schema",
-      "name": "extra key fairLine",
-      "raw": {
-        "side": "home",
-        "projMargin": 3,
-        "projTotal": 47,
-        "totalLean": "over",
-        "confidence": 0.6,
-        "reasons": ["r"],
-        "fairLine": -3
-      },
-      "market": { "spread": -3, "total": 45 }
+      "name": "not json",
+      "input": "{not json",
+      "market": {},
+      "reason": "not_json"
     },
     {
-      "reason": "schema",
-      "name": "extra key prob",
-      "raw": {
+      "name": "array",
+      "input": [],
+      "market": {},
+      "reason": "not_object"
+    },
+    {
+      "name": "extra key fairLine",
+      "input": {
+        "schemaVersion": 2,
+        "eventId": "evt-1",
+        "sport": "NFL",
         "side": "home",
-        "projMargin": 3,
-        "projTotal": 47,
+        "projMargin": 4,
+        "projTotal": 45,
         "totalLean": "over",
         "confidence": 0.6,
-        "reasons": ["r"],
+        "reasons": ["Home OL healthy; 3 starters back"],
+        "fairLine": -4
+      },
+      "market": {
+        "spread": -3.5,
+        "total": 44
+      },
+      "reason": "extra_key"
+    },
+    {
+      "name": "extra key prob",
+      "input": {
+        "schemaVersion": 2,
+        "eventId": "evt-1",
+        "sport": "NFL",
+        "side": "home",
+        "projMargin": 4,
+        "projTotal": 45,
+        "totalLean": "over",
+        "confidence": 0.6,
+        "reasons": ["Home OL healthy; 3 starters back"],
         "prob": 0.6
       },
-      "market": {}
-    },
-    {
-      "reason": "schema",
-      "name": "projTotal not > 0",
-      "raw": {
-        "side": "home",
-        "projMargin": 3,
-        "projTotal": 0,
-        "totalLean": "pass",
-        "confidence": 0.6,
-        "reasons": ["r"]
+      "market": {
+        "spread": -3.5,
+        "total": 44
       },
-      "market": {}
+      "reason": "extra_key"
     },
     {
-      "reason": "schema",
-      "name": "4 reasons",
-      "raw": {
+      "name": "schema 1",
+      "input": {
+        "schemaVersion": 1,
+        "eventId": "evt-1",
+        "sport": "NFL",
         "side": "home",
-        "projMargin": 3,
-        "projTotal": 47,
-        "totalLean": "pass",
+        "projMargin": 4,
+        "projTotal": 45,
+        "totalLean": "over",
+        "confidence": 0.6,
+        "reasons": ["Home OL healthy; 3 starters back"]
+      },
+      "market": {
+        "spread": -3.5,
+        "total": 44
+      },
+      "reason": "bad_schema_version"
+    },
+    {
+      "name": "empty eventId",
+      "input": {
+        "schemaVersion": 2,
+        "eventId": "",
+        "sport": "NFL",
+        "side": "home",
+        "projMargin": 4,
+        "projTotal": 45,
+        "totalLean": "over",
+        "confidence": 0.6,
+        "reasons": ["Home OL healthy; 3 starters back"]
+      },
+      "market": {
+        "spread": -3.5,
+        "total": 44
+      },
+      "reason": "bad_event_id"
+    },
+    {
+      "name": "bad sport",
+      "input": {
+        "schemaVersion": 2,
+        "eventId": "evt-1",
+        "sport": "EPL",
+        "side": "home",
+        "projMargin": 4,
+        "projTotal": 45,
+        "totalLean": "over",
+        "confidence": 0.6,
+        "reasons": ["Home OL healthy; 3 starters back"]
+      },
+      "market": {
+        "spread": -3.5,
+        "total": 44
+      },
+      "reason": "bad_sport"
+    },
+    {
+      "name": "bad side",
+      "input": {
+        "schemaVersion": 2,
+        "eventId": "evt-1",
+        "sport": "NFL",
+        "side": "draw",
+        "projMargin": 4,
+        "projTotal": 45,
+        "totalLean": "over",
+        "confidence": 0.6,
+        "reasons": ["Home OL healthy; 3 starters back"]
+      },
+      "market": {
+        "spread": -3.5,
+        "total": 44
+      },
+      "reason": "bad_side"
+    },
+    {
+      "name": "string margin",
+      "input": {
+        "schemaVersion": 2,
+        "eventId": "evt-1",
+        "sport": "NFL",
+        "side": "home",
+        "projMargin": "4",
+        "projTotal": 45,
+        "totalLean": "over",
+        "confidence": 0.6,
+        "reasons": ["Home OL healthy; 3 starters back"]
+      },
+      "market": {
+        "spread": -3.5,
+        "total": 44
+      },
+      "reason": "bad_number"
+    },
+    {
+      "name": "zero total",
+      "input": {
+        "schemaVersion": 2,
+        "eventId": "evt-1",
+        "sport": "NFL",
+        "side": "home",
+        "projMargin": 4,
+        "projTotal": 0,
+        "totalLean": "over",
+        "confidence": 0.6,
+        "reasons": ["Home OL healthy; 3 starters back"]
+      },
+      "market": {
+        "spread": -3.5,
+        "total": 44
+      },
+      "reason": "proj_total_nonpositive"
+    },
+    {
+      "name": "bad lean",
+      "input": {
+        "schemaVersion": 2,
+        "eventId": "evt-1",
+        "sport": "NFL",
+        "side": "home",
+        "projMargin": 4,
+        "projTotal": 45,
+        "totalLean": "up",
+        "confidence": 0.6,
+        "reasons": ["Home OL healthy; 3 starters back"]
+      },
+      "market": {
+        "spread": -3.5,
+        "total": 44
+      },
+      "reason": "bad_total_lean"
+    },
+    {
+      "name": "confidence > 1",
+      "input": {
+        "schemaVersion": 2,
+        "eventId": "evt-1",
+        "sport": "NFL",
+        "side": "home",
+        "projMargin": 4,
+        "projTotal": 45,
+        "totalLean": "over",
+        "confidence": 1.2,
+        "reasons": ["Home OL healthy; 3 starters back"]
+      },
+      "market": {
+        "spread": -3.5,
+        "total": 44
+      },
+      "reason": "bad_confidence"
+    },
+    {
+      "name": "no reasons",
+      "input": {
+        "schemaVersion": 2,
+        "eventId": "evt-1",
+        "sport": "NFL",
+        "side": "home",
+        "projMargin": 4,
+        "projTotal": 45,
+        "totalLean": "over",
+        "confidence": 0.6,
+        "reasons": []
+      },
+      "market": {
+        "spread": -3.5,
+        "total": 44
+      },
+      "reason": "bad_reasons"
+    },
+    {
+      "name": "4 reasons",
+      "input": {
+        "schemaVersion": 2,
+        "eventId": "evt-1",
+        "sport": "NFL",
+        "side": "home",
+        "projMargin": 4,
+        "projTotal": 45,
+        "totalLean": "over",
         "confidence": 0.6,
         "reasons": ["a", "b", "c", "d"]
       },
-      "market": {}
-    },
-    {
-      "reason": "schema",
-      "name": "confidence > 1",
-      "raw": {
-        "side": "home",
-        "projMargin": 3,
-        "projTotal": 47,
-        "totalLean": "pass",
-        "confidence": 62,
-        "reasons": ["a"]
+      "market": {
+        "spread": -3.5,
+        "total": 44
       },
-      "market": {}
+      "reason": "bad_reasons"
     },
     {
-      "reason": "schema",
-      "name": "no v2 object",
-      "raw": "no json here",
-      "market": {}
-    },
-    {
-      "reason": "side_mismatch",
-      "name": "home side, away margin",
-      "raw": {
+      "name": "long reason",
+      "input": {
+        "schemaVersion": 2,
+        "eventId": "evt-1",
+        "sport": "NFL",
         "side": "home",
-        "projMargin": -3,
-        "projTotal": 47,
+        "projMargin": 4,
+        "projTotal": 45,
         "totalLean": "over",
         "confidence": 0.6,
-        "reasons": ["r"]
+        "reasons": [
+          "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        ]
       },
-      "market": { "spread": 3, "total": 45 }
+      "market": {
+        "spread": -3.5,
+        "total": 44
+      },
+      "reason": "bad_reasons"
     },
     {
-      "reason": "side_mismatch",
-      "name": "side set inside dead-band",
-      "raw": {
-        "side": "home",
-        "projMargin": 0.3,
-        "projTotal": 47,
+      "name": "side vs sign",
+      "input": {
+        "schemaVersion": 2,
+        "eventId": "evt-1",
+        "sport": "NFL",
+        "side": "away",
+        "projMargin": 4,
+        "projTotal": 45,
         "totalLean": "over",
         "confidence": 0.6,
-        "reasons": ["r"]
+        "reasons": ["Home OL healthy; 3 starters back"]
       },
-      "market": { "spread": 0, "total": 45 }
+      "market": {
+        "spread": -3.5,
+        "total": 44
+      },
+      "reason": "side_mismatch"
     },
     {
-      "reason": "total_lean_mismatch",
-      "name": "over but projTotal below market",
-      "raw": {
+      "name": "dead band needs pass",
+      "input": {
+        "schemaVersion": 2,
+        "eventId": "evt-1",
+        "sport": "NFL",
         "side": "home",
-        "projMargin": 3,
-        "projTotal": 42,
+        "projMargin": 0.4,
+        "projTotal": 45,
         "totalLean": "over",
         "confidence": 0.6,
-        "reasons": ["r"]
+        "reasons": ["Home OL healthy; 3 starters back"]
       },
-      "market": { "spread": -3, "total": 45 }
+      "market": {
+        "spread": -3.5,
+        "total": 44
+      },
+      "reason": "side_mismatch"
     },
     {
-      "reason": "total_vs_market",
-      "name": "total 13 above market",
-      "raw": {
+      "name": "lean vs market",
+      "input": {
+        "schemaVersion": 2,
+        "eventId": "evt-1",
+        "sport": "NFL",
         "side": "home",
-        "projMargin": 3,
-        "projTotal": 58,
+        "projMargin": 4,
+        "projTotal": 45,
+        "totalLean": "under",
+        "confidence": 0.6,
+        "reasons": ["Home OL healthy; 3 starters back"]
+      },
+      "market": {
+        "spread": -3.5,
+        "total": 44
+      },
+      "reason": "total_lean_mismatch"
+    },
+    {
+      "name": "total far from market",
+      "input": {
+        "schemaVersion": 2,
+        "eventId": "evt-1",
+        "sport": "NFL",
+        "side": "home",
+        "projMargin": 4,
+        "projTotal": 57,
         "totalLean": "over",
         "confidence": 0.6,
-        "reasons": ["r"]
+        "reasons": ["Home OL healthy; 3 starters back"]
       },
-      "market": { "spread": -3, "total": 45 }
+      "market": {
+        "spread": -3.5,
+        "total": 44
+      },
+      "reason": "total_vs_market"
     },
     {
-      "reason": "margin_vs_market",
-      "name": "margin 11 off market",
-      "raw": {
+      "name": "margin far from market",
+      "input": {
+        "schemaVersion": 2,
+        "eventId": "evt-1",
+        "sport": "NFL",
         "side": "home",
         "projMargin": 14,
-        "projTotal": 47,
+        "projTotal": 45,
         "totalLean": "over",
         "confidence": 0.6,
-        "reasons": ["r"]
+        "reasons": ["Home OL healthy; 3 starters back"]
       },
-      "market": { "spread": -3, "total": 45 }
+      "market": {
+        "spread": -3.5,
+        "total": 44
+      },
+      "reason": "margin_vs_market"
     },
     {
-      "reason": "margin_range",
-      "name": "NFL margin 36 no market",
-      "raw": {
+      "name": "no market total out of range",
+      "input": {
+        "schemaVersion": 2,
+        "eventId": "evt-1",
+        "sport": "NFL",
         "side": "home",
-        "projMargin": 36,
-        "projTotal": 47,
-        "totalLean": "over",
-        "confidence": 0.6,
-        "reasons": ["r"]
-      },
-      "market": {}
-    },
-    {
-      "reason": "total_range",
-      "name": "NFL total 70 no market",
-      "raw": {
-        "side": "home",
-        "projMargin": 3,
+        "projMargin": 4,
         "projTotal": 70,
         "totalLean": "over",
         "confidence": 0.6,
-        "reasons": ["r"]
+        "reasons": ["Home OL healthy; 3 starters back"]
       },
-      "market": {}
+      "market": {},
+      "reason": "total_out_of_range"
+    },
+    {
+      "name": "no market margin out of range",
+      "input": {
+        "schemaVersion": 2,
+        "eventId": "evt-1",
+        "sport": "NFL",
+        "side": "home",
+        "projMargin": 36,
+        "projTotal": 45,
+        "totalLean": "over",
+        "confidence": 0.6,
+        "reasons": ["Home OL healthy; 3 starters back"]
+      },
+      "market": {},
+      "reason": "margin_out_of_range"
     }
   ],
   "sideEvColumn": [
-    { "side": "home", "column": "ev_home" },
-    { "side": "away", "column": "ev_away" },
-    { "side": "over", "column": "ev_over" },
-    { "side": "under", "column": "ev_under" },
-    { "side": "pass", "column": null },
-    { "side": null, "column": null }
+    {
+      "side": "home",
+      "column": "ev_home"
+    },
+    {
+      "side": "away",
+      "column": "ev_away"
+    },
+    {
+      "side": "over",
+      "column": "ev_over"
+    },
+    {
+      "side": "under",
+      "column": "ev_under"
+    },
+    {
+      "side": "spread_home",
+      "column": "ev_spread_home"
+    },
+    {
+      "side": "spread_away",
+      "column": "ev_spread_away"
+    },
+    {
+      "side": "pass",
+      "column": null
+    },
+    {
+      "side": null,
+      "column": null
+    }
+  ],
+  "codeEdge": [
+    {
+      "name": "home value",
+      "row": {
+        "ev_home": 0.042,
+        "ev_away": -0.08
+      },
+      "side": "home",
+      "edge": 0.042
+    },
+    {
+      "name": "null column skips",
+      "row": {
+        "ev_home": null,
+        "ev_away": -0.08
+      },
+      "side": "home",
+      "edge": null
+    },
+    {
+      "name": "missing column skips",
+      "row": {},
+      "side": "over",
+      "edge": null
+    },
+    {
+      "name": "pass has no edge",
+      "row": {
+        "ev_home": 0.042
+      },
+      "side": "pass",
+      "edge": null
+    },
+    {
+      "name": "numeric string (PostgREST numeric)",
+      "row": {
+        "ev_under": "0.013"
+      },
+      "side": "under",
+      "edge": 0.013
+    }
   ]
 }
