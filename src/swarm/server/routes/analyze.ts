@@ -14,6 +14,8 @@ import {
     serializeSwarmResult,
     handleServerError
 } from './helpers.ts';
+import { SwarmContext } from '../../context.ts';
+import { globalAsyncJobs, wantsAsync, newJobId } from '../asyncJobs.ts';
 
 export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void {
     const { defaultSettings, defaultAi, defaultCortex, swarmBodyLimit } = ctx;
@@ -111,27 +113,52 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
 
             hydrateAppOutcomes(originApp);
 
+            const asyncMode = wantsAsync(c);
+            const context = new SwarmContext();
+            if (asyncMode) {
+                // Pre-assign the engine's workflowId so the 202 id equals result.workflowId.
+                (context as any).id = newJobId('wf', Date.now());
+            }
+            const workflowParams: SwarmWorkflowParams = {
+                context,
+                task: body.task,
+                data: prependCalibrationToData(body.data, originApp),
+                originApp,
+                callerAppId,
+                domain: body.domain || body.settings?.domain,
+                settings: sanitizedSettings,
+                defaultAi: body.defaultAi || defaultAi,
+                cortex: body.cortex || body.memoryCortex || defaultCortex,
+                memoryCortex: body.memoryCortex || body.cortex || defaultCortex,
+                tools: body.tools,
+                enableDeepAnalysis: body.enableDeepAnalysis,
+                forceFullSwarm: body.forceFullSwarm,
+                speculativeParallel: body.speculativeParallel,
+                maxSpeculativeConcurrency: body.maxSpeculativeConcurrency,
+                complexityOverride: body.complexityOverride,
+                bypassCache: body.bypassCache,
+                scorecardMode: body.scorecardMode === true
+            } as SwarmWorkflowParams;
+
+            if (asyncMode) {
+                const workflowId = (context as any).id as string;
+                globalAsyncJobs.start(workflowId, originApp, async () => {
+                    const result = await executeSwarmWorkflow(workflowParams);
+                    // Same body the sync path would send (serializeSwarmResult normalizes status/degraded/bigint).
+                    const shim = {
+                        newResponse: (b: string) => new Response(b),
+                        json: (o: unknown) => new Response(JSON.stringify(o))
+                    };
+                    return await serializeSwarmResult(shim, result).json();
+                });
+                c.header('Preference-Applied', 'respond-async');
+                c.header('Location', `/api/swarm/analyze/status/${workflowId}`);
+                return c.json({ workflowId, status: 'pending' }, 202);
+            }
+
             let result: any;
             try {
-                result = await executeSwarmWorkflow({
-                    task: body.task,
-                    data: prependCalibrationToData(body.data, originApp),
-                    originApp,
-                    callerAppId,
-                    domain: body.domain || body.settings?.domain,
-                    settings: sanitizedSettings,
-                    defaultAi: body.defaultAi || defaultAi,
-                    cortex: body.cortex || body.memoryCortex || defaultCortex,
-                    memoryCortex: body.memoryCortex || body.cortex || defaultCortex,
-                    tools: body.tools,
-                    enableDeepAnalysis: body.enableDeepAnalysis,
-                    forceFullSwarm: body.forceFullSwarm,
-                    speculativeParallel: body.speculativeParallel,
-                    maxSpeculativeConcurrency: body.maxSpeculativeConcurrency,
-                    complexityOverride: body.complexityOverride,
-                    bypassCache: body.bypassCache,
-                    scorecardMode: body.scorecardMode === true
-                });
+                result = await executeSwarmWorkflow(workflowParams);
             } catch (workflowErr: any) {
                 console.error('[SwarmServer Analyze Workflow Error]:', workflowErr);
                 return c.json({ error: workflowErr.message || 'Swarm workflow execution failed' }, 500);
@@ -141,6 +168,16 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
         } catch (err: any) {
             return handleServerError('Analyze', err, c);
         }
+    });
+
+    // Async poll for Prefer: respond-async jobs (analyze and morning). Same auth as every /api route.
+    app.get('/api/swarm/analyze/status/:workflowId', (c) => {
+        const { originApp } = resolveAppIds(c, defaultSettings);
+        const job = globalAsyncJobs.get(c.req.param('workflowId'), originApp);
+        if (!job) return c.json({ error: 'Unknown workflowId' }, 404);
+        if (job.status === 'done') return c.json({ status: 'done', result: job.result }, 200);
+        if (job.status === 'error') return c.json({ status: 'error', error: job.error }, 200);
+        return c.json({ status: 'pending' }, 200);
     });
 
     app.post('/api/swarm/backtest', swarmBodyLimit, async (c) => {
