@@ -7,6 +7,13 @@
  * Self-contained on purpose (only zod): no imports from the rest of the swarm.
  */
 import { z } from "zod";
+import {
+  REGISTRY_IDS,
+  FACTOR_EVIDENCE_KINDS,
+  FACTOR_MAX_PER_JUDGMENT,
+  FACTOR_SPORTS,
+  isAllowedEvidenceUrl,
+} from "./factorIds.ts";
 
 /** JUDGMENT_SCHEMA_V2 gate. Off unless the env value is exactly "1" or "true". */
 export function isJudgmentSchemaV2(
@@ -31,6 +38,23 @@ export const JudgmentV2Schema = z
     /** 0..1, display/ranking only: used in no formula */
     confidence: z.number().min(0).max(1),
     reasons: z.array(z.string().min(1).max(140)).min(1).max(3),
+    /** JUDGMENT_FACTORS only (parseJudgmentV2 rejects the key when the flag is off). Ids + evidence; no magnitudes. */
+    factors: z
+      .array(
+        z
+          .object({
+            id: z.enum(REGISTRY_IDS),
+            evidence: z
+              .object({
+                kind: z.enum(FACTOR_EVIDENCE_KINDS),
+                ref: z.string().min(1).max(200),
+              })
+              .strict(),
+          })
+          .strict(),
+      )
+      .max(FACTOR_MAX_PER_JUDGMENT)
+      .optional(),
   })
   .strict();
 export type JudgmentV2 = z.infer<typeof JudgmentV2Schema>;
@@ -108,7 +132,8 @@ export type JudgmentV2Failure =
   | "margin_vs_market"
   | "total_vs_market"
   | "margin_range"
-  | "total_range";
+  | "total_range"
+  | "factor_invalid";
 
 export interface JudgmentMarket {
   spread?: number | null;
@@ -170,6 +195,8 @@ export function extractJudgmentV2Candidate(
 export function parseJudgmentV2(
   raw: unknown,
   ids: { eventId: string; sport: string },
+  /** factors: JUDGMENT_FACTORS. Off (default) = a "factors" key is rejected exactly as before (strict schema). */
+  opts: { factors?: boolean } = {},
 ): JudgmentV2Result {
   const cand = extractJudgmentV2Candidate(raw);
   if (!cand)
@@ -178,6 +205,13 @@ export function parseJudgmentV2(
       reason: "schema",
       detail: "no v2 judgment object (projMargin/projTotal) found",
     };
+  if (!opts.factors && cand && "factors" in cand) {
+    return {
+      ok: false,
+      reason: "schema",
+      detail: "(root): Unrecognized key(s) in object: 'factors'",
+    };
+  }
   const r = JudgmentV2Schema.safeParse({
     ...cand,
     schemaVersion: 2,
@@ -202,6 +236,22 @@ export function validateJudgmentV2(
   /** false = skip the side/totalLean label checks (the swarm derive path set them from the numbers). Default true (canonical). */
   checkLabels: boolean = true,
 ): JudgmentV2Result {
+  // Factor rule (JUDGMENT_FACTORS): ids are checked by the schema; here sport fit, duplicates and the url
+  // allow-list. Reject, never drop a factor.
+  const seen = new Set<string>();
+  for (const f of j.factors ?? []) {
+    const sport = j.sport.toLowerCase().trim();
+    if (!FACTOR_SPORTS[f.id].includes(sport)) {
+      return { ok: false, reason: "factor_invalid", detail: `factor ${f.id} not allowed for ${sport}` };
+    }
+    if (seen.has(f.id)) {
+      return { ok: false, reason: "factor_invalid", detail: `factor ${f.id} listed twice` };
+    }
+    seen.add(f.id);
+    if (f.evidence.kind === "url" && !isAllowedEvidenceUrl(f.evidence.ref)) {
+      return { ok: false, reason: "factor_invalid", detail: `factor ${f.id} evidence url not on the allow-list` };
+    }
+  }
   const m = j.projMargin;
   const wantSide =
     Math.abs(m) < JUDGMENT_DEAD_BAND ? "pass" : m > 0 ? "home" : "away";
@@ -329,11 +379,12 @@ export function parseDeriveAndValidateJudgmentV2(
   raw: unknown,
   ids: { eventId: string; sport: string },
   market?: JudgmentMarket,
+  opts: { factors?: boolean } = {},
 ): JudgmentV2Result & {
   corrections?: JudgmentV2Correction[];
   sideBasis?: "spread" | "margin_fallback";
 } {
-  const p = parseJudgmentV2(raw, ids);
+  const p = parseJudgmentV2(raw, ids, opts);
   if (p.ok === false) return p;
   const d = deriveJudgmentV2Picks((p as { judgment: JudgmentV2 }).judgment, market);
   const v = validateJudgmentV2(d.judgment, market, false);

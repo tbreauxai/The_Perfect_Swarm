@@ -1,0 +1,41 @@
+{
+  "registryVersion": 1,
+  "ids": [
+    "inj_qb_out",
+    "inj_star_out",
+    "inj_goalie_backup",
+    "sp_scratch",
+    "wind_high",
+    "precip_heavy",
+    "cold_extreme",
+    "rest_b2b",
+    "travel_long"
+  ],
+  "sports": {
+    "inj_qb_out": ["americanfootball_nfl", "americanfootball_ncaaf"],
+    "inj_star_out": ["basketball_nba", "basketball_wnba", "basketball_ncaab"],
+    "inj_goalie_backup": ["icehockey_nhl"],
+    "sp_scratch": ["baseball_mlb"],
+    "wind_high": ["americanfootball_nfl", "americanfootball_ncaaf", "baseball_mlb"],
+    "precip_heavy": ["americanfootball_nfl", "americanfootball_ncaaf", "baseball_mlb"],
+    "cold_extreme": ["americanfootball_nfl", "americanfootball_ncaaf"],
+    "rest_b2b": ["basketball_nba", "icehockey_nhl"],
+    "travel_long": ["basketball_nba", "icehockey_nhl"]
+  },
+  "defaultWeights": {
+    "inj_qb_out": 0.1,
+    "inj_star_out": 0.08,
+    "inj_goalie_backup": 0.08,
+    "sp_scratch": 0.08,
+    "wind_high": 0.06,
+    "precip_heavy": 0.05,
+    "cold_extreme": 0.05,
+    "rest_b2b": 0.05,
+    "travel_long": 0.05
+  },
+  "factorCap": 0.15,
+  "totalCap": 0.35,
+  "maxFactors": 4,
+  "evidenceKinds": ["espn_field", "url"],
+  "urlHosts": ["espn.com", "api.weather.gov", "open-meteo.com"]
+}
