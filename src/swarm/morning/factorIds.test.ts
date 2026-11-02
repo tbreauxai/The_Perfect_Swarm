@@ -69,3 +69,13 @@ describe("JUDGMENT_FACTORS flag and url allow-list", () => {
         expect(isAllowedEvidenceUrl("not a url")).toBe(false);
     });
 });
+
+describe("JUDGE_MANAGER_INSTRUCTION_V2_FACTORS", () => {
+    it("lists every registry id and stays within the v1 instruction length (Groq TPM)", async () => {
+        const p = await import("./judgePrompt.ts");
+        for (const id of REGISTRY_IDS) expect(p.JUDGE_MANAGER_INSTRUCTION_V2_FACTORS).toContain(id);
+        expect(p.JUDGE_MANAGER_INSTRUCTION_V2_FACTORS).toContain('"factors"');
+        expect(p.JUDGE_MANAGER_INSTRUCTION_V2_FACTORS.length).toBeLessThanOrEqual(p.JUDGE_MANAGER_INSTRUCTION.length);
+        expect(p.JUDGE_MANAGER_INSTRUCTION_V2).not.toContain("factors");
+    });
+});

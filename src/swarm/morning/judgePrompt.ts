@@ -1,5 +1,6 @@
 import type { MorningArgument, MorningJudgeOutput, SlateGame } from './types.ts';
 import { parseDeriveAndValidateJudgmentV2, type JudgmentV2, type JudgmentV2Result } from './judgment.ts';
+import { REGISTRY_IDS } from './factorIds.ts';
 
 /**
  * Builds a single-line columnar representation for a slate game.
@@ -129,6 +130,17 @@ RULES:
 4. "totalLean": "over" if projTotal is 0.5+ above the posted total, "under" if 0.5+ below, else "pass".
 5. "confidence": 0 to 1. "reasons": 1 to 3 strings, max 140 chars each.
 6. No other keys: no probabilities, fair lines, odds, EV or stakes. No text outside the JSON.`;
+
+/**
+ * JUDGMENT_FACTORS (default off, needs JUDGMENT_SCHEMA_V2): the v2 contract plus an optional "factors" list.
+ * The judge names registry ids and cites the field; code (DuelOdds) derives sign and size. Ids: factorIds.ts.
+ */
+export const JUDGE_MANAGER_INSTRUCTION_V2_FACTORS = JUDGE_MANAGER_INSTRUCTION_V2.replace(
+  '6. No other keys:',
+  `6. Optional "factors": up to 4 of {"id","evidence":{"kind":"espn_field"|"url","ref"}} for facts in the game data. ids: ${REGISTRY_IDS.join(',')}. No sizes.
+
+7. No other keys:`
+);
 
 export const JUDGE_MANAGER_INSTRUCTION = `You are the Morning Swarm Judge (GodView Compiler) for DuelOdds.
 You must synthesize the full debate and determine fair lines and win probabilities.
@@ -566,10 +578,14 @@ export function computeModelSnapshot(
  * Judgment v2 parse (rule a) + validate (rules b, c). Replaces parseAndValidateJudgeOutput + crossCheckJudgeOutput
  * when JUDGMENT_SCHEMA_V2 is on. A rejection logs one warning and returns { ok: false }; nothing is retried in-run.
  */
-export function parseAndValidateJudgeOutputV2(raw: unknown, game: SlateGame): JudgmentV2Result {
+export function parseAndValidateJudgeOutputV2(
+  raw: unknown,
+  game: SlateGame,
+  opts: { factors?: boolean } = {}
+): JudgmentV2Result {
   const market = { spread: game.oddsSnapshot?.spread ?? null, total: game.oddsSnapshot?.overUnder ?? null };
   // side (ATS cover vs the home spread) and totalLean are derived from the numbers; a label mismatch is logged, not rejected.
-  const r = parseDeriveAndValidateJudgmentV2(raw, { eventId: game.eventId, sport: game.sport }, market);
+  const r = parseDeriveAndValidateJudgmentV2(raw, { eventId: game.eventId, sport: game.sport }, market, opts);
   if (r.ok === false) {
     const f = r as { reason: string; detail: string };
     console.warn(`[MorningJudge] Rejected v2 judgment for ${game.awayTeam} @ ${game.homeTeam}: ${f.reason}: ${f.detail}`);

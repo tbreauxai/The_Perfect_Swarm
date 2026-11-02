@@ -9,9 +9,11 @@ import {
   buildProposerPromptV2,
   parseAndValidateJudgeOutputV2,
   computeModelSnapshotV2,
-  JUDGE_MANAGER_INSTRUCTION_V2
+  JUDGE_MANAGER_INSTRUCTION_V2,
+  JUDGE_MANAGER_INSTRUCTION_V2_FACTORS
 } from './judgePrompt.ts';
 import { isJudgmentSchemaV2 } from './judgment.ts';
+import { isJudgmentFactors } from './factorIds.ts';
 import {
   getSupabaseConfig,
   partitionSlateGames,
@@ -166,6 +168,8 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
   // JUDGMENT_SCHEMA_V2 (default off): off = v1 prompts, parse, columns and selects exactly as before.
   // Do not set it until the DuelOdds game_judgments v2 migration and backfill are applied.
   const v2 = isJudgmentSchemaV2(env);
+  // JUDGMENT_FACTORS (default off): only with v2. Off = the v2 prompt and parse exactly as before.
+  const factors = v2 && isJudgmentFactors(env);
   if (cfg) {
     await hydrateCalibrationFromSupabase(cfg, fetchFn, v2).catch(() => 0);
   }
@@ -222,7 +226,9 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
 
       // Proposers receive lean board, baseline, and live Supabase steam/calibration context; manager receives JSON contract via JUDGE_MANAGER_INSTRUCTION
       const baseTask = v2 ? buildProposerPromptV2(game) : buildProposerPrompt(game);
-      const managerInstruction = v2 ? JUDGE_MANAGER_INSTRUCTION_V2 : JUDGE_MANAGER_INSTRUCTION;
+      const managerInstruction = factors
+        ? JUDGE_MANAGER_INSTRUCTION_V2_FACTORS
+        : v2 ? JUDGE_MANAGER_INSTRUCTION_V2 : JUDGE_MANAGER_INSTRUCTION;
       const task = pregameContext.formattedBlock ? `${baseTask}\n\n${pregameContext.formattedBlock}` : baseTask;
       const baseData = formatGameToColumnar(game);
       const data = pregameContext.formattedBlock ? `${baseData}\n\n${pregameContext.formattedBlock}` : baseData;
@@ -254,7 +260,7 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
       });
 
       if (v2) {
-        const v2Result = parseAndValidateJudgeOutputV2(workflowResult?.finalAnalysis ?? workflowResult, game);
+        const v2Result = parseAndValidateJudgeOutputV2(workflowResult?.finalAnalysis ?? workflowResult, game, { factors });
         if (v2Result.ok === false) {
           // No in-run retry and no extra call. Failure 1: rejudge_count 1, re-judged next run.
           // Failure 2: stored as 'pass' with validation_flag 'validation_failed' and never re-judged.
