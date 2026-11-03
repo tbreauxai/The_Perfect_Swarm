@@ -170,9 +170,8 @@ describe('MetricsCollector', () => {
 
         it('logs event and injects id and timestamp', () => {
             tracer.logEvent({
-                traceId: 'trace-1',
-                action: 'START',
-                details: {}
+                payload: { traceId: 'trace-1' },
+                action: 'START'
             });
             const events = tracer.dumpTrace();
             expect(events.length).toBe(1);
@@ -183,7 +182,7 @@ describe('MetricsCollector', () => {
 
         it('auto-instruments metrics when durationMs is present and success', () => {
             tracer.logEvent({
-                traceId: 'trace-2',
+                payload: { traceId: 'trace-2' },
                 action: 'LLM_CALL',
                 durationMs: 500,
                 provider: 'anthropic',
@@ -199,7 +198,7 @@ describe('MetricsCollector', () => {
 
         it('auto-instruments metrics as failure if error is present', () => {
             tracer.logEvent({
-                traceId: 'trace-3',
+                payload: { traceId: 'trace-3' },
                 action: 'LLM_CALL',
                 durationMs: 200,
                 error: 'Rate limit exceeded'
@@ -213,7 +212,7 @@ describe('MetricsCollector', () => {
 
         it('auto-instruments metrics as failure if action contains failed', () => {
             tracer.logEvent({
-                traceId: 'trace-4',
+                payload: { traceId: 'trace-4' },
                 action: 'LLM_CALL_FAILED',
                 durationMs: 200,
             });
@@ -229,7 +228,7 @@ describe('MetricsCollector', () => {
             tracer.setCallback(cb);
 
             tracer.logEvent({
-                traceId: 'trace-4',
+                payload: { traceId: 'trace-4' },
                 action: 'TEST'
             });
 
@@ -240,7 +239,7 @@ describe('MetricsCollector', () => {
         });
 
         it('clears trace events', () => {
-            tracer.logEvent({ traceId: 'trace-5', action: 'DUMMY' });
+            tracer.logEvent({ payload: { traceId: 'trace-5' }, action: 'DUMMY' });
             expect(tracer.dumpTrace().length).toBe(1);
 
             tracer.clear();
