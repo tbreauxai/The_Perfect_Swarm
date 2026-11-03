@@ -80,8 +80,8 @@ export function useOptimizationRunner({ task, data, settings, onApplyModelToSett
                 try {
                     const stringified = JSON.stringify(top100);
                     localStorage.setItem('swarm_optimization_history', stringified);
-                } catch (e: any) {
-                    if (e.name === 'QuotaExceededError') alert('LocalStorage Quota Exceeded');
+                } catch (e: unknown) {
+                    if (e instanceof Error && e.name === 'QuotaExceededError') alert('LocalStorage Quota Exceeded');
                 }
             } catch (e) {}
 
@@ -171,7 +171,7 @@ export function useOptimizationRunner({ task, data, settings, onApplyModelToSett
             try {
                 const stringified = JSON.stringify(updated);
                 localStorage.setItem('swarm_model_errors', stringified);
-            } catch (e: any) {
+            } catch (e: unknown) {
                 console.error("Failed to save error records", e);
             }
             return updated;
@@ -365,12 +365,13 @@ export function useOptimizationRunner({ task, data, settings, onApplyModelToSett
                     recordProviderSuccess(agentToTest.provider);
                     clearModel404Strikes(agentToTest.provider, model.id);
                     globalModelHealthChecker.circuitBreaker.recordSuccess(agentToTest.provider, model.id);
-                } catch (e: any) {
-                    globalModelHealthChecker.circuitBreaker.recordFailure(agentToTest.provider, model.id, e.message);
-                    errorMsg = e.message;
+                } catch (e: unknown) {
+                    const errorMessage = e instanceof Error ? e.message : String(e);
+                    globalModelHealthChecker.circuitBreaker.recordFailure(agentToTest.provider, model.id, errorMessage);
+                    errorMsg = errorMessage;
                     lastErrorMsg = errorMsg;
                     recordError(model.id, agentToTest.provider, errorMsg);
-                    if (e.message?.includes('404') || e.message?.toLowerCase().includes('not found')) {
+                    if (errorMessage.includes('404') || errorMessage.toLowerCase().includes('not found')) {
                         recordModel404(agentToTest.provider, model.id);
                         setQuarantinedCount(getQuarantinedModels().length);
                     }
@@ -391,8 +392,9 @@ export function useOptimizationRunner({ task, data, settings, onApplyModelToSett
                             });
                             if (scoreRes.fromCache) anyFromCache = true;
                         }
-                    } catch (e: any) {
-                        lastGradingError = `Grading failed: ${e.message}`;
+                    } catch (e: unknown) {
+                        const errorMessage = e instanceof Error ? e.message : String(e);
+                        lastGradingError = `Grading failed: ${errorMessage}`;
                     }
                 }
 
@@ -577,8 +579,8 @@ export function useOptimizationRunner({ task, data, settings, onApplyModelToSett
                 if (typeof output === "string" && output.trim().length < 5) {
                      throw new Error("Output too short to be valid.");
                 }
-            } catch (e: any) {
-                errorMsg = e.message;
+            } catch (e: unknown) {
+                errorMsg = e instanceof Error ? e.message : String(e);
             }
             const duration = Date.now() - start;
 
@@ -596,8 +598,9 @@ export function useOptimizationRunner({ task, data, settings, onApplyModelToSett
                         };
                         comboFromCache = scoreRes.fromCache;
                     }
-                } catch (e: any) {
-                    comboGradingError = `Combo grading failed: ${e.message}`;
+                } catch (e: unknown) {
+                    const errorMessage = e instanceof Error ? e.message : String(e);
+                    comboGradingError = `Combo grading failed: ${errorMessage}`;
                 }
             }
 
