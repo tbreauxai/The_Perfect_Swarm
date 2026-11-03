@@ -1,0 +1,30 @@
+[
+  {
+    "id": "goal-1-phase1-diagnostics",
+    "description": "Phase 1: Diagnostics aggregation & server-side filtering in diagnostics.ts and cortex.ts with DuelOdds safeguards and unit tests.",
+    "status": "completed",
+    "verification": "npx vitest run src/swarm/memory/diagnostics.test.ts exits 0; unit tests pass; DuelOdds appId/originApp logic verified.",
+    "evidence": "Diagnostics test suite passed (6/6 tests), feedback-grading test suite passed (9/9 tests), and lint (tsc --noEmit) passed clean with 0 errors."
+  },
+  {
+    "id": "goal-2-phase2-storage-adapter",
+    "description": "Phase 2: Storage adapter payload schema check, scroll pagination loop, storeBatch deduplication, configurable RRF/HNSW parameters.",
+    "status": "completed",
+    "verification": "npx vitest run src/swarm/memory/storage/qdrantStorage.test.ts exits 0 with pagination and config tests passing.",
+    "evidence": "qdrantStorage.test.ts passed (12/12 tests), all 8 memory test files passed (46/46 tests), and lint passed with 0 errors."
+  },
+  {
+    "id": "goal-3-phase3-persistence-batching",
+    "description": "Phase 3: Learning persistence micro-batching with flush(), timestamp incremental loading, and Promise.all parallelization.",
+    "status": "completed",
+    "verification": "npx vitest run src/swarm/learning-persistence.test.ts exits 0; buffer flush and timestamp tests pass.",
+    "evidence": "learning-persistence.test.ts passed (8/8 tests) including micro-batching, flush(), and sinceTimestamp watermark loading, and lint passed with 0 errors."
+  },
+  {
+    "id": "goal-4-verification-and-clear-todo",
+    "description": "Phase 4: Full verification gateway (lint, test:unit, test:server, build) and clear todo.md.",
+    "status": "completed",
+    "verification": "npm run lint, npm run test:unit, npm run test:server, and npm run build all exit 0; todo.md is cleared.",
+    "evidence": "Full gateway passed: lint clean (0 errors), test:unit passed (132 files, 1171 passed), test:server passed, build succeeded, and todo.md is cleared."
+  }
+]

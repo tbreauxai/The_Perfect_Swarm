@@ -198,13 +198,22 @@ export class AdaptiveLoadBalancer {
         t.lastError = errMsg;
         t.lastErrorTimestamp = Date.now();
 
-        const isRateLimit = errMsg.includes('429') || errMsg.includes('RATE_LIMIT') || errMsg.includes('quota') || errMsg.includes('TPM');
+        const isDailyLimit = errMsg.toLowerCase().includes('daily') || errMsg.toLowerCase().includes('per day') || errMsg.toLowerCase().includes('day limit') || errMsg.toLowerCase().includes('quota exceeded');
+        const isRateLimit = isDailyLimit || errMsg.includes('429') || errMsg.includes('RATE_LIMIT') || errMsg.includes('quota') || errMsg.includes('TPM');
         const isTimeout = errMsg.includes('timeout') || errMsg.includes('TIMEOUT') || errMsg.includes('AbortError');
 
         if (isRateLimit) {
             t.rateLimitCount++;
             t.status = 'cooldown';
-            const cooldownDuration = parseRetryAfterMs(error, this.rateLimitCooldownMs);
+            let cooldownDuration = parseRetryAfterMs(error, this.rateLimitCooldownMs);
+            if (isDailyLimit) {
+                const headerReset = error?.resetTimeMs || (typeof error?.headers?.get === 'function' ? error.headers.get('x-ratelimit-reset-requests') : null);
+                if (headerReset && Number.isFinite(Number(headerReset))) {
+                    cooldownDuration = Number(headerReset) * 1000;
+                } else {
+                    cooldownDuration = Math.max(3600000, cooldownDuration);
+                }
+            }
             t.cooldownUntil = Date.now() + cooldownDuration;
             // Inflate perceived latency to prevent immediate reselection
             t.latencyEmaMs = Math.max(t.latencyEmaMs * 2, 5000);

@@ -37,7 +37,7 @@ export async function executeMemoryConsolidation(
         // We do not prune SOLELY on quality rating in typical production code now per the instructions,
         // but tests explicitly test this flag.
         if (pruneLowQuality && (payload.qualityRating ?? 0) < minRating) {
-            if (!payload.verified) {
+            if (!payload.verified && payload.memoryType !== 'fact' && payload.memory_type !== 'fact') {
                 shouldPrune = true;
             }
         }
@@ -45,7 +45,7 @@ export async function executeMemoryConsolidation(
         // Age out unverified judgments
         if (maxAgeDays !== undefined && payload.timestamp) {
             const ageDays = (now - new Date(payload.timestamp).getTime()) / (1000 * 60 * 60 * 24);
-            if (ageDays > maxAgeDays && !payload.verified) {
+            if (ageDays > maxAgeDays && !payload.verified && payload.memoryType !== 'fact' && payload.memory_type !== 'fact') {
                 shouldPrune = true;
             }
         }

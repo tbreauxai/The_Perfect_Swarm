@@ -3,6 +3,7 @@ import type { SwarmContext } from '../context.ts';
 import { AnalysisLifecycle } from '../lifecycle.ts';
 import { guardManagerResponse } from '../parser.ts';
 import { globalSpecialistProfiler } from '../loadBalancer.ts';
+import { getManagerContextTokenCeiling } from './synthesisPipeline.ts';
 
 import type { SwarmEngineSettings } from '../types.ts';
 
@@ -61,10 +62,17 @@ export async function runDeepAnalysisVerification(
         prompt: `Auditing synthesized proposal against raw findings with cross-provider verification (max 2 attempts)`
     });
 
+    const ceilingTokens = getManagerContextTokenCeiling(managerAgent.provider);
+    const maxChars = ceilingTokens * 4;
+    const rawBoardSlice = typeof rawInput === 'string'
+        ? (rawInput.length > maxChars ? rawInput.slice(0, maxChars) : rawInput)
+        : JSON.stringify(rawInput || '').slice(0, maxChars);
+
     const lifecycleResult = await lifecycle.executeAndVerify(
         {
             task,
-            dataSample: rawInput.substring(0, 3000),
+            dataSample: rawBoardSlice,
+            rawBoard: rawBoardSlice,
             analystReports: effectiveCompiledReports,
             historicalBaselines: effectiveHistoricalContext
         },

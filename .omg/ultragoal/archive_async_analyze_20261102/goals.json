@@ -1,0 +1,37 @@
+[
+  {
+    "id": "goal-1-smoke",
+    "description": "Step 1: Git safety verification, branch creation (feat/async-analyze), real start command smoke check and empty smoke commit.",
+    "status": "completed",
+    "verification": "node scripts/smoke-start.mjs passes; git commit --allow-empty -m 'chore: smoke step (start command + /api/health)'; git status clean of staged files.",
+    "evidence": "Commit 5b52099 chore: smoke step created; node scripts/smoke-start.mjs passed with [smoke] PASS."
+  },
+  {
+    "id": "goal-2-job-store",
+    "description": "Step 2: In-memory async job store implementation and unit tests.",
+    "status": "completed",
+    "verification": "env -u SWARM_APP_TOKEN npx vitest run src/swarm/server/asyncJobs.test.ts (5 tests pass); git commit 'feat(swarm): in-memory async job store'.",
+    "evidence": "Commit 9d80bb9 feat(swarm): in-memory async job store created; vitest passed 5/5; tsc --noEmit clean."
+  },
+  {
+    "id": "goal-3-analyze-async",
+    "description": "Step 3: Opt-in async /api/swarm/analyze and GET /api/swarm/analyze/status/:workflowId route.",
+    "status": "completed",
+    "verification": "env -u SWARM_APP_TOKEN npx vitest run src/swarm/server/asyncAnalyze.test.ts src/swarm/server/app.test.ts (17 tests pass); git commit 'feat(swarm): opt-in async /analyze + status route'.",
+    "evidence": "Commit efd5a8a feat(swarm): opt-in async /analyze + status route created; vitest passed 17/17; diff stat 2 files."
+  },
+  {
+    "id": "goal-4-morning-async",
+    "description": "Step 4: Opt-in async /api/swarm/morning with background lock management.",
+    "status": "completed",
+    "verification": "env -u SWARM_APP_TOKEN npx vitest run src/swarm/server/asyncMorning.test.ts src/swarm/server/morning.test.ts src/swarm/server/morningDedupe.test.ts (38 tests pass); git commit 'feat(swarm): opt-in async /morning'.",
+    "evidence": "Commit a9439f3 feat(swarm): opt-in async /morning created; vitest passed 38/38; diff stat 2 files."
+  },
+  {
+    "id": "goal-5-final-verification-and-pr",
+    "description": "Step 5: Full verification suite (vitest, lint, tsc erasable, build, smoke-start), branch push, PR creation, and clear todo.md.",
+    "status": "completed",
+    "verification": "All test and build suites exit 0; PR created against main; todo.md cleared.",
+    "evidence": "All verification suites passed (125 files, 1079 passed, 6 skipped; lint clean; 10 TS1484 pre-existing; build exit 0; smoke-start PASS). Branch pushed and PR #132 opened. todo.md cleared."
+  }
+]

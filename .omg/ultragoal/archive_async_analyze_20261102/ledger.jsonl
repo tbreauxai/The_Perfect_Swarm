@@ -1,0 +1,13 @@
+{"timestamp":"2026-11-02T15:55:00Z","event":"session_started","base_commit":"68ab9d31216f3c61e436843bec0765f7d572d476","brief":"todo.md"}
+{"timestamp":"2026-11-02T15:55:00Z","event":"goal_started","goal_id":"goal-1-smoke"}
+{"timestamp":"2026-11-02T15:56:30Z","event":"goal_completed","goal_id":"goal-1-smoke","commit":"5b52099","evidence":"Commit 5b52099 chore: smoke step created; node scripts/smoke-start.mjs passed with [smoke] PASS.","next_goal_id":"goal-2-job-store"}
+{"timestamp":"2026-11-02T15:56:30Z","event":"goal_started","goal_id":"goal-2-job-store"}
+{"timestamp":"2026-11-02T15:58:50Z","event":"goal_completed","goal_id":"goal-2-job-store","commit":"9d80bb9","evidence":"Commit 9d80bb9 feat(swarm): in-memory async job store created; vitest passed 5/5; tsc --noEmit clean.","next_goal_id":"goal-3-analyze-async"}
+{"timestamp":"2026-11-02T15:58:50Z","event":"goal_started","goal_id":"goal-3-analyze-async"}
+{"timestamp":"2026-11-02T16:00:15Z","event":"goal_completed","goal_id":"goal-3-analyze-async","commit":"efd5a8a","evidence":"Commit efd5a8a feat(swarm): opt-in async /analyze + status route created; vitest passed 17/17; diff stat 2 files.","next_goal_id":"goal-4-morning-async"}
+{"timestamp":"2026-11-02T16:00:15Z","event":"goal_started","goal_id":"goal-4-morning-async"}
+{"timestamp":"2026-11-02T16:01:15Z","event":"goal_completed","goal_id":"goal-4-morning-async","commit":"a9439f3","evidence":"Commit a9439f3 feat(swarm): opt-in async /morning created; vitest passed 38/38; diff stat 2 files.","next_goal_id":"goal-5-final-verification-and-pr"}
+{"timestamp":"2026-11-02T16:01:15Z","event":"goal_started","goal_id":"goal-5-final-verification-and-pr"}
+{"timestamp":"2026-11-02T16:04:10Z","event":"goal_completed","goal_id":"goal-5-final-verification-and-pr","pr":"https://github.com/tbreauxai/The_Perfect_Swarm/pull/132","evidence":"All verification suites passed (125 files, 1079 passed, 6 skipped; lint clean; 10 TS1484 pre-existing; build exit 0; smoke-start PASS). Branch pushed and PR #132 opened. todo.md cleared.","next_goal_id":null}
+{"timestamp":"2026-11-02T16:04:10Z","event":"all_goals_completed"}
+{"timestamp":"2026-11-02T16:10:00Z","event":"pr_merged","pr":"https://github.com/tbreauxai/The_Perfect_Swarm/pull/132","merge_sha":"98bb3843447251ebd0b3585a1e6b7a40a1ac1b42"}

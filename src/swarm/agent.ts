@@ -5,6 +5,7 @@ import { ProviderRegistry } from './providers/registry.ts';
 import { sanitizeModelOutput } from './providers/adapter.ts';
 import { SwarmTracer } from './profiler.ts';
 import { globalLoadBalancer, type AdaptiveLoadBalancer } from './loadBalancer.ts';
+import { globalTokenBudgetManager } from './loadBalancer/tokenBudgetManager.ts';
 import { globalProviderLimiter, estimateTokens, PROVIDER_CALL_TIMEOUT_MS, MAX_BUDGET_WAIT_MS, DEFAULT_STRICT_BUDGET_WAIT_MS, INTERACTIVE_MAX_BUDGET_WAIT_MS } from './providers/limiter.ts';
 import { parseRetryAfterMs } from './utils/httpTimeouts.ts';
 import { isModelDead, DEFAULT_PROVIDER_MODELS } from './server/modelsProvider.ts';
@@ -138,6 +139,14 @@ export class Agent {
                 lastError = new Error(knownSkip || `token budget needs ${Math.ceil(budgetWait)}ms`);
                 continue;
             }
+
+            const estimatedTokens = estimateTokens(payloadToEstimate);
+            if (!globalTokenBudgetManager.canAllocate(currentTarget.provider, estimatedTokens)) {
+                lastFailedProvider = String(currentTarget.provider);
+                lastFailedModel = targetModel;
+                lastError = new Error(`token budget remaining ${globalTokenBudgetManager.getRemainingBudget(currentTarget.provider)} < ${estimatedTokens}; shifting seat`);
+                continue;
+            }
             // Two attempts max: fail fast on free-tier stalls. Fatal (4xx) errors
             // never recover by retrying; transient (429/5xx/timeout) errors either
             // fail over immediately (when a backup exists) or get one quick retry.
@@ -198,16 +207,27 @@ export class Agent {
                             },
                             () => lb.executeWithTelemetry(
                                 currentTarget.provider,
-                                () => adapter.call({
-                                    modelName: targetModel,
-                                    prompt,
-                                    systemInstruction: this.systemInstruction,
-                                    apiKey: currentTarget.apiKey,
-                                    aiClient: currentTarget.aiClient || this.aiClient,
-                                    config: effectiveConfig,
-                                    timeoutMs,
-                                    role: this.role
-                                })
+                                async () => {
+                                    let capturedHeaders: any = null;
+                                    const out = await adapter.call({
+                                        modelName: targetModel,
+                                        prompt,
+                                        systemInstruction: this.systemInstruction,
+                                        apiKey: currentTarget.apiKey,
+                                        aiClient: currentTarget.aiClient || this.aiClient,
+                                        config: effectiveConfig,
+                                        timeoutMs,
+                                        role: this.role,
+                                        onHeaders: (headers) => {
+                                            capturedHeaders = headers;
+                                            globalTokenBudgetManager.applyProviderHeaders(currentTarget.provider, headers);
+                                        }
+                                    });
+                                    if (capturedHeaders) {
+                                        globalTokenBudgetManager.applyProviderHeaders(currentTarget.provider, capturedHeaders);
+                                    }
+                                    return out;
+                                }
                             )
                         );
                         globalPayloadCache.set(cacheFingerprint, textOutput);

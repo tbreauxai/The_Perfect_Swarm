@@ -27,7 +27,28 @@ export function registerFeedbackRoutes(app: Hono, ctx: ServerRouteContext): void
 
         try {
             const body = await c.req.json().catch(() => ({}));
-            const { workflowId, outcome, gradedAt, predictedProbability, sportKey, market } = body;
+            const {
+                workflowId,
+                outcome,
+                gradedAt,
+                predictedProbability,
+                sportKey,
+                market,
+                reason,
+                reasonSource,
+                oddsBucket,
+                lessonId,
+                closingLineValue,
+                deleteLessonId
+            } = body;
+            const pickId = body.pickId || body.pick_id;
+
+            if (deleteLessonId) {
+                if (defaultCortex) {
+                    await defaultCortex.deletePoint(deleteLessonId);
+                }
+                return c.json({ ok: true, deleted: deleteLessonId });
+            }
 
             if (!workflowId || !['win', 'loss', 'push'].includes(outcome)) {
                 return c.json({ error: 'Invalid workflowId or outcome' }, 400);
@@ -37,7 +58,6 @@ export function registerFeedbackRoutes(app: Hono, ctx: ServerRouteContext): void
                 return c.json({ error: 'Unauthorized: missing callerAppId' }, 401);
             }
             const originApp = callerAppId;
-            const pickId = body.pickId || body.pick_id;
 
             dedupKey = generateDedupeKey(callerAppId, workflowId, pickId, outcome, body);
 
@@ -120,8 +140,34 @@ export function registerFeedbackRoutes(app: Hono, ctx: ServerRouteContext): void
                     if (Number.isFinite(statedProbability)) (r as any).predictedProbability = statedProbability;
                     if (sportKey) (r as any).sportKey = sportKey;
                     if (market) (r as any).market = market;
+                    if (pickId) (r as any).pickId = pickId;
+                    if (reason !== undefined) (r as any).reason = reason;
+                    if (reasonSource !== undefined) (r as any).reasonSource = reasonSource;
+                    if (oddsBucket !== undefined) (r as any).oddsBucket = oddsBucket;
+                    if (lessonId !== undefined) (r as any).lessonId = lessonId;
+                    if (closingLineValue !== undefined) (r as any).closingLineValue = closingLineValue;
                     globalFeedbackEngine.getKnowledgeRepository().persistOutcome(r as any);
                 }
+            }
+
+            if (lessonId && defaultCortex) {
+                await defaultCortex.upsertGradedLesson(lessonId, {
+                    id: lessonId,
+                    betId: pickId || (body as any).betId || lessonId,
+                    sportKey,
+                    rule: (body as any).rule || reason,
+                    reason,
+                    reasonSource,
+                    oddsBucket,
+                    category: (body as any).category || 'betting_lesson',
+                    date: gradedAt || new Date().toISOString(),
+                    type: 'graded_lesson',
+                    app_id: originApp,
+                    memory_type: 'graded_lesson',
+                    closingLineValue,
+                    outcome,
+                    qualityRating: accuracyScore
+                });
             }
 
             markFeedbackProcessed(dedupKey);

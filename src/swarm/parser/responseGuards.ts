@@ -144,6 +144,9 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
 export function guardVerificationResult(input: unknown): VerificationResult {
     if (typeof input === 'object' && input !== null) {
         const obj = input as any;
+        if (Object.keys(obj).length === 0) {
+            return { pass: false, feedback: 'Critic returned an empty object.' };
+        }
         if (typeof obj.pass === 'boolean') {
             return {
                 pass: obj.pass,
@@ -162,17 +165,59 @@ export function guardVerificationResult(input: unknown): VerificationResult {
                 feedback: typeof obj.feedback === 'string' ? obj.feedback : 'Approval status evaluated.'
             };
         }
+        return {
+            pass: false,
+            feedback: 'Critic output missing pass field.'
+        };
     }
 
     const text = typeof input === 'string' ? input : JSON.stringify(input);
+    const trimmed = text.trim();
+
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+        try {
+            const parsed = JSON.parse(trimmed);
+            if (typeof parsed === 'object' && parsed !== null) {
+                if (Object.keys(parsed).length === 0) {
+                    return { pass: false, feedback: 'Critic returned an empty object.' };
+                }
+                if (typeof parsed.pass === 'boolean') {
+                    return { pass: parsed.pass, feedback: typeof parsed.feedback === 'string' ? parsed.feedback : '' };
+                }
+                if (typeof parsed.passed === 'boolean') {
+                    return { pass: parsed.passed, feedback: typeof parsed.feedback === 'string' ? parsed.feedback : '' };
+                }
+                if (typeof parsed.approved === 'boolean') {
+                    return { pass: parsed.approved, feedback: typeof parsed.feedback === 'string' ? parsed.feedback : '' };
+                }
+                return { pass: false, feedback: 'Critic output missing pass field.' };
+            }
+        } catch {
+            // continue
+        }
+    }
 
     // Try parsing safely
     const parsed = parseJsonSafe<any>(text, null);
-    if (parsed && typeof parsed.pass === 'boolean') {
-        return {
-            pass: parsed.pass,
-            feedback: typeof parsed.feedback === 'string' ? parsed.feedback : ''
-        };
+    if (parsed && typeof parsed === 'object') {
+        if (typeof parsed.pass === 'boolean') {
+            return {
+                pass: parsed.pass,
+                feedback: typeof parsed.feedback === 'string' ? parsed.feedback : ''
+            };
+        }
+        if (typeof parsed.passed === 'boolean') {
+            return {
+                pass: parsed.passed,
+                feedback: typeof parsed.feedback === 'string' ? parsed.feedback : ''
+            };
+        }
+        if (typeof parsed.approved === 'boolean') {
+            return {
+                pass: parsed.approved,
+                feedback: typeof parsed.feedback === 'string' ? parsed.feedback : ''
+            };
+        }
     }
 
     // Heuristic sentiment detection for unformatted text outputs

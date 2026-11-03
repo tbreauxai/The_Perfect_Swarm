@@ -91,6 +91,7 @@ export async function executeOpenAiCompatibleChat(
 
     try {
         response = await attemptFetch(activeJson);
+        if (options.onHeaders && response?.headers) options.onHeaders(response.headers);
         if (!response.ok && response.status === 400 && activeJson) {
             const peekError = await response.clone().text().catch(() => '');
             const isFormatRejection = !peekError ||
@@ -130,6 +131,7 @@ export async function executeOpenAiCompatibleChat(
                 await new Promise((r) => setTimeout(r, retryMs + jitterMs));
                 try {
                     response = await attemptFetch(activeJson);
+        if (options.onHeaders && response?.headers) options.onHeaders(response.headers);
                 } catch {
                     // fall through to error handling below
                 }

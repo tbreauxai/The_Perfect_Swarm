@@ -1,7 +1,8 @@
 export const VALID_DOMAINS = ['odds', 'injury', 'lineup', 'fantasy', 'general'] as const;
 export type SwarmDomain = typeof VALID_DOMAINS[number];
 
-export type MemoryType = 'fact' | 'judgment';
+export const VALID_MEMORY_TYPES = ['fact', 'judgment', 'semantic_cache', 'golden_exemplar', 'reflexion_rule', 'graded_lesson'] as const;
+export type MemoryType = typeof VALID_MEMORY_TYPES[number];
 
 export function normalizeDomain(domain?: string | null, fallbackText?: string): string {
     if (domain && typeof domain === 'string') {
@@ -21,8 +22,10 @@ export function normalizeDomain(domain?: string | null, fallbackText?: string): 
 }
 
 export function normalizeMemoryType(type?: string | null, meta?: any): MemoryType {
-    if (type === 'fact' || type === 'judgment') return type;
-    if (meta?.memoryType === 'fact' || meta?.memoryType === 'judgment') return meta.memoryType;
+    if (type && (VALID_MEMORY_TYPES as readonly string[]).includes(type as any)) return type as MemoryType;
+    if (meta?.memoryType && (VALID_MEMORY_TYPES as readonly string[]).includes(meta.memoryType)) return meta.memoryType as MemoryType;
+    if (meta?.memory_type && (VALID_MEMORY_TYPES as readonly string[]).includes(meta.memory_type)) return meta.memory_type as MemoryType;
+    if (meta?.type && (VALID_MEMORY_TYPES as readonly string[]).includes(meta.type)) return meta.type as MemoryType;
     if (meta?.verified === true || meta?.graded === true || meta?.outcome !== undefined || (typeof meta?.qualityRating === 'number' && meta.qualityRating >= 0.8)) {
         return 'fact';
     }
@@ -71,7 +74,7 @@ export function normalizeMemoryPayload(payload: any, defaultAppId: string = 'def
     const rawApp = payload?.originApp || payload?.appId || defaultAppId;
     const originApp = String(rawApp).trim() || defaultAppId;
     const domain = payload?.domain ? normalizeDomain(payload.domain) : 'general';
-    const memoryType = (payload?.memoryType === 'fact' || payload?.memoryType === 'judgment')
+    const memoryType = (payload?.memoryType && (VALID_MEMORY_TYPES as readonly string[]).includes(payload.memoryType))
         ? payload.memoryType
         : normalizeMemoryType(payload?.memoryType, payload);
     const entityIds = Array.isArray(payload?.entityIds)

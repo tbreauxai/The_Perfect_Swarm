@@ -136,6 +136,37 @@ export class AnalysisLifecycle {
             
             const verification: VerificationResult = guardVerificationResult(verificationRaw);
 
+            // A claim that cites no field in the raw board is a veto
+            if (verification.pass && currentProposal) {
+                const rawBoardText = typeof rawData === 'string'
+                    ? rawData
+                    : (rawData?.rawBoard || rawData?.dataSample || JSON.stringify(rawData));
+                const candidateClaims = Array.isArray(currentProposal.arguments)
+                    ? currentProposal.arguments
+                    : (Array.isArray(currentProposal.claims) ? currentProposal.claims : []);
+
+                if (candidateClaims.length > 0 && rawBoardText) {
+                    const rawLower = String(rawBoardText).toLowerCase();
+                    for (const arg of candidateClaims) {
+                        const claimSupporting = typeof arg === 'object' && arg !== null
+                            ? (arg.supportingData || arg.field || arg.claim || '')
+                            : String(arg);
+                        if (!claimSupporting || !claimSupporting.trim()) {
+                            verification.pass = false;
+                            verification.feedback = 'Veto: Claim cites no field in the raw board.';
+                            break;
+                        }
+                        const tokens = String(claimSupporting).toLowerCase().match(/[a-z0-9_]{3,}/g) || [];
+                        const citesField = tokens.some(tok => rawLower.includes(tok));
+                        if (!citesField && tokens.length > 0) {
+                            verification.pass = false;
+                            verification.feedback = `Veto: Claim "${String(claimSupporting).slice(0, 80)}" cites no field in the raw board.`;
+                            break;
+                        }
+                    }
+                }
+            }
+
             // 3. Pass/Fail evaluation
             if (verification.pass) {
                 const computedRating = AnalysisLifecycle.computeReinforcementScore(true, attempt, this.maxRetries);

@@ -1,0 +1,23 @@
+[
+  {
+    "id": "goal-1-smoke",
+    "description": "Step 1: Smoke step commit 'chore: smoke step' and run scripts/smoke-start.mjs.",
+    "status": "completed",
+    "verification": "git log -1 --format=%s prints 'chore: smoke step'; node scripts/smoke-start.mjs passes.",
+    "evidence": "Commit b979c2c 'chore: smoke step' created; node scripts/smoke-start.mjs exited 0 with [smoke] PASS."
+  },
+  {
+    "id": "goal-2-fixtures-sync",
+    "description": "Step 2: Sync judgment.v2.fixtures.json with DuelOdds b264058f verbatim (blob d30796de) and adapt judgmentV2.test.ts to 'input' layout.",
+    "status": "completed",
+    "verification": "git hash-object src/swarm/morning/judgment.v2.fixtures.json prints d30796de49f33275476d046316ba1754f34ea5ab; npx vitest run src/swarm/server/judgmentV2.test.ts passes (44 passed, 6 skipped); commit 'test(judgment): sync v2 fixtures with DuelOdds b264058f input layout'.",
+    "evidence": "Fixtures file hash matched d30796de49f33275476d046316ba1754f34ea5ab; vitest judgmentV2.test.ts passed (44 passed, 6 skipped); commit b77ac62 created."
+  },
+  {
+    "id": "goal-3-verification-and-pr",
+    "description": "Full final run verification, push branch test/judgment-v2-fixtures-sync, and open PR to main.",
+    "status": "completed",
+    "verification": "npm run lint, npm run build, npm test (1067 passed, 6 skipped), npm run test:simulation, node scripts/smoke-start.mjs, strip-types, erasableSyntaxOnly all pass; PR opened.",
+    "evidence": "All verification suites passed cleanly; branch pushed; PR #131 opened against main."
+  }
+]

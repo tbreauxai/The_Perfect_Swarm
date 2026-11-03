@@ -27,6 +27,7 @@ import {
     type EmbeddingProvider,
     type MemoryCortexDiagnostics,
     type MemoryCortexConfig,
+    type MemoryType,
     normalizeDomain,
     normalizeMemoryType,
     extractEntityIds
@@ -337,6 +338,94 @@ export class MemoryCortex {
             await this.savePersistFileIfConfigured();
         }
         return updated;
+    }
+
+    async upsertGradedLesson(lessonId: string, payload: Record<string, any>): Promise<string | null> {
+        await this.initialize();
+        const originApp = payload.app_id || payload.originApp || payload.appId || this.defaultAppId;
+        const now = payload.date || new Date().toISOString();
+        const memoryType: MemoryType = 'graded_lesson';
+        const content = payload.reason || payload.rule || JSON.stringify(payload);
+
+        const pointPayload = {
+            id: lessonId,
+            betId: payload.betId || payload.pickId || lessonId,
+            sportKey: payload.sportKey,
+            rule: payload.rule,
+            reason: payload.reason,
+            reasonSource: payload.reasonSource,
+            oddsBucket: payload.oddsBucket,
+            category: payload.category || 'betting_lesson',
+            date: now,
+            type: 'graded_lesson',
+            app_id: originApp,
+            appId: originApp,
+            originApp,
+            memoryType,
+            memory_type: memoryType,
+            closingLineValue: payload.closingLineValue,
+            content,
+            frequency: 1,
+            qualityRating: payload.qualityRating ?? 0.85,
+            verified: true,
+            timestamp: now,
+            lastSeen: now,
+            ...payload
+        };
+
+        let denseVector: number[];
+        try {
+            denseVector = await this.embeddingProvider.embed(content);
+        } catch (firstErr: any) {
+            try {
+                denseVector = await this.embeddingProvider.embed(content);
+            } catch (retryErr: any) {
+                console.warn(`[MemoryCortex] Primary embedder retry failed (${retryErr?.message || retryErr}). Falling back for this request only.`);
+                const fallbackEmbedder = new DeterministicLocalEmbeddingProvider();
+                denseVector = await fallbackEmbedder.embed(content);
+            }
+        }
+
+        const sparseVector = SparseTokenizer.encode(content);
+        const point: StoredMemoryPoint = {
+            id: lessonId,
+            denseVector,
+            sparseVector,
+            payload: pointPayload
+        };
+
+        let storedId: string | null = null;
+        if (this.qdrantStorage && this.qdrantStorage.isAvailable) {
+            storedId = await this.qdrantStorage.store(point, false);
+        }
+
+        if (!storedId) {
+            storedId = await this.inMemoryStorage.store(point, false);
+        }
+
+        if (storedId) {
+            this.semanticCache.clear();
+            await this.savePersistFileIfConfigured();
+        }
+
+        return storedId;
+    }
+
+    async deletePoint(id: string): Promise<boolean> {
+        await this.initialize();
+        let deleted = false;
+        if (this.qdrantStorage && this.qdrantStorage.isAvailable) {
+            const qdrantDeleted = await this.qdrantStorage.delete([id]);
+            if (qdrantDeleted) deleted = true;
+        }
+        const memDeleted = await this.inMemoryStorage.delete([id]);
+        if (memDeleted) deleted = true;
+
+        if (deleted) {
+            this.semanticCache.clear();
+            await this.savePersistFileIfConfigured();
+        }
+        return deleted;
     }
 
     async retrieve(

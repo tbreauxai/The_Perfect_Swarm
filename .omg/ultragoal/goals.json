@@ -1,30 +1,37 @@
 [
   {
-    "id": "goal-1-phase1-diagnostics",
-    "description": "Phase 1: Diagnostics aggregation & server-side filtering in diagnostics.ts and cortex.ts with DuelOdds safeguards and unit tests.",
+    "id": "goal-1-feedback-and-cortex",
+    "description": "Step 1: Feedback route (outcome update without duplicate, deleteLessonId handling, upsertGradedLesson call), Cortex methods (upsertGradedLesson with deterministic ID, deletePoint), safeEmbed non-mutation, and memory tags extension.",
     "status": "completed",
-    "verification": "npx vitest run src/swarm/memory/diagnostics.test.ts exits 0; unit tests pass; DuelOdds appId/originApp logic verified.",
-    "evidence": "Diagnostics test suite passed (6/6 tests), feedback-grading test suite passed (9/9 tests), and lint (tsc --noEmit) passed clean with 0 errors."
+    "verification": "Cortex and route units pass; deletePoint and upsertGradedLesson verified in memory and Qdrant paths; safeEmbed preserves primary provider.",
+    "evidence": "Implemented in feedback.ts, cortex.ts, embeddings.ts, types.ts, tags.ts, and verified in feedbackDedupe.test.ts (4/4 pass) and embeddingFallback.test.ts (1/1 pass)."
   },
   {
-    "id": "goal-2-phase2-storage-adapter",
-    "description": "Phase 2: Storage adapter payload schema check, scroll pagination loop, storeBatch deduplication, configurable RRF/HNSW parameters.",
+    "id": "goal-2-critic-veto-and-synthesis",
+    "description": "Step 2: Critic veto with raw board slice, empty critic object / missing pass rejection, ungrounded claim veto, and synthesis pipeline board retention.",
     "status": "completed",
-    "verification": "npx vitest run src/swarm/memory/storage/qdrantStorage.test.ts exits 0 with pagination and config tests passing.",
-    "evidence": "qdrantStorage.test.ts passed (12/12 tests), all 8 memory test files passed (46/46 tests), and lint passed with 0 errors."
+    "verification": "verificationPipeline and synthesisPipeline tests pass with raw board slices, critic vetoes, and synthesis prompt priorities.",
+    "evidence": "Implemented in verificationPipeline.ts, responseGuards.ts, lifecycle.ts, and synthesisPipeline.ts. Verified in criticVeto.test.ts (3/3 pass) and morningCacheBypass.test.ts (2/2 pass)."
   },
   {
-    "id": "goal-3-phase3-persistence-batching",
-    "description": "Phase 3: Learning persistence micro-batching with flush(), timestamp incremental loading, and Promise.all parallelization.",
+    "id": "goal-3-quota-shift",
+    "description": "Step 3: Quota shift in TokenBudgetManager (applyProviderHeaders with remaining tokens and reset times), AdaptiveLoadBalancer seat shifting, and agent header passing.",
     "status": "completed",
-    "verification": "npx vitest run src/swarm/learning-persistence.test.ts exits 0; buffer flush and timestamp tests pass.",
-    "evidence": "learning-persistence.test.ts passed (8/8 tests) including micro-batching, flush(), and sinceTimestamp watermark loading, and lint passed with 0 errors."
+    "verification": "tokenBudgetManager and adaptiveLoadBalancer tests verify seat shifting before 429 and header ingestion.",
+    "evidence": "Implemented applyProviderHeaders in tokenBudgetManager.ts, header parsing in baseOpenAi.ts/agent.ts, and seat shift check in agent.ts. Verified in quotaShift.test.ts (3/3 pass)."
   },
   {
-    "id": "goal-4-verification-and-clear-todo",
-    "description": "Phase 4: Full verification gateway (lint, test:unit, test:server, build) and clear todo.md.",
+    "id": "goal-4-test-suites",
+    "description": "Step 4: Comprehensive test suites across feedbackDedupe.test.ts, critic verification, token budget seat shifting, and embedding provider permanence.",
+    "status": "completed",
+    "verification": "All targeted unit test suites pass.",
+    "evidence": "All unit tests verified: feedbackDedupe.test.ts (4/4 pass), criticVeto.test.ts (3/3 pass), quotaShift.test.ts (3/3 pass), embeddingFallback.test.ts (1/1 pass), tokenBudgetManager.test.ts (16/16 pass)."
+  },
+  {
+    "id": "goal-5-verification-and-clear-todo",
+    "description": "Step 5: Full verification gateway (lint, test:unit, test:server, build) and clear todo.md.",
     "status": "completed",
     "verification": "npm run lint, npm run test:unit, npm run test:server, and npm run build all exit 0; todo.md is cleared.",
-    "evidence": "Full gateway passed: lint clean (0 errors), test:unit passed (132 files, 1171 passed), test:server passed, build succeeded, and todo.md is cleared."
+    "evidence": "Full test suite (135/135 files, 1180/1180 tests pass), npm run lint (0 errors), npm run test:server (all 7 passed), npm run test:dist (ESM & CJS bundles verified), npm run test:portable (26 steps passed), npm run test:simulation (7 phases passed), npm run build (0 errors), and todo.md cleared."
   }
 ]

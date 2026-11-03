@@ -1,0 +1,8 @@
+{"timestamp":"2026-10-27T22:44:00Z","event":"session_started","base_commit":"06f18604"}
+{"timestamp":"2026-10-27T22:44:00Z","event":"goal_started","goal_id":"goal-1-smoke"}
+{"timestamp":"2026-10-27T22:44:20Z","event":"goal_completed","goal_id":"goal-1-smoke","commit":"b979c2c"}
+{"timestamp":"2026-10-27T22:44:20Z","event":"goal_started","goal_id":"goal-2-fixtures-sync"}
+{"timestamp":"2026-10-27T22:46:20Z","event":"goal_completed","goal_id":"goal-2-fixtures-sync","commit":"b77ac62"}
+{"timestamp":"2026-10-27T22:46:20Z","event":"goal_started","goal_id":"goal-3-verification-and-pr"}
+{"timestamp":"2026-10-27T22:49:25Z","event":"goal_completed","goal_id":"goal-3-verification-and-pr","pr":"https://github.com/tbreauxai/The_Perfect_Swarm/pull/131"}
+{"timestamp":"2026-10-27T22:49:25Z","event":"all_goals_completed"}

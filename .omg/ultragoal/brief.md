@@ -1,21 +1,12 @@
-# Ultragoal Brief: Qdrant Memory & Cortex Optimization Plan
+# Ultragoal Brief: Graded Lesson Index, Critic Veto, and Quota Shift
 
 ## Objective
-Implement architectural modernization, latency optimizations, server-side prefiltering, count aggregation, storage adapter tuning/pagination, and write micro-batching across Qdrant Memory and Learning Persistence systems as specified in `todo.md`, then clear `todo.md`.
+Implement feedback route enhancements, Qdrant graded lesson indexing with deterministic lessonId, point deletion, memory type tag extension, critic veto with raw board slices, manager synthesis board preservation, dynamic token budget quota shifts from rate-limit headers, and comprehensive unit tests as specified in `todo.md`. Clear `todo.md` upon completion.
 
-## Target Architecture & Boundaries
-1. Diagnostics & Server-Side Filtering (`src/swarm/memory/diagnostics.ts`, `src/swarm/memory/cortex.ts`, `src/swarm/memory/types.ts`)
-   - DuelOdds safeguard: Query filtering for `appId` must use `should` disjunction with `originApp`.
-   - Use `client.count()` for point metrics (total, graded, wins, losses, pushes) with fallback if `.count()` unavailable.
-2. Storage Adapter (`src/swarm/memory/storage/qdrantStorage.ts`, `src/swarm/memory/storage/types.ts`)
-   - Schema check before index creation to skip redundant index calls while ensuring newly required fields are indexed.
-   - Offset pagination loop in `scroll()` with safety cap.
-   - Deduplication option in `storeBatch` (default: false).
-   - Configurable RRF (k: 60 default) and HNSW/quantization profiles.
-3. Persistence Batching & Watermarking (`src/swarm/learning-persistence.ts`, `analystLedger.ts`, `snapshotPipeline.ts`)
-   - In-memory write buffer with debounce timer (`unref()` called) and explicit `flush(): Promise<void>`.
-   - `sinceTimestamp` watermark loading in `loadAll()`.
-   - Parallelization of orthogonal remote collection queries via `Promise.all`.
-4. Verification & Clear:
-   - Full gate validation: `npm run lint`, unit tests, server tests, `npm run build`.
-   - Clear `todo.md`.
+## Boundaries & Constraints
+- Repo: `tbreauxai/The_Perfect_Swarm`, branch main, SHA 44bf569.
+- Single collection: `pwa_swarm_dev_cortex_v2`. Partition by payload tags, never new collections.
+- No NVIDIA NIM, compound-mini, prompt-guard model, or FastAPI migration.
+- Embeddings stay Gemini `text-embedding-005` (768 dims) with `text-embedding-004` fallback. No Cloudflare bge.
+- Per-request deterministic fallback must NOT mutate `this.embeddingProvider`.
+- All tests must pass: `npm run lint`, `npm run test:unit`, `npm run test:server`, `npm run build`.

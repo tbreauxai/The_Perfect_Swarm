@@ -36,14 +36,14 @@ export class CortexConsolidator {
             let shouldPrune = false;
 
             if (pruneLowQuality && (payload.qualityRating ?? 0) < minRating) {
-                if (!payload.verified) {
+                if (!payload.verified && payload.memoryType !== 'fact' && payload.memory_type !== 'fact') {
                     shouldPrune = true;
                 }
             }
 
             if (maxAgeDays !== undefined && payload.timestamp) {
                 const ageDays = (now - new Date(payload.timestamp).getTime()) / (1000 * 60 * 60 * 24);
-                if (ageDays > maxAgeDays && !payload.verified) {
+                if (ageDays > maxAgeDays && !payload.verified && payload.memoryType !== 'fact' && payload.memory_type !== 'fact') {
                     shouldPrune = true;
                 }
             }
