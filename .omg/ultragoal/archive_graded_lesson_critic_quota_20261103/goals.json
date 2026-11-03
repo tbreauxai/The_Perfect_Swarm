@@ -1,0 +1,37 @@
+[
+  {
+    "id": "goal-1-feedback-and-cortex",
+    "description": "Step 1: Feedback route (outcome update without duplicate, deleteLessonId handling, upsertGradedLesson call), Cortex methods (upsertGradedLesson with deterministic ID, deletePoint), safeEmbed non-mutation, and memory tags extension.",
+    "status": "completed",
+    "verification": "Cortex and route units pass; deletePoint and upsertGradedLesson verified in memory and Qdrant paths; safeEmbed preserves primary provider.",
+    "evidence": "Implemented in feedback.ts, cortex.ts, embeddings.ts, types.ts, tags.ts, and verified in feedbackDedupe.test.ts (4/4 pass) and embeddingFallback.test.ts (1/1 pass)."
+  },
+  {
+    "id": "goal-2-critic-veto-and-synthesis",
+    "description": "Step 2: Critic veto with raw board slice, empty critic object / missing pass rejection, ungrounded claim veto, and synthesis pipeline board retention.",
+    "status": "completed",
+    "verification": "verificationPipeline and synthesisPipeline tests pass with raw board slices, critic vetoes, and synthesis prompt priorities.",
+    "evidence": "Implemented in verificationPipeline.ts, responseGuards.ts, lifecycle.ts, and synthesisPipeline.ts. Verified in criticVeto.test.ts (3/3 pass) and morningCacheBypass.test.ts (2/2 pass)."
+  },
+  {
+    "id": "goal-3-quota-shift",
+    "description": "Step 3: Quota shift in TokenBudgetManager (applyProviderHeaders with remaining tokens and reset times), AdaptiveLoadBalancer seat shifting, and agent header passing.",
+    "status": "completed",
+    "verification": "tokenBudgetManager and adaptiveLoadBalancer tests verify seat shifting before 429 and header ingestion.",
+    "evidence": "Implemented applyProviderHeaders in tokenBudgetManager.ts, header parsing in baseOpenAi.ts/agent.ts, and seat shift check in agent.ts. Verified in quotaShift.test.ts (3/3 pass)."
+  },
+  {
+    "id": "goal-4-test-suites",
+    "description": "Step 4: Comprehensive test suites across feedbackDedupe.test.ts, critic verification, token budget seat shifting, and embedding provider permanence.",
+    "status": "completed",
+    "verification": "All targeted unit test suites pass.",
+    "evidence": "All unit tests verified: feedbackDedupe.test.ts (4/4 pass), criticVeto.test.ts (3/3 pass), quotaShift.test.ts (3/3 pass), embeddingFallback.test.ts (1/1 pass), tokenBudgetManager.test.ts (16/16 pass)."
+  },
+  {
+    "id": "goal-5-verification-and-clear-todo",
+    "description": "Step 5: Full verification gateway (lint, test:unit, test:server, build) and clear todo.md.",
+    "status": "completed",
+    "verification": "npm run lint, npm run test:unit, npm run test:server, and npm run build all exit 0; todo.md is cleared.",
+    "evidence": "Full test suite (135/135 files, 1180/1180 tests pass), npm run lint (0 errors), npm run test:server (all 7 passed), npm run test:dist (ESM & CJS bundles verified), npm run test:portable (26 steps passed), npm run test:simulation (7 phases passed), npm run build (0 errors), and todo.md cleared."
+  }
+]

@@ -18,16 +18,50 @@
  *   retries and re-saves are idempotent upserts, never duplicates.
  */
 
+import crypto from 'crypto';
 import { QdrantClient } from '@qdrant/js-client-rest';
 
 export const LEARNING_COLLECTION = 'swarm_learning';
+export const LEARNING_NAMESPACE = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
 const VECTOR_SIZE = 8;
 const QDRANT_TIMEOUT_MS = 8000;
 const BATCH_FLUSH_WINDOW_MS = 35;
 const MAX_BATCH_SIZE = 50;
 
-function dummyVector(): number[] {
-    return new Array(VECTOR_SIZE).fill(0);
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function dummyVector(): number[] {
+    const val = 1 / Math.sqrt(VECTOR_SIZE);
+    return new Array(VECTOR_SIZE).fill(val);
+}
+
+function parseUuidToBytes(uuid: string): Buffer {
+    const hex = uuid.replace(/-/g, '');
+    return Buffer.from(hex, 'hex');
+}
+
+/**
+ * Deterministically generates an RFC 4122 compliant UUIDv5 string from a name and namespace.
+ */
+export function toUuidV5(name: string, namespace: string = LEARNING_NAMESPACE): string {
+    const nsBytes = parseUuidToBytes(namespace);
+    const nameBytes = Buffer.from(name, 'utf8');
+    const hash = crypto.createHash('sha1').update(Buffer.concat([nsBytes, nameBytes])).digest();
+
+    // Set version 5 (0101 in bits 4-7 of octet 6)
+    hash[6] = (hash[6] & 0x0f) | 0x50;
+    // Set variant RFC 4122 (10 in bits 6-7 of octet 8)
+    hash[8] = (hash[8] & 0x3f) | 0x80;
+
+    const hex = hash.subarray(0, 16).toString('hex');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+
+export function ensureUuid(idOrKey: string): string {
+    if (UUID_REGEX.test(idOrKey)) {
+        return idOrKey;
+    }
+    return toUuidV5(idOrKey);
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -212,8 +246,12 @@ export class QdrantLearningStore {
     /** Persist a full outcome record (idempotent by record.id). */
     public saveOutcome(record: Record<string, any>): Promise<void> {
         if (!record || !record.id) return Promise.resolve();
-        return this.upsert(String(record.id), {
+        const rawId = String(record.id);
+        const pointId = ensureUuid(rawId);
+        return this.upsert(pointId, {
             kind: 'outcome',
+            key: rawId,
+            originalKey: rawId,
             appId: record.appId || 'default',
             workflowId: record.workflowId || '',
             ts: record.timestamp || Date.now(),
@@ -224,9 +262,12 @@ export class QdrantLearningStore {
     /** Persist one analyst-ledger entry, keyed `${appId}:${agentRole}`. */
     public saveLedgerEntry(key: string, entry: Record<string, any>): Promise<void> {
         if (!key) return Promise.resolve();
-        return this.upsert(`ledger:${key}`, {
+        const textId = `ledger:${key}`;
+        const pointId = toUuidV5(textId);
+        return this.upsert(pointId, {
             kind: 'ledger',
             key,
+            originalKey: textId,
             ts: entry.lastUpdated || Date.now(),
             data: entry
         });
@@ -236,9 +277,13 @@ export class QdrantLearningStore {
     public saveProfile(agentRole: string, profile: Record<string, any>): Promise<void> {
         const role = (agentRole || '').trim();
         if (!role) return Promise.resolve();
-        return this.upsert(`profile:${role}`, {
+        const textId = `profile:${role}`;
+        const pointId = toUuidV5(textId);
+        return this.upsert(pointId, {
             kind: 'profile',
             role,
+            key: role,
+            originalKey: textId,
             ts: profile.lastUpdated || Date.now(),
             data: profile
         });
@@ -246,9 +291,13 @@ export class QdrantLearningStore {
 
     /** Persist one policy-genealogy generation. */
     public savePolicyGeneration(generation: number, policy: any, reward: number): Promise<void> {
-        return this.upsert(`policy:gen:${generation}`, {
+        const textId = `policy:gen:${generation}`;
+        const pointId = toUuidV5(textId);
+        return this.upsert(pointId, {
             kind: 'policy',
             generation,
+            key: textId,
+            originalKey: textId,
             ts: Date.now(),
             data: { generation, policy, reward, timestamp: Date.now() }
         });
@@ -286,7 +335,7 @@ export class QdrantLearningStore {
                     const p = (pt.payload || {}) as any;
                     if (p.kind === 'outcome' && p.data) state.outcomes.push(p.data);
                     else if (p.kind === 'ledger' && p.key && p.data) state.ledger[p.key] = p.data;
-                    else if (p.kind === 'profile' && p.role && p.data) state.profiles[p.role] = p.data;
+                    else if (p.kind === 'profile' && (p.role || p.key) && p.data) state.profiles[p.role || p.key] = p.data;
                     else if (p.kind === 'policy' && p.data) state.policies.push(p.data);
                 }
                 offset = res?.next_page_offset;

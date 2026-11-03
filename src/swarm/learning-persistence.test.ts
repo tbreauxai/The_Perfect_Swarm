@@ -3,7 +3,7 @@
  * Tests for Qdrant-backed durable learning state (no live Qdrant needed).
  */
 import { describe, it, expect, vi } from 'vitest';
-import { QdrantLearningStore, LEARNING_COLLECTION } from './learning-persistence.ts';
+import { QdrantLearningStore, LEARNING_COLLECTION, toUuidV5, dummyVector, ensureUuid } from './learning-persistence.ts';
 import { SwarmKnowledgeRepository, AnalystLedger } from './feedback.ts';
 
 /** Minimal in-memory fake of the QdrantClient surface we use. */
@@ -89,6 +89,16 @@ describe('QdrantLearningStore', () => {
         // 4 writes should be batched together in fewer upsert calls than 4
         expect(fake.upsertCalls.length).toBeLessThanOrEqual(2);
 
+        // Verify UUIDv5 format, non-zero vectors, and payload keys on every point
+        const allPoints = fake.upsertCalls.flat();
+        const uuidv5Regex = /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+        for (const pt of allPoints) {
+            expect(pt.id).toMatch(uuidv5Regex);
+            expect(pt.vector).toHaveLength(8);
+            expect(pt.vector.every((val: number) => val !== 0 && !Number.isNaN(val))).toBe(true);
+            expect(pt.payload.originalKey).toBeDefined();
+        }
+
         const loaded = await store.loadAll();
         expect(loaded.outcomes).toHaveLength(1);
         expect(loaded.outcomes[0].workflowId).toBe('wf-1');
@@ -168,6 +178,55 @@ describe('QdrantLearningStore', () => {
         const loaded = await store.loadAll();
         expect(loaded.outcomes).toHaveLength(1);
         expect(loaded.outcomes[0].graded).toBe(true);
+    });
+
+    it('converts text IDs (ledger:, profile:, policy:gen:) to UUIDv5 and keeps original key in payload with non-zero vector', async () => {
+        const fake = makeFakeQdrant();
+        const store = new QdrantLearningStore({ client: fake as any, collection: 'test_learning' });
+        await store.whenReady();
+
+        const ledgerKey = 'app-1:Risk Specialist';
+        const profileRole = 'Market Analyst';
+        const generation = 42;
+
+        await store.saveLedgerEntry(ledgerKey, { wins: 5 });
+        await store.saveProfile(profileRole, { trials: 10 });
+        await store.savePolicyGeneration(generation, { temp: 0.7 }, 0.95);
+        await store.flush();
+
+        const allPoints = fake.upsertCalls.flat();
+        expect(allPoints).toHaveLength(3);
+
+        const expectedLedgerUuid = toUuidV5(`ledger:${ledgerKey}`);
+        const expectedProfileUuid = toUuidV5(`profile:${profileRole}`);
+        const expectedPolicyUuid = toUuidV5(`policy:gen:${generation}`);
+
+        const ledgerPt = allPoints.find(p => p.id === expectedLedgerUuid);
+        expect(ledgerPt).toBeDefined();
+        expect(ledgerPt.payload.key).toBe(ledgerKey);
+        expect(ledgerPt.payload.originalKey).toBe(`ledger:${ledgerKey}`);
+        expect(ledgerPt.vector).toEqual(dummyVector());
+        expect(ledgerPt.vector.every((x: number) => x > 0)).toBe(true);
+
+        const profilePt = allPoints.find(p => p.id === expectedProfileUuid);
+        expect(profilePt).toBeDefined();
+        expect(profilePt.payload.role).toBe(profileRole);
+        expect(profilePt.payload.originalKey).toBe(`profile:${profileRole}`);
+        expect(profilePt.vector).toEqual(dummyVector());
+        expect(profilePt.vector.every((x: number) => x > 0)).toBe(true);
+
+        const policyPt = allPoints.find(p => p.id === expectedPolicyUuid);
+        expect(policyPt).toBeDefined();
+        expect(policyPt.payload.generation).toBe(generation);
+        expect(policyPt.payload.originalKey).toBe(`policy:gen:${generation}`);
+        expect(policyPt.vector).toEqual(dummyVector());
+        expect(policyPt.vector.every((x: number) => x > 0)).toBe(true);
+
+        // Verify loaded state maps back to original keys accurately
+        const loaded = await store.loadAll();
+        expect(loaded.ledger[ledgerKey]).toEqual({ wins: 5 });
+        expect(loaded.profiles[profileRole]).toEqual({ trials: 10 });
+        expect(loaded.policies[0].generation).toBe(generation);
     });
 });
 
