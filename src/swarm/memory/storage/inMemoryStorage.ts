@@ -118,10 +118,11 @@ export class InMemoryStorageAdapter implements StorageBackend {
         return point.id;
     }
 
-    async storeBatch(points: StoredMemoryPoint[]): Promise<string[]> {
+    async storeBatch(points: StoredMemoryPoint[], options?: { deduplicate?: boolean }): Promise<string[]> {
+        const deduplicate = options?.deduplicate ?? false;
         const ids: string[] = [];
         for (const pt of points) {
-            const id = await this.store(pt, false);
+            const id = await this.store(pt, deduplicate);
             if (id) ids.push(id);
         }
         return ids;
@@ -227,7 +228,7 @@ export class InMemoryStorageAdapter implements StorageBackend {
         const readerApp = filter.appId || filter.originApp;
         const requestedDomain = filter.domain ? normalizeDomain(filter.domain) : undefined;
 
-        return this.points.filter(pt => {
+        const matched = this.points.filter(pt => {
             if (filter.includeShared === false && readerApp) {
                 const itemApp = pt.payload.originApp || pt.payload.appId;
                 if (itemApp !== readerApp) return false;
@@ -245,6 +246,11 @@ export class InMemoryStorageAdapter implements StorageBackend {
             if (filter.verifiedOnly && pt.payload.verified !== true && pt.payload.memoryType !== 'fact') return false;
             return true;
         });
+
+        if (filter.maxPoints && matched.length > filter.maxPoints) {
+            return matched.slice(0, filter.maxPoints);
+        }
+        return matched;
     }
 
     getRawStore(): StoredMemoryPoint[] {

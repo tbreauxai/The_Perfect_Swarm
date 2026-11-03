@@ -1,0 +1,37 @@
+[
+  {
+    "id": "goal-1-smoke",
+    "description": "Step 1: Smoke check start command, checkout branch feat/judgment-factors, and empty smoke commit.",
+    "status": "completed",
+    "verification": "node scripts/smoke-start.mjs passes; git commit --allow-empty -m 'chore: smoke step (start command + /api/health)'; git status clean of staged files.",
+    "evidence": "Commit 789434f created; node scripts/smoke-start.mjs passed with [smoke] PASS."
+  },
+  {
+    "id": "goal-2-registry",
+    "description": "Step 2: Factor registry v1 (shared JSON) + typed constants + parity test.",
+    "status": "completed",
+    "verification": "env -u SWARM_APP_TOKEN npx vitest run src/swarm/morning/factorIds.test.ts (5 tests pass); git commit 'feat(swarm): confidence factor registry v1 + parity test'.",
+    "evidence": "Commit b136a12 created; vitest passed 5/5."
+  },
+  {
+    "id": "goal-3-schema-validator",
+    "description": "Step 3: Optional factors in judgment v2 schema + validator gated by JUDGMENT_FACTORS.",
+    "status": "completed",
+    "verification": "env -u SWARM_APP_TOKEN npx vitest run src/swarm/morning/judgmentFactors.test.ts src/swarm/server/judgmentV2.test.ts src/swarm/server/judgmentV2Run.test.ts; git commit 'feat(swarm): judgment v2 factors schema + validator (JUDGMENT_FACTORS, default off)'.",
+    "evidence": "Commit 7dbb208 created; vitest passed 15/15 new and 66 existing."
+  },
+  {
+    "id": "goal-4-prompt-wiring",
+    "description": "Step 4: Factors judge prompt and morning wiring.",
+    "status": "completed",
+    "verification": "env -u SWARM_APP_TOKEN npx vitest run src/swarm/server/judgmentFactorsRun.test.ts src/swarm/morning/factorIds.test.ts src/swarm/server/judgmentV2Run.test.ts src/swarm/server/judgmentV2.test.ts src/swarm/server/morning.test.ts; git commit 'feat(swarm): factors judge prompt + morning wiring (JUDGMENT_FACTORS, default off)'.",
+    "evidence": "Commit cdf604f created; vitest passed 98/98 (6 skipped)."
+  },
+  {
+    "id": "goal-5-final-verification-and-pr",
+    "description": "Step 5: Full verification suite, leak check, branch push, PR creation, and clear todo.md.",
+    "status": "completed",
+    "verification": "All test and build suites exit 0; PR created against main; todo.md cleared.",
+    "evidence": "Full verification suite passed (128 files, 1104 passed, 6 skipped; lint clean; 10 TS1484 pre-existing; build exit 0; smoke-start PASS; no secret leaks). Branch pushed, PR #133 opened, todo.md cleared."
+  }
+]

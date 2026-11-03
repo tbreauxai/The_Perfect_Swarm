@@ -140,6 +140,10 @@ export interface EmbeddingProvider {
     embed(text: string): Promise<number[]>;
 }
 
+export interface DiagnosticsOptions {
+    includeBreakdown?: boolean;
+}
+
 export interface MemoryCortexDiagnostics {
     qdrantAvailable: boolean;
     collectionName: string;

@@ -1,44 +1,30 @@
 [
   {
-    "id": "goal-1-branch-and-startup-smoke",
-    "description": "Step 1: Create branch fix/judge-crosscheck from main 31f9aaa, verify scripts/smoke-start.mjs exists, create empty commit 'step 1'.",
+    "id": "goal-1-phase1-diagnostics",
+    "description": "Phase 1: Diagnostics aggregation & server-side filtering in diagnostics.ts and cortex.ts with DuelOdds safeguards and unit tests.",
     "status": "completed",
-    "verification": "git ls-files scripts/smoke-start.mjs prints 1 line; git log -1 --format=%s is 'step 1'; npm run lint passes.",
-    "evidence": "Created branch fix/judge-crosscheck at 31f9aaa. scripts/smoke-start.mjs confirmed on disk. Empty commit step 1 created (8d69f48). npm run lint passed with 0 errors."
+    "verification": "npx vitest run src/swarm/memory/diagnostics.test.ts exits 0; unit tests pass; DuelOdds appId/originApp logic verified.",
+    "evidence": "Diagnostics test suite passed (6/6 tests), feedback-grading test suite passed (9/9 tests), and lint (tsc --noEmit) passed clean with 0 errors."
   },
   {
-    "id": "goal-2-cross-check-helpers",
-    "description": "Step 2: Add JUDGE_TOTAL_RANGES, JUDGE_MARKET_CAPS, JudgeMarketLines, and crossCheckJudgeOutput helper to src/swarm/morning/judgePrompt.ts.",
+    "id": "goal-2-phase2-storage-adapter",
+    "description": "Phase 2: Storage adapter payload schema check, scroll pagination loop, storeBatch deduplication, configurable RRF/HNSW parameters.",
     "status": "completed",
-    "verification": "npm run lint passes; npx vitest run src/swarm/server/morning.test.ts passes; commit 'step 2'.",
-    "evidence": "Inserted JUDGE_TOTAL_RANGES, JUDGE_MARKET_CAPS, JudgeMarketLines, and crossCheckJudgeOutput into src/swarm/morning/judgePrompt.ts. npm run lint passed; morning.test.ts passed (28/28); commit 6be220f created."
+    "verification": "npx vitest run src/swarm/memory/storage/qdrantStorage.test.ts exits 0 with pagination and config tests passing.",
+    "evidence": "qdrantStorage.test.ts passed (12/12 tests), all 8 memory test files passed (46/46 tests), and lint passed with 0 errors."
   },
   {
-    "id": "goal-3-parser-rejection-wiring",
-    "description": "Step 3: Update parseAndValidateJudgeOutput in src/swarm/morning/judgePrompt.ts to accept market lines, track namedWinner, check sport range for fairTotal, and execute crossCheckJudgeOutput.",
+    "id": "goal-3-phase3-persistence-batching",
+    "description": "Phase 3: Learning persistence micro-batching with flush(), timestamp incremental loading, and Promise.all parallelization.",
     "status": "completed",
-    "verification": "npm run lint passes; npx vitest run src/swarm/server/morning.test.ts passes; commit 'step 3'.",
-    "evidence": "Added market parameter, namedWinner tracking, fairTotal positive & sport range check, and crossCheckJudgeOutput call in parseAndValidateJudgeOutput. Lint passed; morning.test.ts passed (28/28); commit acdd2e5 created."
+    "verification": "npx vitest run src/swarm/learning-persistence.test.ts exits 0; buffer flush and timestamp tests pass.",
+    "evidence": "learning-persistence.test.ts passed (8/8 tests) including micro-batching, flush(), and sinceTimestamp watermark loading, and lint passed with 0 errors."
   },
   {
-    "id": "goal-4-judge-prompts-tuning",
-    "description": "Step 4: Update buildJudgePrompt and JUDGE_MANAGER_INSTRUCTION in src/swarm/morning/judgePrompt.ts to add NCAAF (30-80) and NCAAB (110-180) and replace 215.5 example with null.",
+    "id": "goal-4-verification-and-clear-todo",
+    "description": "Phase 4: Full verification gateway (lint, test:unit, test:server, build) and clear todo.md.",
     "status": "completed",
-    "verification": "npm run lint passes; git grep 215.5 in judgePrompt.ts prints nothing; git grep NCAAF: 30-80 prints 1 line; commit 'step 4'.",
-    "evidence": "Updated buildJudgePrompt and JUDGE_MANAGER_INSTRUCTION: added NCAAF: 30-80 and NCAAB: 110-180 ranges, replaced 215.5 with null. Greps confirmed 0 instances of 215.5 and 1 line for NCAAF. morning.test.ts passed (28/28); commit c6756bb created."
-  },
-  {
-    "id": "goal-5-downstream-market-wiring",
-    "description": "Step 5: In src/swarm/morning/index.ts pass market lines to parseAndValidateJudgeOutput and update rejection error text; update tests in morning.test.ts and morningCacheBypass.test.ts.",
-    "status": "completed",
-    "verification": "npm run lint passes; npx vitest run src/swarm/server/morning.test.ts src/swarm/server/morningCacheBypass.test.ts green; commit 'step 5'.",
-    "evidence": "Passed market lines { spread, total } to parseAndValidateJudgeOutput in runMorningSlate. Updated rejection error message. Updated expected error assertion in morning.test.ts and flipped game 2 spread in morningCacheBypass.test.ts. Lint passed; vitest 30/30 passed; commit 1b91593 created."
-  },
-  {
-    "id": "goal-6-cross-check-test-and-verification",
-    "description": "Step 6: Create src/swarm/server/judgeCrossCheck.test.ts, commit 'step 6', and run complete final verification (lint, unit tests, simulation, build, smoke, strip-types scans).",
-    "status": "completed",
-    "verification": "judgeCrossCheck.test.ts 8/8 pass; lint passes; unit tests all green; simulation passes; build passes; smoke-start passes; strip scans 0 non-erasable.",
-    "evidence": "judgeCrossCheck.test.ts 8/8 passed. Commit d1ebd08 'step 6' created. Full final verification passed: lint (0 errors), test:unit (116 files, 984 passed), test:simulation (exit 0), build (exit 0), smoke-start (exit 0), strip scan 1 (363 files, 0 non-erasable), strip scan 2 (0 errors in changed files), greps (0 for 215.5, 2 lines for crossCheckJudgeOutput), diff stat (5 files, +333 -12), git log (6 commits step 1..6)."
+    "verification": "npm run lint, npm run test:unit, npm run test:server, and npm run build all exit 0; todo.md is cleared.",
+    "evidence": "Full gateway passed: lint clean (0 errors), test:unit passed (132 files, 1171 passed), test:server passed, build succeeded, and todo.md is cleared."
   }
 ]

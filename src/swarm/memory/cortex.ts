@@ -18,6 +18,7 @@ import {
     type RetrievalOptions,
     type ConsolidationOptions,
     type ConsolidationResult,
+    type DiagnosticsOptions,
     type ExportMemoriesOptions,
     type MemorySnapshot,
     type ImportMemoriesOptions,
@@ -652,7 +653,7 @@ export class MemoryCortex {
         };
     }
 
-    async getDiagnostics(appIdFilter?: string): Promise<MemoryCortexDiagnostics> {
+    async getDiagnostics(appIdFilter?: string, options?: DiagnosticsOptions): Promise<MemoryCortexDiagnostics> {
         return collectCortexDiagnostics({
             qdrant: this.qdrantStorage?.getRawClient() ?? null,
             isAvailable: this.isAvailable,
@@ -670,7 +671,7 @@ export class MemoryCortex {
                     clearTimeout(timeoutId);
                 }
             }
-        }, appIdFilter);
+        }, appIdFilter, options);
     }
 
     get ready(): boolean {

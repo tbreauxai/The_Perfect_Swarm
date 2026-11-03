@@ -100,7 +100,7 @@ describe('Swarm Feedback CORS Before Auth & Deduplication', () => {
         });
 
         const submission = {
-            workflowId: 'wf-dedup-' + Date.now(),
+            workflowId: 'wf-dedup-' + Date.now() + '-' + Math.random().toString(36).slice(2),
             pickId: 'pick-42',
             outcome: 'win'
         };

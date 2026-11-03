@@ -17,6 +17,12 @@ export class SwarmKnowledgeRepository {
         this.learningStore = store;
     }
 
+    public async flush(): Promise<void> {
+        if (this.learningStore) {
+            await this.learningStore.flush();
+        }
+    }
+
     public getLearningStore(): QdrantLearningStore | null {
         return this.learningStore;
     }

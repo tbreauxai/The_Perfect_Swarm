@@ -11,10 +11,36 @@ export interface QdrantStorageConfig {
     denseDimension?: number;
     client?: QdrantClient;
     timeoutMs?: number;
+    rrfK?: number;
+    prefetchFactor?: number;
+    hnswConfig?: {
+        m?: number;
+        ef_construct?: number;
+        on_disk?: boolean;
+    };
+    hnswEf?: number;
+    quantizationConfig?: any;
 }
+
+const REQUIRED_INDEXES: Array<{ field: string; schema: 'keyword' | 'float' | 'integer' | 'bool' }> = [
+    { field: 'originApp', schema: 'keyword' },
+    { field: 'domain', schema: 'keyword' },
+    { field: 'memoryType', schema: 'keyword' },
+    { field: 'entityIds', schema: 'keyword' },
+    { field: 'workflowId', schema: 'keyword' },
+    { field: 'appId', schema: 'keyword' },
+    { field: 'targetApps', schema: 'keyword' },
+    { field: 'agentRole', schema: 'keyword' },
+    { field: 'qualityRating', schema: 'float' },
+    { field: 'verified', schema: 'bool' },
+    { field: 'outcome', schema: 'keyword' },
+    { field: 'gradedAt', schema: 'keyword' },
+    { field: 'feedbackProcessed', schema: 'bool' }
+];
 
 export class QdrantStorageAdapter implements StorageBackend {
     private client: QdrantClient | null = null;
+    private config: QdrantStorageConfig;
     private collectionName: string;
     private collectionNameTemplate?: string;
     private denseDimension: number;
@@ -23,6 +49,7 @@ export class QdrantStorageAdapter implements StorageBackend {
     private available: boolean = false;
 
     constructor(config: QdrantStorageConfig = {}) {
+        this.config = config;
         this.collectionName = config.collectionName || 'pwa_swarm_dev_cortex_v2';
         this.collectionNameTemplate = config.collectionNameTemplate;
         this.denseDimension = config.denseDimension || 768;
@@ -106,6 +133,21 @@ export class QdrantStorageAdapter implements StorageBackend {
             const exists = collections.collections.some(c => c.name === targetCollection);
 
             if (!exists) {
+                const hnsw_config = {
+                    m: this.config.hnswConfig?.m ?? 16,
+                    ef_construct: this.config.hnswConfig?.ef_construct ?? 128,
+                    on_disk: this.config.hnswConfig?.on_disk ?? true
+                };
+                const quantization_config = this.config.quantizationConfig !== undefined
+                    ? this.config.quantizationConfig
+                    : {
+                        scalar: {
+                            type: 'int8',
+                            quantile: 0.99,
+                            always_ram: true
+                        }
+                    };
+
                 await this.withTimeout(
                     this.client.createCollection(targetCollection, {
                         vectors: {
@@ -122,18 +164,8 @@ export class QdrantStorageAdapter implements StorageBackend {
                                 }
                             }
                         },
-                        quantization_config: {
-                            scalar: {
-                                type: 'int8',
-                                quantile: 0.99,
-                                always_ram: true
-                            }
-                        },
-                        hnsw_config: {
-                            m: 16,
-                            ef_construct: 128,
-                            on_disk: true
-                        },
+                        quantization_config,
+                        hnsw_config,
                         optimizers_config: {
                             default_segment_number: 2,
                             deleted_threshold: 0.2
@@ -144,18 +176,22 @@ export class QdrantStorageAdapter implements StorageBackend {
                 );
             }
 
-            await Promise.all([
-                this.ensurePayloadIndex(targetCollection, 'originApp', 'keyword'),
-                this.ensurePayloadIndex(targetCollection, 'domain', 'keyword'),
-                this.ensurePayloadIndex(targetCollection, 'memoryType', 'keyword'),
-                this.ensurePayloadIndex(targetCollection, 'entityIds', 'keyword'),
-                this.ensurePayloadIndex(targetCollection, 'workflowId', 'keyword'),
-                this.ensurePayloadIndex(targetCollection, 'appId', 'keyword'),
-                this.ensurePayloadIndex(targetCollection, 'targetApps', 'keyword'),
-                this.ensurePayloadIndex(targetCollection, 'agentRole', 'keyword'),
-                this.ensurePayloadIndex(targetCollection, 'qualityRating', 'float'),
-                this.ensurePayloadIndex(targetCollection, 'verified', 'bool')
-            ]);
+            let existingPayloadSchema: Record<string, any> = {};
+            if (typeof this.client.getCollection === 'function') {
+                try {
+                    const colInfo = await this.withTimeout(this.client.getCollection(targetCollection), 5000);
+                    if (colInfo?.payload_schema) {
+                        existingPayloadSchema = colInfo.payload_schema;
+                    }
+                } catch {
+                    // Fallback to ensuring all indexes if getCollection fails
+                }
+            }
+
+            const missingIndexes = REQUIRED_INDEXES.filter(idx => !existingPayloadSchema[idx.field]);
+            await Promise.all(
+                missingIndexes.map(idx => this.ensurePayloadIndex(targetCollection, idx.field, idx.schema))
+            );
 
             this.initializedCollections.add(targetCollection);
             return true;
@@ -251,8 +287,17 @@ export class QdrantStorageAdapter implements StorageBackend {
         }
     }
 
-    async storeBatch(points: StoredMemoryPoint[]): Promise<string[]> {
+    async storeBatch(points: StoredMemoryPoint[], options?: { deduplicate?: boolean }): Promise<string[]> {
         if (!this.client || !this.available || points.length === 0) return [];
+        if (options?.deduplicate) {
+            const ids: string[] = [];
+            for (const pt of points) {
+                const id = await this.store(pt, true);
+                if (id) ids.push(id);
+            }
+            return ids;
+        }
+
         const originApp = points[0].payload.originApp || points[0].payload.appId || 'default';
         const targetCollection = this.getTargetCollection(originApp);
         await this.initialize(originApp);
@@ -366,7 +411,11 @@ export class QdrantStorageAdapter implements StorageBackend {
             }
 
             const filter = filterMust.length > 0 ? { must: filterMust } : undefined;
+            const rrfK = options.rrfK ?? this.config.rrfK ?? 60;
+            const prefetchFactor = options.prefetchFactor ?? this.config.prefetchFactor ?? 1;
             const searchLimit = Math.max(options.limit || 3, 5) * 4;
+            const prefetchLimit = options.prefetchLimit ?? Math.round(searchLimit * prefetchFactor);
+            const hnswEf = options.hnswEf ?? this.config.hnswEf ?? 64;
 
             let qdrantRes: any;
             if (querySparse && querySparse.indices.length > 0) {
@@ -376,19 +425,19 @@ export class QdrantStorageAdapter implements StorageBackend {
                             {
                                 query: queryDense,
                                 using: 'dense',
-                                limit: searchLimit,
+                                limit: prefetchLimit,
                                 filter,
-                                params: { hnsw_ef: 64 }
+                                params: { hnsw_ef: hnswEf }
                             },
                             {
                                 query: querySparse,
                                 using: 'sparse',
-                                limit: searchLimit,
+                                limit: prefetchLimit,
                                 filter
                             }
                         ],
                         query: {
-                            rrf: { k: 60 }
+                            rrf: { k: rrfK }
                         },
                         limit: searchLimit,
                         with_payload: true
@@ -401,6 +450,7 @@ export class QdrantStorageAdapter implements StorageBackend {
                         using: 'dense',
                         limit: searchLimit,
                         filter,
+                        params: { hnsw_ef: hnswEf },
                         with_payload: true
                     })
                 );
@@ -463,7 +513,19 @@ export class QdrantStorageAdapter implements StorageBackend {
         try {
             const filterMust: any[] = [];
             if (filter?.appId) {
-                filterMust.push({ key: 'appId', match: { value: filter.appId } });
+                filterMust.push({
+                    should: [
+                        { key: 'appId', match: { value: filter.appId } },
+                        { key: 'originApp', match: { value: filter.appId } }
+                    ]
+                });
+            } else if (filter?.originApp) {
+                filterMust.push({
+                    should: [
+                        { key: 'appId', match: { value: filter.originApp } },
+                        { key: 'originApp', match: { value: filter.originApp } }
+                    ]
+                });
             }
             if (filter?.domain) {
                 filterMust.push({ key: 'domain', match: { value: normalizeDomain(filter.domain) } });
@@ -473,24 +535,40 @@ export class QdrantStorageAdapter implements StorageBackend {
             }
 
             const qFilter = filterMust.length > 0 ? { must: filterMust } : undefined;
-            const res = await this.withTimeout(
-                this.client.scroll(this.collectionName, {
-                    filter: qFilter,
-                    limit: 1000,
-                    with_payload: true,
-                    with_vector: true
-                })
-            );
+            const maxPoints = filter?.maxPoints ?? 10000;
+            const points: StoredMemoryPoint[] = [];
+            let nextOffset: any = undefined;
+            let hasMore = true;
 
-            return (res.points || []).map((pt: any) => {
-                const vectorObj = pt.vector as any;
-                return {
-                    id: String(pt.id),
-                    denseVector: Array.isArray(vectorObj) ? vectorObj : vectorObj?.dense || [],
-                    sparseVector: vectorObj?.sparse || { indices: [], values: [] },
-                    payload: (pt.payload || {}) as StoredMemoryPoint['payload']
-                };
-            });
+            while (hasMore && points.length < maxPoints) {
+                const batchLimit = Math.min(1000, maxPoints - points.length);
+                const res = await this.withTimeout(
+                    this.client.scroll(this.collectionName, {
+                        filter: qFilter,
+                        limit: batchLimit,
+                        offset: nextOffset ?? undefined,
+                        with_payload: true,
+                        with_vector: true
+                    })
+                );
+
+                const batch = res?.points || [];
+                for (const pt of batch) {
+                    const vectorObj = pt.vector as any;
+                    points.push({
+                        id: String(pt.id),
+                        denseVector: Array.isArray(vectorObj) ? vectorObj : vectorObj?.dense || [],
+                        sparseVector: vectorObj?.sparse || { indices: [], values: [] },
+                        payload: (pt.payload || {}) as StoredMemoryPoint['payload']
+                    });
+                    if (points.length >= maxPoints) break;
+                }
+
+                nextOffset = res?.next_page_offset;
+                hasMore = nextOffset !== null && nextOffset !== undefined && batch.length > 0;
+            }
+
+            return points;
         } catch (err: any) {
             console.warn(`[QdrantStorageAdapter] Scroll error: ${err.message || err}`);
             return [];

@@ -10,12 +10,17 @@ export interface StorageFilterOptions {
     verifiedOnly?: boolean;
     includeShared?: boolean;
     targetApps?: string | string[];
+    maxPoints?: number;
 }
 
 export interface StorageQueryOptions extends StorageFilterOptions {
     limit?: number;
     scoreThreshold?: number;
     queryText?: string;
+    rrfK?: number;
+    prefetchLimit?: number;
+    prefetchFactor?: number;
+    hnswEf?: number;
 }
 
 export interface StorageQueryResult {
@@ -29,7 +34,7 @@ export interface StorageBackend {
     readonly size: number;
     initialize(appId?: string): Promise<boolean>;
     store(point: StoredMemoryPoint, deduplicate?: boolean): Promise<string | null>;
-    storeBatch(points: StoredMemoryPoint[]): Promise<string[]>;
+    storeBatch(points: StoredMemoryPoint[], options?: { deduplicate?: boolean }): Promise<string[]>;
     get(id: string): Promise<StoredMemoryPoint | null>;
     setPayload(id: string, payload: Partial<Record<string, any>>): Promise<boolean>;
     search(queryDense: number[], options: StorageQueryOptions, querySparse?: SparseVector): Promise<StorageQueryResult[]>;

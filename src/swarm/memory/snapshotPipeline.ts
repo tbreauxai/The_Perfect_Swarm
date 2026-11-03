@@ -123,14 +123,13 @@ export async function saveMemoriesToFile(
     if (!targetPath) {
         throw new Error("[MemoryCortex] saveToFile requires a filePath or configured persistPath");
     }
-    let fs, path;
+    let fs: any, path: any;
     try {
-        fs = await import('no' + 'de:fs');
-        path = await import('no' + 'de:path');
+        [fs, path] = await Promise.all([import('no' + 'de:fs'), import('no' + 'de:path')]);
     } catch {
         throw new Error("[MemoryCortex] Local file saving is not supported in this environment (Edge/Browser).");
     }
-    
+
     const dir = path.dirname(targetPath);
     if (dir && !fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
@@ -156,8 +155,8 @@ export async function loadMemoriesFromFile(
     if (!targetPath) {
         throw new Error("[MemoryCortex] loadFromFile requires a filePath or configured persistPath");
     }
-    
-    let fs;
+
+    let fs: any;
     try {
         fs = await import('no' + 'de:fs');
     } catch {

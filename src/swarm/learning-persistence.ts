@@ -11,6 +11,7 @@
  * Design rules:
  * - Qdrant is a durable *backup*; in-memory Maps stay the read path (zero latency impact).
  * - All writes are fire-and-forget with timeouts and never throw into request handling.
+ * - Writes are batched in-memory with a debounce timer and explicit flush().
  * - If Qdrant is unconfigured or unreachable, the store disables itself and the
  *   system keeps its previous in-memory-only behavior (with a warning).
  * - Point IDs are deterministic (record id / ledger key / role / generation) so
@@ -22,6 +23,8 @@ import { QdrantClient } from '@qdrant/js-client-rest';
 export const LEARNING_COLLECTION = 'swarm_learning';
 const VECTOR_SIZE = 8;
 const QDRANT_TIMEOUT_MS = 8000;
+const BATCH_FLUSH_WINDOW_MS = 35;
+const MAX_BATCH_SIZE = 50;
 
 function dummyVector(): number[] {
     return new Array(VECTOR_SIZE).fill(0);
@@ -44,6 +47,8 @@ export interface LearningStoreConfig {
     collection?: string;
     /** Inject a fake client in tests. */
     client?: any;
+    debounceMs?: number;
+    maxBatchSize?: number;
 }
 
 export interface RestoredLearningState {
@@ -53,18 +58,22 @@ export interface RestoredLearningState {
     policies: { generation: number; policy: any; reward: number; timestamp: number }[];
 }
 
-const EMPTY_STATE: RestoredLearningState = { outcomes: [], ledger: {}, profiles: {}, policies: [] };
-
 export class QdrantLearningStore {
     public enabled = false;
     private client: any = null;
     private collection: string;
     private readyPromise: Promise<boolean>;
+    private writeBuffer: Array<{ id: string; payload: Record<string, any> }> = [];
+    private flushTimer: any = null;
+    private debounceMs: number;
+    private maxBatchSize: number;
 
     constructor(config: LearningStoreConfig = {}) {
         const safeEnv: Record<string, string | undefined> =
             typeof process !== 'undefined' && (process as any).env ? (process as any).env : {};
         this.collection = config.collection || LEARNING_COLLECTION;
+        this.debounceMs = config.debounceMs ?? BATCH_FLUSH_WINDOW_MS;
+        this.maxBatchSize = config.maxBatchSize ?? MAX_BATCH_SIZE;
 
         if (config.client) {
             this.client = config.client;
@@ -113,22 +122,90 @@ export class QdrantLearningStore {
                 'createCollection'
             );
         }
+
+        if (typeof this.client.createPayloadIndex === 'function') {
+            try {
+                await withTimeout(
+                    this.client.createPayloadIndex(this.collection, {
+                        field_name: 'ts',
+                        field_schema: 'integer'
+                    }),
+                    QDRANT_TIMEOUT_MS,
+                    'createPayloadIndex'
+                );
+            } catch {
+                // Idempotent: ignore if index already exists
+            }
+        }
     }
 
-    private async upsert(id: string, payload: Record<string, any>): Promise<void> {
-        const ok = await this.readyPromise;
-        if (!ok || !this.client) return;
+    /**
+     * Explicitly commits all pending buffered writes immediately.
+     * Essential for process exit, test completion, and serverless response delivery.
+     */
+    public async flush(): Promise<void> {
+        if (this.flushTimer) {
+            clearTimeout(this.flushTimer);
+            this.flushTimer = null;
+        }
+
+        if (!this.enabled) {
+            const ok = await this.readyPromise;
+            if (!ok) {
+                this.writeBuffer = [];
+                return;
+            }
+        }
+
+        if (this.writeBuffer.length === 0 || !this.client) return;
+
+        const batch = this.writeBuffer.splice(0, this.writeBuffer.length);
+        const points = batch.map(item => ({
+            id: item.id,
+            vector: dummyVector(),
+            payload: item.payload
+        }));
+
         try {
             await withTimeout(
                 this.client.upsert(this.collection, {
                     wait: false,
-                    points: [{ id, vector: dummyVector(), payload }]
+                    points
                 }),
                 QDRANT_TIMEOUT_MS,
-                'upsert'
+                'upsertBatch'
             );
         } catch (err) {
-            this.warn('upsert', err);
+            this.warn('upsertBatch', err);
+        }
+    }
+
+    private async upsert(id: string, payload: Record<string, any>): Promise<void> {
+        if (!this.client) return;
+
+        if (!this.enabled) {
+            const ok = await this.readyPromise;
+            if (!ok || !this.client) return;
+        }
+
+        // Deduplicate within the write buffer by deterministic ID
+        const existingIdx = this.writeBuffer.findIndex(item => item.id === id);
+        if (existingIdx >= 0) {
+            this.writeBuffer[existingIdx] = { id, payload };
+        } else {
+            this.writeBuffer.push({ id, payload });
+        }
+
+        if (this.writeBuffer.length >= this.maxBatchSize) {
+            await this.flush();
+        } else if (!this.flushTimer) {
+            this.flushTimer = setTimeout(() => {
+                this.flushTimer = null;
+                this.flush().catch(err => this.warn('flush', err));
+            }, this.debounceMs);
+            if (this.flushTimer && typeof this.flushTimer.unref === 'function') {
+                this.flushTimer.unref();
+            }
         }
     }
 
@@ -177,16 +254,26 @@ export class QdrantLearningStore {
         });
     }
 
-    /** Load every persisted learning record. Never rejects; returns empty state on failure. */
-    public async loadAll(): Promise<RestoredLearningState> {
+    /**
+     * Load persisted learning records.
+     * Optional sinceTimestamp filter loads only records updated after that timestamp.
+     * Default undefined loads all historical records (full restore for cold starts).
+     */
+    public async loadAll(sinceTimestamp?: number): Promise<RestoredLearningState> {
         const state: RestoredLearningState = { outcomes: [], ledger: {}, profiles: {}, policies: [] };
         const ok = await this.readyPromise;
         if (!ok || !this.client) return state;
+
+        const filter = sinceTimestamp !== undefined
+            ? { must: [{ key: 'ts', range: { gte: sinceTimestamp } }] }
+            : undefined;
+
         try {
             let offset: any = undefined;
             for (;;) {
                 const res: any = await withTimeout(
                     this.client.scroll(this.collection, {
+                        filter,
                         limit: 500,
                         offset,
                         with_payload: true,

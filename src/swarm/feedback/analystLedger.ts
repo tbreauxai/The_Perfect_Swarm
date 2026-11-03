@@ -24,6 +24,15 @@ export class AnalystLedger {
   }
 
   /**
+   * Explicitly flush pending learning writes.
+   */
+  public async flush(): Promise<void> {
+    if (this.learningStore) {
+      await this.learningStore.flush();
+    }
+  }
+
+  /**
    * Restore ledger entries from durable storage. Merges with any in-memory
    * entries by taking the max of each counter (safe against double-restore).
    * Returns the number of keys restored.
