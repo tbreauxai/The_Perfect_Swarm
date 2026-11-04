@@ -365,4 +365,33 @@ describe('guardVerificationResult', () => {
         expect(result.feedback).toContain('Ambiguous critic output could not be verified');
 
     });
+
+    it('sets _repaired: true when guardAnalystResponse repairs conversational or malformed JSON without retry', () => {
+        const malformed = 'Here is the analysis:\n```json\n{"insights": ["High CPU on node 1"], "summary": "Degraded state"';
+        const result = guardAnalystResponse(malformed);
+        expect(result._repaired).toBe(true);
+        expect(result.insights).toEqual(['High CPU on node 1']);
+        expect(result.summary).toBe('Degraded state');
+    });
+
+    it('sets _repaired: true when guardManagerResponse repairs truncated or unescaped JSON without retry', () => {
+        const malformed = 'Here is your dashboard:\n{"ui_title": "System Status", "components": [{"id": "c1", "type": "MetricCard", "props": {"title": "CPU", "value": "99%"}}';
+        const result = guardManagerResponse(malformed);
+        expect(result._repaired).toBe(true);
+        expect(result.ui_title).toBe('System Status');
+        expect(result.components[0].type).toBe('MetricCard');
+    });
+
+    it('handles minified keys in guardAnalystResponse and inverts them with _repaired: true', () => {
+        const minifiedJson = JSON.stringify({
+            ins: ['Key minified insight'],
+            ano: ['Memory leak detected'],
+            sum: 'All systems monitored'
+        });
+        const result = guardAnalystResponse(minifiedJson);
+        expect(result._repaired).toBe(true);
+        expect(result.insights).toEqual(['Key minified insight']);
+        expect(result.anomalies).toEqual(['Memory leak detected']);
+        expect(result.summary).toBe('All systems monitored');
+    });
 });

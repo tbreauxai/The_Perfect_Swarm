@@ -428,6 +428,101 @@ export class TokenAwarePromptCompressor {
     }
 
     /**
+     * Default key abbreviation dictionary for high-frequency analytical and swarm structures.
+     */
+    private static DEFAULT_KEY_ABBREVIATIONS: Record<string, string> = {
+        insights: 'ins',
+        anomalies: 'ano',
+        summary: 'sum',
+        recommendations: 'rec',
+        metrics: 'met',
+        components: 'cmp',
+        ui_title: 'tit',
+        status: 'st',
+        confidence: 'cnf',
+        priority: 'pri',
+        timestamp: 'ts',
+        description: 'dsc',
+        category: 'cat',
+        metadata: 'md',
+        findings: 'fdg',
+        score: 'sc',
+        weight: 'wt'
+    };
+
+    /**
+     * Deterministically minifies verbose JSON keys to compact 2-3 char identifiers.
+     */
+    static minifyJsonKeys(data: any, customMap?: Record<string, string>): {
+        minified: any;
+        keyMap: Record<string, string>;
+        reverseMap: Record<string, string>;
+    } {
+        const keyMap: Record<string, string> = { ...TokenAwarePromptCompressor.DEFAULT_KEY_ABBREVIATIONS, ...customMap };
+        const reverseMap: Record<string, string> = {};
+        for (const [k, v] of Object.entries(keyMap)) {
+            reverseMap[v] = k;
+        }
+
+        let keyCounter = 0;
+        const getShortKey = (k: string): string => {
+            if (keyMap[k]) return keyMap[k];
+            // If already short (<=3 chars), keep as is
+            if (k.length <= 3) return k;
+            const shortKey = `k${keyCounter++}`;
+            keyMap[k] = shortKey;
+            reverseMap[shortKey] = k;
+            return shortKey;
+        };
+
+        const transform = (val: any): any => {
+            if (val === null || typeof val !== 'object') return val;
+            if (Array.isArray(val)) return val.map(transform);
+
+            const result: Record<string, any> = {};
+            for (const [k, v] of Object.entries(val)) {
+                const shortKey = getShortKey(k);
+                result[shortKey] = transform(v);
+            }
+            return result;
+        };
+
+        const minified = transform(data);
+        return { minified, keyMap, reverseMap };
+    }
+
+    /**
+     * Inverts and restores minified JSON keys back to their original verbose names.
+     */
+    static restoreMinifiedKeys(data: any, reverseMap: Record<string, string>): any {
+        if (!reverseMap || Object.keys(reverseMap).length === 0) return data;
+
+        const transform = (val: any): any => {
+            if (val === null || typeof val !== 'object') return val;
+            if (Array.isArray(val)) return val.map(transform);
+
+            const result: Record<string, any> = {};
+            for (const [k, v] of Object.entries(val)) {
+                const originalKey = reverseMap[k] || k;
+                result[originalKey] = transform(v);
+            }
+            return result;
+        };
+
+        return transform(data);
+    }
+
+    /**
+     * Deduplicates repeated tabular or log lines, keeping single exemplar with frequency counter tag [xN].
+     */
+    static deduplicateTabularLines(text: string, threshold: number = 0.85): string {
+        if (!text || text.trim().length === 0) return '';
+        const lines = text.split(/\r?\n/);
+        const dedupedLines = SemanticDeduplicator.deduplicateLinesWithFrequency(lines, threshold);
+        return dedupedLines.join('\n');
+    }
+
+    /**
      * Reassembles active compressed segments into clean formatted prompt text.
      */
     private assembleCompressedPrompt(segments: PromptSegment[]): string {
@@ -435,16 +530,18 @@ export class TokenAwarePromptCompressor {
 
         for (let i = 0; i < segments.length; i++) {
             const seg = segments[i];
+            const freqPrefix = seg.frequency && seg.frequency > 1 && !seg.text.startsWith('[x') ? `[x${seg.frequency}] ` : '';
+            const textWithFreq = `${freqPrefix}${seg.text}`;
             if (seg.isHeader) {
                 if (outputLines.length > 0 && outputLines[outputLines.length - 1] !== '') {
                     outputLines.push('');
                 }
-                outputLines.push(seg.text);
+                outputLines.push(textWithFreq);
             } else {
-                if (seg.sources.length > 1 && !seg.text.startsWith('[')) {
-                    outputLines.push(`[${seg.sources.join(' & ')}] ${seg.text}`);
+                if (seg.sources.length > 1 && !textWithFreq.startsWith('[')) {
+                    outputLines.push(`[${seg.sources.join(' & ')}] ${textWithFreq}`);
                 } else {
-                    outputLines.push(seg.text);
+                    outputLines.push(textWithFreq);
                 }
             }
         }

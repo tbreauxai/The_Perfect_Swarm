@@ -25,7 +25,7 @@ export interface SemanticCacheEntry<T = any> extends BaseCacheEntry {
 export class SemanticCacheInterceptor extends SemanticVectorCache<SemanticCacheEntry> {
     constructor(config?: SemanticCacheInterceptorConfig) {
         super({
-            similarityThreshold: config?.similarityThreshold ?? 0.96,
+            similarityThreshold: config?.similarityThreshold ?? 0.88,
             maxEntries: config?.maxEntries ?? 500,
             defaultTtlMs: config?.defaultTtlMs ?? 30 * 60 * 1000,
             estimatedLatencySavingsMs: 45
@@ -67,6 +67,95 @@ export class SemanticCacheInterceptor extends SemanticVectorCache<SemanticCacheE
                 hit: true,
                 payload: entry.payload,
                 similarity: best.similarity
+            };
+        }
+
+        this.recordMiss();
+        return { hit: false };
+    }
+
+    /**
+     * Hybrid search across cached task syntheses combining dense similarity and sparse BM25/keyword rankings
+     * using Reciprocal Rank Fusion (RRF):
+     * RRF = 1 / (60 + rank_dense) + 1 / (60 + rank_sparse).
+     * Returns instant cached result when semantic similarity >= threshold (default 0.88).
+     */
+    lookupWithRRF<T = any>(
+        queryVector: number[],
+        queryKeywords?: string[] | string,
+        appId?: string,
+        threshold: number = 0.88
+    ): { hit: boolean; payload?: T; similarity?: number; rrfScore?: number } {
+        if (!queryVector || queryVector.length === 0 || this.entries.size === 0) {
+            this.recordMiss();
+            return { hit: false };
+        }
+
+        const now = Date.now();
+        const denseCandidates = this.vectorIndex.search(queryVector, {
+            k: 10,
+            minSimilarity: Math.min(this.threshold, threshold),
+            filter: (item) => !appId || item.data.appId === appId || !item.data.appId
+        });
+
+        if (denseCandidates.length === 0) {
+            this.recordMiss();
+            return { hit: false };
+        }
+
+        const keywords = Array.isArray(queryKeywords)
+            ? queryKeywords
+            : (typeof queryKeywords === 'string' ? queryKeywords.toLowerCase().split(/\s+/) : []);
+
+        const candidatesWithScores = denseCandidates.map((c, denseRank) => {
+            const entry = c.data as SemanticCacheEntry<T>;
+            let sparseMatches = 0;
+            if (keywords.length > 0) {
+                const text = JSON.stringify(entry.payload).toLowerCase();
+                for (const kw of keywords) {
+                    if (kw.length > 2 && text.includes(kw)) sparseMatches++;
+                }
+            }
+            return {
+                entry,
+                similarity: c.similarity,
+                denseRank: denseRank + 1,
+                sparseMatches
+            };
+        });
+
+        // Sort for sparse ranking
+        const sparseSorted = [...candidatesWithScores].sort((a, b) => b.sparseMatches - a.sparseMatches);
+        const sparseRankMap = new Map<string, number>();
+        sparseSorted.forEach((item, idx) => sparseRankMap.set(item.entry.id, idx + 1));
+
+        // Compute RRF score
+        let bestCandidate: { entry: SemanticCacheEntry<T>; similarity: number; rrfScore: number } | null = null;
+        let maxRrf = -1;
+
+        for (const item of candidatesWithScores) {
+            const sparseRank = sparseRankMap.get(item.entry.id) || 10;
+            const rrfScore = (1 / (60 + item.denseRank)) + (1 / (60 + sparseRank));
+            if (rrfScore > maxRrf) {
+                maxRrf = rrfScore;
+                bestCandidate = { entry: item.entry, similarity: item.similarity, rrfScore };
+            }
+        }
+
+        if (bestCandidate && bestCandidate.similarity >= threshold) {
+            if (now > bestCandidate.entry.expiresAt) {
+                this.entries.delete(bestCandidate.entry.id);
+                this.vectorIndex.delete(bestCandidate.entry.id);
+                this.recordMiss();
+                return { hit: false };
+            }
+
+            this.recordHit(bestCandidate.entry);
+            return {
+                hit: true,
+                payload: bestCandidate.entry.payload,
+                similarity: bestCandidate.similarity,
+                rrfScore: Math.round(bestCandidate.rrfScore * 10000) / 10000
             };
         }
 

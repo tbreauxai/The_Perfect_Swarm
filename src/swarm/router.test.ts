@@ -194,4 +194,20 @@ describe('ModelRouter', () => {
             expect(agent.provider).toBe('gemini');
         });
     });
+
+    describe('classifyTieredModelOffload', () => {
+        it('offloads scorecards and deterministic verification strictly to low-latency models', () => {
+            const scGroq = ModelRouter.classifyTieredModelOffload('Routine scorecard triage', 'groq', { isScorecard: true });
+            expect(scGroq.isOffloadedToFastTier).toBe(true);
+            expect(scGroq.modelName).toBe('llama-3.1-8b-instant');
+
+            const mathGemini = ModelRouter.classifyTieredModelOffload('Deterministic math check', 'gemini', { isHeuristic: true });
+            expect(mathGemini.isOffloadedToFastTier).toBe(true);
+            expect(mathGemini.modelName).toBe('gemini-2.5-flash-lite');
+
+            const complexTask = ModelRouter.classifyTieredModelOffload('Deep cross-reference correlation and full multi-agent synthesis', 'gemini', { chunkCount: 4 });
+            expect(complexTask.isOffloadedToFastTier).toBe(false);
+            expect(complexTask.modelName).toBe('gemini-2.5-flash');
+        });
+    });
 });

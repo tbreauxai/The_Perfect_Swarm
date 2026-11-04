@@ -184,6 +184,9 @@ export class SemanticDeduplicator {
                         existing.hasAnomaly = true;
                     }
 
+                    // Track frequency counter for repeated/merged exemplars
+                    existing.frequency = (existing.frequency || 1) + (current.frequency || 1);
+
                     // Keep the richer segment with more numbers/details
                     const numbersInCurrent = current.text.match(/\b\d+(\.\d+)?%?\b/g) || [];
                     const numbersInExisting = existing.text.match(/\b\d+(\.\d+)?%?\b/g) || [];
@@ -199,5 +202,49 @@ export class SemanticDeduplicator {
         }
 
         return result;
+    }
+
+    /**
+     * Deduplicates repeated tabular or log lines, keeping a single exemplar with a frequency counter tag [xN].
+     */
+    static deduplicateLinesWithFrequency(lines: string[], threshold: number = 0.85): string[] {
+        if (!lines || lines.length === 0) return [];
+
+        const exemplars: Array<{ text: string; count: number; hasAnomaly: boolean }> = [];
+
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+
+            let matched = false;
+            for (const item of exemplars) {
+                if (item.text === trimmed) {
+                    item.count++;
+                    matched = true;
+                    break;
+                }
+                const sim = this.computeSemanticSimilarity(item.text, trimmed);
+                if (sim >= threshold) {
+                    item.count++;
+                    matched = true;
+                    break;
+                }
+            }
+
+            if (!matched) {
+                exemplars.push({
+                    text: trimmed,
+                    count: 1,
+                    hasAnomaly: /\b(error|fatal|exception|fail|anomaly|breach|alert)\b/i.test(trimmed)
+                });
+            }
+        }
+
+        return exemplars.map(item => {
+            if (item.count > 1) {
+                return `[x${item.count}] ${item.text}`;
+            }
+            return item.text;
+        });
     }
 }

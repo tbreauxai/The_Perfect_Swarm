@@ -266,4 +266,47 @@ Final summary.`;
         expect(res.compressedReportsText).toContain('Database Specialist & Infrastructure Specialist');
         expect(res.compressedReportsText).toContain('TLS certificates');
     });
+
+    it('minifies verbose JSON keys and restores them without data loss', () => {
+        const payload = {
+            insights: ['Spike on node 2', 'Lock contention on db'],
+            anomalies: ['High memory leak'],
+            summary: 'Worker nodes strained',
+            metrics: { cpu_usage: 95, memory_pct: 88 },
+            recommendations: ['Scale pods horizontally']
+        };
+
+        const { minified, reverseMap } = TokenAwarePromptCompressor.minifyJsonKeys(payload);
+        expect(minified.ins).toEqual(payload.insights);
+        expect(minified.ano).toEqual(payload.anomalies);
+        expect(minified.sum).toEqual(payload.summary);
+        expect(minified.met).toBeDefined();
+        expect(minified.rec).toEqual(payload.recommendations);
+
+        const restored = TokenAwarePromptCompressor.restoreMinifiedKeys(minified, reverseMap);
+        expect(restored).toEqual(payload);
+    });
+
+    it('deduplicates repetitive tabular and log lines with [xN] tags achieving >50% token reduction', () => {
+        const logData = [
+            '2026-11-03 14:00:00 [ERROR] Connection pool timed out after 3000ms',
+            '2026-11-03 14:00:01 [ERROR] Connection pool timed out after 3000ms',
+            '2026-11-03 14:00:02 [ERROR] Connection pool timed out after 3000ms',
+            '2026-11-03 14:00:03 [ERROR] Connection pool timed out after 3000ms',
+            '2026-11-03 14:00:04 [ERROR] Connection pool timed out after 3000ms',
+            '2026-11-03 14:00:05 [INFO] Health check completed successfully',
+            '2026-11-03 14:00:06 [INFO] Health check completed successfully'
+        ].join('\n');
+
+        const deduped = TokenAwarePromptCompressor.deduplicateTabularLines(logData);
+        expect(deduped).toContain('[x5]');
+        expect(deduped).toContain('[x2]');
+        expect(deduped).toContain('Connection pool timed out');
+        expect(deduped).toContain('Health check completed');
+
+        const originalTokens = TokenEstimator.countTokens(logData);
+        const compressedTokens = TokenEstimator.countTokens(deduped);
+        const reduction = (originalTokens - compressedTokens) / originalTokens;
+        expect(reduction).toBeGreaterThanOrEqual(0.40);
+    });
 });

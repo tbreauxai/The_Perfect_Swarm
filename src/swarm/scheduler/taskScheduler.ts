@@ -155,10 +155,13 @@ export class AdaptiveTaskScheduler {
                         });
                     }
 
-                    // Rate-limit check & backpressure delay
+                    // Rate-limit check & predictive pacing delay (80% sliding-window threshold)
                     let backpressureDelayMs = 0;
                     if (this.enableRateLimiting && task.targetProvider) {
                         backpressureDelayMs = this.rateLimiter.getDelayUntilAvailable(task.targetProvider, task.estimatedTokens);
+                        if (backpressureDelayMs === 0) {
+                            backpressureDelayMs = this.rateLimiter.getPredictivePacingDelay(task.targetProvider, task.estimatedTokens);
+                        }
                         if (backpressureDelayMs > 0) {
                             totalBackpressureDelayMs += backpressureDelayMs;
                             this.emit({
@@ -281,9 +284,13 @@ export class AdaptiveTaskScheduler {
                     const queueWaitMs = Math.max(0, Date.now() - (task.createdAt ?? Date.now()));
                     totalQueueWaitMs += queueWaitMs;
 
+                    // Rate-limit check & predictive pacing delay (80% sliding-window threshold)
                     let backpressureDelayMs = 0;
                     if (this.enableRateLimiting && task.targetProvider) {
                         backpressureDelayMs = this.rateLimiter.getDelayUntilAvailable(task.targetProvider, task.estimatedTokens);
+                        if (backpressureDelayMs === 0) {
+                            backpressureDelayMs = this.rateLimiter.getPredictivePacingDelay(task.targetProvider, task.estimatedTokens);
+                        }
                         if (backpressureDelayMs > 0) {
                             totalBackpressureDelayMs += backpressureDelayMs;
                             this.emit({

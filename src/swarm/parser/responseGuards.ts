@@ -7,26 +7,46 @@ import {
     type ManagerResponse
 } from '../schemas.ts';
 import type { VerificationResult } from '../types.ts';
-import { parseJsonSafe } from './parseJsonSafe.ts';
+import { parseJsonSafe, parseJsonSafeWithStatus } from './parseJsonSafe.ts';
 
 /**
  * Domain guard for AnalystResponseSchema: guaranteed zero crashes on worker agent outputs.
  */
 export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): AnalystResponse {
-    const raw = parseJsonSafe<any>(input, {});
+    const { data: raw, repaired: parseRepaired } = parseJsonSafeWithStatus<any>(input, {});
+    let wasRepaired = parseRepaired || raw?._repaired === true;
+
+    // Handle minified key compaction aliases if present (ins, ano, sum)
+    if (raw && typeof raw === 'object') {
+        if (raw.ins !== undefined && raw.insights === undefined) {
+            raw.insights = raw.ins;
+            wasRepaired = true;
+        }
+        if (raw.ano !== undefined && raw.anomalies === undefined) {
+            raw.anomalies = raw.ano;
+            wasRepaired = true;
+        }
+        if (raw.sum !== undefined && raw.summary === undefined) {
+            raw.summary = raw.sum;
+            wasRepaired = true;
+        }
+    }
 
     let insights: string[] = [];
     if (Array.isArray(raw.insights)) {
         insights = raw.insights.map((s: any) => String(s)).filter((s: string) => s.length > 0);
     } else if (typeof raw.insights === 'string' && raw.insights.trim().length > 0) {
         insights = [raw.insights.trim()];
+        wasRepaired = true;
     } else if (Array.isArray(raw.findings)) {
         insights = raw.findings.map((s: any) => String(s)).filter((s: string) => s.length > 0);
+        wasRepaired = true;
     }
 
     if (insights.length === 0) {
         const fallbackText = typeof input === 'string' ? input.slice(0, 300) : JSON.stringify(raw).slice(0, 300);
         insights = [`[${role}] ${fallbackText || 'Completed analysis'}`];
+        wasRepaired = true;
     }
 
     let anomalies: string[] = [];
@@ -34,6 +54,7 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
         anomalies = raw.anomalies.map((s: any) => String(s)).filter((s: string) => s.length > 0);
     } else if (typeof raw.anomalies === 'string' && raw.anomalies.trim().length > 0 && !/^none$/i.test(raw.anomalies.trim())) {
         anomalies = [raw.anomalies.trim()];
+        wasRepaired = true;
     }
 
     let summary = '';
@@ -41,12 +62,14 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
         summary = raw.summary.trim();
     } else {
         summary = `${role} analytical assessment completed (${insights.length} insight${insights.length === 1 ? '' : 's'}).`;
+        wasRepaired = true;
     }
 
     return {
         insights,
         anomalies,
-        summary
+        summary,
+        ...(wasRepaired ? { _repaired: true } : {})
     };
 }
 
@@ -54,12 +77,49 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
  * Domain guard for ManagerResponseSchema: guaranteed valid Generative UI schema.
  */
 export function guardManagerResponse(input: unknown, defaultTitle: string = 'Executive Swarm Synthesis'): ManagerResponse {
-    const raw = parseJsonSafe<any>(input, {});
+    const { data: raw, repaired: parseRepaired } = parseJsonSafeWithStatus<any>(input, {});
+    let wasRepaired = parseRepaired || raw?._repaired === true;
+
+    // Handle minified key compaction aliases if present (tit, sum, cmp, met, rec, md)
+    if (raw && typeof raw === 'object') {
+        if (raw.tit !== undefined && raw.ui_title === undefined) {
+            raw.ui_title = raw.tit;
+            wasRepaired = true;
+        }
+        if (raw.sum !== undefined && raw.summary === undefined) {
+            raw.summary = raw.sum;
+            wasRepaired = true;
+        }
+        if (raw.cmp !== undefined && raw.components === undefined) {
+            raw.components = raw.cmp;
+            wasRepaired = true;
+        }
+        if (raw.met !== undefined && raw.metrics === undefined) {
+            raw.metrics = raw.met;
+            wasRepaired = true;
+        }
+        if (raw.rec !== undefined && raw.recommendations === undefined) {
+            raw.recommendations = raw.rec;
+            wasRepaired = true;
+        }
+        if (raw.md !== undefined && raw.metadata === undefined) {
+            raw.metadata = raw.md;
+            wasRepaired = true;
+        }
+    }
 
     const parsed = ManagerResponseSchema.safeParse(raw);
-    if (parsed.success) {
+    if (parsed.success && !wasRepaired) {
         return parsed.data;
     }
+    if (parsed.success && wasRepaired) {
+        return {
+            ...parsed.data,
+            _repaired: true
+        };
+    }
+
+    wasRepaired = true;
 
     // Synthesize valid Manager UI from whatever data is present
     const title = typeof raw.ui_title === 'string' && raw.ui_title.trim().length > 0
@@ -134,7 +194,8 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
     return {
         ui_title: title,
         ...(summary ? { summary } : {}),
-        components
+        components,
+        _repaired: true
     };
 }
 

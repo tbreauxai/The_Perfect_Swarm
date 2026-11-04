@@ -601,4 +601,32 @@ describe('TokenBudgetManager & SpecialistAffinityRouter', () => {
             expect(profiler.getProfile('Custom Specialist')).toBeUndefined();
         });
     });
+
+    describe('Predictive Pacing & RL Routing Weights', () => {
+        it('calculates multi-objective RL reward based on success, latency, and cost', () => {
+            const alb = new AdaptiveLoadBalancer();
+            const fastReward = alb.calculateReward({ success: true, latencyMs: 200, costUnits: 0 });
+            const slowReward = alb.calculateReward({ success: true, latencyMs: 2500, costUnits: 0.1 });
+            const failReward = alb.calculateReward({ success: false, latencyMs: 5000, costUnits: 0 });
+
+            expect(fastReward).toBeGreaterThan(slowReward);
+            expect(slowReward).toBeGreaterThan(failReward);
+            expect(fastReward).toBeLessThanOrEqual(1.0);
+            expect(failReward).toBeGreaterThanOrEqual(0.0);
+        });
+
+        it('triggers proactive penalty and pacing delay at 80% token utilization threshold', () => {
+            const alb = new AdaptiveLoadBalancer();
+            alb.recordTokenUsage('groq', 4900); // Groq default limit is 6000 -> 4900/6000 = ~81.6%
+
+            expect(alb.getTokenUtilization('groq')).toBeGreaterThanOrEqual(0.80);
+            const pacingDelay = alb.getPacingDelayMs('groq');
+            expect(pacingDelay).toBeGreaterThan(0);
+
+            // Score should be reduced compared to healthy provider below 80%
+            const scoreGroq = alb.calculateScore('groq');
+            const scoreMistral = alb.calculateScore('mistral');
+            expect(scoreMistral).toBeGreaterThan(scoreGroq);
+        });
+    });
 });

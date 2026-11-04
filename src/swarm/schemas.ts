@@ -6,7 +6,8 @@ import { z } from 'zod';
 export const AnalystResponseSchema = z.object({
   insights: z.array(z.string()).describe("Key analytical insights derived from the data chunk"),
   anomalies: z.array(z.string()).describe("Any anomalies, errors, or unusual patterns detected in the data"),
-  summary: z.string().describe("A brief 1-2 sentence summary of the analysis")
+  summary: z.string().describe("A brief 1-2 sentence summary of the analysis"),
+  _repaired: z.boolean().optional().describe("Flag indicating local format repair occurred without secondary LLM retry")
 });
 
 /**
@@ -92,7 +93,8 @@ export const ManagerResponseSchema = z.object({
         })
       })
     ])
-  ).describe("Array of UI components to render the analysis")
+  ).describe("Array of UI components to render the analysis"),
+  _repaired: z.boolean().optional().describe("Flag indicating local format repair occurred without secondary LLM retry")
 });
 
 /**

@@ -2,6 +2,7 @@ import { parseRetryAfterMs } from '../utils/httpTimeouts.ts';
 export { parseRetryAfterMs };
 import type { Provider, ProviderCredential } from '../types.ts';
 import { QdrantLearningStore } from '../learning-persistence.ts';
+import { globalTokenBudgetManager } from './tokenBudgetManager.ts';
 export type ProviderHealthStatus = 'healthy' | 'degraded' | 'cooldown';
 
 export interface ProviderTelemetry {
@@ -15,6 +16,8 @@ export interface ProviderTelemetry {
     failureCount: number;
     rateLimitCount: number;
     rewardScore?: number;
+    rollingTokensUsed?: number;
+    tokenUtilization?: number;
     lastError?: string;
     lastErrorTimestamp?: number;
     cooldownUntil?: number;
@@ -87,10 +90,66 @@ export class AdaptiveLoadBalancer {
     }
 
     /**
+     * Calculates multi-objective reinforcement learning reward:
+     * R = w_success * R_success - w_latency * Latency - w_cost * Cost
+     */
+    calculateReward(params: {
+        success: boolean;
+        latencyMs: number;
+        costUnits?: number;
+        wSuccess?: number;
+        wLatency?: number;
+        wCost?: number;
+    }): number {
+        const wSuccess = params.wSuccess ?? 1.0;
+        const wLatency = params.wLatency ?? 0.0005;
+        const wCost = params.wCost ?? 0.05;
+        const cost = params.costUnits ?? 0;
+
+        const rSuccess = params.success ? 1.0 : -1.0;
+        const rawReward = (wSuccess * rSuccess) - (wLatency * params.latencyMs) - (wCost * cost);
+
+        // Normalize linearly to 0.0 - 1.0 bounds
+        const normalized = (rawReward + 1.0) / 2.0;
+        return Math.max(0.0, Math.min(1.0, Math.round(normalized * 1000) / 1000));
+    }
+
+    /**
+     * Records token usage into the rolling window for predictive pacing.
+     */
+    recordTokenUsage(provider: Provider, tokens: number): void {
+        globalTokenBudgetManager.recordUsage(provider, tokens);
+    }
+
+    /**
+     * Gets current rolling 60-second token utilization ratio (0.0 to 1.0).
+     */
+    getTokenUtilization(provider: Provider): number {
+        return globalTokenBudgetManager.getUtilizationRatio(provider);
+    }
+
+    /**
+     * Calculates soft pacing delay in ms when provider utilization exceeds 80% (0.80).
+     * Prevents harsh 429 lockouts.
+     */
+    getPacingDelayMs(provider: Provider): number {
+        const util = this.getTokenUtilization(provider);
+        if (util < 0.80) return 0;
+        // Scale soft delay from 100ms at 80% to 2000ms at 100%
+        const excess = Math.min(0.20, util - 0.80);
+        return Math.round((excess / 0.20) * 1900) + 100;
+    }
+
+    /**
      * Inspects telemetry metrics for a provider.
      */
     getTelemetry(provider: Provider): ProviderTelemetry {
-        return { ...this.getOrCreateTelemetry(provider) };
+        const t = this.getOrCreateTelemetry(provider);
+        return {
+            ...t,
+            rollingTokensUsed: globalTokenBudgetManager.getTokensUsedInWindow(provider),
+            tokenUtilization: globalTokenBudgetManager.getUtilizationRatio(provider)
+        };
     }
 
     /**
@@ -99,7 +158,11 @@ export class AdaptiveLoadBalancer {
     getAllTelemetry(): Record<string, ProviderTelemetry> {
         const result: Record<string, ProviderTelemetry> = {};
         for (const [key, val] of this.telemetry.entries()) {
-            result[key] = { ...val };
+            result[key] = {
+                ...val,
+                rollingTokensUsed: globalTokenBudgetManager.getTokensUsedInWindow(key as Provider),
+                tokenUtilization: globalTokenBudgetManager.getUtilizationRatio(key as Provider)
+            };
         }
         return result;
     }
@@ -133,6 +196,13 @@ export class AdaptiveLoadBalancer {
 
         // Penalize in-flight concurrency to prevent burst rate limits
         score -= t.inFlightRequests * 50;
+
+        // Predictive token accounting & proactive backpressure at 80% rate limit threshold
+        const tokenUtil = this.getTokenUtilization(provider);
+        if (tokenUtil >= 0.80) {
+            const penalty = Math.max(0.05, 1.0 - ((tokenUtil - 0.80) / 0.20) * 0.95);
+            score *= penalty;
+        }
 
         return Math.max(1, score);
     }
@@ -179,6 +249,10 @@ export class AdaptiveLoadBalancer {
         // Exponential Moving Average update
         t.latencyEmaMs = Math.round((this.emaAlpha * durationMs) + ((1 - this.emaAlpha) * t.latencyEmaMs));
 
+        // Update RL routing reward for healthy execution
+        const reward = this.calculateReward({ success: true, latencyMs: durationMs });
+        this.recordReward(provider, reward);
+
         // Reset error state if previously degraded
         if (t.status !== 'healthy' && (!t.cooldownUntil || Date.now() >= t.cooldownUntil)) {
             t.status = 'healthy';
@@ -201,6 +275,10 @@ export class AdaptiveLoadBalancer {
         const isDailyLimit = errMsg.toLowerCase().includes('daily') || errMsg.toLowerCase().includes('per day') || errMsg.toLowerCase().includes('day limit') || errMsg.toLowerCase().includes('quota exceeded');
         const isRateLimit = isDailyLimit || errMsg.includes('429') || errMsg.includes('RATE_LIMIT') || errMsg.includes('quota') || errMsg.includes('TPM');
         const isTimeout = errMsg.includes('timeout') || errMsg.includes('TIMEOUT') || errMsg.includes('AbortError');
+
+        // Penalize RL reward upon failure
+        const failureReward = this.calculateReward({ success: false, latencyMs: isRateLimit ? 10000 : 5000 });
+        this.recordReward(provider, failureReward);
 
         if (isRateLimit) {
             t.rateLimitCount++;

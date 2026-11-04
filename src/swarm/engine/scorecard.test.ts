@@ -8,6 +8,9 @@ import {
   runScorecardSeat,
   scorecardToAnalystReport,
   SCORECARD_UNSTRUCTURED_MAX_CHARS,
+  AnomalyScorecardSchema,
+  shouldDispatchFullAnalysis,
+  renderAnomalyScorecardInstruction,
 } from "./scorecard.ts";
 import { getDegraded } from "./partialResult.ts";
 import { SwarmContext } from "../context.ts";
@@ -127,6 +130,31 @@ describe("R2-S1 AnalystScorecard schema", () => {
     const text = renderScorecardInstruction("seat-x");
     expect(text.trimEnd().endsWith("JSON only.")).toBe(true);
     expect(text).toContain('"seat":"seat-x"');
+  });
+
+  it('defaults scorecardMode to true for routine batch and anomaly detection workflows', () => {
+    expect(isScorecardMode({ workflow: 'anomaly' }, {})).toBe(true);
+    expect(isScorecardMode({ task: 'routine batch triage' }, {})).toBe(true);
+    expect(isScorecardMode({ anomalyDetection: true }, {})).toBe(true);
+    expect(isScorecardMode({ workflow: 'general' }, {})).toBe(false);
+  });
+
+  it('evaluates compact anomaly scorecards and gates full analysis workflow dispatch', () => {
+    const benignScorecard = { risk_score: 0.05, anomaly: false };
+    const validatedBenign = AnomalyScorecardSchema.parse(benignScorecard);
+    expect(shouldDispatchFullAnalysis(validatedBenign, 0.5)).toBe(false);
+
+    // Negative/benign JSON output should be extremely compact (< 50 tokens)
+    const benignJson = JSON.stringify(benignScorecard);
+    expect(benignJson.length).toBeLessThan(50);
+
+    const alertScorecard = { risk_score: 0.85, anomaly: true, reason: 'Memory exhaustion spike' };
+    const validatedAlert = AnomalyScorecardSchema.parse(alertScorecard);
+    expect(shouldDispatchFullAnalysis(validatedAlert, 0.5)).toBe(true);
+
+    const instruction = renderAnomalyScorecardInstruction();
+    expect(instruction).toContain('"risk_score"');
+    expect(instruction).toContain('"anomaly"');
   });
 });
 

@@ -1,17 +1,21 @@
-# Ultragoal Brief: Swarm Learning Persistence Qdrant UUIDv5 & Non-Zero Vector
+# Ultragoal Brief: Token & Throughput Optimization Implementation Plan
 
 ## Objective
-In `src/swarm/learning-persistence.ts`, convert each text ID (`ledger:`, `profile:`, `policy:gen:`) into a deterministic UUIDv5 so Qdrant accepts valid UUID point IDs without Bad Request errors, while preserving the original key in the point payload. Replace zero-filled dummy vectors with non-zero vectors for Cosine distance compatibility.
+Implement comprehensive engineering optimizations across compression, JSON repair, scorecard triage, predictive flow control, provider multiplexing, hierarchical map-reduce, semantic caching, RL load balancing, and sliding-window memory rotation as specified in `todo.md`, verify with full test suites, and clear `todo.md`.
 
-## Core Requirements & Architecture Constraints
-1. **UUIDv5 Conversion**:
-   - RFC 4122 compliant UUIDv5 generation based on SHA-1 and a fixed namespace UUID.
-   - Deterministic point ID mapping for `ledger:${key}`, `profile:${role}`, `policy:gen:${generation}` (and any text-based outcome IDs).
-   - Preserve original keys in point payload (`key`, `role`, `generation`, `originalKey`/`pointKey`).
-2. **Non-Zero Vectors**:
-   - `dummyVector()` must return a non-zero vector of length `VECTOR_SIZE` (e.g. normalized unit vector) to ensure Cosine distance calculation is valid in Qdrant.
-3. **Round-Trip Integrity**:
-   - `loadAll()` and all restore functions (`AnalystLedger`, `SpecialistCapabilityProfiler`, `SwarmKnowledgeRepository`) must restore state accurately using payload keys.
-4. **Verification**:
-   - Targeted unit tests in `learning-persistence.test.ts` verifying UUID format, non-zero vectors, payload keys, and full restore.
-   - Full suite verification: `npm run lint`, `npm run test:unit`, `npm run test:server`, `npm run build`.
+## Architecture Boundaries & Phases
+1. **Phase 1: Immediate Token Reduction & Zero-Retry Guarantees**
+   - `TokenAwarePromptCompressor` key minification, inverse key restoration, and `[xN]` repeated line deduplication.
+   - Zero-retry deterministic JSON repair in `responseGuards.ts` and `_repaired: true` tracking.
+   - Early-exit scorecard mode for anomaly detection in `scorecard.ts` and `scorecardManager.ts`.
+2. **Phase 2: Predictive Flow Control & Provider Multiplexing**
+   - 80% proactive token pacing and predictive backpressure in `AdaptiveLoadBalancer` and `AdaptiveTaskScheduler`.
+   - Cross-provider parallel chunk multiplexing in `clusterPipeline.ts`.
+   - Tiered model offloading in `fastPath.ts`.
+3. **Phase 3: Hierarchical Aggregation & Adaptive Intelligence**
+   - Hierarchical Map-Reduce micro-batch cluster digests (>6 chunks) in `clusterPipeline.ts`.
+   - Semantic caching with RRF and threshold >= 0.88 in `semanticCacheInterceptor.ts` and `cortex.ts`.
+   - RL routing reward $R = w_{\text{success}} - w_{\text{latency}} - w_{\text{cost}}$ in `AdaptiveLoadBalancer`.
+   - New `src/swarm/conversation/slidingWindow.ts` for sliding window memory rotation (<6k tokens).
+4. **Phase 4: Full Verification & Todo Clearance**
+   - All tests, lint, simulation, and build pass cleanly; clear `todo.md`.

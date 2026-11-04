@@ -147,11 +147,7 @@ export class ModelRouter {
             case 'groq':
                 return complexity === 'instant' ? 'openai/gpt-oss-20b' : 'openai/gpt-oss-120b';
             case 'openrouter':
-                return complexity === 'complex'
-                    ? 'nvidia/nemotron-3-super-120b-a12b:free'
-                    : complexity === 'instant'
-                    ? 'nvidia/nemotron-3-super-120b-a12b:free'
-                    : 'nvidia/nemotron-3-super-120b-a12b:free';
+                return 'nvidia/nemotron-3-super-120b-a12b:free';
             case 'mistral':
                 // mistral-small-latest is available on Mistral free API tier
                 return 'mistral-small-latest';
@@ -159,6 +155,42 @@ export class ModelRouter {
             default:
                 return 'gemini-2.5-flash';
         }
+    }
+
+    /**
+     * Tiered model offloading by task complexity heuristic.
+     * Routes deterministic verification, fast-path checks, and scorecards strictly to low-latency models,
+     * reserving large context models strictly for high-entropy synthesis.
+     */
+    static classifyTieredModelOffload(
+        task: string,
+        provider: Provider,
+        options?: { isScorecard?: boolean; isHeuristic?: boolean; dataLength?: number; chunkCount?: number }
+    ): { modelName: string; tier: TaskComplexity; isOffloadedToFastTier: boolean } {
+        const isScorecard = options?.isScorecard ?? /\b(scorecard|triage|anomaly check|health check)\b/i.test(task);
+        const isHeuristic = options?.isHeuristic ?? /\b(math check|deterministic|verify row|validate syntax)\b/i.test(task);
+
+        let tier: TaskComplexity = 'simple';
+        if (isScorecard || isHeuristic || this.isFastPathEligible(task, options?.dataLength ?? 0)) {
+            tier = 'instant';
+        } else {
+            tier = this.inferComplexity(task, options?.dataLength ?? 0, options?.chunkCount ?? 1);
+        }
+
+        let modelName = this.getRecommendedModel(provider, tier);
+        // Offload deterministic checks / fast path strictly to low-latency fast models
+        if (tier === 'instant' || isScorecard || isHeuristic) {
+            if (provider === 'groq') modelName = 'llama-3.1-8b-instant';
+            else if (provider === 'gemini') modelName = 'gemini-2.5-flash-lite';
+            else if (provider === 'openrouter') modelName = 'meta-llama/llama-3.1-8b-instruct:free';
+        }
+
+        const isOffloadedToFastTier = tier === 'instant' || tier === 'simple';
+        return {
+            modelName,
+            tier,
+            isOffloadedToFastTier
+        };
     }
 
     static isValidModel(model: string): boolean {

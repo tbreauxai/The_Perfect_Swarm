@@ -655,8 +655,8 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
     const clusterDigests: Record<string, ClusterDigest> = {};
     if (isHierarchicalTreeReduction) {
         // Module 6: 2-Tier Tree Reduction
-        // Sub-managers synthesize batches of 3-4 analyst chunk reports into intermediate ClusterDigest summaries
-        const batchSize = 4;
+        // When chunk count exceeds 6, group into 3-chunk micro-batches
+        const batchSize = chunks.length > 6 ? 3 : 4;
         let subManagerIndex = 1;
 
         for (const [cId, reps] of Object.entries(clusterReportsMap)) {

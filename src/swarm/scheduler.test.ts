@@ -315,5 +315,18 @@ describe('AdaptiveTaskScheduler Unit Test Suite', () => {
             expect(events.some(e => e.type === 'task_started')).toBe(true);
             expect(events.some(e => e.type === 'task_completed')).toBe(true);
         });
+
+        it('triggers predictive pacing backpressure when approaching rate limit threshold', async () => {
+            const limiter = new TokenBucketRateLimiter({
+                pacingprov: { maxRpm: 60, maxTpm: 1000 }
+            });
+
+            // Consume 850 tokens out of 1000 (85% utilization >= 80% threshold)
+            limiter.acquire('pacingprov', 850);
+            expect(limiter.getUtilizationRatio('pacingprov')).toBeGreaterThanOrEqual(0.80);
+
+            const pacingDelay = limiter.getPredictivePacingDelay('pacingprov', 50);
+            expect(pacingDelay).toBeGreaterThan(0);
+        });
     });
 });

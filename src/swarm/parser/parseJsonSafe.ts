@@ -1,26 +1,30 @@
 import type { ValidationOutcome } from './types.ts';
 import { repairJson, extractFuzzyFields } from './repairJson.ts';
 
+export interface ParseJsonSafeResult<T> {
+    data: T;
+    repaired: boolean;
+}
+
 /**
- * Parses JSON safely from any input (object, string, malformed string, or buffer).
- * Never throws under any circumstances.
+ * Parses JSON safely from any input while tracking whether format repair was required.
  */
-export function parseJsonSafe<T = any>(input: unknown, fallback?: T): T {
+export function parseJsonSafeWithStatus<T = any>(input: unknown, fallback?: T): ParseJsonSafeResult<T> {
     if (typeof input === 'object' && input !== null) {
-        return input as T;
+        return { data: input as T, repaired: false };
     }
     if (typeof input !== 'string') {
-        return (fallback !== undefined ? fallback : {}) as T;
+        return { data: (fallback !== undefined ? fallback : {}) as T, repaired: true };
     }
 
     const trimmed = input.trim();
     if (!trimmed) {
-        return (fallback !== undefined ? fallback : {}) as T;
+        return { data: (fallback !== undefined ? fallback : {}) as T, repaired: true };
     }
 
     // Attempt 1: Direct JSON.parse
     try {
-        return JSON.parse(trimmed) as T;
+        return { data: JSON.parse(trimmed) as T, repaired: false };
     } catch {
         // continue
     }
@@ -30,7 +34,8 @@ export function parseJsonSafe<T = any>(input: unknown, fallback?: T): T {
         const firstObj = trimmed.indexOf('{');
         const lastObj = trimmed.lastIndexOf('}');
         if (firstObj !== -1 && lastObj > firstObj) {
-            return JSON.parse(trimmed.substring(firstObj, lastObj + 1)) as T;
+            const sliced = JSON.parse(trimmed.substring(firstObj, lastObj + 1)) as T;
+            return { data: sliced, repaired: true };
         }
     } catch {
         // continue
@@ -42,7 +47,7 @@ export function parseJsonSafe<T = any>(input: unknown, fallback?: T): T {
             const repaired = repairJson(trimmed);
             const parsed = JSON.parse(repaired) as T;
             if (parsed && (typeof parsed !== 'object' || Object.keys(parsed).length > 0)) {
-                return parsed;
+                return { data: parsed, repaired: true };
             }
         } catch {
             // continue
@@ -52,10 +57,18 @@ export function parseJsonSafe<T = any>(input: unknown, fallback?: T): T {
     // Attempt 4: Fuzzy regex extraction
     const fuzzy = extractFuzzyFields(trimmed);
     if (fuzzy && Object.keys(fuzzy).length > 0) {
-        return fuzzy as T;
+        return { data: fuzzy as T, repaired: true };
     }
 
-    return (fallback !== undefined ? fallback : {}) as T;
+    return { data: (fallback !== undefined ? fallback : {}) as T, repaired: true };
+}
+
+/**
+ * Parses JSON safely from any input (object, string, malformed string, or buffer).
+ * Never throws under any circumstances.
+ */
+export function parseJsonSafe<T = any>(input: unknown, fallback?: T): T {
+    return parseJsonSafeWithStatus<T>(input, fallback).data;
 }
 
 /**

@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type { Agent } from "../agent.ts";
 import type { SwarmContext } from "../context.ts";
 import type { AgentRunConfig, SwarmEngineSettings } from "../types.ts";
@@ -17,13 +18,45 @@ export const SCORECARD_ANALYST_MAX_TOKENS = 800;
 /** R2-S2: free text kept when a seat never produces a valid scorecard. */
 export const SCORECARD_UNSTRUCTURED_MAX_CHARS = 600;
 
-/** Scorecard mode is opt-in (request or settings) and never applies to morning_judge runs. */
+/** Fast anomaly triage scorecard schema (~20 tokens output). */
+export const AnomalyScorecardSchema = z.object({
+  risk_score: z.number().min(0).max(1).describe("Risk score between 0.0 and 1.0"),
+  anomaly: z.boolean().describe("Whether an anomaly was detected"),
+  reason: z.string().optional().describe("Brief reason if anomaly or elevated risk")
+});
+
+export type AnomalyScorecard = z.infer<typeof AnomalyScorecardSchema>;
+
+/** Decides whether full paragraph analysis workflow must be dispatched. */
+export function shouldDispatchFullAnalysis(scorecard: AnomalyScorecard, threshold: number = 0.5): boolean {
+  return scorecard.anomaly === true || scorecard.risk_score > threshold;
+}
+
+/** Instruction appended to prompt for compact anomaly triage scorecard. */
+export function renderAnomalyScorecardInstruction(): string {
+  return `\n\nOUTPUT FORMAT (triage scorecard mode):
+Reply with ONE JSON object and nothing else:
+{"risk_score":0.05,"anomaly":false}
+Rules:
+- risk_score is a number between 0.0 and 1.0.
+- anomaly is boolean (true if an issue, regression, or anomaly is detected; otherwise false).
+JSON only.`;
+}
+
+/** Scorecard mode is opt-in, defaults to true for routine batch/anomaly triage, and never applies to morning_judge runs. */
 export function isScorecardMode(
-    params: { scorecardMode?: boolean } | undefined,
-    settings?: SwarmEngineSettings
+    params: { scorecardMode?: boolean; workflow?: string; task?: string; anomalyDetection?: boolean } | undefined,
+    settings?: SwarmEngineSettings & { workflow?: string; defaultScorecardForAnomaly?: boolean }
 ): boolean {
     if ((settings as any)?.responseSchema === 'morning_judge') return false;
-    return params?.scorecardMode === true || settings?.scorecardMode === true;
+    if (params?.scorecardMode !== undefined) return params.scorecardMode;
+    if (settings?.scorecardMode !== undefined) return settings.scorecardMode;
+    if (params?.anomalyDetection === true) return true;
+    const taskOrWf = `${params?.workflow || ''} ${params?.task || ''} ${(settings as any)?.workflow || ''}`.toLowerCase();
+    if (/\b(anomaly|triage|routine batch|health check|anomaly detection)\b/.test(taskOrWf)) {
+        return true;
+    }
+    return false;
 }
 
 export function scorecardAnalystMaxTokens(settings?: SwarmEngineSettings): number {

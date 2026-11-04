@@ -1,23 +1,30 @@
 [
   {
-    "id": "goal-1-uuidv5-and-nonzero-vector",
-    "description": "Implement deterministic RFC 4122 UUIDv5 generator and non-zero dummy vector in learning-persistence.ts. Convert text IDs (ledger:, profile:, policy:gen:) to UUIDv5 while keeping original keys in payload.",
+    "id": "goal-1-phase1-compression-repair-scorecard",
+    "description": "Implement Phase 1: Schema minification & key compaction ([xN] line dedup, key mapping/inversion), zero-retry JSON repair policy (_repaired: true), and default early-exit scorecard mode for anomaly triage.",
     "status": "completed",
-    "verification": "Point IDs created by learningStore are valid RFC 4122 UUID strings, vectors are non-zero, and payloads retain original keys.",
-    "evidence": "Implemented toUuidV5, ensureUuid, and non-zero unit vector in learning-persistence.ts. Verified in learning-persistence.test.ts."
+    "verification": "Compression, parser, and scorecard tests pass with 30-50% size reduction on repetitive data, _repaired: true on local repairs, and <50 tokens on negative scorecards.",
+    "evidence": "Implemented minifyJsonKeys, restoreMinifiedKeys, deduplicateTabularLines, _repaired: true in schemas and guards, AnomalyScorecardSchema, and default anomaly triage in isScorecardMode. 73/73 tests pass."
   },
   {
-    "id": "goal-2-learning-persistence-tests",
-    "description": "Update learning-persistence.test.ts to verify UUIDv5 point IDs, non-zero vectors, payload key retention, and flawless restoreFromLearningStore.",
+    "id": "goal-2-phase2-predictive-flow-multiplexing",
+    "description": "Implement Phase 2: Predictive flow control with 80% sliding-window token pacing/backpressure, cross-provider parallel chunk multiplexing in clusterPipeline, and tiered model offloading in fastPath.",
     "status": "completed",
-    "verification": "learning-persistence.test.ts passes with assertions on UUIDv5 format, non-zero vectors, and payload keys.",
-    "evidence": "All 9/9 tests pass in learning-persistence.test.ts, asserting valid UUIDv5 regex, non-zero vectors, and payload key preservation."
+    "verification": "Load balancer, scheduler, and fastPath tests pass, preventing rate limits and properly multiplexing across providers.",
+    "evidence": "Implemented predictive pacing delay and 80% token utilization backpressure in AdaptiveLoadBalancer & TokenBucketRateLimiter, cross-provider chunk multiplexing in clusterPipeline, and tiered model offloading in router. 82/82 tests pass."
   },
   {
-    "id": "goal-3-full-suite-verification",
-    "description": "Run complete test suite and build verification gateway (lint, test:unit, test:server, test:dist, build).",
+    "id": "goal-3-phase3-hierarchical-rrf-sliding-window",
+    "description": "Implement Phase 3: Hierarchical Map-Reduce micro-batch digests (>6 chunks), semantic caching with RRF in semanticCacheInterceptor, RL routing reward in AdaptiveLoadBalancer, and sliding-window memory context rotation (<6k tokens).",
     "status": "completed",
-    "verification": "npm run lint, npm run test:unit, npm run test:server, npm run test:dist, and npm run build all exit 0.",
-    "evidence": "All verification gates passed: npm run lint (0 errors), npm run test:server (7/7 passed), npm run test:dist (ESM & CJS verified), npm run test:unit (135/135 test files, 1181 passed), npm run build (client & swarm build succeeded)."
+    "verification": "Cluster pipeline, semantic cache, RL routing, and sliding window module tests pass with verified token bounding.",
+    "evidence": "Implemented 3-chunk micro-batch digests in clusterPipeline, lookupWithRRF and default 0.88 threshold in semanticCacheInterceptor, multi-objective RL reward in AdaptiveLoadBalancer, and created SlidingWindowContext in src/swarm/conversation/slidingWindow.ts strictly bounding context below 6k tokens. All tests pass."
+  },
+  {
+    "id": "goal-4-phase4-verification-and-clear-todo",
+    "description": "Implement Phase 4: Run full verification gateways (npm run lint, npm run test:unit, npm run test:simulation, npm run build) and clear todo.md.",
+    "status": "completed",
+    "verification": "All test and build suites exit with code 0, and todo.md is cleared.",
+    "evidence": "All verification gateways passed cleanly: npm run lint (0 errors), npm run test:unit (137/137 files, 1201 tests passed), npm run test:simulation (12/12 tasks passed), npm run test:server (7/7 tests passed), npm run build (client & swarm built), npm run test:dist (ESM & CJS verified). todo.md cleared."
   }
 ]

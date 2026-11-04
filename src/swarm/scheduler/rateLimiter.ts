@@ -113,6 +113,32 @@ export class TokenBucketRateLimiter {
         return Math.ceil(delayMs);
     }
 
+    /**
+     * Gets current token utilization ratio (0.0 to 1.0) for a provider.
+     */
+    getUtilizationRatio(provider?: string, now: number = Date.now()): number {
+        const key = this.normalizeKey(provider);
+        const profile = this.getProfile(key);
+        const { tokenAllowance } = this.replenish(key, now);
+        const used = Math.max(0, profile.maxTpm - tokenAllowance);
+        return Math.min(1.0, used / profile.maxTpm);
+    }
+
+    /**
+     * Calculates predictive soft pacing delay when provider token usage reaches or exceeds 80% (0.80).
+     */
+    getPredictivePacingDelay(provider?: string, estimatedTokens: number = 200, now: number = Date.now()): number {
+        const key = this.normalizeKey(provider);
+        const profile = this.getProfile(key);
+        const { tokenAllowance } = this.replenish(key, now);
+        const safetyReserve = profile.maxTpm * 0.20; // 80% consumed threshold
+        if (tokenAllowance - estimatedTokens < safetyReserve) {
+            const deficit = safetyReserve - Math.max(0, tokenAllowance - estimatedTokens);
+            return Math.ceil(Math.min(2500, (deficit / profile.maxTpm) * 15000));
+        }
+        return 0;
+    }
+
     canAcquire(provider?: string, estimatedTokens: number = 200, now: number = Date.now()): boolean {
         return this.getDelayUntilAvailable(provider, estimatedTokens, now) === 0;
     }

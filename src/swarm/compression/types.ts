@@ -13,6 +13,7 @@ export interface PromptSegment {
     isCodeBlock?: boolean;
     isHeader?: boolean;
     hasAnomaly?: boolean;
+    frequency?: number;
 }
 
 export interface CompressionOptions {
