@@ -88,6 +88,7 @@ export function buildAnalystPool(
     const model = (seat?.model || DEFAULT_PROVIDER_MODELS[p] || "").trim();
     if (!model) continue;
     if (!globalProviderLimiter.isAvailable(p, model)) continue;
+    if (settings?.disableFallback && p === 'cloudflare') continue;
     pool.push({ provider: p, apiKey: key, modelName: model, aiClient: client });
   }
   return pool;

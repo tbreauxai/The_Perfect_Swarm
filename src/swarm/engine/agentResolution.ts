@@ -143,7 +143,7 @@ export function resolveSwarmAgents(
             dedicatedCriticAgent = new Agent(dedicatedCriticConfig.role || 'Verification Critic', cModel, dedicatedCriticConfig.provider, finalCKey, cClient, cFallbacks);
             dedicatedCriticAgent.id = dedicatedCriticConfig.id || dedicatedCriticConfig.role || 'critic';
             dedicatedCriticAgent.maxTokens = dedicatedCriticConfig.maxTokens;
-            dedicatedCriticAgent.disableFallback = !!(settings?.disableFallback || (dedicatedCriticConfig as any).disableFallback || (dedicatedCriticConfig as any).strictProvider);
+            dedicatedCriticAgent.disableFallback = !!(dedicatedCriticConfig as any).strictProvider;
         }
     }
 
