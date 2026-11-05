@@ -1,5 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
 import { Agent } from '../agent.ts';
+import { DEFAULT_PROVIDER_MODELS } from '../server/modelsProvider.ts';
 import type { ProviderCredential, Provider, AgentConfig } from '../types.ts';
 import type { SwarmEngineSettings } from '../types.ts';
 import type { AgentVariantConfig, AgentExperiment } from '../experiment.ts';
@@ -102,7 +103,7 @@ export function resolveSwarmAgents(
     const { key: mKey, client: mClient } = resolveProvider(managerConfig.provider, settings, defaultAi);
     const finalMKey = managerConfig.apiKey ? sanitizeApiKey(managerConfig.apiKey) : mKey;
     validateProviderKey(managerConfig.provider, finalMKey, managerConfig.role || 'Manager Node');
-    const managerModel = managerConfig.model || '';
+    const managerModel = managerConfig.model || DEFAULT_PROVIDER_MODELS[managerConfig.provider] || '';
     const managerFallbacks = mergeFallbacks(
         buildManagerChain(defaultAi, { provider: managerConfig.provider, model: managerModel }),
         availableFallbacks.filter(f => f.provider !== managerConfig.provider)
@@ -119,7 +120,7 @@ export function resolveSwarmAgents(
         const finalAKey = ac.apiKey ? sanitizeApiKey(ac.apiKey) : aKey;
         const isMock = ac.provider === 'simulated' || ac.provider === 'mock' || ac.provider === 'custom-mock' || ac.provider.includes('mock') || ac.provider.includes('simulated');
         if (finalAKey || isMock) {
-            const aModel = ac.model || '';
+            const aModel = ac.model || DEFAULT_PROVIDER_MODELS[ac.provider] || '';
             const aFallbacks = availableFallbacks.filter(f => f.provider !== ac.provider);
             const analyst = new Agent(ac.role || 'Analyst', aModel, ac.provider, finalAKey, aClient, aFallbacks);
             analyst.id = ac.id || ac.role;
@@ -137,7 +138,7 @@ export function resolveSwarmAgents(
         const finalCKey = dedicatedCriticConfig.apiKey ? sanitizeApiKey(dedicatedCriticConfig.apiKey) : cKey;
         const isCriticMock = dedicatedCriticConfig.provider === 'simulated' || dedicatedCriticConfig.provider === 'mock' || dedicatedCriticConfig.provider === 'custom-mock' || dedicatedCriticConfig.provider.includes('mock') || dedicatedCriticConfig.provider.includes('simulated');
         if (finalCKey || isCriticMock) {
-            const cModel = dedicatedCriticConfig.model || '';
+            const cModel = dedicatedCriticConfig.model || DEFAULT_PROVIDER_MODELS[dedicatedCriticConfig.provider] || '';
             const cFallbacks = availableFallbacks.filter(f => f.provider !== dedicatedCriticConfig.provider);
             dedicatedCriticAgent = new Agent(dedicatedCriticConfig.role || 'Verification Critic', cModel, dedicatedCriticConfig.provider, finalCKey, cClient, cFallbacks);
             dedicatedCriticAgent.id = dedicatedCriticConfig.id || dedicatedCriticConfig.role || 'critic';
