@@ -84,7 +84,9 @@ export function buildAnalystPool(
       (a: AgentConfig) =>
         a.provider === p && a.model && a.model.trim().length > 0,
     );
-    if (options.seatModelsOnly && !seat) continue;
+    // Only fall back to a provider the user actually put on a seat.
+    // An env key alone is not a selection.
+    if (!seat) continue;
     const model = (seat?.model || DEFAULT_PROVIDER_MODELS[p] || "").trim();
     if (!model) continue;
     if (!globalProviderLimiter.isAvailable(p, model)) continue;
