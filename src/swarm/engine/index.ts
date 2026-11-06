@@ -213,7 +213,9 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 qdrantUrl,
                 toolRegistry,
                 context,
-                domain: (params as any).domain || settings?.domain
+                domain: (params as any).domain || settings?.domain,
+                disableMemoryRetrieval: Boolean((params as any).disableMemoryRetrieval || settings?.disableMemoryRetrieval),
+                settings
             } as any);
 
             const mathBlock = profilingResult.mathGroundingReport?.promptBlock;

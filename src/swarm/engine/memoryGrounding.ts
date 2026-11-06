@@ -121,14 +121,32 @@ export async function resolveMemoryGrounding(p: MemoryGroundingParams): Promise<
                     (typeof readDomain === 'string' && /sport|bet|odds/i.test(readDomain)) ||
                     /\b(event_?id|spread|moneyline|over\/under|duelodds)\b/i.test(task);
 
-                if (supaCfg && !disableMemoryRetrieval && !alreadyHasSupabaseContext && isSportsOrDuelOdds) {
-                    const onDemand = await fetchOnDemandSupabaseContext(supaCfg, {
-                        task,
-                        data: p.data,
-                        limit: 6
-                    }).catch(() => ({ judgments: [], lineSnapshots: [], formattedBlock: '' }));
-                    if (onDemand.formattedBlock) {
-                        historicalContext += `\n\n${onDemand.formattedBlock}`;
+                if (!disableMemoryRetrieval && !alreadyHasSupabaseContext && isSportsOrDuelOdds) {
+                    if (!supaCfg) {
+                        console.warn('[MemoryGrounding] sports/duelodds task without Supabase config; on-demand pull skipped');
+                        historicalContext += '\n\n[DUELODDS SUPABASE ON-DEMAND] supabase_not_configured';
+                    } else {
+                        const onDemand = await fetchOnDemandSupabaseContext(supaCfg, {
+                            task,
+                            data: p.data,
+                            eventId: (p as any).eventId,
+                            eventIds: (p as any).eventIds,
+                            gameDate: (p as any).gameDate || (p as any).date,
+                            sport: (p as any).sport,
+                            limit: 6
+                        }).catch((err: any) => ({
+                            judgments: [],
+                            lineSnapshots: [],
+                            formattedBlock: '',
+                            error: 'slim_pull_failed' as const,
+                            detail: String(err?.message || err)
+                        }));
+                        if (onDemand.formattedBlock) {
+                            historicalContext += `\n\n${onDemand.formattedBlock}`;
+                        } else if (onDemand.error) {
+                            console.warn(`[MemoryGrounding] on-demand pull ${onDemand.error}: ${onDemand.detail || ''}`);
+                            historicalContext += `\n\n[DUELODDS SUPABASE ON-DEMAND] ${onDemand.error}${onDemand.detail ? ': ' + onDemand.detail : ''}`;
+                        }
                     }
                 }
 

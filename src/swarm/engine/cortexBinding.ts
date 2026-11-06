@@ -81,7 +81,9 @@ export function bindCortexAndTools(
                     ? new ToolRegistry(settings.tools)
                     : globalToolRegistry)));
 
-    if (memoryCortex) {
+    // Morning judge already injects steam/calibration; search_lessons → Qdrant hangs CI multi-game runs.
+    const isMorningJudge = settings?.responseSchema === 'morning_judge';
+    if (memoryCortex && !isMorningJudge) {
         toolRegistry.register({
             name: 'search_lessons',
             description: 'Search graded lessons by sport and market. Returns the top matches.',
