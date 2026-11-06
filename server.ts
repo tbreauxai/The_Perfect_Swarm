@@ -59,7 +59,9 @@ export function createMainApp(options: { defaultAi?: any; defaultCortex?: any; s
       hasOpenRouterKey: !!process.env.OPENROUTER_API_KEY,
       hasMistralKey: !!process.env.MISTRAL_API_KEY,
       hasQdrantUrl: !!process.env.QDRANT_URL,
-      hasQdrantKey: !!process.env.QDRANT_API_KEY
+      hasQdrantKey: !!process.env.QDRANT_API_KEY,
+      hasSupabaseUrl: !!process.env.SUPABASE_URL,
+      hasSupabaseKey: !!(process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY)
     });
   });
 

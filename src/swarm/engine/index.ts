@@ -206,6 +206,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             const { historicalContext: rawHistoricalContext } = await resolveMemoryGrounding({
                 memoryCortex,
                 task,
+                data,
                 targetAppId,
                 includeShared,
                 bypassCache,

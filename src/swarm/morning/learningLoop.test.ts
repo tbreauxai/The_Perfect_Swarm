@@ -6,6 +6,7 @@ import { resolveMemoryGrounding } from '../engine/memoryGrounding.ts';
 import { formatLearnedVerdictContent } from '../engine/learningPipeline.ts';
 import {
   fetchPregameLearningContext,
+  fetchOnDemandSupabaseContext,
   hydrateCalibrationFromSupabase,
   type SupabaseConfig
 } from './supabase.ts';
@@ -273,4 +274,62 @@ describe('Closed-Loop Learning & Calibration Upgrades (Qdrant + Supabase)', () =
       expect(prof?.accuracyWins).toBe(1);
     }
   });
+
+  it('pulls game_judgments and line_snapshots on-demand via fetchOnDemandSupabaseContext', async () => {
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      const u = String(url);
+      if (u.includes('game_judgments?')) {
+        return new Response(
+          JSON.stringify([
+            {
+              event_id: 'nba-celtics-1',
+              game_date: '2026-10-25',
+              sport: 'NBA',
+              home_team: 'Boston Celtics',
+              away_team: 'New York Knicks',
+              status: 'final',
+              win_prob_home: 0.66,
+              fair_spread: -4.5,
+              brier: 0.115,
+              result: { outcome: 'win' }
+            }
+          ]),
+          { status: 200 }
+        );
+      }
+      if (u.includes('line_snapshots?')) {
+        return new Response(
+          JSON.stringify([
+            {
+              event_id: 'nba-celtics-1',
+              game_date: '2026-10-25',
+              sport: 'NBA',
+              book: 'DraftKings',
+              spread: -5.5,
+              total: 222.5,
+              ml_home: -210,
+              ml_away: 175,
+              snapshot_at: '2026-10-25T23:00:00Z',
+              is_baseline: false
+            }
+          ]),
+          { status: 200 }
+        );
+      }
+      return new Response('[]', { status: 200 });
+    });
+
+    const res = await fetchOnDemandSupabaseContext(
+      cfg,
+      { task: 'Analyze event_id=nba-celtics-1 Celtics vs Knicks', team: 'Celtics' },
+      fetchMock as unknown as typeof fetch
+    );
+
+    expect(res.judgments).toHaveLength(1);
+    expect(res.lineSnapshots).toHaveLength(1);
+    expect(res.formattedBlock).toContain('[DUELODDS SUPABASE ON-DEMAND DATA PULL]');
+    expect(res.formattedBlock).toContain('New York Knicks @ Boston Celtics');
+    expect(res.formattedBlock).toContain('Spread=-5.5');
+  });
 });
+
