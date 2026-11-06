@@ -1230,6 +1230,7 @@ Anomalies:
     await learningEngine.executeWorkflow({
         task: 'Health check node ping',
         data: 'node=green',
+        scorecardMode: false,
         settings: {
             appId: 'rrf-preset-app',
             agents: [
