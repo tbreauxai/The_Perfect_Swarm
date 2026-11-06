@@ -16,6 +16,53 @@ import {
 } from './helpers.ts';
 import { SwarmContext } from '../../context.ts';
 import { globalAsyncJobs, wantsAsync, newJobId } from '../asyncJobs.ts';
+import { getSupabaseConfig, fetchOnDemandSupabaseContext } from '../../morning/supabase.ts';
+import { isSlimSwarmRequest, validateSlimSwarmRequest, slimIdsStubData } from '../slimPayload.ts';
+
+
+/** Slim-v1: pull by eventIds before workflow; 422 slim_pull_* for DuelOdds fallback/proxy retry. */
+async function resolveSlimOrReject(
+  body: any,
+  fetchFn: typeof fetch = fetch
+): Promise<{ ok: true; task: string; data: string; eventIds: string[]; date: string; sport: string } | { ok: false; status: 422; error: string }> {
+  const bad = validateSlimSwarmRequest(body);
+  if (bad) return { ok: false, status: 422, error: bad.startsWith('slim_pull_') ? bad : `slim_pull_failed: ${bad}` };
+  const eventIds = body.eventIds.map((id: string) => String(id).trim()).filter(Boolean);
+  const cfg = getSupabaseConfig();
+  const pull = await fetchOnDemandSupabaseContext(cfg, {
+    task: body.task,
+    eventIds,
+    gameDate: body.date,
+    sport: body.sport,
+    limit: Math.min(25, Math.max(eventIds.length * 2, 8)),
+    requireHits: true
+  }, fetchFn);
+  if (pull.error === 'slim_pull_empty') {
+    return { ok: false, status: 422, error: 'slim_pull_empty' };
+  }
+  if (pull.error) {
+    // supabase_not_configured | unfiltered_refused | slim_pull_failed → agreed failed token
+    return { ok: false, status: 422, error: 'slim_pull_failed' };
+  }
+  if (!pull.formattedBlock && pull.judgments.length === 0 && pull.lineSnapshots.length === 0) {
+    return { ok: false, status: 422, error: 'slim_pull_empty' };
+  }
+  // Fail-closed: every requested ID needs judgment OR snapshot grounding (never ungrounded success).
+  const hitIds = new Set<string>([
+    ...pull.judgments.map((j: any) => String(j?.event_id || '')),
+    ...pull.lineSnapshots.map((r: any) => String(r?.event_id || ''))
+  ].filter(Boolean));
+  const missing = eventIds.filter((id: string) => !hitIds.has(id));
+  if (missing.length) {
+    console.warn(`[SlimV1] slim_pull_empty: missing evidence for ${missing.join(',')}`);
+    return { ok: false, status: 422, error: 'slim_pull_empty' };
+  }
+  let data = slimIdsStubData(body);
+  if (pull.formattedBlock) data = `${data}
+
+${pull.formattedBlock}`;
+  return { ok: true, task: body.task, data, eventIds, date: body.date, sport: body.sport };
+}
 
 export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void {
     const { defaultSettings, defaultAi, defaultCortex, swarmBodyLimit } = ctx;
@@ -30,7 +77,16 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
 
             if (c.req.method === 'POST') {
                 const body = await c.req.json().catch(() => ({}));
-                if (!body.task || body.data === undefined) {
+                let task = body.task;
+                let data = body.data;
+                let slimMeta: { eventIds?: string[]; date?: string; sport?: string } = {};
+                if (isSlimSwarmRequest(body)) {
+                    const slim = await resolveSlimOrReject(body);
+                    if (slim.ok === false) return c.json({ error: slim.error, payload: 'slim-v1' }, slim.status);
+                    task = slim.task;
+                    data = slim.data;
+                    slimMeta = { eventIds: slim.eventIds, date: slim.date, sport: slim.sport };
+                } else if (!body.task || body.data === undefined) {
                     return c.json({ error: 'Missing required parameter: task and data' }, 400);
                 }
                 if (body.metadata) {
@@ -43,8 +99,8 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
                 hydrateAppOutcomes(originApp);
 
                 params = {
-                    task: body.task,
-                    data: prependCalibrationToData(body.data, originApp),
+                    task,
+                    data: prependCalibrationToData(data, originApp),
                     originApp,
                     callerAppId,
                     domain: body.domain || body.settings?.domain,
@@ -59,8 +115,11 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
                     maxSpeculativeConcurrency: body.maxSpeculativeConcurrency,
                     complexityOverride: body.complexityOverride,
                     bypassCache: body.bypassCache,
-                    scorecardMode: body.scorecardMode === true
-                };
+                    scorecardMode: body.scorecardMode === true,
+                    eventIds: slimMeta.eventIds,
+                    date: slimMeta.date,
+                    sport: slimMeta.sport
+                } as SwarmWorkflowParams;
             } else if (c.req.method === 'GET') {
                 const url = new URL(c.req.url);
                 const task = url.searchParams.get('task') || '';
@@ -94,7 +153,16 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
     app.post('/api/swarm/analyze', swarmBodyLimit, async (c) => {
         try {
             const body = await c.req.json().catch(() => ({}));
-            if (!body.task || body.data === undefined) {
+            let task = body.task;
+            let data = body.data;
+            let slimMeta: { eventIds?: string[]; date?: string; sport?: string } = {};
+            if (isSlimSwarmRequest(body)) {
+                const slim = await resolveSlimOrReject(body);
+                if (slim.ok === false) return c.json({ error: slim.error, payload: 'slim-v1' }, slim.status);
+                task = slim.task;
+                data = slim.data;
+                slimMeta = { eventIds: slim.eventIds, date: slim.date, sport: slim.sport };
+            } else if (!body.task || body.data === undefined) {
                 return c.json({ error: 'Missing required parameter: task and data' }, 400);
             }
             if (body.metadata) {
@@ -121,8 +189,8 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
             }
             const workflowParams: SwarmWorkflowParams = {
                 context,
-                task: body.task,
-                data: prependCalibrationToData(body.data, originApp),
+                task,
+                data: prependCalibrationToData(data, originApp),
                 originApp,
                 callerAppId,
                 domain: body.domain || body.settings?.domain,
@@ -137,7 +205,10 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
                 maxSpeculativeConcurrency: body.maxSpeculativeConcurrency,
                 complexityOverride: body.complexityOverride,
                 bypassCache: body.bypassCache,
-                scorecardMode: body.scorecardMode === true
+                scorecardMode: body.scorecardMode === true,
+                eventIds: slimMeta.eventIds,
+                date: slimMeta.date,
+                sport: slimMeta.sport
             } as SwarmWorkflowParams;
 
             if (asyncMode) {

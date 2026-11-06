@@ -60,6 +60,13 @@ const BAD = {
   apiKey: "k-bad",
   model: "mock-bad",
 };
+/** Seat-only pool (#143): a groq seat is required to select the groq fallback. */
+const GROQ_SEAT = {
+  id: "groq-seat",
+  role: "Groq Analyst",
+  provider: "groq",
+  model: "openai/gpt-oss-20b",
+};
 
 describe("PS1 partial / degraded semantics", () => {
   beforeEach(() => {
@@ -117,7 +124,7 @@ describe("PS1 partial / degraded semantics", () => {
   });
 
   it("a seat that recovers through a fallback is neither partial nor degraded", async () => {
-    const result: any = await run("ps1-recovered", [MANAGER_OK, GOOD, BAD]);
+    const result: any = await run("ps1-recovered", [MANAGER_OK, GOOD, BAD, GROQ_SEAT]);
     expect(groqPoolCalls).toBeGreaterThanOrEqual(1);
     expect(result.status).toBe("complete");
     expect(result.partial).toBe(false);

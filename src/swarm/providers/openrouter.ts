@@ -39,13 +39,13 @@ export class OpenRouterAdapter implements ProviderAdapter {
         const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 30000;
         const effectiveModel = resolveOpenRouterModel(options.modelName);
 
-        return executeOpenAiCompatibleChat(options, {
+        const callWith = (model: string) => executeOpenAiCompatibleChat(options, {
             providerName: this.providerName,
             providerLabel: 'OpenRouter',
             endpoint: 'https://openrouter.ai/api/v1/chat/completions',
             apiKey: key,
             modelName: options.modelName,
-            effectiveModel,
+            effectiveModel: model,
             messages,
             maxTokens: options.config?.maxTokens || 8192,
             isJson,
@@ -60,5 +60,15 @@ export class OpenRouterAdapter implements ProviderAdapter {
             },
             format500Error: (status, errorText) => `[SERVER_ERROR_${status}] OpenRouter service error: ${errorText}`
         });
+        try {
+            return await callWith(effectiveModel);
+        } catch (err: any) {
+            const msg = String(err?.message || err || '');
+            if (effectiveModel !== 'openrouter/free' && msg.includes('404') && /nvidia/i.test(msg)) {
+                console.warn(`[OpenRouter] ${effectiveModel} returned Nvidia 404; retrying with openrouter/free`);
+                return await callWith('openrouter/free');
+            }
+            throw err;
+        }
     }
 }

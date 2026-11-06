@@ -663,10 +663,28 @@ export interface OnDemandSupabaseQueryParams {
   task?: string;
   data?: unknown;
   eventId?: string;
+  /** Slim-v1 / multi-ID Pages stream: pull these event_ids (OR filter). */
+  eventIds?: string[];
   team?: string;
   sport?: string;
   gameDate?: string;
   limit?: number;
+  /** When true, missing filters or empty rows are hard errors (slim path). */
+  requireHits?: boolean;
+}
+
+export type OnDemandPullErrorCode =
+  | 'unfiltered_refused'
+  | 'supabase_not_configured'
+  | 'slim_pull_failed'
+  | 'slim_pull_empty';
+
+export interface OnDemandSupabaseContext {
+  judgments: any[];
+  lineSnapshots: any[];
+  formattedBlock: string;
+  error?: OnDemandPullErrorCode;
+  detail?: string;
 }
 
 /**
@@ -678,20 +696,27 @@ export async function fetchOnDemandSupabaseContext(
   cfg: SupabaseConfig | null,
   params: OnDemandSupabaseQueryParams,
   fetchFn: typeof fetch = fetch
-): Promise<{
-  judgments: any[];
-  lineSnapshots: any[];
-  formattedBlock: string;
-}> {
-  const empty = { judgments: [], lineSnapshots: [], formattedBlock: '' };
-  if (!cfg || !cfg.supabaseUrl.startsWith('http')) return empty;
+): Promise<OnDemandSupabaseContext> {
+  const empty: OnDemandSupabaseContext = { judgments: [], lineSnapshots: [], formattedBlock: '' };
+  if (!cfg || !cfg.supabaseUrl.startsWith('http')) {
+    const err: OnDemandSupabaseContext = {
+      ...empty,
+      error: 'supabase_not_configured',
+      detail: 'SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY missing or invalid'
+    };
+    if (params.requireHits) return err;
+    return empty;
+  }
 
   const limit = Math.min(25, Math.max(1, Number(params.limit ?? 8)));
   const rawText = `${params.task || ''} ${typeof params.data === 'string' ? params.data : JSON.stringify(params.data || '')}`;
 
-  // Extract explicit or inferred eventId / gameDate / sport / team filters
+  const eventIds = (params.eventIds || [])
+    .map((id) => String(id || '').trim())
+    .filter(Boolean);
   let eventId = params.eventId?.trim();
-  if (!eventId) {
+  if (!eventId && eventIds.length === 1) eventId = eventIds[0];
+  if (!eventId && eventIds.length === 0) {
     const evMatch = rawText.match(/\b(?:event_?id|eventId)["'\s:=]+([a-zA-Z0-9_-]{5,40})/i);
     if (evMatch) eventId = evMatch[1];
   }
@@ -705,12 +730,31 @@ export async function fetchOnDemandSupabaseContext(
   const sport = params.sport?.trim();
   const team = params.team?.trim();
 
+  const hasFilter = Boolean(
+    eventId || eventIds.length > 0 || gameDate || sport || (team && team.replace(/[,()*]/g, '').trim())
+  );
+  if (!hasFilter) {
+    const msg = 'refusing unfiltered game_judgments pull: need eventId(s), gameDate, sport, or team';
+    console.warn(`[OnDemandSupabase] ${msg}`);
+    return {
+      ...empty,
+      error: 'unfiltered_refused',
+      detail: msg
+    };
+  }
+
   const judgments: any[] = [];
   const lineSnapshots: any[] = [];
+  let pullFailed: string | undefined;
 
   try {
     const filters: string[] = [];
-    if (eventId) filters.push(`event_id=eq.${encodeURIComponent(eventId)}`);
+    if (eventIds.length > 1) {
+      const inList = eventIds.map((id) => encodeURIComponent(id)).join(',');
+      filters.push(`event_id=in.(${inList})`);
+    } else if (eventId) {
+      filters.push(`event_id=eq.${encodeURIComponent(eventId)}`);
+    }
     if (gameDate) filters.push(`game_date=eq.${encodeURIComponent(gameDate)}`);
     if (sport) filters.push(`sport=eq.${encodeURIComponent(sport)}`);
     if (team) {
@@ -730,14 +774,17 @@ export async function fetchOnDemandSupabaseContext(
     if (Array.isArray(judgmentRows)) {
       judgments.push(...judgmentRows);
     }
-  } catch {
-    // Non-fatal
+  } catch (err: any) {
+    pullFailed = String(err?.message || err);
+    console.warn(`[OnDemandSupabase] game_judgments pull failed: ${pullFailed}`);
   }
 
   try {
-    const targetEventIds = eventId
-      ? [eventId]
-      : Array.from(new Set(judgments.map((j: any) => j?.event_id).filter(Boolean))).slice(0, 4);
+    const targetEventIds = eventIds.length > 0
+      ? eventIds
+      : eventId
+        ? [eventId]
+        : Array.from(new Set(judgments.map((j: any) => j?.event_id).filter(Boolean))).slice(0, 8);
 
     if (targetEventIds.length > 0) {
       const inList = targetEventIds.map((id) => encodeURIComponent(String(id))).join(',');
@@ -751,11 +798,28 @@ export async function fetchOnDemandSupabaseContext(
         lineSnapshots.push(...snapRows);
       }
     }
-  } catch {
-    // Non-fatal
+  } catch (err: any) {
+    const msg = String(err?.message || err);
+    pullFailed = pullFailed ? `${pullFailed}; ${msg}` : msg;
+    console.warn(`[OnDemandSupabase] line_snapshots pull failed: ${msg}`);
+  }
+
+  if (pullFailed) {
+    return {
+      ...empty,
+      judgments,
+      lineSnapshots,
+      error: 'slim_pull_failed',
+      detail: pullFailed
+    };
   }
 
   if (judgments.length === 0 && lineSnapshots.length === 0) {
+    const detail = 'no game_judgments or line_snapshots rows for the requested filters';
+    if (params.requireHits) {
+      console.warn(`[OnDemandSupabase] ${detail}`);
+      return { ...empty, error: 'slim_pull_empty', detail };
+    }
     return empty;
   }
 
@@ -776,9 +840,9 @@ export async function fetchOnDemandSupabaseContext(
 
   if (lineSnapshots.length > 0) {
     lines.push(`Line Snapshots (${lineSnapshots.length} rows):`);
-    for (const s of lineSnapshots.slice(0, 6)) {
+    for (const srow of lineSnapshots.slice(0, 6)) {
       lines.push(
-        `  • [event_id=${s.event_id} | ${s.is_baseline ? 'OPEN/BASELINE' : 'LIVE'}] Spread=${s.spread ?? 'N/A'}, Total=${s.total ?? 'N/A'}, ML(H/A)=${s.ml_home ?? 'N/A'}/${s.ml_away ?? 'N/A'} (${s.snapshot_at || ''})`
+        `  • [event_id=${srow.event_id} | ${srow.is_baseline ? 'OPEN/BASELINE' : 'LIVE'}] Spread=${srow.spread ?? 'N/A'}, Total=${srow.total ?? 'N/A'}, ML(H/A)=${srow.ml_home ?? 'N/A'}/${srow.ml_away ?? 'N/A'} (${srow.snapshot_at || ''})`
       );
     }
   }

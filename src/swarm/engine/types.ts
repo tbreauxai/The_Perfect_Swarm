@@ -36,6 +36,10 @@ export interface SwarmWorkflowParams {
      * Useful for debugging and for verifying behavior after config changes.
      */
     bypassCache?: boolean;
+    disableMemoryRetrieval?: boolean;
+    eventIds?: string[];
+    date?: string;
+    sport?: string;
     speculativeParallel?: boolean;
     maxSpeculativeConcurrency?: number;
     complexityOverride?: TaskComplexity;

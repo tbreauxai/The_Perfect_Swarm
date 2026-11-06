@@ -98,7 +98,7 @@ describe("MANAGER_CHAIN + analyst pool (PS3)", () => {
     ]);
   });
 
-  it("analyst pool covers every keyed provider, using the default model when no seat uses it", () => {
+  it("analyst pool only includes providers the user put on a seat (env key alone is not a selection)", () => {
     const pool = buildAnalystPool(
       ["gemini", "openrouter", "groq", "mistral"] as any,
       {} as any,
@@ -111,16 +111,20 @@ describe("MANAGER_CHAIN + analyst pool (PS3)", () => {
         } as any,
       ],
     );
-    expect(pool.map((p) => p.provider)).toEqual(["gemini", "groq", "mistral"]);
+    expect(pool.map((p) => p.provider)).toEqual(["groq"]);
     expect(pool.find((p) => p.provider === "groq")?.modelName).toBe(
       "openai/gpt-oss-20b",
     );
-    expect(pool.find((p) => p.provider === "gemini")?.modelName).toBe(
-      DEFAULT_PROVIDER_MODELS.gemini,
+    const multi = buildAnalystPool(
+      ["gemini", "groq", "mistral"] as any,
+      {} as any,
+      [
+        { id: "g", role: "A", provider: "gemini", model: "gemini-2.5-flash" } as any,
+        { id: "q", role: "B", provider: "groq", model: "openai/gpt-oss-20b" } as any,
+        { id: "m", role: "C", provider: "mistral", model: "mistral-small-latest" } as any,
+      ],
     );
-    expect(pool.find((p) => p.provider === "mistral")?.modelName).toBe(
-      DEFAULT_PROVIDER_MODELS.mistral,
-    );
+    expect(multi.map((p) => p.provider)).toEqual(["gemini", "groq", "mistral"]);
   });
 
   it("morning runs never borrow from the global analyst pool (chat runs do, and never from github)", () => {
@@ -147,11 +151,8 @@ describe("MANAGER_CHAIN + analyst pool (PS3)", () => {
     expect(morning.analysts[0].getFallbacks()).toEqual([]);
 
     const chat = resolveSwarmAgents({ agents } as any, undefined);
-    expect(chat.analysts[0].getFallbacks().map((f) => f.provider)).toEqual([
-      "gemini",
-      "groq",
-      "mistral",
-    ]);
+    // ps-ok-mock seats only → pool empty (env keys alone are not a selection after #143).
+    expect(chat.analysts[0].getFallbacks().map((f) => f.provider)).toEqual([]);
     expect(
       chat.managerAgent.getFallbacks().map((f) => String(f.provider)),
     ).not.toContain("github");

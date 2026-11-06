@@ -29,6 +29,7 @@ import { gradeAndRecordFinalGames } from './feedback.ts';
 import type { MorningBatchResult, SlateGame } from './types.ts';
 import { morningClaimKey, type MorningClaimStore } from "./singleFlight.ts";
 import { executeSwarmWorkflow } from '../engine/index.ts';
+import { globalProviderLimiter } from '../providers/limiter.ts';
 
 export * from "./types.ts";
 export * from "./espnSlate.ts";
@@ -218,6 +219,8 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
 
   for (const item of unclaimedGames) {
     const { game, isReplace } = item;
+    // Independent games: do not let game N's TPM window block game N+1 for up to a minute.
+    globalProviderLimiter.clearTokenLogs();
     try {
       // Fetch live line-movement steam delta and team-specific calibration history from Supabase when configured
       const pregameContext = cfg
@@ -240,6 +243,9 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
         callerAppId: 'duelodds',
         // Every game is judged fresh: no semantic/payload cache hit can copy another game's verdict.
         bypassCache: true,
+        // Morning already injects steam/calibration via fetchPregameLearningContext. Cortex retrieve
+        // has been observed to hang on the 2nd+ game in a slate when Qdrant is unreachable (CI).
+        disableMemoryRetrieval: true,
         settings: {
           domain: 'sports-betting',
           responseSchema: 'morning_judge',

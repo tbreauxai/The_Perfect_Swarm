@@ -11,11 +11,11 @@ import {
 export const dueloddsSupabaseLookupTool: SwarmTool = {
   name: 'duelodds_supabase_lookup',
   description:
-    'Pulls live and historical sports market data directly from the DuelOdds Supabase database (game_judgments and line_snapshots) on-demand by eventId, team name, sport, or gameDate.',
+    'Pulls live and historical sports market data directly from the DuelOdds Supabase database (game_judgments and line_snapshots) on-demand by eventId, team name, sport, or gameDate. Refuses unfiltered pulls.',
   parameters: {
     eventId: {
       type: 'string',
-      description: 'Optional specific game event_id (e.g., "401584000") to fetch line movement snapshots and judgments for.'
+      description: 'Optional specific game event_id (e.g., "nba-401584000") to fetch line movement snapshots and judgments for.'
     },
     team: {
       type: 'string',
@@ -39,6 +39,7 @@ export const dueloddsSupabaseLookupTool: SwarmTool = {
     if (!cfg) {
       return {
         configured: false,
+        error: 'supabase_not_configured',
         message: 'Supabase credentials (SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY) are not configured in the environment.'
       };
     }
@@ -55,7 +56,9 @@ export const dueloddsSupabaseLookupTool: SwarmTool = {
       configured: true,
       judgmentsCount: result.judgments.length,
       lineSnapshotsCount: result.lineSnapshots.length,
-      summary: result.formattedBlock || 'No matching rows found in DuelOdds Supabase tables.',
+      error: result.error,
+      detail: result.detail,
+      summary: result.formattedBlock || result.detail || 'No matching rows found in DuelOdds Supabase tables.',
       judgments: result.judgments,
       lineSnapshots: result.lineSnapshots
     };

@@ -359,6 +359,13 @@ export class ProviderLimiter {
     }
   }
 
+  /** Drop sliding TPM windows only (keep circuits / dead-model marks). Morning clears between games. */
+  clearTokenLogs(): void {
+    for (const st of this.states.values()) {
+      st.tokenLog.length = 0;
+    }
+  }
+
   /** Clears all breaker/budget state (tests). */
   reset(): void {
     this.states.clear();
