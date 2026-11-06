@@ -23,8 +23,35 @@ export const LEARNING_COLLECTION = 'swarm_learning';
 const VECTOR_SIZE = 8;
 const QDRANT_TIMEOUT_MS = 8000;
 
-function dummyVector(): number[] {
-    return new Array(VECTOR_SIZE).fill(0);
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Qdrant requires every point ID to be either an unsigned 64-bit integer or a valid UUID string.
+ * Converts arbitrary string keys (e.g. "ledger:duelodds:Quant Specialist", "profile:Manager Node")
+ * into a deterministic UUIDv5-formatted string so upserts remain 100% idempotent and Qdrant-compliant.
+ */
+export function toDeterministicUuid(key: string): string {
+    const clean = String(key || '').trim();
+    if (UUID_REGEX.test(clean)) return clean.toLowerCase();
+
+    const seeds = [0x811c9dc5, 0x9e3779b9, 0x85ebca6b, 0xc2b2ae35];
+    const hashes = seeds.map((seed, sIdx) => {
+        let h = seed >>> 0;
+        for (let i = 0; i < clean.length; i++) {
+            h ^= (clean.charCodeAt(i) + sIdx * 31) & 0xff;
+            h = Math.imul(h, 0x01000193) >>> 0;
+        }
+        return h.toString(16).padStart(8, '0');
+    });
+
+    const hex = hashes.join('');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+function dummyVector(size: number = VECTOR_SIZE): number[] {
+    const vec = new Array(size).fill(0);
+    if (size > 0) vec[0] = 1;
+    return vec;
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -118,11 +145,13 @@ export class QdrantLearningStore {
     private async upsert(id: string, payload: Record<string, any>): Promise<void> {
         const ok = await this.readyPromise;
         if (!ok || !this.client) return;
+        const pointId = toDeterministicUuid(id);
+        const enrichedPayload = { ...payload, pointKey: id };
         try {
             await withTimeout(
                 this.client.upsert(this.collection, {
                     wait: false,
-                    points: [{ id, vector: dummyVector(), payload }]
+                    points: [{ id: pointId, vector: dummyVector(), payload: enrichedPayload }]
                 }),
                 QDRANT_TIMEOUT_MS,
                 'upsert'

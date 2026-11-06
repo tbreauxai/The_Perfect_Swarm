@@ -70,15 +70,19 @@ describe('QdrantLearningStore', () => {
         expect(loaded.policies[0].generation).toBe(3);
     });
 
-    it('upserts are idempotent (no duplicates on re-save)', async () => {
+    it('upserts are idempotent (no duplicates on re-save) and use valid UUID point IDs', async () => {
         const fake = makeFakeQdrant();
         const store = new QdrantLearningStore({ client: fake as any, collection: 'test_learning' });
         await store.whenReady();
         await store.saveOutcome({ id: 'outcome-1', workflowId: 'wf-1', appId: 'a', timestamp: 1 });
         await store.saveOutcome({ id: 'outcome-1', workflowId: 'wf-1', appId: 'a', timestamp: 1, graded: true });
+        await store.saveLedgerEntry('duelodds:Quant Specialist', { wins: 3, losses: 1 });
         const loaded = await store.loadAll();
         expect(loaded.outcomes).toHaveLength(1);
         expect(loaded.outcomes[0].graded).toBe(true);
+        for (const id of fake.points.keys()) {
+            expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+        }
     });
 });
 
