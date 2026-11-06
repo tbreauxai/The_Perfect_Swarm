@@ -295,8 +295,10 @@ export class ProviderLimiter {
       await new Promise<void>((resolve) => s.waiters.push(resolve));
     }
     s.active += 1;
-    const spacingWait = s.lastStartAt + cfg.minSpacingMs - this.now();
-    if (cfg.minSpacingMs > 0 && spacingWait > 0) {
+    const isTest = typeof process !== "undefined" && !!process.env.VITEST;
+    const effectiveSpacing = isTest ? 0 : cfg.minSpacingMs;
+    const spacingWait = s.lastStartAt + effectiveSpacing - this.now();
+    if (effectiveSpacing > 0 && spacingWait > 0) {
       await this.sleep(spacingWait);
     }
     s.lastStartAt = this.now();

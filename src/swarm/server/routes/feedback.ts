@@ -1,5 +1,5 @@
 import type { Hono } from 'hono';
-import { globalFeedbackEngine, analystLedger } from '../../feedback.ts';
+import { globalFeedbackEngine, analystLedger, triggerOfflineFailureReflection } from '../../feedback.ts';
 import { globalSpecialistProfiler } from '../../loadBalancer.ts';
 import {
     outcomeToScore,
@@ -148,6 +148,19 @@ export function registerFeedbackRoutes(app: Hono, ctx: ServerRouteContext): void
                     if (closingLineValue !== undefined) (r as any).closingLineValue = closingLineValue;
                     globalFeedbackEngine.getKnowledgeRepository().persistOutcome(r as any);
                 }
+            }
+
+            if (defaultCortex && (outcome === 'loss' || (typeof outcome === 'string' && outcome.toLowerCase().includes('loss')))) {
+                triggerOfflineFailureReflection({
+                    workflowId,
+                    originApp,
+                    outcome,
+                    reason,
+                    workflowRecord: workflowRecords[0],
+                    cortex: defaultCortex
+                }).catch(err => {
+                    console.warn('[OfflineReflection] Non-blocking reflection failed:', err);
+                });
             }
 
             if (lessonId && defaultCortex) {

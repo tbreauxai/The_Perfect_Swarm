@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { executeSwarmWorkflow } from "./index.ts";
+import { executeEmergencySynthesis } from "./partialResult.ts";
+import { compileDebateDigest, publishInteragentCoordination } from "./coordinationPipeline.ts";
+import { globalHypothesisLayer } from "../coordination.ts";
 import { ProviderRegistry } from "../providers/registry.ts";
 import { GroqAdapter } from "../providers/groq.ts";
 import {
@@ -159,5 +162,53 @@ describe("PS1 partial / degraded semantics", () => {
     expect(result.status).toBe("partial");
     expect(result.partial).toBe(true);
     expect(result.finalAnalysis.partial).toBe(true);
+  });
+  it("executeEmergencySynthesis succeeds with 200-token cap and attaches emergencyFallback flag", async () => {
+    let capturedConfig: any;
+    const mockAgent = {
+      role: "Emergency Analyst",
+      provider: "ps-ok-mock",
+      async run(prompt: string, context: any, config: any) {
+        capturedConfig = config;
+        return JSON.stringify({
+          ui_title: "Emergency Executive Synthesis",
+          summary: "Emergency summary synthesized from top analyst insights in under 200 tokens.",
+          components: []
+        });
+      }
+    };
+
+    const res = await executeEmergencySynthesis({
+      analysts: [mockAgent as any],
+      allAnalystReports: [[{ insights: ["Critical liquidity issue", "High latency"], summary: "Sum" }]],
+      bestAnalyst: { seatId: "a1", role: "Analyst", provider: "mock", report: {} },
+      degraded: ["manager"],
+      context: { addEvent: () => {} } as any
+    });
+
+    expect(capturedConfig?.maxTokens).toBe(200);
+    expect(res.emergencyFallback).toBe(true);
+    expect(res.partial).toBe(true);
+    expect(res.summary).toContain("Emergency summary synthesized");
+  });
+
+  it("coordinationPipeline registers hypotheses and compileDebateDigest formats them", () => {
+    const mockAnalyst = { role: "Specialist A", provider: "mock" };
+    publishInteragentCoordination({
+      analysts: [mockAnalyst as any],
+      allAnalystReports: [[{
+        primaryHypothesis: "Signal edge is persistent",
+        counterHypothesis: "Signal decays immediately under transaction costs",
+        insights: ["Finding A"],
+        summary: "Assessment complete"
+      }]],
+      context: { addEvent: () => {} } as any
+    });
+
+    const digest = compileDebateDigest("Critic refutation evidence");
+    expect(digest).toContain("[Debate Digest & Dialectic Synthesis]");
+    expect(digest).toContain("Primary Claim");
+    expect(digest).toContain("Counter-Argument / Falsifier");
+    expect(digest).toContain("Critic Refutation & Stress-Test");
   });
 });

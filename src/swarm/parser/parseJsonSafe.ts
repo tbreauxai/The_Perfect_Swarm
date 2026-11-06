@@ -1,13 +1,15 @@
 import type { ValidationOutcome } from './types.ts';
-import { repairJson, extractFuzzyFields } from './repairJson.ts';
+import { repairJson, extractFuzzyFields, extractReasoningTraces } from './repairJson.ts';
 
 export interface ParseJsonSafeResult<T> {
     data: T;
     repaired: boolean;
+    reasoningTraces?: string[];
 }
 
 /**
- * Parses JSON safely from any input while tracking whether format repair was required.
+ * Parses JSON safely from any input while tracking whether format repair was required
+ * and capturing any harvested reasoning traces.
  */
 export function parseJsonSafeWithStatus<T = any>(input: unknown, fallback?: T): ParseJsonSafeResult<T> {
     if (typeof input === 'object' && input !== null) {
@@ -22,9 +24,12 @@ export function parseJsonSafeWithStatus<T = any>(input: unknown, fallback?: T): 
         return { data: (fallback !== undefined ? fallback : {}) as T, repaired: true };
     }
 
+    const reasoningTraces = extractReasoningTraces(trimmed);
+    const traceResult = reasoningTraces.length > 0 ? { reasoningTraces } : {};
+
     // Attempt 1: Direct JSON.parse
     try {
-        return { data: JSON.parse(trimmed) as T, repaired: false };
+        return { data: JSON.parse(trimmed) as T, repaired: false, ...traceResult };
     } catch {
         // continue
     }
@@ -35,7 +40,7 @@ export function parseJsonSafeWithStatus<T = any>(input: unknown, fallback?: T): 
         const lastObj = trimmed.lastIndexOf('}');
         if (firstObj !== -1 && lastObj > firstObj) {
             const sliced = JSON.parse(trimmed.substring(firstObj, lastObj + 1)) as T;
-            return { data: sliced, repaired: true };
+            return { data: sliced, repaired: true, ...traceResult };
         }
     } catch {
         // continue
@@ -47,7 +52,7 @@ export function parseJsonSafeWithStatus<T = any>(input: unknown, fallback?: T): 
             const repaired = repairJson(trimmed);
             const parsed = JSON.parse(repaired) as T;
             if (parsed && (typeof parsed !== 'object' || Object.keys(parsed).length > 0)) {
-                return { data: parsed, repaired: true };
+                return { data: parsed, repaired: true, ...traceResult };
             }
         } catch {
             // continue
@@ -57,10 +62,10 @@ export function parseJsonSafeWithStatus<T = any>(input: unknown, fallback?: T): 
     // Attempt 4: Fuzzy regex extraction
     const fuzzy = extractFuzzyFields(trimmed);
     if (fuzzy && Object.keys(fuzzy).length > 0) {
-        return { data: fuzzy as T, repaired: true };
+        return { data: fuzzy as T, repaired: true, ...traceResult };
     }
 
-    return { data: (fallback !== undefined ? fallback : {}) as T, repaired: true };
+    return { data: (fallback !== undefined ? fallback : {}) as T, repaired: true, ...traceResult };
 }
 
 /**

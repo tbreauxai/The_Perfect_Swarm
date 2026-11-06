@@ -1,30 +1,26 @@
 [
   {
-    "id": "goal-1-phase1-compression-repair-scorecard",
-    "description": "Implement Phase 1: Schema minification & key compaction ([xN] line dedup, key mapping/inversion), zero-retry JSON repair policy (_repaired: true), and default early-exit scorecard mode for anomaly triage.",
+    "id": "goal-1-phase1-thinking-harvest-redteam-variance",
+    "description": "Implement Phase 1: Preserve and harvest thinking tags in repairJson into metadata.reasoningTraces, define RedTeamAnalyst in constants and default analyst pool, and calculate ensemble variance with [CONTESTED_CONSENSUS] warning and confidence clamping.",
     "status": "completed",
-    "verification": "Compression, parser, and scorecard tests pass with 30-50% size reduction on repetitive data, _repaired: true on local repairs, and <50 tokens on negative scorecards.",
-    "evidence": "Implemented minifyJsonKeys, restoreMinifiedKeys, deduplicateTabularLines, _repaired: true in schemas and guards, AnomalyScorecardSchema, and default anomaly triage in isScorecardMode. 73/73 tests pass."
+    "verification": "Tests verify thinking tags are harvested into metadata, RedTeamAnalyst generates counter-perspectives, and high variance triggers [CONTESTED_CONSENSUS] and confidence clamping."
   },
   {
-    "id": "goal-2-phase2-predictive-flow-multiplexing",
-    "description": "Implement Phase 2: Predictive flow control with 80% sliding-window token pacing/backpressure, cross-provider parallel chunk multiplexing in clusterPipeline, and tiered model offloading in fastPath.",
+    "id": "goal-2-phase2-dialectic-hypothesis-emergency-fallback",
+    "description": "Implement Phase 2: Dynamic hypothesis and counter-hypothesis schemas, HypothesisValidationLayer registration with Debate Digest in synthesis prompt, and context-aware emergency synthesis fallback with 200-token cap in partialResult.",
     "status": "completed",
-    "verification": "Load balancer, scheduler, and fastPath tests pass, preventing rate limits and properly multiplexing across providers.",
-    "evidence": "Implemented predictive pacing delay and 80% token utilization backpressure in AdaptiveLoadBalancer & TokenBucketRateLimiter, cross-provider chunk multiplexing in clusterPipeline, and tiered model offloading in router. 82/82 tests pass."
+    "verification": "Dialectic debate digest synthesized into manager prompt, and emergency synthesis executed before pickBestAnalystOutput on manager failure."
   },
   {
-    "id": "goal-3-phase3-hierarchical-rrf-sliding-window",
-    "description": "Implement Phase 3: Hierarchical Map-Reduce micro-batch digests (>6 chunks), semantic caching with RRF in semanticCacheInterceptor, RL routing reward in AdaptiveLoadBalancer, and sliding-window memory context rotation (<6k tokens).",
+    "id": "goal-3-phase3-meta-learning-failure-reflection",
+    "description": "Implement Phase 3: Asynchronous offline failure reflection on loss outcomes in feedback.ts and offlineReflection.ts, upserting structured lessons into MemoryCortex via upsertGradedLesson.",
     "status": "completed",
-    "verification": "Cluster pipeline, semantic cache, RL routing, and sliding window module tests pass with verified token bounding.",
-    "evidence": "Implemented 3-chunk micro-batch digests in clusterPipeline, lookupWithRRF and default 0.88 threshold in semanticCacheInterceptor, multi-objective RL reward in AdaptiveLoadBalancer, and created SlidingWindowContext in src/swarm/conversation/slidingWindow.ts strictly bounding context below 6k tokens. All tests pass."
+    "verification": "Integration tests verify loss outcome triggers asynchronous failure reflection and creates queryable graded_lesson point in cortex."
   },
   {
     "id": "goal-4-phase4-verification-and-clear-todo",
-    "description": "Implement Phase 4: Run full verification gateways (npm run lint, npm run test:unit, npm run test:simulation, npm run build) and clear todo.md.",
+    "description": "Implement Phase 4: Run full verification gateways (npm run lint, repairJson tests, criticVeto tests, offlineReflection tests, npm run test:unit, npm run build) and clear todo.md.",
     "status": "completed",
-    "verification": "All test and build suites exit with code 0, and todo.md is cleared.",
-    "evidence": "All verification gateways passed cleanly: npm run lint (0 errors), npm run test:unit (137/137 files, 1201 tests passed), npm run test:simulation (12/12 tasks passed), npm run test:server (7/7 tests passed), npm run build (client & swarm built), npm run test:dist (ESM & CJS verified). todo.md cleared."
+    "verification": "All verification commands exit 0 and todo.md is cleared."
   }
 ]

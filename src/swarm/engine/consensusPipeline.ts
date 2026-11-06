@@ -29,6 +29,9 @@ export interface AnalystConsensusDigest {
     verifiedCitationsCount?: number;
     citationCountsBySeat?: Record<string, number>;
     calibratedEnsemble?: CalibratedEnsembleDigest;
+    sampleVariance?: number;
+    sampleStdDev?: number;
+    isContested?: boolean;
 }
 
 const STOP_WORDS = new Set([
@@ -356,11 +359,41 @@ export function extractAnalystConsensus(
         agreementLevel = 'divergent';
     }
 
-    const confidenceScore = Number(Math.min(0.99, Math.max(0.3,
+    // 3. Compute Numerical Prediction Variance & Calibrated Variance Clamping
+    const numericPredictions: number[] = [];
+    for (let i = 0; i < activeAnalystCount; i++) {
+        const rawProb = calibratedEnsemble.seatWeights[i]?.rawProbability;
+        if (typeof rawProb === 'number' && Number.isFinite(rawProb)) {
+            numericPredictions.push(rawProb);
+        }
+    }
+
+    let sampleVariance: number | undefined;
+    let sampleStdDev: number | undefined;
+    let isContested = false;
+
+    if (numericPredictions.length >= 2) {
+        const mean = numericPredictions.reduce((acc, v) => acc + v, 0) / numericPredictions.length;
+        const sumSqDiff = numericPredictions.reduce((acc, v) => acc + Math.pow(v - mean, 2), 0);
+        sampleVariance = sumSqDiff / (numericPredictions.length - 1);
+        sampleStdDev = Math.sqrt(sampleVariance);
+
+        if (sampleStdDev > 0.15 || sampleVariance > 0.02) {
+            isContested = true;
+        }
+    } else if (agreementLevel === 'divergent') {
+        isContested = true;
+    }
+
+    let confidenceScore = Number(Math.min(0.99, Math.max(0.3,
         agreementLevel === 'strong' ? 0.90 + (normalizedConsensus * 0.08)
         : agreementLevel === 'moderate' ? 0.75 + (normalizedConsensus * 0.10)
         : 0.50
     )).toFixed(2));
+
+    if (isContested) {
+        confidenceScore = Math.min(confidenceScore, 0.65);
+    }
 
     const summaryParts: string[] = [
         `Cross-Analyst Consensus: ${agreementLevel.toUpperCase()} (Score: ${(normalizedConsensus * 100).toFixed(0)}%, Evidence-Weighted: ${(evidenceWeightedScore * 100).toFixed(0)}%, Confidence: ${confidenceScore})`,
@@ -383,7 +416,10 @@ export function extractAnalystConsensus(
         summaryText: summaryParts.join(' | '),
         verifiedCitationsCount: calibratedEnsemble.totalVerifiedCitations,
         citationCountsBySeat,
-        calibratedEnsemble
+        calibratedEnsemble,
+        sampleVariance,
+        sampleStdDev,
+        isContested
     };
 }
 
@@ -434,6 +470,14 @@ export function renderPromptConsensusBlock(digest: AnalystConsensusDigest): stri
         for (const d of digest.dissentingOpinions) {
             lines.push(`  - ${d}`);
         }
+    }
+
+    if (digest.isContested) {
+        lines.push(
+            `• [CONTESTED_CONSENSUS]: High variance detected across specialist predictions` +
+            (digest.sampleVariance !== undefined ? ` (sample variance: ${digest.sampleVariance.toFixed(4)}, std dev: ${digest.sampleStdDev?.toFixed(4)})` : '') +
+            `. Analysts sharply disagree on core metrics or direction. Directive: Highlight conflicting perspectives, explain trade-offs, and do NOT state unearned certainty.`
+        );
     }
 
     if (digest.agreementLevel === 'divergent' && digest.confidenceScore < 0.45) {

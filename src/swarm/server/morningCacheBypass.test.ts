@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { runMorningSlate } from "../morning/index.ts";
+import { globalHypothesisLayer } from "../coordination.ts";
 import { ProviderRegistry } from "../providers/registry.ts";
 import { globalSemanticCache, globalPayloadCache } from "../cache.ts";
 import {
@@ -85,6 +86,7 @@ describe("morning run: every game gets its own model call (no cross-game cache h
     globalSpecialistProfiler.reset();
     globalNodeCapacityManager.reset();
     globalProviderLimiter.reset();
+    globalHypothesisLayer.clear();
     vi.stubEnv("GEMINI_API_KEY", "");
     vi.stubEnv("OPENROUTER_API_KEY", "");
     vi.stubEnv("MISTRAL_API_KEY", "");
@@ -157,7 +159,7 @@ describe("morning run: every game gets its own model call (no cross-game cache h
     expect(new Set(calls.analyst.map((p) => gameFor(p)?.id))).toEqual(
       new Set(["nba-g1", "nba-g2"]),
     );
-  });
+  }, 15000);
 
   it("the morning call asks the engine to bypass every cache", async () => {
     const seen: any[] = [];

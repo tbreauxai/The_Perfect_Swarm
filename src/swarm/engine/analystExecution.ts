@@ -23,7 +23,7 @@ import {
 import { globalPromptCompressor } from '../compression.ts';
 import { guardAnalystResponse } from '../parser.ts';
 import { SwarmTracer } from '../profiler.ts';
-import { ANALYST_SYSTEM_INSTRUCTION } from './constants.ts';
+import { ANALYST_SYSTEM_INSTRUCTION, RED_TEAM_ANALYST_ROLE, RED_TEAM_ANALYST_SYSTEM_INSTRUCTION } from './constants.ts';
 import { recordDegraded } from './partialResult.ts';
 import { AnalystScorecardSchema } from '../types.ts';
 import { runScorecardSeat, renderScorecardInstruction, scorecardAnalystMaxTokens, scorecardToAnalystReport } from './scorecard.ts';
@@ -140,9 +140,13 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
 
         const startTime = Date.now();
         const toolPrompt = toolRegistry.list().length > 0 ? `\n\n${toolRegistry.renderPromptSchema()}` : '';
+        const isRedTeam = analyst.role === RED_TEAM_ANALYST_ROLE ||
+            /red[-_]?team/i.test(analyst.role) ||
+            /red[-_]?team/i.test((analyst as any).id || '');
+        const defaultInstruction = isRedTeam ? RED_TEAM_ANALYST_SYSTEM_INSTRUCTION : ANALYST_SYSTEM_INSTRUCTION;
         const baseInstruction = activeVariant?.systemPrompts?.[(analyst as any).id || analyst.role]
             || activeVariant?.systemPrompts?.[analyst.role]
-            || ANALYST_SYSTEM_INSTRUCTION;
+            || defaultInstruction;
         analyst.setSystemInstruction(baseInstruction + toolPrompt);
         const overhead = (baseInstruction?.length || 0) + task.length + JSON.stringify(profile).length + (historicalContext?.length || 0);
         const chunkPromptText = fitChunkToProvider(chunk, analyst.provider, chunks.length, chunkIdx, overhead);

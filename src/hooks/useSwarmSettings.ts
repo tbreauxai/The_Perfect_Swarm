@@ -20,6 +20,7 @@ export const DEFAULT_SWARM_SETTINGS: AppSettings = {
     { id: 'a2', role: 'Analyst 2', provider: 'gemini', model: 'gemini-3.5-flash-lite' },
     { id: 'a3', role: 'Analyst 3', provider: 'gemini', model: 'gemini-3.5-flash-lite' },
     { id: 'a4', role: 'Analyst 4', provider: 'mistral', model: 'mistral-small-latest' },
+    { id: 'redteam', role: 'RedTeamAnalyst', provider: 'gemini', model: 'gemini-3.5-flash-lite' },
     { id: 'critic', role: 'Verification Critic', provider: 'gemini', model: 'gemini-3.5-flash-lite' }
   ]
 };

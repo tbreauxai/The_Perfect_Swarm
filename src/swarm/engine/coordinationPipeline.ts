@@ -37,8 +37,27 @@ export function publishInteragentCoordination(params: InteragentPublishParams): 
             });
 
             if (coordinationSettings?.hypothesisValidation !== false) {
+                if (rep.primaryHypothesis && typeof rep.primaryHypothesis === 'string' && rep.primaryHypothesis.trim().length > 0) {
+                    globalHypothesisLayer.proposeHypothesis({
+                        claim: rep.primaryHypothesis.trim(),
+                        proposedBy: analyst.role,
+                        confidence: 0.75,
+                        evidence: [rep.summary || 'Primary analytical deduction']
+                    });
+                    totalHypothesesProposed++;
+                }
+                if (rep.counterHypothesis && typeof rep.counterHypothesis === 'string' && rep.counterHypothesis.trim().length > 0) {
+                    globalHypothesisLayer.proposeHypothesis({
+                        claim: `[Counter-Hypothesis]: ${rep.counterHypothesis.trim()}`,
+                        proposedBy: analyst.role,
+                        confidence: 0.60,
+                        evidence: [rep.summary || 'Adversarial counter-deduction']
+                    });
+                    totalHypothesesProposed++;
+                }
+
                 const candidateInsights = rep.insights || [];
-                for (const ins of candidateInsights.slice(0, 3)) {
+                for (const ins of candidateInsights.slice(0, 2)) {
                     const claim = typeof ins === 'string' ? ins : (ins.description || ins.title || JSON.stringify(ins));
                     if (claim && claim.length > 5) {
                         globalHypothesisLayer.proposeHypothesis({
@@ -116,4 +135,31 @@ export function arbitrateAndPropagateCoordination(params: ArbitrateCoordinationP
     }
 
     return validatedThisRun;
+}
+
+/**
+ * Compiles proposed and surviving hypotheses, counter-arguments, and critic refutations
+ * into a structured Debate Digest prompt block for the Manager Node.
+ */
+export function compileDebateDigest(criticFeedback?: any): string {
+    const hypotheses = globalHypothesisLayer.getHypotheses();
+    if (!hypotheses || hypotheses.length === 0) return '';
+
+    const lines: string[] = ['[Debate Digest & Dialectic Synthesis]:'];
+    for (const h of hypotheses.slice(0, 8)) {
+        const isCounter = h.claim.startsWith('[Counter-Hypothesis]');
+        const prefix = isCounter ? '• Counter-Argument / Falsifier' : '• Primary Claim';
+        const cleanClaim = h.claim.replace(/^\[Counter-Hypothesis\]:\s*/, '');
+        lines.push(`  ${prefix} (${h.proposedBy}): "${cleanClaim}" [Confidence: ${(h.confidence * 100).toFixed(0)}%, Status: ${h.status}]`);
+    }
+
+    const feedbackStr = typeof criticFeedback === 'string'
+        ? criticFeedback
+        : (criticFeedback?.feedback || (criticFeedback ? JSON.stringify(criticFeedback) : ''));
+    if (feedbackStr && feedbackStr.trim().length > 0) {
+        lines.push(`  • Critic Refutation & Stress-Test: "${feedbackStr.slice(0, 300).trim()}"`);
+    }
+
+    lines.push('Directives: Synthesize conflicting claims. Directly arbitrate between primary claims and counter-arguments; state which hypothesis survives empirical evidence.');
+    return lines.join('\n');
 }

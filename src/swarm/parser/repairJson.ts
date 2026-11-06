@@ -1,10 +1,64 @@
 /**
+ * Extracts raw reasoning or thinking traces enclosed in model-specific tags
+ * (<think>, <thought>, <reasoning>, [THOUGHT]) before stripping or repairing JSON.
+ */
+export function extractReasoningTraces(raw: string): string[] {
+    if (!raw || typeof raw !== 'string') return [];
+    const traces: string[] = [];
+    const patterns = [
+        /<think>([\s\S]*?)<\/think>/gi,
+        /<reasoning>([\s\S]*?)<\/reasoning>/gi,
+        /<thought>([\s\S]*?)<\/thought>/gi,
+        /\[THOUGHT\]([\s\S]*?)\[\/THOUGHT\]/gi,
+    ];
+
+    for (const pattern of patterns) {
+        let match: RegExpExecArray | null;
+        while ((match = pattern.exec(raw)) !== null) {
+            const trace = match[1]?.trim();
+            if (trace) traces.push(trace);
+        }
+    }
+
+    // Handle unclosed <think> tag if model was truncated mid-reasoning
+    const lower = raw.toLowerCase();
+    const thinkIdx = lower.indexOf('<think>');
+    if (thinkIdx !== -1 && !lower.includes('</think>')) {
+        const afterTag = raw.slice(thinkIdx + 7);
+        const jsonStart = afterTag.search(/[{\[]/);
+        const unclosed = (jsonStart !== -1 ? afterTag.substring(0, jsonStart) : afterTag).trim();
+        if (unclosed) {
+            traces.push(unclosed);
+        }
+    }
+
+    return traces;
+}
+
+/**
+ * Repairs JSON while returning both the clean JSON and any harvested reasoning traces.
+ */
+export function repairJsonWithTraces(raw: string): { cleaned: string; reasoningTraces: string[] } {
+    const traces = extractReasoningTraces(raw);
+    const cleaned = repairJson(raw);
+    return { cleaned, reasoningTraces: traces };
+}
+
+/**
  * Resilient Zero-Drift AI JSON Repair Engine.
  * Transforms malformed, fenced, commented, unquoted, single-quoted, or truncated LLM outputs
  * into strictly valid JSON without any external runtime dependencies.
+ * Optionally populates an output sink with captured reasoning traces.
  */
-export function repairJson(raw: string): string {
+export function repairJson(raw: string, sink?: string[]): string {
     if (!raw || typeof raw !== 'string') return '{}';
+
+    if (sink) {
+        const traces = extractReasoningTraces(raw);
+        for (const t of traces) {
+            sink.push(t);
+        }
+    }
 
     // 1. Strip reasoning tags (DeepSeek R1, Llama 3.3, Qwen)
     let text = raw

@@ -13,7 +13,7 @@ import { parseJsonSafe, parseJsonSafeWithStatus } from './parseJsonSafe.ts';
  * Domain guard for AnalystResponseSchema: guaranteed zero crashes on worker agent outputs.
  */
 export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): AnalystResponse {
-    const { data: raw, repaired: parseRepaired } = parseJsonSafeWithStatus<any>(input, {});
+    const { data: raw, repaired: parseRepaired, reasoningTraces } = parseJsonSafeWithStatus<any>(input, {});
     let wasRepaired = parseRepaired || raw?._repaired === true;
 
     // Handle minified key compaction aliases if present (ins, ano, sum)
@@ -65,10 +65,27 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
         wasRepaired = true;
     }
 
+    const primaryHypothesis = typeof raw?.primaryHypothesis === 'string' && raw.primaryHypothesis.trim().length > 0
+        ? raw.primaryHypothesis.trim()
+        : undefined;
+    const counterHypothesis = typeof raw?.counterHypothesis === 'string' && raw.counterHypothesis.trim().length > 0
+        ? raw.counterHypothesis.trim()
+        : undefined;
+
+    const metadata: Record<string, any> = {
+        ...(raw?.metadata && typeof raw.metadata === 'object' ? raw.metadata : {})
+    };
+    if (reasoningTraces && reasoningTraces.length > 0 && !metadata.reasoningTraces) {
+        metadata.reasoningTraces = reasoningTraces;
+    }
+
     return {
         insights,
         anomalies,
         summary,
+        ...(primaryHypothesis ? { primaryHypothesis } : {}),
+        ...(counterHypothesis ? { counterHypothesis } : {}),
+        ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
         ...(wasRepaired ? { _repaired: true } : {})
     };
 }
@@ -77,8 +94,15 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
  * Domain guard for ManagerResponseSchema: guaranteed valid Generative UI schema.
  */
 export function guardManagerResponse(input: unknown, defaultTitle: string = 'Executive Swarm Synthesis'): ManagerResponse {
-    const { data: raw, repaired: parseRepaired } = parseJsonSafeWithStatus<any>(input, {});
+    const { data: raw, repaired: parseRepaired, reasoningTraces } = parseJsonSafeWithStatus<any>(input, {});
     let wasRepaired = parseRepaired || raw?._repaired === true;
+
+    if (reasoningTraces && reasoningTraces.length > 0 && raw && typeof raw === 'object') {
+        raw.metadata = {
+            ...(raw.metadata && typeof raw.metadata === 'object' ? raw.metadata : {}),
+            reasoningTraces
+        };
+    }
 
     // Handle minified key compaction aliases if present (tit, sum, cmp, met, rec, md)
     if (raw && typeof raw === 'object') {
@@ -191,10 +215,15 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
         });
     }
 
+    const finalMetadata = raw && typeof raw === 'object' && raw.metadata && typeof raw.metadata === 'object' && Object.keys(raw.metadata).length > 0
+        ? raw.metadata
+        : undefined;
+
     return {
         ui_title: title,
         ...(summary ? { summary } : {}),
         components,
+        ...(finalMetadata ? { metadata: finalMetadata } : {}),
         _repaired: true
     };
 }

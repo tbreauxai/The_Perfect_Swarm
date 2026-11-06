@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { repairJson, extractFuzzyFields } from './repairJson';
+import { repairJson, extractFuzzyFields, extractReasoningTraces, repairJsonWithTraces } from './repairJson';
+import { guardAnalystResponse, guardManagerResponse } from './responseGuards';
 
 describe('repairJson', () => {
   it('should handle basic valid JSON strings', () => {
@@ -157,5 +158,38 @@ describe('extractFuzzyFields', () => {
   it('should return null if no fields match', () => {
       const input = 'Just some random text with no matching headers.';
       expect(extractFuzzyFields(input)).toEqual({ anomalies: [] });
+  });
+  it('should extract reasoning traces and populate sink', () => {
+    const raw = '<think>Deductive hypothesis test</think><thought>Secondary reflection</thought>{"insights": ["A"]}';
+    const traces = extractReasoningTraces(raw);
+    expect(traces).toEqual(['Deductive hypothesis test', 'Secondary reflection']);
+
+    const sink = [];
+    const cleaned = repairJson(raw, sink);
+    expect(cleaned).toBe('{"insights": ["A"]}');
+    expect(sink).toEqual(['Deductive hypothesis test', 'Secondary reflection']);
+
+    const withTraces = repairJsonWithTraces(raw);
+    expect(withTraces.cleaned).toBe('{"insights": ["A"]}');
+    expect(withTraces.reasoningTraces).toEqual(['Deductive hypothesis test', 'Secondary reflection']);
+  });
+
+  it('should handle unclosed think tag in extractReasoningTraces', () => {
+    const raw = '<think>Incomplete chain of thought\n{"key": "val"}';
+    const traces = extractReasoningTraces(raw);
+    expect(traces).toEqual(['Incomplete chain of thought']);
+  });
+  it('should attach reasoning traces and hypotheses in guardAnalystResponse and guardManagerResponse', () => {
+    const rawAnalyst = '<think>Analyst reasoning trace</think>{"insights": ["Insight 1"], "summary": "Sum", "primaryHypothesis": "H1", "counterHypothesis": "H2"}';
+    const guardedAnalyst = guardAnalystResponse(rawAnalyst, 'Specialist');
+    expect(guardedAnalyst.insights).toEqual(['Insight 1']);
+    expect(guardedAnalyst.primaryHypothesis).toBe('H1');
+    expect(guardedAnalyst.counterHypothesis).toBe('H2');
+    expect(guardedAnalyst.metadata?.reasoningTraces).toEqual(['Analyst reasoning trace']);
+
+    const rawManager = '<thought>Manager reasoning trace</thought>{"ui_title": "Title", "summary": "Exec summary", "components": []}';
+    const guardedManager = guardManagerResponse(rawManager);
+    expect(guardedManager.ui_title).toBe('Title');
+    expect(guardedManager.metadata?.reasoningTraces).toEqual(['Manager reasoning trace']);
   });
 });

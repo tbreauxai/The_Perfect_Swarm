@@ -4,3 +4,4 @@ export * from './conceptDriftDetector.ts';
 export * from './knowledgeRepository.ts';
 export * from './feedbackEngine.ts';
 export * from './analystLedger.ts';
+export * from './offlineReflection.ts';

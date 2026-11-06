@@ -1,21 +1,19 @@
-# Ultragoal Brief: Token & Throughput Optimization Implementation Plan
+# Ultragoal Brief: Deductive Reasoning & Intelligence Implementation Plan
 
 ## Objective
-Implement comprehensive engineering optimizations across compression, JSON repair, scorecard triage, predictive flow control, provider multiplexing, hierarchical map-reduce, semantic caching, RL load balancing, and sliding-window memory rotation as specified in `todo.md`, verify with full test suites, and clear `todo.md`.
+Implement the 6 accepted reasoning and intelligence optimizations: Dynamic Hypothesis/Refutation, Meta-Learning Failure Reflection, Adversarial Red-Teaming, Ensemble Confidence Calibration, Context-Aware Emergency Fallback, and Zero-Cost Thinking Tag Harvesting, verify all test suites, and clear `todo.md`.
 
 ## Architecture Boundaries & Phases
-1. **Phase 1: Immediate Token Reduction & Zero-Retry Guarantees**
-   - `TokenAwarePromptCompressor` key minification, inverse key restoration, and `[xN]` repeated line deduplication.
-   - Zero-retry deterministic JSON repair in `responseGuards.ts` and `_repaired: true` tracking.
-   - Early-exit scorecard mode for anomaly detection in `scorecard.ts` and `scorecardManager.ts`.
-2. **Phase 2: Predictive Flow Control & Provider Multiplexing**
-   - 80% proactive token pacing and predictive backpressure in `AdaptiveLoadBalancer` and `AdaptiveTaskScheduler`.
-   - Cross-provider parallel chunk multiplexing in `clusterPipeline.ts`.
-   - Tiered model offloading in `fastPath.ts`.
-3. **Phase 3: Hierarchical Aggregation & Adaptive Intelligence**
-   - Hierarchical Map-Reduce micro-batch cluster digests (>6 chunks) in `clusterPipeline.ts`.
-   - Semantic caching with RRF and threshold >= 0.88 in `semanticCacheInterceptor.ts` and `cortex.ts`.
-   - RL routing reward $R = w_{\text{success}} - w_{\text{latency}} - w_{\text{cost}}$ in `AdaptiveLoadBalancer`.
-   - New `src/swarm/conversation/slidingWindow.ts` for sliding window memory rotation (<6k tokens).
-4. **Phase 4: Full Verification & Todo Clearance**
-   - All tests, lint, simulation, and build pass cleanly; clear `todo.md`.
+1. **Phase 1: Zero-Inference Harvesting & Adversarial Dialectic**
+   - Extract thinking tags (`<think>`, `<reasoning>`, `<thought>`, `[THOUGHT]`) in `repairJson.ts` and attach to `metadata.reasoningTraces`.
+   - Add `RedTeamAnalyst` role and instructions to default analyst pool in `constants.ts`.
+   - Calculate sample variance in `consensusPipeline.ts`, emit `[CONTESTED_CONSENSUS]` warning, and clamp manager confidence when variance > threshold.
+2. **Phase 2: Dialectic Synthesis & Resilient Fallback Degradation**
+   - Add `primaryHypothesis` and `counterHypothesis` to analyst schema and register into `HypothesisValidationLayer` in `coordinationPipeline.ts`.
+   - Generate structured `Debate Digest` into `compileSynthesisPrompt`.
+   - Context-aware emergency synthesis fallback in `partialResult.ts` with 200-token cap before falling back to single analyst.
+3. **Phase 3: Asynchronous Meta-Learning & Failure Reflection**
+   - Create `src/swarm/feedback/offlineReflection.ts` with non-blocking failure reflection generator on loss outcomes.
+   - Upsert generated failure reflection rule and reason into `MemoryCortex.upsertGradedLesson()`.
+4. **Phase 4: Verification Gateways & Todo Clearance**
+   - `npm run lint`, unit tests, offlineReflection tests, full unit suite, `npm run build`, and clear `todo.md`.

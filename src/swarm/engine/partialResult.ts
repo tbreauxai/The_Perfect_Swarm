@@ -106,3 +106,71 @@ export function buildPartialFinalAnalysis(
     analystReport: rep,
   };
 }
+
+export interface EmergencySynthesisParams {
+  analysts: Array<{ role: string; provider: any; id?: string; run?: (prompt: string, context: any, config?: any) => Promise<any> }>;
+  allAnalystReports: any[][];
+  bestAnalyst: BestAnalystOutput;
+  degraded: string[];
+  context: SwarmContext;
+  emergencyModelAgent?: { run: (prompt: string, context: any, config?: any) => Promise<any> };
+}
+
+/**
+ * Context-Aware Emergency Synthesis Fallback.
+ * Dispatches a stripped emergency prompt to an available fast model with a strict 200-token cap.
+ * If this fails or throws, gracefully falls back to pickBestAnalystOutput.
+ */
+export async function executeEmergencySynthesis(params: EmergencySynthesisParams): Promise<any> {
+  const { analysts, allAnalystReports, bestAnalyst, degraded, context, emergencyModelAgent } = params;
+
+  // 1. Gather top analyst insights
+  const allInsights: string[] = [];
+  for (const reps of allAnalystReports || []) {
+    for (const r of reps || []) {
+      if (r && Array.isArray(r.insights)) {
+        for (const ins of r.insights) {
+          if (typeof ins === 'string' && ins.trim()) {
+            allInsights.push(ins.trim());
+          }
+        }
+      }
+    }
+  }
+
+  const topInsights = allInsights.slice(0, 5);
+  const candidateAgent = emergencyModelAgent || (analysts || []).find(a => typeof a.run === 'function');
+
+  if (candidateAgent && typeof candidateAgent.run === 'function' && topInsights.length > 0) {
+    try {
+      const emergencyPrompt = `EMERGENCY: Swarm manager synthesis failed. Given the following top analyst insights, generate a bare-bones 2-sentence executive summary and list key findings.\n\nTop Analyst Insights:\n${topInsights.map((ins, i) => `${i + 1}. ${ins}`).join('\n')}\n\nRespond with strict JSON matching: {"ui_title": "Emergency Executive Synthesis", "summary": "...", "components": []}`;
+
+      const raw = await candidateAgent.run(emergencyPrompt, context, {
+        maxTokens: 200,
+        maxTokensCap: 200,
+        responseMimeType: "application/json"
+      });
+
+      const guarded = guardManagerResponse(raw, "Emergency Executive Synthesis");
+      if (guarded && guarded.summary) {
+        context.addEvent({
+          agentRole: 'Emergency Synthesis Fallback',
+          action: 'Emergency Synthesis Completed',
+          modelName: 'Local/EmergencySynthesis',
+          prompt: 'Manager synthesis failed; emergency 200-token synthesis succeeded.',
+          output: { summary: guarded.summary }
+        });
+        return {
+          ...guarded,
+          partial: true,
+          degraded,
+          emergencyFallback: true
+        };
+      }
+    } catch {
+      // Emergency synthesis threw; fall back to pickBestAnalystOutput
+    }
+  }
+
+  return buildPartialFinalAnalysis(bestAnalyst, degraded);
+}

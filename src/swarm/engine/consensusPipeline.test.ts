@@ -147,4 +147,26 @@ describe('Consensus Pipeline & Disagreement Arbitration', () => {
         expect(block).toContain('High Divergence Warning');
         expect(block).toContain('no_play / pass');
     });
+    it('detects contested consensus with high prediction variance and clamps confidence', () => {
+        const reports = [
+            [{ scorecard: { confidence: 0.95, edge: 12.0 }, insights: ['Bullish momentum'] }],
+            [{ scorecard: { confidence: 0.20, edge: -8.0 }, insights: ['Bearish reversal'] }],
+            [{ scorecard: { confidence: 0.85, edge: 10.0 }, insights: ['Strong upside'] }]
+        ];
+
+        const digest = extractAnalystConsensus(
+            reports,
+            [mockAnalyst1, mockAnalyst2, mockAnalyst3],
+            'Forecast outcome'
+        );
+
+        expect(digest.isContested).toBe(true);
+        expect(digest.sampleVariance).toBeGreaterThan(0.02);
+        expect(digest.sampleStdDev).toBeGreaterThan(0.15);
+        expect(digest.confidenceScore).toBeLessThanOrEqual(0.65);
+
+        const promptBlock = renderPromptConsensusBlock(digest);
+        expect(promptBlock).toContain('[CONTESTED_CONSENSUS]');
+        expect(promptBlock).toContain('High variance detected across specialist predictions');
+    });
 });
