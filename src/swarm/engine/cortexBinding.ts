@@ -81,5 +81,25 @@ export function bindCortexAndTools(
                     ? new ToolRegistry(settings.tools)
                     : globalToolRegistry)));
 
+    if (memoryCortex) {
+        toolRegistry.register({
+            name: 'search_lessons',
+            description: 'Search graded lessons by sport and market. Returns the top matches.',
+            parameters: {
+                sport: { type: 'string', description: 'Sport key, for example basketball_nba' },
+                market: { type: 'string', description: 'Market, for example spread or total' },
+                query: { type: 'string', description: 'Free text, for example unders in close games' }
+            },
+            execute: async (params: { sport?: string; market?: string; query?: string }) => {
+                const q = [params.sport, params.market, params.query].filter(Boolean).join(' ');
+                if (!q) return { lessons: [], note: 'no query' };
+                const results = await memoryCortex.retrieve(q, { limit: 5 });
+                const count = Array.isArray(results) ? results.length : 0;
+                console.log(`[search_lessons] query="${q}" returned ${count}`);
+                return { lessons: results, query: q, count };
+            }
+        });
+    }
+
     return { memoryCortex, toolRegistry };
 }
