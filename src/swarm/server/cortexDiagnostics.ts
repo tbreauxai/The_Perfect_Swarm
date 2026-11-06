@@ -1,8 +1,8 @@
 import type { MemoryCortex } from '../memory.ts';
 import { globalBenchmarker } from '../benchmark.ts';
 import { globalTelemetryCollector } from '../telemetry.ts';
-import { analystLedger } from '../feedback.ts';
-import { fitCalibration, observationsForApp } from '../feedback/probabilityCalibration.ts';
+import { analystLedger, globalFeedbackEngine } from '../feedback.ts';
+import { fitCalibration, observationsForApp, buildBrierTrendSeries } from '../feedback/probabilityCalibration.ts';
 import { globalSpecialistProfiler } from '../loadBalancer.ts';
 import { getSupabaseConfig } from '../morning/supabase.ts';
 
@@ -25,6 +25,8 @@ export async function buildCortexDiagnostics(cortex: MemoryCortex, appId?: strin
     const targetCalibrationApp = appId && appId !== 'global' ? appId : 'duelodds';
     const calObservations = observationsForApp(targetCalibrationApp);
     const calibrationFit = fitCalibration(calObservations);
+    const outcomeRecords = globalFeedbackEngine.getKnowledgeRepository().queryOutcomes({ appId: targetCalibrationApp, limit: 100 });
+    const brierTrend = buildBrierTrendSeries(targetCalibrationApp, outcomeRecords as any[]);
     const ledgerMetrics = analystLedger.getMetrics();
     const specialistProfiles = globalSpecialistProfiler.getAllProfiles();
 
@@ -84,7 +86,8 @@ export async function buildCortexDiagnostics(cortex: MemoryCortex, appId?: strin
         supabaseConfigured: Boolean(getSupabaseConfig()),
         calibrationAppId: targetCalibrationApp,
         calibration: calibrationFit,
-        seatAccuracy
+        seatAccuracy,
+        brierTrend
     };
 
     if (bestModels && Object.keys(diagnostics.storageByRole).length > 0) {

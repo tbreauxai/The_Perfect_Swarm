@@ -109,7 +109,7 @@ export class Agent {
         for (let targetIdx = 0; targetIdx < targetChain.length; targetIdx++) {
             const currentTarget = targetChain[targetIdx];
             const isFallback = targetIdx > 0;
-            const targetModel = currentTarget.modelName || (currentTarget.provider === this.provider ? this.modelName : (DEFAULT_PROVIDER_MODELS[currentTarget.provider] || this.modelName));
+            const targetModel = currentTarget.modelName || (currentTarget.provider === this.provider ? this.modelName : null) || DEFAULT_PROVIDER_MODELS[currentTarget.provider] || this.modelName;
             // A model the probe proved dead (404) is skipped, even if it is assigned
             // to this seat. The probe never opens the seat circuit; seats read its mark.
             if (isModelDead(String(currentTarget.provider), targetModel)) {
@@ -189,7 +189,7 @@ export class Agent {
                         context.addEvent(cacheHitEvent);
                         SwarmTracer.getInstance().logEvent(cacheHitEvent);
                     } else {
-                        const targetModel = currentTarget.modelName || (currentTarget.provider === this.provider ? this.modelName : (DEFAULT_PROVIDER_MODELS[currentTarget.provider] || this.modelName));
+                        const targetModel = currentTarget.modelName || (currentTarget.provider === this.provider ? this.modelName : null) || DEFAULT_PROVIDER_MODELS[currentTarget.provider] || this.modelName;
                         // Budget estimate (chars/4) uses what the adapter will actually send: Groq caps the prompt by mode (chat 18k / morning 6k).
                         const promptCharCap = currentTarget.provider === 'groq' ? groqPromptCharCap(effectiveConfig.groqMode) : prompt.length;
                         const effectivePrompt = currentTarget.provider === 'groq' && prompt.length > promptCharCap

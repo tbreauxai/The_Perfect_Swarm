@@ -30,9 +30,9 @@ const MAX_BATCH_SIZE = 50;
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-export function dummyVector(): number[] {
-    const val = 1 / Math.sqrt(VECTOR_SIZE);
-    return new Array(VECTOR_SIZE).fill(val);
+export function dummyVector(size: number = VECTOR_SIZE): number[] {
+    const val = 1 / Math.sqrt(size);
+    return new Array(size).fill(val);
 }
 
 function parseUuidToBytes(uuid: string): Buffer {
@@ -59,10 +59,12 @@ export function toUuidV5(name: string, namespace: string = LEARNING_NAMESPACE): 
 
 export function ensureUuid(idOrKey: string): string {
     if (UUID_REGEX.test(idOrKey)) {
-        return idOrKey;
+        return idOrKey.toLowerCase();
     }
     return toUuidV5(idOrKey);
 }
+
+export const toDeterministicUuid = ensureUuid;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
     let timer: any;
@@ -195,9 +197,9 @@ export class QdrantLearningStore {
 
         const batch = this.writeBuffer.splice(0, this.writeBuffer.length);
         const points = batch.map(item => ({
-            id: item.id,
+            id: ensureUuid(item.id),
             vector: dummyVector(),
-            payload: item.payload
+            payload: { ...item.payload, pointKey: item.id }
         }));
 
         try {

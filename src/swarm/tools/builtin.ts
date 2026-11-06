@@ -10,6 +10,7 @@ import {
     kellyEdgeSizerTool,
     monteCarloBootstrapTool
 } from './forecastingTools.ts';
+import { dueloddsSupabaseLookupTool } from './supabaseTools.ts';
 
 export * from './mathTools.ts';
 export * from './statsTools.ts';
@@ -17,6 +18,7 @@ export * from './stringTools.ts';
 export * from './dataTools.ts';
 export * from './dateTools.ts';
 export * from './forecastingTools.ts';
+export * from './supabaseTools.ts';
 
 export const standardBuiltinTools: SwarmTool[] = [
     calculatorTool,
@@ -33,5 +35,7 @@ export const standardBuiltinTools: SwarmTool[] = [
     holtWintersForecastTool,
     autocorrelationRegimeTool,
     kellyEdgeSizerTool,
-    monteCarloBootstrapTool
+    monteCarloBootstrapTool,
+    dueloddsSupabaseLookupTool
 ];
+

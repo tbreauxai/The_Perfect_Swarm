@@ -1,10 +1,12 @@
 import type { MemoryCortex } from '../memory.ts';
 import type { ToolRegistry } from '../tools/index.ts';
 import type { SwarmContext } from '../context.ts';
+import { getSupabaseConfig, fetchOnDemandSupabaseContext } from '../morning/supabase.ts';
 
 export interface MemoryGroundingParams {
     memoryCortex?: MemoryCortex;
     task: string;
+    data?: unknown;
     targetAppId: string;
     includeShared: boolean;
     bypassCache: boolean;
@@ -110,6 +112,24 @@ export async function resolveMemoryGrounding(p: MemoryGroundingParams): Promise<
 
                 if (contrastive?.formattedBlock) {
                     historicalContext += `\n\n${contrastive.formattedBlock}`;
+                }
+
+                // On-demand Supabase pull for DuelOdds / sports workflows when not already pre-populated by runMorningSlate
+                const supaCfg = getSupabaseConfig();
+                const alreadyHasSupabaseContext = task.includes('[SUPABASE LIVE MARKET STEAM') || String(p.data || '').includes('[SUPABASE LIVE MARKET STEAM');
+                const isSportsOrDuelOdds = targetAppId === 'duelodds' ||
+                    (typeof readDomain === 'string' && /sport|bet|odds/i.test(readDomain)) ||
+                    /\b(event_?id|spread|moneyline|over\/under|duelodds)\b/i.test(task);
+
+                if (supaCfg && !disableMemoryRetrieval && !alreadyHasSupabaseContext && isSportsOrDuelOdds) {
+                    const onDemand = await fetchOnDemandSupabaseContext(supaCfg, {
+                        task,
+                        data: p.data,
+                        limit: 6
+                    }).catch(() => ({ judgments: [], lineSnapshots: [], formattedBlock: '' }));
+                    if (onDemand.formattedBlock) {
+                        historicalContext += `\n\n${onDemand.formattedBlock}`;
+                    }
                 }
 
                 context.addEvent({

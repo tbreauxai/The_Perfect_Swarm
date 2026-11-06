@@ -659,3 +659,135 @@ export async function fetchPregameLearningContext(
   };
 }
 
+export interface OnDemandSupabaseQueryParams {
+  task?: string;
+  data?: unknown;
+  eventId?: string;
+  team?: string;
+  sport?: string;
+  gameDate?: string;
+  limit?: number;
+}
+
+/**
+ * Pulls live matchup context, line-movement snapshots (`line_snapshots`), and settled/active
+ * judgments (`game_judgments`) on-demand from the DuelOdds Supabase database.
+ * Allows the Swarm to pull only the data it needs rather than requiring DuelOdds to push full history.
+ */
+export async function fetchOnDemandSupabaseContext(
+  cfg: SupabaseConfig | null,
+  params: OnDemandSupabaseQueryParams,
+  fetchFn: typeof fetch = fetch
+): Promise<{
+  judgments: any[];
+  lineSnapshots: any[];
+  formattedBlock: string;
+}> {
+  const empty = { judgments: [], lineSnapshots: [], formattedBlock: '' };
+  if (!cfg || !cfg.supabaseUrl.startsWith('http')) return empty;
+
+  const limit = Math.min(25, Math.max(1, Number(params.limit ?? 8)));
+  const rawText = `${params.task || ''} ${typeof params.data === 'string' ? params.data : JSON.stringify(params.data || '')}`;
+
+  // Extract explicit or inferred eventId / gameDate / sport / team filters
+  let eventId = params.eventId?.trim();
+  if (!eventId) {
+    const evMatch = rawText.match(/\b(?:event_?id|eventId)["'\s:=]+([a-zA-Z0-9_-]{5,40})/i);
+    if (evMatch) eventId = evMatch[1];
+  }
+
+  let gameDate = params.gameDate?.trim();
+  if (!gameDate) {
+    const dateMatch = rawText.match(/\b(202\d-\d{2}-\d{2})\b/);
+    if (dateMatch) gameDate = dateMatch[1];
+  }
+
+  const sport = params.sport?.trim();
+  const team = params.team?.trim();
+
+  const judgments: any[] = [];
+  const lineSnapshots: any[] = [];
+
+  try {
+    const filters: string[] = [];
+    if (eventId) filters.push(`event_id=eq.${encodeURIComponent(eventId)}`);
+    if (gameDate) filters.push(`game_date=eq.${encodeURIComponent(gameDate)}`);
+    if (sport) filters.push(`sport=eq.${encodeURIComponent(sport)}`);
+    if (team) {
+      const safeTeam = team.replace(/[,()*]/g, '').trim();
+      if (safeTeam) {
+        filters.push(`or=(home_team.ilike.*${encodeURIComponent(safeTeam)}*,away_team.ilike.*${encodeURIComponent(safeTeam)}*)`);
+      }
+    }
+
+    const queryPrefix = filters.length > 0 ? `${filters.join('&')}&` : '';
+    const judgmentRows = await querySupabase(
+      cfg,
+      `game_judgments?${queryPrefix}order=judged_at.desc&limit=${limit}&select=event_id,game_date,sport,home_team,away_team,status,win_prob_home,win_prob_home_code,fair_spread,proj_margin,total_lean,side,confidence,brier,result,odds_snapshot,judged_at`,
+      { method: 'GET', headers: { Prefer: 'return=representation' } },
+      fetchFn
+    );
+    if (Array.isArray(judgmentRows)) {
+      judgments.push(...judgmentRows);
+    }
+  } catch {
+    // Non-fatal
+  }
+
+  try {
+    const targetEventIds = eventId
+      ? [eventId]
+      : Array.from(new Set(judgments.map((j: any) => j?.event_id).filter(Boolean))).slice(0, 4);
+
+    if (targetEventIds.length > 0) {
+      const inList = targetEventIds.map((id) => encodeURIComponent(String(id))).join(',');
+      const snapRows = await querySupabase(
+        cfg,
+        `line_snapshots?event_id=in.(${inList})&order=snapshot_at.desc&limit=${limit * 2}&select=event_id,game_date,sport,book,spread,total,ml_home,ml_away,snapshot_at,is_baseline`,
+        { method: 'GET', headers: { Prefer: 'return=representation' } },
+        fetchFn
+      );
+      if (Array.isArray(snapRows)) {
+        lineSnapshots.push(...snapRows);
+      }
+    }
+  } catch {
+    // Non-fatal
+  }
+
+  if (judgments.length === 0 && lineSnapshots.length === 0) {
+    return empty;
+  }
+
+  const lines: string[] = ['[DUELODDS SUPABASE ON-DEMAND DATA PULL]'];
+  if (judgments.length > 0) {
+    lines.push(`Recent/Matching Game Judgments (${judgments.length} rows):`);
+    for (const j of judgments.slice(0, 6)) {
+      const winProb = j.win_prob_home_code ?? j.win_prob_home;
+      const probStr = typeof winProb === 'number' ? `P(Home)=${(winProb * 100).toFixed(1)}%` : '';
+      const spreadVal = j.proj_margin != null ? `ProjMargin=${j.proj_margin}` : (j.fair_spread != null ? `FairSpread=${j.fair_spread}` : '');
+      const brierStr = typeof j.brier === 'number' ? `Brier=${j.brier.toFixed(3)}` : '';
+      const outcomeStr = j.result?.outcome ? `Outcome=${String(j.result.outcome).toUpperCase()}` : `Status=${j.status || 'active'}`;
+      lines.push(
+        `  • [${j.game_date || 'N/A'} | ${j.sport || 'sport'} | event_id=${j.event_id}] ${j.away_team} @ ${j.home_team} — ${[probStr, spreadVal, outcomeStr, brierStr].filter(Boolean).join(', ')}`
+      );
+    }
+  }
+
+  if (lineSnapshots.length > 0) {
+    lines.push(`Line Snapshots (${lineSnapshots.length} rows):`);
+    for (const s of lineSnapshots.slice(0, 6)) {
+      lines.push(
+        `  • [event_id=${s.event_id} | ${s.is_baseline ? 'OPEN/BASELINE' : 'LIVE'}] Spread=${s.spread ?? 'N/A'}, Total=${s.total ?? 'N/A'}, ML(H/A)=${s.ml_home ?? 'N/A'}/${s.ml_away ?? 'N/A'} (${s.snapshot_at || ''})`
+      );
+    }
+  }
+
+  return {
+    judgments,
+    lineSnapshots,
+    formattedBlock: lines.join('\n')
+  };
+}
+
+

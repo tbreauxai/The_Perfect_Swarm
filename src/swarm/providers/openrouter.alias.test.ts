@@ -78,4 +78,45 @@ describe("OpenRouter retired-model alias (nemotron-3-ultra → nemotron-3-super 
     expect(bodies[1].response_format).toBeUndefined();
     expect(result).toBe('{"status":"ok_openrouter"}');
   });
+
+  it("transparently falls back to openrouter/free when upstream Nvidia endpoint returns 404", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const bodies: any[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: any) => {
+        const body = JSON.parse(init.body);
+        bodies.push(body);
+        if (body.model === SUPER) {
+          return new Response(
+            JSON.stringify({
+              error: {
+                message: "Provider returned error",
+                code: 404,
+                metadata: { provider_name: "Nvidia" },
+              },
+            }),
+            { status: 404 },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: '{"status":"fallback_ok"}' } }],
+          }),
+          { status: 200 },
+        );
+      }),
+    );
+
+    const result = await new OpenRouterAdapter().call({
+      modelName: SUPER,
+      prompt: "hi",
+      apiKey: "sk-or-v1-test",
+    } as any);
+
+    expect(bodies.length).toBe(2);
+    expect(bodies[0].model).toBe(SUPER);
+    expect(bodies[1].model).toBe("openrouter/free");
+    expect(result).toBe('{"status":"fallback_ok"}');
+  });
 });
