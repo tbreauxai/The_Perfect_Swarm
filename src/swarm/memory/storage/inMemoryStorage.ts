@@ -1,7 +1,7 @@
 import { createVectorIndex, type VectorIndex, type VectorIndexMetrics } from '../../vectorIndex.ts';
 import { cosineSimilarity } from '../vectorMath.ts';
 import { normalizeDomain, type StoredMemoryPoint, type SparseVector } from '../types.ts';
-import type { StorageBackend, StorageFilterOptions, StorageQueryOptions, StorageQueryResult } from './types.ts';
+import { matchesScopedMemoryFilter, type StorageBackend, type StorageFilterOptions, type StorageQueryOptions, type StorageQueryResult } from './types.ts';
 
 export interface InMemoryStorageConfig {
     collectionName?: string;
@@ -150,6 +150,7 @@ export class InMemoryStorageAdapter implements StorageBackend {
         const requestedDomain = options.domain ? normalizeDomain(options.domain) : undefined;
 
         const filterPredicate = (pt: StoredMemoryPoint) => {
+            if (!matchesScopedMemoryFilter(pt.payload, options)) return false;
             if (options.includeShared === false && readerApp) {
                 const itemApp = pt.payload.originApp || pt.payload.appId;
                 if (itemApp !== readerApp) return false;
@@ -229,6 +230,7 @@ export class InMemoryStorageAdapter implements StorageBackend {
         const requestedDomain = filter.domain ? normalizeDomain(filter.domain) : undefined;
 
         const matched = this.points.filter(pt => {
+            if (!matchesScopedMemoryFilter(pt.payload, filter)) return false;
             if (filter.includeShared === false && readerApp) {
                 const itemApp = pt.payload.originApp || pt.payload.appId;
                 if (itemApp !== readerApp) return false;

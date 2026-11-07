@@ -272,4 +272,92 @@ describe('QdrantStorageAdapter', () => {
         expect(wiped).toBe(true);
         expect(mockClient.delete).toHaveBeenCalled();
     });
+
+    it('enforces trusted appId, public visibility, sport, entityIds, and asOf cutoff on Qdrant search hits', async () => {
+        mockClient.query.mockResolvedValueOnce({
+            points: [
+                {
+                    id: 'valid-public-lesson',
+                    score: 0.96,
+                    payload: {
+                        content: 'Public pre-cutoff NFL lesson for KC',
+                        appId: 'duelodds',
+                        originApp: 'duelodds',
+                        visibility: 'public',
+                        sport: 'americanfootball_nfl',
+                        entityIds: ['KC'],
+                        available_at: '2026-11-05T12:00:00.000Z',
+                        graded_at: '2026-11-05T12:00:00.000Z'
+                    }
+                },
+                {
+                    id: 'post-cutoff-lesson',
+                    score: 0.99,
+                    payload: {
+                        content: 'Leaked post-cutoff lesson',
+                        appId: 'duelodds',
+                        originApp: 'duelodds',
+                        visibility: 'public',
+                        sport: 'americanfootball_nfl',
+                        entityIds: ['KC'],
+                        available_at: '2026-11-06T19:00:00.000Z',
+                        graded_at: '2026-11-06T19:00:00.000Z'
+                    }
+                },
+                {
+                    id: 'private-user-lesson',
+                    score: 0.98,
+                    payload: {
+                        content: 'Private user memory',
+                        appId: 'duelodds',
+                        originApp: 'duelodds',
+                        visibility: 'private',
+                        userId: 'user-123',
+                        sport: 'americanfootball_nfl',
+                        entityIds: ['KC'],
+                        available_at: '2026-11-05T12:00:00.000Z'
+                    }
+                },
+                {
+                    id: 'cross-sport-lesson',
+                    score: 0.97,
+                    payload: {
+                        content: 'NBA lesson',
+                        appId: 'duelodds',
+                        originApp: 'duelodds',
+                        visibility: 'public',
+                        sport: 'basketball_nba',
+                        entityIds: ['KC'],
+                        available_at: '2026-11-05T12:00:00.000Z'
+                    }
+                },
+                {
+                    id: 'cross-entity-lesson',
+                    score: 0.95,
+                    payload: {
+                        content: 'Other NFL team lesson',
+                        appId: 'duelodds',
+                        originApp: 'duelodds',
+                        visibility: 'public',
+                        sport: 'americanfootball_nfl',
+                        entityIds: ['DAL'],
+                        available_at: '2026-11-05T12:00:00.000Z'
+                    }
+                }
+            ]
+        });
+
+        const hits = await adapter.search([0.1, 0.2, 0.3], {
+            appId: 'duelodds',
+            includeShared: false,
+            publicOnly: true,
+            sport: 'americanfootball_nfl',
+            entityIds: ['KC', 'BUF'],
+            asOf: '2026-11-06T18:00:00.000Z',
+            limit: 5
+        });
+
+        expect(hits).toHaveLength(1);
+        expect(hits[0].id).toBe('valid-public-lesson');
+    });
 });

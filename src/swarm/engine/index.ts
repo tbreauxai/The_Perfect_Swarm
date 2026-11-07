@@ -76,7 +76,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             if (subResult) return subResult;
         }
 
-        const targetAppId = settings?.appId || 'perfect-swarm';
+        const targetAppId = params.retrievalScope?.callerAppId || params.callerAppId || params.originApp || settings?.appId || 'perfect-swarm';
         const includeShared = settings?.includeSharedMemory !== false;
         const qdrantUrl = settings?.qdrantUrl;
 
@@ -213,10 +213,17 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 qdrantUrl,
                 toolRegistry,
                 context,
-                domain: (params as any).domain || settings?.domain,
-                disableMemoryRetrieval: Boolean((params as any).disableMemoryRetrieval || settings?.disableMemoryRetrieval),
-                settings
-            } as any);
+                domain: params.domain || settings?.domain,
+                disableMemoryRetrieval: Boolean(params.disableMemoryRetrieval || settings?.disableMemoryRetrieval),
+                settings,
+                eventIds: params.eventIds,
+                date: params.date,
+                sport: params.sport,
+                entityIds: params.entityIds,
+                retrievalContext: params.retrievalContext,
+                snapshotRefs: params.snapshotRefs,
+                retrievalScope: params.retrievalScope
+            });
 
             const mathBlock = profilingResult.mathGroundingReport?.promptBlock;
             const historicalContext = mathBlock

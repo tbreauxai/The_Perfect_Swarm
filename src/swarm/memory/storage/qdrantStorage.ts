@@ -1,7 +1,7 @@
 import { QdrantClient } from '@qdrant/js-client-rest';
 import type { StoredMemoryPoint, SparseVector } from '../types.ts';
 import { normalizeDomain } from '../types.ts';
-import type { StorageBackend, StorageFilterOptions, StorageQueryOptions, StorageQueryResult } from './types.ts';
+import { matchesScopedMemoryFilter, type StorageBackend, type StorageFilterOptions, type StorageQueryOptions, type StorageQueryResult } from './types.ts';
 
 export interface QdrantStorageConfig {
     url?: string;
@@ -379,12 +379,44 @@ export class QdrantStorageAdapter implements StorageBackend {
 
         try {
             const filterMust: any[] = [];
-            if (options.includeShared === false && readerApp) {
+            const strictAppFilter =
+                options.includeShared === false ||
+                options.publicOnly === true ||
+                options.asOf !== undefined ||
+                options.sport !== undefined ||
+                (Array.isArray(options.entityIds) && options.entityIds.length > 0) ||
+                (Array.isArray(options.eventIds) && options.eventIds.length > 0);
+            if (strictAppFilter && readerApp) {
                 filterMust.push({
                     should: [
                         { key: 'originApp', match: { value: readerApp } },
                         { key: 'appId', match: { value: readerApp } }
                     ]
+                });
+            }
+            if (options.sport) {
+                filterMust.push({
+                    should: [
+                        { key: 'sport', match: { value: options.sport } },
+                        { key: 'sportKey', match: { value: options.sport } }
+                    ]
+                });
+            }
+            if (Array.isArray(options.entityIds) && options.entityIds.length > 0) {
+                filterMust.push({
+                    should: options.entityIds.map((entityId) => ({
+                        key: 'entityIds',
+                        match: { value: entityId }
+                    }))
+                });
+            }
+            if (Array.isArray(options.eventIds) && options.eventIds.length > 0) {
+                filterMust.push({
+                    should: options.eventIds.flatMap((evId) => [
+                        { key: 'eventId', match: { value: evId } },
+                        { key: 'event_id', match: { value: evId } },
+                        { key: 'eventIds', match: { value: evId } }
+                    ])
                 });
             }
             if (options.targetApps) {
@@ -456,11 +488,13 @@ export class QdrantStorageAdapter implements StorageBackend {
                 );
             }
 
-            return (qdrantRes.points || []).map((r: any) => ({
-                id: String(r.id),
-                payload: (r.payload || {}) as Record<string, any>,
-                vectorScore: r.score ?? 1.0
-            }));
+            return (qdrantRes.points || [])
+                .filter((r: any) => matchesScopedMemoryFilter((r.payload || {}) as Record<string, any>, options))
+                .map((r: any) => ({
+                    id: String(r.id),
+                    payload: (r.payload || {}) as Record<string, any>,
+                    vectorScore: r.score ?? 1.0
+                }));
         } catch (err: any) {
             console.warn(`[QdrantStorageAdapter] Search error: ${err.message || err}`);
             return [];
@@ -554,12 +588,14 @@ export class QdrantStorageAdapter implements StorageBackend {
 
                 const batch = res?.points || [];
                 for (const pt of batch) {
+                    const ptPayload = (pt.payload || {}) as StoredMemoryPoint['payload'];
+                    if (filter && !matchesScopedMemoryFilter(ptPayload, filter)) continue;
                     const vectorObj = pt.vector as any;
                     points.push({
                         id: String(pt.id),
                         denseVector: Array.isArray(vectorObj) ? vectorObj : vectorObj?.dense || [],
                         sparseVector: vectorObj?.sparse || { indices: [], values: [] },
-                        payload: (pt.payload || {}) as StoredMemoryPoint['payload']
+                        payload: ptPayload
                     });
                     if (points.length >= maxPoints) break;
                 }

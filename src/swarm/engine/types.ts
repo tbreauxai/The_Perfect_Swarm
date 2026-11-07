@@ -12,6 +12,8 @@ import type { TaskDecompositionPlan } from "../coordination.ts";
 import type { SwarmTool, ToolRegistry } from "../tools/index.ts";
 import type { AnalystConsensusDigest } from "./consensusPipeline.ts";
 import type { Blackboard } from "./blackboard.ts";
+import type { RetrievalContextEnvelope, SnapshotRef, TrustedRetrievalScope } from "./historyScope.ts";
+export type { RetrievalContextEnvelope, SnapshotRef, TrustedRetrievalScope };
 export interface SwarmStagePayload {
     stage: 'routing' | 'cluster_aggregation' | 'partial_prediction' | 'manager_synthesis' | 'critic_verification' | 'completed' | 'scorecard' | 'critic_scorecard' | 'wave_progress';
     task?: string;
@@ -38,6 +40,10 @@ export interface SwarmWorkflowParams {
     bypassCache?: boolean;
     disableMemoryRetrieval?: boolean;
     eventIds?: string[];
+    entityIds?: string[];
+    retrievalContext?: RetrievalContextEnvelope;
+    snapshotRefs?: SnapshotRef[];
+    retrievalScope?: TrustedRetrievalScope;
     date?: string;
     sport?: string;
     speculativeParallel?: boolean;
