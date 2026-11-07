@@ -154,4 +154,90 @@ describe('InMemoryStorageAdapter', () => {
         expect(metrics).toBeDefined();
         expect(metrics?.size).toBe(1);
     });
+
+    it('excludes post-cutoff, private/user-owned, cross-app, cross-sport, and cross-entity points', async () => {
+        await storage.store(
+            createMockPoint('valid-kc', 'KC redzone trend', [1, 0, 0], 'duelodds', {
+                visibility: 'public',
+                sport: 'americanfootball_nfl',
+                entityIds: ['KC'],
+                available_at: '2026-11-05T10:00:00.000Z',
+                updated_at: '2026-11-05T10:00:00.000Z',
+                graded_at: '2026-11-05T10:00:00.000Z',
+                timestamp: '2026-11-05T10:00:00.000Z',
+                lastSeen: '2026-11-05T10:00:00.000Z'
+            }),
+            false
+        );
+        await storage.store(
+            createMockPoint('future-kc', 'Future KC postgame lesson', [1, 0, 0], 'duelodds', {
+                visibility: 'public',
+                sport: 'americanfootball_nfl',
+                entityIds: ['KC'],
+                available_at: '2026-11-06T22:00:00.000Z',
+                graded_at: '2026-11-06T22:00:00.000Z',
+                timestamp: '2026-11-05T10:00:00.000Z',
+                lastSeen: '2026-11-05T10:00:00.000Z'
+            }),
+            false
+        );
+        await storage.store(
+            createMockPoint('private-kc', 'Private user note', [1, 0, 0], 'duelodds', {
+                visibility: 'private',
+                userId: 'u-99',
+                sport: 'americanfootball_nfl',
+                entityIds: ['KC'],
+                available_at: '2026-11-05T10:00:00.000Z',
+                timestamp: '2026-11-05T10:00:00.000Z',
+                lastSeen: '2026-11-05T10:00:00.000Z'
+            }),
+            false
+        );
+        await storage.store(
+            createMockPoint('other-app-kc', 'Other app note', [1, 0, 0], 'other-app', {
+                visibility: 'public',
+                sport: 'americanfootball_nfl',
+                entityIds: ['KC'],
+                available_at: '2026-11-05T10:00:00.000Z',
+                timestamp: '2026-11-05T10:00:00.000Z',
+                lastSeen: '2026-11-05T10:00:00.000Z'
+            }),
+            false
+        );
+        await storage.store(
+            createMockPoint('nba-kc', 'NBA note', [1, 0, 0], 'duelodds', {
+                visibility: 'public',
+                sport: 'basketball_nba',
+                entityIds: ['KC'],
+                available_at: '2026-11-05T10:00:00.000Z',
+                timestamp: '2026-11-05T10:00:00.000Z',
+                lastSeen: '2026-11-05T10:00:00.000Z'
+            }),
+            false
+        );
+        await storage.store(
+            createMockPoint('dal-nfl', 'DAL note', [1, 0, 0], 'duelodds', {
+                visibility: 'public',
+                sport: 'americanfootball_nfl',
+                entityIds: ['DAL'],
+                available_at: '2026-11-05T10:00:00.000Z',
+                timestamp: '2026-11-05T10:00:00.000Z',
+                lastSeen: '2026-11-05T10:00:00.000Z'
+            }),
+            false
+        );
+
+        const hits = await storage.search([1, 0, 0], {
+            appId: 'duelodds',
+            includeShared: false,
+            publicOnly: true,
+            sport: 'americanfootball_nfl',
+            entityIds: ['KC', 'BUF'],
+            asOf: '2026-11-06T18:00:00.000Z',
+            limit: 5
+        });
+
+        expect(hits).toHaveLength(1);
+        expect(hits[0].id).toBe('valid-kc');
+    });
 });

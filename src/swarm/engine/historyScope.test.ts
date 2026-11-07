@@ -6,6 +6,10 @@ import {
     isValidCalendarDate
 } from './historyScope.ts';
 import { registerAnalyzeRoutes } from '../server/routes/analyze.ts';
+import { MemoryCortex } from '../memory.ts';
+import { SwarmContext } from '../context.ts';
+import { ToolRegistry } from '../tools/index.ts';
+import { resolveMemoryGrounding } from './memoryGrounding.ts';
 
 function createTestAnalyzeApp(callerAppId?: string) {
     const app = new Hono();
@@ -367,5 +371,85 @@ describe('historyScope validation and trusted scope binding', () => {
         expect(conflictStreamRes.status).toBe(400);
         const conflictJson = await conflictStreamRes.json();
         expect(conflictJson.reason).toBe('conflicting_sport_scope');
+    });
+
+    it('isolates derived lessons in MemoryCortex and resolveMemoryGrounding by trusted scope and asOf cutoff', async () => {
+        const cortex = new MemoryCortex({
+            defaultAppId: 'duelodds',
+            isolatedStore: true
+        });
+
+        await cortex.upsertGradedLesson('lesson-valid', {
+            app_id: 'duelodds',
+            visibility: 'public',
+            sport: 'americanfootball_nfl',
+            entityIds: ['KC'],
+            rule: 'KC covers short spreads off a 7-day rest window.',
+            available_at: '2026-11-05T12:00:00.000Z',
+            graded_at: '2026-11-05T12:00:00.000Z',
+            date: '2026-11-05T12:00:00.000Z',
+            outcome: 'win'
+        });
+
+        await cortex.upsertGradedLesson('lesson-future', {
+            app_id: 'duelodds',
+            visibility: 'public',
+            sport: 'americanfootball_nfl',
+            entityIds: ['KC'],
+            rule: 'Post-game future leak lesson for KC.',
+            available_at: '2026-11-06T22:00:00.000Z',
+            graded_at: '2026-11-06T22:00:00.000Z',
+            date: '2026-11-06T22:00:00.000Z',
+            outcome: 'loss'
+        });
+
+        await cortex.upsertGradedLesson('lesson-private', {
+            app_id: 'duelodds',
+            visibility: 'private',
+            userId: 'user-secret',
+            sport: 'americanfootball_nfl',
+            entityIds: ['KC'],
+            rule: 'Private user lesson must never be retrieved.',
+            available_at: '2026-11-05T12:00:00.000Z',
+            date: '2026-11-05T12:00:00.000Z'
+        });
+
+        const scopeRes = resolveTrustedRetrievalScope({
+            body: {
+                retrievalContext: {
+                    version: 1,
+                    asOf: '2026-11-06T18:00:00.000Z',
+                    groups: [
+                        {
+                            sport: 'americanfootball_nfl',
+                            date: '2026-11-06',
+                            eventIds: ['nfl-1'],
+                            entityIds: ['KC', 'BUF']
+                        }
+                    ],
+                    optionalContext: ['lessons']
+                }
+            },
+            callerAppId: 'duelodds',
+            now: fixedNow
+        });
+        expect(scopeRes.ok).toBe(true);
+        if (!scopeRes.ok) return;
+
+        const grounding = await resolveMemoryGrounding({
+            memoryCortex: cortex,
+            task: 'Evaluate KC vs BUF spread',
+            targetAppId: 'duelodds',
+            includeShared: false,
+            bypassCache: false,
+            toolRegistry: new ToolRegistry(),
+            context: new SwarmContext(),
+            retrievalScope: scopeRes.scope,
+            retrievalContext: scopeRes.retrievalContext
+        });
+
+        expect(grounding.historicalContext).toContain('KC covers short spreads');
+        expect(grounding.historicalContext).not.toContain('Post-game future leak');
+        expect(grounding.historicalContext).not.toContain('Private user lesson');
     });
 });

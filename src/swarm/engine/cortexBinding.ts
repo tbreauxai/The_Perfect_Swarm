@@ -92,10 +92,30 @@ export function bindCortexAndTools(
                 market: { type: 'string', description: 'Market, for example spread or total' },
                 query: { type: 'string', description: 'Free text, for example unders in close games' }
             },
-            execute: async (params: { sport?: string; market?: string; query?: string }) => {
-                const q = [params.sport, params.market, params.query].filter(Boolean).join(' ');
+            execute: async (toolParams: { sport?: string; market?: string; query?: string }) => {
+                const scope = params.retrievalScope;
+                const trustedAppId = scope?.callerAppId || params.callerAppId || params.originApp || targetAppId;
+                const boundSport = scope?.sport || params.sport;
+                if (
+                    boundSport &&
+                    toolParams.sport &&
+                    toolParams.sport.trim().toLowerCase() !== boundSport.trim().toLowerCase()
+                ) {
+                    return { lessons: [], query: '', count: 0, note: 'sport_out_of_scope' };
+                }
+                const effectiveSport = boundSport || toolParams.sport?.trim() || undefined;
+                const q = [effectiveSport, toolParams.market, toolParams.query].filter(Boolean).join(' ');
                 if (!q) return { lessons: [], note: 'no query' };
-                const results = await memoryCortex.retrieve(q, { limit: 5 });
+                const results = await memoryCortex.retrieve(q, {
+                    appId: trustedAppId,
+                    includeShared: false,
+                    publicOnly: true,
+                    sport: effectiveSport,
+                    entityIds: scope?.entityIds?.length ? scope.entityIds : params.entityIds,
+                    eventIds: scope?.eventIds?.length ? scope.eventIds : params.eventIds,
+                    asOf: scope?.asOf,
+                    limit: 5
+                });
                 const count = Array.isArray(results) ? results.length : 0;
                 console.log(`[search_lessons] query="${q}" returned ${count}`);
                 return { lessons: results, query: q, count };

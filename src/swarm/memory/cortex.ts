@@ -9,7 +9,7 @@ import { collectCortexDiagnostics } from './diagnostics.ts';
 import { globalTelemetryCollector } from '../telemetry.ts';
 import { InMemoryStorageAdapter } from './storage/inMemoryStorage.ts';
 import { QdrantStorageAdapter } from './storage/qdrantStorage.ts';
-import type { StorageBackend } from './storage/types.ts';
+import { matchesScopedMemoryFilter, type StorageBackend } from './storage/types.ts';
 import { RrfRanker } from './ranking/rrfRanker.ts';
 import { CortexPersistenceManager } from './persistence/cortexPersistence.ts';
 import { CortexConsolidator } from './consolidation/cortexConsolidator.ts';
@@ -446,8 +446,40 @@ export class MemoryCortex {
         }
 
         const queryDense = await this.safeEmbed(query);
+        const readerApp = options.appId || options.originApp || this.defaultAppId;
+        const requestedDomain = options.domain ? normalizeDomain(options.domain) : undefined;
+        const hasScopeConstraints = Boolean(
+            options.asOf ||
+            options.sport ||
+            (Array.isArray(options.eventIds) && options.eventIds.length > 0) ||
+            options.eventId ||
+            (Array.isArray(options.entityIds) && options.entityIds.length > 0) ||
+            options.entityId ||
+            options.publicOnly ||
+            options.snapshotHash
+        );
+        const scopeParts = [
+            readerApp,
+            requestedDomain,
+            options.sport ? `sport=${options.sport}` : '',
+            options.asOf ? `asOf=${options.asOf}` : '',
+            Array.isArray(options.eventIds) && options.eventIds.length > 0
+                ? `ev=${[...options.eventIds].sort().join(',')}`
+                : options.eventId
+                  ? `ev=${options.eventId}`
+                  : '',
+            Array.isArray(options.entityIds) && options.entityIds.length > 0
+                ? `ent=${[...options.entityIds].sort().join(',')}`
+                : options.entityId
+                  ? `ent=${options.entityId}`
+                  : '',
+            options.publicOnly ? 'pub=1' : '',
+            options.snapshotHash ? `hash=${options.snapshotHash}` : ''
+        ].filter(Boolean);
+        const cacheNamespace = scopeParts.join(':');
+        const planLookupNamespace = hasScopeConstraints ? cacheNamespace : options.appId;
 
-        const planMatch = this.actionPlanCache.lookup(queryDense, options.appId);
+        const planMatch = this.actionPlanCache.lookup(queryDense, planLookupNamespace);
         if (planMatch.hit && planMatch.actionPlan) {
             return [{
                 id: planMatch.actionPlan.id,
@@ -458,29 +490,33 @@ export class MemoryCortex {
             }];
         }
 
-        const readerApp = options.appId || options.originApp || this.defaultAppId;
-        const requestedDomain = options.domain ? normalizeDomain(options.domain) : undefined;
-        const cacheNamespace = requestedDomain ? `${readerApp}:${requestedDomain}` : readerApp;
         const cachedMatch = this.semanticCache.lookup<any[]>(queryDense, cacheNamespace);
         if (cachedMatch.hit && cachedMatch.payload) {
             return cachedMatch.payload;
         }
 
         const querySparse = SparseTokenizer.encode(query);
+        const effectiveQueryOptions: RetrievalOptions = {
+            ...options,
+            ...(options.appId || options.originApp ? {} : { appId: readerApp })
+        };
         let candidates: any[] = [];
 
         if (this.qdrantStorage && this.qdrantStorage.isAvailable) {
-            candidates = await this.qdrantStorage.search(queryDense, options, querySparse);
+            candidates = await this.qdrantStorage.search(queryDense, effectiveQueryOptions, querySparse);
         }
 
         if (candidates.length === 0) {
-            candidates = await this.inMemoryStorage.search(queryDense, options, querySparse);
+            candidates = await this.inMemoryStorage.search(queryDense, effectiveQueryOptions, querySparse);
         }
 
-        const results = this.rrfRanker.rankAndFilter(
+        const rankedResults = this.rrfRanker.rankAndFilter(
             candidates,
-            { ...options, query },
+            { ...effectiveQueryOptions, query },
             this.defaultAppId
+        );
+        const results = rankedResults.filter((item: any) =>
+            matchesScopedMemoryFilter(item, effectiveQueryOptions)
         );
 
         if (results.length > 0) {
@@ -515,8 +551,13 @@ export class MemoryCortex {
         }).catch(() => []);
 
         const fallbackCandidates: any[] = [];
+        const effectiveContrastiveOpts: RetrievalOptions = {
+            ...options,
+            appId: options?.appId || options?.originApp || this.defaultAppId
+        };
         for (const pt of this.fallbackStore) {
             const p: Record<string, any> = (pt.payload || {}) as Record<string, any>;
+            if (!matchesScopedMemoryFilter(p, effectiveContrastiveOpts)) continue;
             const isGradedLoss =
                 p.outcome === 'loss' ||
                 (typeof p.brierScore === 'number' && p.brierScore >= 0.28) ||

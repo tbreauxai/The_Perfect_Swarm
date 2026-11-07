@@ -45,6 +45,12 @@ export interface RetrievalOptions {
     domain?: string;
     entityIds?: string[];
     entityId?: string;
+    eventIds?: string[];
+    eventId?: string;
+    sport?: string;
+    asOf?: string;
+    publicOnly?: boolean;
+    snapshotHash?: string;
     limit?: number;
     minRating?: number;
     verifiedOnly?: boolean;
