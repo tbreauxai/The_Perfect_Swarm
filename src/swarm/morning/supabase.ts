@@ -668,6 +668,8 @@ export interface OnDemandSupabaseQueryParams {
   team?: string;
   sport?: string;
   gameDate?: string;
+  /** Optional RFC3339 UTC cutoff for replay/historical isolation (snapshot_at <= asOf, judged_at <= asOf). */
+  asOf?: string;
   limit?: number;
   /** When true, missing filters or empty rows are hard errors (slim path). */
   requireHits?: boolean;
@@ -685,6 +687,79 @@ export interface OnDemandSupabaseContext {
   formattedBlock: string;
   error?: OnDemandPullErrorCode;
   detail?: string;
+}
+
+function normalizeSportToken(raw: string | undefined): string {
+  const s = String(raw || '').trim().toLowerCase();
+  if (!s) return '';
+  if (s === 'americanfootball_nfl' || s === 'nfl') return 'nfl';
+  if (s === 'basketball_nba' || s === 'nba') return 'nba';
+  if (s === 'baseball_mlb' || s === 'mlb') return 'mlb';
+  if (s === 'icehockey_nhl' || s === 'nhl') return 'nhl';
+  if (s === 'americanfootball_ncaaf' || s === 'ncaaf') return 'ncaaf';
+  if (s === 'basketball_ncaab' || s === 'ncaab') return 'ncaab';
+  return s;
+}
+
+function sportsMatchFilter(rowSport: unknown, filterSport: string | undefined): boolean {
+  if (!filterSport) return true;
+  if (typeof rowSport !== 'string' || !rowSport.trim()) return true;
+  return normalizeSportToken(rowSport) === normalizeSportToken(filterSport);
+}
+
+const MUTABLE_POSTGAME_FIELDS = [
+  'brier',
+  'result',
+  'final_score',
+  'home_score',
+  'away_score',
+  'actual_outcome',
+  'graded_at',
+  'settled_at',
+  'closing_line',
+  'clv'
+] as const;
+
+const OVERWRITABLE_PREDICTION_FIELDS = [
+  'win_prob_home',
+  'win_prob_home_code',
+  'fair_spread',
+  'proj_margin',
+  'total_lean',
+  'side',
+  'confidence'
+] as const;
+
+function sanitizeJudgmentForCutoff(row: any, asOfMs: number | undefined): any | null {
+  if (!row || typeof row !== 'object') return null;
+  if (asOfMs !== undefined) {
+    const judgedMs = typeof row.judged_at === 'string' ? Date.parse(row.judged_at) : Number.NaN;
+    if (!Number.isFinite(judgedMs) || judgedMs > asOfMs) {
+      return null;
+    }
+  }
+  const clean: Record<string, any> = { ...row };
+  // Never expose post-game outcomes, Brier scores, or final scores
+  for (const field of MUTABLE_POSTGAME_FIELDS) {
+    delete clean[field];
+  }
+  if (clean.status === 'settled' || clean.status === 'final' || clean.status === 'graded') {
+    clean.status = 'active';
+  }
+  // In replay (asOf set) or when row was overwritten/re-judged in place, strip unverifiable overwritten predictions
+  const updatedMs = typeof row.updated_at === 'string' ? Date.parse(row.updated_at) : Number.NaN;
+  const wasOverwritten =
+    Number(row.rejudge_count ?? 0) > 0 ||
+    row.overwritten === true ||
+    (asOfMs !== undefined && Number.isFinite(updatedMs) && updatedMs > asOfMs) ||
+    (asOfMs !== undefined && !row.context_snapshot_id && !row.context_hash && (row.result != null || row.brier != null || row.status === 'settled'));
+
+  if (wasOverwritten) {
+    for (const predField of OVERWRITABLE_PREDICTION_FIELDS) {
+      delete clean[predField];
+    }
+  }
+  return clean;
 }
 
 /**
@@ -706,6 +781,21 @@ export async function fetchOnDemandSupabaseContext(
     };
     if (params.requireHits) return err;
     return empty;
+  }
+
+  let asOfIso: string | undefined;
+  let asOfMs: number | undefined;
+  if (params.asOf !== undefined) {
+    const parsedMs = Date.parse(String(params.asOf).trim());
+    if (!Number.isFinite(parsedMs)) {
+      return {
+        ...empty,
+        error: 'slim_pull_failed',
+        detail: 'Invalid asOf timestamp for on-demand Supabase pull'
+      };
+    }
+    asOfMs = parsedMs;
+    asOfIso = new Date(parsedMs).toISOString();
   }
 
   const limit = Math.min(25, Math.max(1, Number(params.limit ?? 8)));
@@ -757,6 +847,7 @@ export async function fetchOnDemandSupabaseContext(
     }
     if (gameDate) filters.push(`game_date=eq.${encodeURIComponent(gameDate)}`);
     if (sport) filters.push(`sport=eq.${encodeURIComponent(sport)}`);
+    if (asOfIso) filters.push(`judged_at=lte.${encodeURIComponent(asOfIso)}`);
     if (team) {
       const safeTeam = team.replace(/[,()*]/g, '').trim();
       if (safeTeam) {
@@ -767,12 +858,19 @@ export async function fetchOnDemandSupabaseContext(
     const queryPrefix = filters.length > 0 ? `${filters.join('&')}&` : '';
     const judgmentRows = await querySupabase(
       cfg,
-      `game_judgments?${queryPrefix}order=judged_at.desc&limit=${limit}&select=event_id,game_date,sport,home_team,away_team,status,win_prob_home,win_prob_home_code,fair_spread,proj_margin,total_lean,side,confidence,brier,result,odds_snapshot,judged_at`,
+      `game_judgments?${queryPrefix}order=judged_at.desc&limit=${limit}&select=event_id,game_date,sport,home_team,away_team,status,win_prob_home,win_prob_home_code,fair_spread,proj_margin,total_lean,side,confidence,odds_snapshot,judged_at,rejudge_count`,
       { method: 'GET', headers: { Prefer: 'return=representation' } },
       fetchFn
     );
     if (Array.isArray(judgmentRows)) {
-      judgments.push(...judgmentRows);
+      for (const rawRow of judgmentRows) {
+        if (gameDate && rawRow?.game_date && String(rawRow.game_date) !== gameDate) continue;
+        if (sport && !sportsMatchFilter(rawRow?.sport, sport)) continue;
+        const sanitized = sanitizeJudgmentForCutoff(rawRow, asOfMs);
+        if (sanitized) {
+          judgments.push(sanitized);
+        }
+      }
     }
   } catch (err: any) {
     pullFailed = String(err?.message || err);
@@ -788,14 +886,26 @@ export async function fetchOnDemandSupabaseContext(
 
     if (targetEventIds.length > 0) {
       const inList = targetEventIds.map((id) => encodeURIComponent(String(id))).join(',');
+      const snapFilters: string[] = [`event_id=in.(${inList})`];
+      if (gameDate) snapFilters.push(`game_date=eq.${encodeURIComponent(gameDate)}`);
+      if (sport) snapFilters.push(`sport=eq.${encodeURIComponent(sport)}`);
+      if (asOfIso) snapFilters.push(`snapshot_at=lte.${encodeURIComponent(asOfIso)}`);
       const snapRows = await querySupabase(
         cfg,
-        `line_snapshots?event_id=in.(${inList})&order=snapshot_at.desc&limit=${limit * 2}&select=event_id,game_date,sport,book,spread,total,ml_home,ml_away,snapshot_at,is_baseline`,
+        `line_snapshots?${snapFilters.join('&')}&order=snapshot_at.desc&limit=${limit * 2}&select=event_id,game_date,sport,book,spread,total,ml_home,ml_away,snapshot_at,is_baseline`,
         { method: 'GET', headers: { Prefer: 'return=representation' } },
         fetchFn
       );
       if (Array.isArray(snapRows)) {
-        lineSnapshots.push(...snapRows);
+        for (const srow of snapRows) {
+          if (gameDate && srow?.game_date && String(srow.game_date) !== gameDate) continue;
+          if (sport && !sportsMatchFilter(srow?.sport, sport)) continue;
+          if (asOfMs !== undefined) {
+            const snapMs = typeof srow?.snapshot_at === 'string' ? Date.parse(srow.snapshot_at) : Number.NaN;
+            if (!Number.isFinite(snapMs) || snapMs > asOfMs) continue;
+          }
+          lineSnapshots.push(srow);
+        }
       }
     }
   } catch (err: any) {
@@ -830,10 +940,9 @@ export async function fetchOnDemandSupabaseContext(
       const winProb = j.win_prob_home_code ?? j.win_prob_home;
       const probStr = typeof winProb === 'number' ? `P(Home)=${(winProb * 100).toFixed(1)}%` : '';
       const spreadVal = j.proj_margin != null ? `ProjMargin=${j.proj_margin}` : (j.fair_spread != null ? `FairSpread=${j.fair_spread}` : '');
-      const brierStr = typeof j.brier === 'number' ? `Brier=${j.brier.toFixed(3)}` : '';
-      const outcomeStr = j.result?.outcome ? `Outcome=${String(j.result.outcome).toUpperCase()}` : `Status=${j.status || 'active'}`;
+      const statusStr = `Status=${j.status || 'active'}`;
       lines.push(
-        `  • [${j.game_date || 'N/A'} | ${j.sport || 'sport'} | event_id=${j.event_id}] ${j.away_team} @ ${j.home_team} — ${[probStr, spreadVal, outcomeStr, brierStr].filter(Boolean).join(', ')}`
+        `  • [${j.game_date || 'N/A'} | ${j.sport || 'sport'} | event_id=${j.event_id}] ${j.away_team} @ ${j.home_team} — ${[probStr, spreadVal, statusStr].filter(Boolean).join(', ')}`
       );
     }
   }
