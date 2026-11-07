@@ -404,7 +404,9 @@ function validateFormSection(
     raw: unknown,
     targetEventId: string,
     asOfMs: number
-): { ok: true; data: FormItemData[] } | { ok: false; reason: UnavailableContextReason } {
+):
+    | { ok: true; data: FormItemData[]; reason?: UnavailableContextReason }
+    | { ok: false; reason: UnavailableContextReason } {
     if (!Array.isArray(raw) || raw.length > 10) {
         return { ok: false, reason: 'sections_incomplete' };
     }
@@ -453,7 +455,9 @@ function validateH2HSection(
     raw: unknown,
     targetEventId: string,
     asOfMs: number
-): { ok: true; data: H2HItemData[] } | { ok: false; reason: UnavailableContextReason } {
+):
+    | { ok: true; data: H2HItemData[]; reason?: UnavailableContextReason }
+    | { ok: false; reason: UnavailableContextReason } {
     if (!Array.isArray(raw) || raw.length > 5) {
         return { ok: false, reason: 'sections_incomplete' };
     }
@@ -497,7 +501,9 @@ function validateH2HSection(
 function validateInjuriesSection(
     raw: unknown,
     asOfMs: number
-): { ok: true; data: InjuryItemData[] } | { ok: false; reason: UnavailableContextReason } {
+):
+    | { ok: true; data: InjuryItemData[]; reason?: UnavailableContextReason }
+    | { ok: false; reason: UnavailableContextReason } {
     if (!Array.isArray(raw) || raw.length > 30) {
         return { ok: false, reason: 'sections_incomplete' };
     }
@@ -569,7 +575,9 @@ function validateWeatherSection(
 function validateOddsSection(
     raw: unknown,
     asOfMs: number
-): { ok: true; data: OddsItemData[]; latestCapturedMs: number | null } | { ok: false; reason: UnavailableContextReason } {
+):
+    | { ok: true; data: OddsItemData[]; latestCapturedMs: number | null; reason?: UnavailableContextReason }
+    | { ok: false; reason: UnavailableContextReason } {
     if (!Array.isArray(raw) || raw.length > 12) {
         return { ok: false, reason: 'sections_incomplete' };
     }
@@ -622,7 +630,9 @@ function validateOddsSection(
 function validateSourceStatusMap(
     raw: unknown,
     asOfMs: number
-): { ok: true; map: SectionSourceStatusMap } | { ok: false; reason: UnavailableContextReason } {
+):
+    | { ok: true; map: SectionSourceStatusMap; reason?: UnavailableContextReason }
+    | { ok: false; reason: UnavailableContextReason } {
     if (!isPlainObject(raw)) return { ok: false, reason: 'sections_incomplete' };
     const serialized = JSON.stringify(raw);
     if (utf8ByteLength(serialized) > MAX_SOURCE_STATUS_BYTES) {
@@ -904,7 +914,9 @@ export interface FormatPromptContextOptions {
 
 export function formatGameContextForPrompt(
     options: FormatPromptContextOptions
-): { ok: true; formattedBlock: string; byteLength: number } | { ok: false; reason: string; detail: string } {
+):
+    | { ok: true; formattedBlock: string; byteLength: number; reason?: string; detail?: string }
+    | { ok: false; reason: string; detail: string } {
     const maxTotalBytes = options.maxTotalBytes ?? MAX_PROMPT_HISTORY_BYTES;
     const maxCharsPerEvent = options.maxCharsPerEvent ?? MAX_PROMPT_CHARS_PER_EVENT;
     const requiredSet = new Set<HistoryContextSectionKey>(options.requiredContext ?? []);
@@ -1251,7 +1263,7 @@ export function verifyAndAttachJudgmentProvenance(
     judgment: Record<string, unknown>,
     snapshotsByEventId: ReadonlyMap<string, ValidatedEventContextRow>
 ):
-    | { ok: true; judgment: Record<string, unknown> }
+    | { ok: true; judgment: Record<string, unknown>; reason?: 'mismatched_context_provenance'; message?: string }
     | { ok: false; reason: 'mismatched_context_provenance'; message: string } {
     const eventId = typeof judgment.event_id === 'string' ? judgment.event_id.trim() : '';
     const supplied = eventId ? snapshotsByEventId.get(eventId) : undefined;

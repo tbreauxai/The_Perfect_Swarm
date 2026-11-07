@@ -136,7 +136,6 @@ export function matchesScopedMemoryFilter(
         options.publicOnly === true ||
         options.asOf !== undefined ||
         options.sport !== undefined ||
-        reqEntities.length > 0 ||
         reqEvents.length > 0;
 
     // 2. Enforce appId / originApp binding when strict scope is active

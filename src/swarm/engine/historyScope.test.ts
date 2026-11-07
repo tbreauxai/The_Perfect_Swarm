@@ -452,4 +452,33 @@ describe('historyScope validation and trusted scope binding', () => {
         expect(grounding.historicalContext).not.toContain('Post-game future leak');
         expect(grounding.historicalContext).not.toContain('Private user lesson');
     });
+
+    it('rejects parlay slim-v1 on /api/swarm/stream with 422 slim_context_ineligible when store is unconfigured', async () => {
+        const app = createTestAnalyzeApp('duelodds');
+        const res = await app.request('/api/swarm/stream', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+                payload: 'slim-v1',
+                task: 'Stream 2-leg parlay',
+                retrievalContext: {
+                    version: 1,
+                    purpose: 'parlay',
+                    asOf: '2025-11-06T18:00:00.000Z',
+                    requiredContext: ['game', 'odds'],
+                    groups: [
+                        { sport: 'americanfootball_nfl', date: '2025-11-06', eventIds: ['nfl-1'] },
+                        { sport: 'basketball_nba', date: '2025-11-07', eventIds: ['nba-1'] }
+                    ]
+                }
+            })
+        });
+        expect(res.status).toBe(422);
+        const body = await res.json();
+        expect(body).toMatchObject({
+            error: 'slim_pull_failed',
+            payload: 'slim-v1',
+            reason: 'slim_context_ineligible'
+        });
+    });
 });

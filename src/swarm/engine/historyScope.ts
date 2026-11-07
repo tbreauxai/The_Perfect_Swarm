@@ -76,6 +76,9 @@ export type RetrievalScopeValidationResult =
           scope: TrustedRetrievalScope;
           retrievalContext?: RetrievalContextEnvelope;
           snapshotRefs?: SnapshotRef[];
+          status?: 400;
+          error?: string;
+          reason?: string;
       }
     | {
           ok: false;
@@ -139,7 +142,9 @@ export function isValidCalendarDate(dateStr: string): boolean {
 export function parseAndValidateAsOf(
     rawAsOf: unknown,
     requestReceivedAt: Date = new Date()
-): { ok: true; asOf: string; asOfMs: number } | { ok: false; reason: string; message: string } {
+):
+    | { ok: true; asOf: string; asOfMs: number; reason?: string; message?: string }
+    | { ok: false; reason: string; message: string } {
     const receivedMs = requestReceivedAt.getTime();
     if (rawAsOf === undefined || rawAsOf === null) {
         return {
@@ -232,7 +237,9 @@ function validateIdArray(
     raw: unknown,
     fieldName: string,
     allowSpaces: boolean
-): { ok: true; values: string[] } | { ok: false; reason: string; message: string } {
+):
+    | { ok: true; values: string[]; reason?: string; message?: string }
+    | { ok: false; reason: string; message: string } {
     if (!Array.isArray(raw)) {
         return {
             ok: false,
@@ -284,7 +291,9 @@ function validateIdArray(
 function validateSnapshotRefs(
     rawRefs: unknown,
     groups: RetrievalContextGroup[]
-): { ok: true; refs: SnapshotRef[] } | { ok: false; reason: string; message: string } {
+):
+    | { ok: true; refs: SnapshotRef[]; reason?: string; message?: string }
+    | { ok: false; reason: string; message: string } {
     if (rawRefs === undefined) {
         return { ok: true, refs: [] };
     }
