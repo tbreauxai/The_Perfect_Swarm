@@ -18,7 +18,7 @@ import { SwarmContext } from '../../context.ts';
 import { globalAsyncJobs, wantsAsync, newJobId } from '../asyncJobs.ts';
 import { getSupabaseConfig, fetchOnDemandSupabaseContext } from '../../morning/supabase.ts';
 import { isSlimSwarmRequest, validateSlimSwarmRequest, slimIdsStubData } from '../slimPayload.ts';
-
+import { resolveTrustedRetrievalScope } from '../../engine/historyScope.ts';
 
 /** Slim-v1: pull by eventIds before workflow; 422 slim_pull_* for DuelOdds fallback/proxy retry. */
 async function resolveSlimOrReject(
@@ -77,11 +77,45 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
 
             if (c.req.method === 'POST') {
                 const body = await c.req.json().catch(() => ({}));
+                const hasExplicitScopeFields =
+                    body.retrievalContext !== undefined ||
+                    body.snapshotRefs !== undefined ||
+                    body.asOf !== undefined ||
+                    body.entityIds !== undefined;
+                if (hasExplicitScopeFields) {
+                    const earlyScope = resolveTrustedRetrievalScope({
+                        body,
+                        callerAppId,
+                        defaultAppId: defaultSettings.appId
+                    });
+                    if (!earlyScope.ok) {
+                        return c.json({ error: earlyScope.error, reason: earlyScope.reason }, earlyScope.status);
+                    }
+                }
                 let task = body.task;
                 let data = body.data;
                 let slimMeta: { eventIds?: string[]; date?: string; sport?: string } = {};
-                if (isSlimSwarmRequest(body)) {
-                    const slim = await resolveSlimOrReject(body);
+                if (isSlimSwarmRequest(body) || body?.payload === 'slim-v1') {
+                    const slimScope = resolveTrustedRetrievalScope({
+                        body,
+                        callerAppId,
+                        defaultAppId: defaultSettings.appId
+                    });
+                    const candidateSlim = slimScope.ok
+                        ? {
+                              ...body,
+                              date: body.date ?? slimScope.scope.date,
+                              sport: body.sport ?? slimScope.scope.sport,
+                              eventIds: body.eventIds ?? slimScope.scope.eventIds
+                          }
+                        : body;
+                    if (!isSlimSwarmRequest(candidateSlim)) {
+                        if (!slimScope.ok) {
+                            return c.json({ error: slimScope.error, reason: slimScope.reason }, slimScope.status);
+                        }
+                        return c.json({ error: 'slim_pull_failed', payload: 'slim-v1' }, 422);
+                    }
+                    const slim = await resolveSlimOrReject(candidateSlim);
                     if (slim.ok === false) return c.json({ error: slim.error, payload: 'slim-v1' }, slim.status);
                     task = slim.task;
                     data = slim.data;
@@ -89,10 +123,28 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
                 } else if (!body.task || body.data === undefined) {
                     return c.json({ error: 'Missing required parameter: task and data' }, 400);
                 }
+                const scopeCheck = resolveTrustedRetrievalScope({
+                    body: {
+                        ...body,
+                        ...(slimMeta.eventIds && !body.eventIds ? { eventIds: slimMeta.eventIds } : {}),
+                        ...(slimMeta.date && !body.date ? { date: slimMeta.date } : {}),
+                        ...(slimMeta.sport && !body.sport ? { sport: slimMeta.sport } : {})
+                    },
+                    callerAppId,
+                    defaultAppId: defaultSettings.appId
+                });
+                if (!scopeCheck.ok) {
+                    return c.json({ error: scopeCheck.error, reason: scopeCheck.reason }, scopeCheck.status);
+                }
                 if (body.metadata) {
                     console.log('[SwarmServer Stream Metadata]:', body.metadata);
                 }
                 const sanitizedSettings = sanitizeClientSettings(body.settings, edgeSettings, defaultSettings);
+                sanitizedSettings.appId = originApp;
+                delete sanitizedSettings.userId;
+                delete sanitizedSettings.ownerId;
+                delete sanitizedSettings.visibility;
+                delete sanitizedSettings.ownership;
                 if (Array.isArray(body.agents)) {
                     sanitizedSettings.agents = body.agents.map(sanitizeAgent);
                 }
@@ -116,9 +168,13 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
                     complexityOverride: body.complexityOverride,
                     bypassCache: body.bypassCache,
                     scorecardMode: body.scorecardMode === true,
-                    eventIds: slimMeta.eventIds,
-                    date: slimMeta.date,
-                    sport: slimMeta.sport
+                    eventIds: scopeCheck.scope.eventIds.length > 0 ? scopeCheck.scope.eventIds : slimMeta.eventIds,
+                    date: scopeCheck.scope.date ?? slimMeta.date,
+                    sport: scopeCheck.scope.sport ?? slimMeta.sport,
+                    entityIds: scopeCheck.scope.entityIds.length > 0 ? scopeCheck.scope.entityIds : undefined,
+                    retrievalContext: scopeCheck.retrievalContext,
+                    snapshotRefs: scopeCheck.snapshotRefs,
+                    retrievalScope: scopeCheck.scope
                 } as SwarmWorkflowParams;
             } else if (c.req.method === 'GET') {
                 const url = new URL(c.req.url);
@@ -127,8 +183,14 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
                 if (!task || data === null) {
                     return c.json({ error: 'Missing required parameter: task and data' }, 400);
                 }
-                const appId = url.searchParams.get('appId') || defaultSettings.appId || 'default';
                 const domain = url.searchParams.get('domain') || undefined;
+                const getScope = resolveTrustedRetrievalScope({
+                    body: {},
+                    callerAppId,
+                    defaultAppId: defaultSettings.appId
+                });
+                const getSettings = sanitizeClientSettings({ domain }, edgeSettings, defaultSettings);
+                getSettings.appId = originApp;
                 hydrateAppOutcomes(originApp);
                 params = {
                     task,
@@ -136,9 +198,10 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
                     originApp,
                     callerAppId,
                     domain,
-                    settings: sanitizeClientSettings({ appId, domain }, edgeSettings, defaultSettings),
+                    settings: getSettings,
                     defaultAi,
-                    cortex: defaultCortex
+                    cortex: defaultCortex,
+                    ...(getScope.ok ? { retrievalScope: getScope.scope } : {})
                 };
             } else {
                 return c.json({ error: 'Method Not Allowed' }, 405);
@@ -153,11 +216,46 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
     app.post('/api/swarm/analyze', swarmBodyLimit, async (c) => {
         try {
             const body = await c.req.json().catch(() => ({}));
+            const { callerAppId, originApp } = resolveAppIds(c, defaultSettings);
+            const hasExplicitScopeFields =
+                body.retrievalContext !== undefined ||
+                body.snapshotRefs !== undefined ||
+                body.asOf !== undefined ||
+                body.entityIds !== undefined;
+            if (hasExplicitScopeFields) {
+                const earlyScope = resolveTrustedRetrievalScope({
+                    body,
+                    callerAppId,
+                    defaultAppId: defaultSettings.appId
+                });
+                if (!earlyScope.ok) {
+                    return c.json({ error: earlyScope.error, reason: earlyScope.reason }, earlyScope.status);
+                }
+            }
             let task = body.task;
             let data = body.data;
             let slimMeta: { eventIds?: string[]; date?: string; sport?: string } = {};
-            if (isSlimSwarmRequest(body)) {
-                const slim = await resolveSlimOrReject(body);
+            if (isSlimSwarmRequest(body) || body?.payload === 'slim-v1') {
+                const slimScope = resolveTrustedRetrievalScope({
+                    body,
+                    callerAppId,
+                    defaultAppId: defaultSettings.appId
+                });
+                const candidateSlim = slimScope.ok
+                    ? {
+                          ...body,
+                          date: body.date ?? slimScope.scope.date,
+                          sport: body.sport ?? slimScope.scope.sport,
+                          eventIds: body.eventIds ?? slimScope.scope.eventIds
+                      }
+                    : body;
+                if (!isSlimSwarmRequest(candidateSlim)) {
+                    if (!slimScope.ok) {
+                        return c.json({ error: slimScope.error, reason: slimScope.reason }, slimScope.status);
+                    }
+                    return c.json({ error: 'slim_pull_failed', payload: 'slim-v1' }, 422);
+                }
+                const slim = await resolveSlimOrReject(candidateSlim);
                 if (slim.ok === false) return c.json({ error: slim.error, payload: 'slim-v1' }, slim.status);
                 task = slim.task;
                 data = slim.data;
@@ -165,16 +263,32 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
             } else if (!body.task || body.data === undefined) {
                 return c.json({ error: 'Missing required parameter: task and data' }, 400);
             }
+            const scopeCheck = resolveTrustedRetrievalScope({
+                body: {
+                    ...body,
+                    ...(slimMeta.eventIds && !body.eventIds ? { eventIds: slimMeta.eventIds } : {}),
+                    ...(slimMeta.date && !body.date ? { date: slimMeta.date } : {}),
+                    ...(slimMeta.sport && !body.sport ? { sport: slimMeta.sport } : {})
+                },
+                callerAppId,
+                defaultAppId: defaultSettings.appId
+            });
+            if (!scopeCheck.ok) {
+                return c.json({ error: scopeCheck.error, reason: scopeCheck.reason }, scopeCheck.status);
+            }
             if (body.metadata) {
                 console.log('[SwarmServer Analyze Metadata]:', body.metadata);
             }
-
-            const { callerAppId, originApp } = resolveAppIds(c, defaultSettings);
 
             const env = resolveEnvironment(c);
             const edgeSettings = buildEdgeSettings(env);
 
             const sanitizedSettings = sanitizeClientSettings(body.settings, edgeSettings, defaultSettings);
+            sanitizedSettings.appId = originApp;
+            delete sanitizedSettings.userId;
+            delete sanitizedSettings.ownerId;
+            delete sanitizedSettings.visibility;
+            delete sanitizedSettings.ownership;
             if (Array.isArray(body.agents)) {
                 sanitizedSettings.agents = body.agents.map(sanitizeAgent);
             }
@@ -206,9 +320,13 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
                 complexityOverride: body.complexityOverride,
                 bypassCache: body.bypassCache,
                 scorecardMode: body.scorecardMode === true,
-                eventIds: slimMeta.eventIds,
-                date: slimMeta.date,
-                sport: slimMeta.sport
+                eventIds: scopeCheck.scope.eventIds.length > 0 ? scopeCheck.scope.eventIds : slimMeta.eventIds,
+                date: scopeCheck.scope.date ?? slimMeta.date,
+                sport: scopeCheck.scope.sport ?? slimMeta.sport,
+                entityIds: scopeCheck.scope.entityIds.length > 0 ? scopeCheck.scope.entityIds : undefined,
+                retrievalContext: scopeCheck.retrievalContext,
+                snapshotRefs: scopeCheck.snapshotRefs,
+                retrievalScope: scopeCheck.scope
             } as SwarmWorkflowParams;
 
             if (asyncMode) {

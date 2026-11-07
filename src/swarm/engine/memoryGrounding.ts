@@ -1,6 +1,12 @@
 import type { MemoryCortex } from '../memory.ts';
 import type { ToolRegistry } from '../tools/index.ts';
 import type { SwarmContext } from '../context.ts';
+import type { SwarmEngineSettings } from '../types.ts';
+import type {
+    RetrievalContextEnvelope,
+    SnapshotRef,
+    TrustedRetrievalScope
+} from './historyScope.ts';
 import { getSupabaseConfig, fetchOnDemandSupabaseContext } from '../morning/supabase.ts';
 
 export interface MemoryGroundingParams {
@@ -13,6 +19,18 @@ export interface MemoryGroundingParams {
     qdrantUrl?: string;
     toolRegistry: ToolRegistry;
     context: SwarmContext;
+    domain?: string;
+    disableMemoryRetrieval?: boolean;
+    settings?: SwarmEngineSettings;
+    eventId?: string;
+    eventIds?: string[];
+    gameDate?: string;
+    date?: string;
+    sport?: string;
+    entityIds?: string[];
+    retrievalContext?: RetrievalContextEnvelope;
+    snapshotRefs?: SnapshotRef[];
+    retrievalScope?: TrustedRetrievalScope;
 }
 
 export interface MemoryGroundingResult {
@@ -89,9 +107,9 @@ export async function resolveMemoryGrounding(p: MemoryGroundingParams): Promise<
                     prompt: `Retrieving historical baseline constraints (appId='${targetAppId}', includeShared=${includeShared})...`
                 });
 
-                const readDomain = (p as any).domain || (p as any).settings?.domain;
-                const explicitEntities = (p as any).entityIds || (p as any).settings?.entityIds;
-                const disableMemoryRetrieval = Boolean((p as any).disableMemoryRetrieval || (p as any).settings?.disableMemoryRetrieval);
+                const readDomain = p.domain || p.settings?.domain;
+                const explicitEntities = p.retrievalScope?.entityIds?.length ? p.retrievalScope.entityIds : (p.entityIds || (p.settings as any)?.entityIds);
+                const disableMemoryRetrieval = Boolean(p.disableMemoryRetrieval || (p.settings as any)?.disableMemoryRetrieval);
 
                 const [retrieved, exemplars, contrastive] = disableMemoryRetrieval ? [[], "", { wins: [], losses: [], formattedBlock: "" }] : await Promise.all([
                     memoryCortex.retrieve(task, { appId: targetAppId, domain: readDomain, entityIds: explicitEntities, includeShared }, 3).catch(() => []),
@@ -129,10 +147,10 @@ export async function resolveMemoryGrounding(p: MemoryGroundingParams): Promise<
                         const onDemand = await fetchOnDemandSupabaseContext(supaCfg, {
                             task,
                             data: p.data,
-                            eventId: (p as any).eventId,
-                            eventIds: (p as any).eventIds,
-                            gameDate: (p as any).gameDate || (p as any).date,
-                            sport: (p as any).sport,
+                            eventId: p.eventId,
+                            eventIds: p.retrievalScope?.eventIds?.length ? p.retrievalScope.eventIds : p.eventIds,
+                            gameDate: p.gameDate || p.retrievalScope?.date || p.date,
+                            sport: p.retrievalScope?.sport || p.sport,
                             limit: 6
                         }).catch((err: any) => ({
                             judgments: [],
