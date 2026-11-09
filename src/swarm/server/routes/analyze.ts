@@ -17,7 +17,8 @@ import {
 import { SwarmContext } from '../../context.ts';
 import { globalAsyncJobs, wantsAsync, newJobId } from '../asyncJobs.ts';
 import { getSupabaseConfig, fetchOnDemandSupabaseContext } from '../../morning/supabase.ts';
-import { isSlimSwarmRequest, validateSlimSwarmRequest, slimIdsStubData } from '../slimPayload.ts';
+import { isSlimSwarmRequest, validateSlimSwarmRequest, slimIdsStubData, isSeedManifestRequest, validateSeedManifestRequest, seedManifestStubData, type SeedManifest } from '../slimPayload.ts';
+import { globalToolRegistry, type ToolRegistry } from '../../tools/index.ts';
 import { resolveTrustedRetrievalScope, type TrustedRetrievalScope } from '../../engine/historyScope.ts';
 import {
     getSupabaseReadOnlyConfig,
@@ -71,6 +72,20 @@ async function resolveSlimOrReject(
       }
     | { ok: false; status: 400 | 422; error: string; reason?: string }
 > {
+    if (isSeedManifestRequest(body)) {
+        const manifestErr = validateSeedManifestRequest(body);
+        if (manifestErr) {
+            return { ok: false, status: 400, error: manifestErr, reason: 'invalid_seed_manifest' };
+        }
+        return {
+            ok: true,
+            task: body.task || `Analyze candidate ${body.candidate_id} for ${body.market_type || 'game'}`,
+            data: seedManifestStubData(body),
+            eventIds: [body.game_id],
+            date: '',
+            sport: body.sport
+        };
+    }
     const useStoreForSlim = Boolean(
         scope &&
             (scope.purpose === 'parlay' ||
@@ -191,6 +206,17 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
 
             if (c.req.method === 'POST') {
                 const body = await c.req.json().catch(() => ({}));
+                const isSeedManifest = isSeedManifestRequest(body);
+                if (isSeedManifest) {
+                    const manifestErr = validateSeedManifestRequest(body);
+                    if (manifestErr) {
+                        return c.json({ error: manifestErr, reason: 'invalid_seed_manifest' }, 400);
+                    }
+                    (c as any).set?.('candidate_id', body.candidate_id);
+                    if (body.game_id) {
+                        (c as any).set?.('event_id', body.game_id);
+                    }
+                }
                 const hasExplicitScopeFields =
                     body.retrievalContext !== undefined ||
                     body.snapshotRefs !== undefined ||
@@ -210,7 +236,11 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
                 let data = body.data;
                 let slimMeta: { eventIds?: string[]; date?: string; sport?: string } = {};
                 const isSlimRequest = isSlimSwarmRequest(body) || body?.payload === 'slim-v1';
-                if (isSlimRequest) {
+                if (isSeedManifest) {
+                    task = body.task || `Analyze candidate ${body.candidate_id} for ${body.market_type || 'game'}`;
+                    data = seedManifestStubData(body);
+                    slimMeta = { eventIds: [body.game_id], sport: body.sport };
+                } else if (isSlimRequest) {
                     const slimScope = resolveTrustedRetrievalScope({
                         body,
                         callerAppId,
@@ -265,6 +295,12 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
                             ? body
                             : {
                                   ...body,
+                                  ...(isSeedManifest
+                                      ? {
+                                            eventIds: [body.game_id],
+                                            sport: body.sport
+                                        }
+                                      : {}),
                                   ...(slimMeta.eventIds && !body.eventIds ? { eventIds: slimMeta.eventIds } : {}),
                                   ...(slimMeta.date && !body.date ? { date: slimMeta.date } : {}),
                                   ...(slimMeta.sport && !body.sport ? { sport: slimMeta.sport } : {})
@@ -357,7 +393,7 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
                     defaultAi: body.defaultAi || defaultAi,
                     cortex: body.cortex || body.memoryCortex || defaultCortex,
                     memoryCortex: body.memoryCortex || body.cortex || defaultCortex,
-                    tools: body.tools,
+                    tools: isSeedManifest ? globalToolRegistry.scoped(body.available_tools || []) : body.tools,
                     enableDeepAnalysis: body.enableDeepAnalysis,
                     forceFullSwarm: body.forceFullSwarm,
                     speculativeParallel: body.speculativeParallel,
@@ -365,13 +401,22 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
                     complexityOverride: body.complexityOverride,
                     bypassCache: body.bypassCache,
                     scorecardMode: body.scorecardMode === true,
-                    eventIds: scopeCheck.scope.eventIds.length > 0 ? scopeCheck.scope.eventIds : slimMeta.eventIds,
+                    eventIds: isSeedManifest ? [body.game_id] : (scopeCheck.scope.eventIds.length > 0 ? scopeCheck.scope.eventIds : slimMeta.eventIds),
                     date: scopeCheck.scope.date ?? slimMeta.date,
-                    sport: scopeCheck.scope.sport ?? slimMeta.sport,
+                    sport: isSeedManifest ? body.sport : (scopeCheck.scope.sport ?? slimMeta.sport),
                     entityIds: scopeCheck.scope.entityIds.length > 0 ? scopeCheck.scope.entityIds : undefined,
                     retrievalContext: scopeCheck.retrievalContext,
                     snapshotRefs: scopeCheck.snapshotRefs,
-                    retrievalScope: scopeCheck.scope
+                    retrievalScope: scopeCheck.scope,
+                    ...(isSeedManifest
+                        ? {
+                              seedManifest: body,
+                              candidateId: body.candidate_id,
+                              marketType: body.market_type,
+                              pricing: body.pricing,
+                              flags: body.flags
+                          }
+                        : {})
                 } as SwarmWorkflowParams;
             } else if (c.req.method === 'GET') {
                 const url = new URL(c.req.url);
@@ -416,6 +461,17 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
             const edgeSettings = buildEdgeSettings(env);
             const body = await c.req.json().catch(() => ({}));
             const { callerAppId, originApp } = resolveAppIds(c, defaultSettings);
+            const isSeedManifest = isSeedManifestRequest(body);
+            if (isSeedManifest) {
+                const manifestErr = validateSeedManifestRequest(body);
+                if (manifestErr) {
+                    return c.json({ error: manifestErr, reason: 'invalid_seed_manifest' }, 400);
+                }
+                (c as any).set?.('candidate_id', body.candidate_id);
+                if (body.game_id) {
+                    (c as any).set?.('event_id', body.game_id);
+                }
+            }
             const hasExplicitScopeFields =
                 body.retrievalContext !== undefined ||
                 body.snapshotRefs !== undefined ||
@@ -436,7 +492,11 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
             let slimMeta: { eventIds?: string[]; date?: string; sport?: string } = {};
             let preloadedGameContext: GameContextStoreReadResult | undefined;
             const isSlimRequest = isSlimSwarmRequest(body) || body?.payload === 'slim-v1';
-            if (isSlimRequest) {
+            if (isSeedManifest) {
+                task = body.task || `Analyze candidate ${body.candidate_id} for ${body.market_type || 'game'}`;
+                data = seedManifestStubData(body);
+                slimMeta = { eventIds: [body.game_id], sport: body.sport };
+            } else if (isSlimRequest) {
                 const slimScope = resolveTrustedRetrievalScope({
                     body,
                     callerAppId,
@@ -492,6 +552,12 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
                         ? body
                         : {
                               ...body,
+                              ...(isSeedManifest
+                                  ? {
+                                        eventIds: [body.game_id],
+                                        sport: body.sport
+                                    }
+                                  : {}),
                               ...(slimMeta.eventIds && !body.eventIds ? { eventIds: slimMeta.eventIds } : {}),
                               ...(slimMeta.date && !body.date ? { date: slimMeta.date } : {}),
                               ...(slimMeta.sport && !body.sport ? { sport: slimMeta.sport } : {})
@@ -594,7 +660,7 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
                 defaultAi: body.defaultAi || defaultAi,
                 cortex: body.cortex || body.memoryCortex || defaultCortex,
                 memoryCortex: body.memoryCortex || body.cortex || defaultCortex,
-                tools: body.tools,
+                tools: isSeedManifest ? globalToolRegistry.scoped(body.available_tools || []) : body.tools,
                 enableDeepAnalysis: body.enableDeepAnalysis,
                 forceFullSwarm: body.forceFullSwarm,
                 speculativeParallel: body.speculativeParallel,
@@ -602,13 +668,22 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
                 complexityOverride: body.complexityOverride,
                 bypassCache: body.bypassCache,
                 scorecardMode: body.scorecardMode === true,
-                eventIds: scopeCheck.scope.eventIds.length > 0 ? scopeCheck.scope.eventIds : slimMeta.eventIds,
+                eventIds: isSeedManifest ? [body.game_id] : (scopeCheck.scope.eventIds.length > 0 ? scopeCheck.scope.eventIds : slimMeta.eventIds),
                 date: scopeCheck.scope.date ?? slimMeta.date,
-                sport: scopeCheck.scope.sport ?? slimMeta.sport,
+                sport: isSeedManifest ? body.sport : (scopeCheck.scope.sport ?? slimMeta.sport),
                 entityIds: scopeCheck.scope.entityIds.length > 0 ? scopeCheck.scope.entityIds : undefined,
                 retrievalContext: scopeCheck.retrievalContext,
                 snapshotRefs: scopeCheck.snapshotRefs,
-                retrievalScope: scopeCheck.scope
+                retrievalScope: scopeCheck.scope,
+                ...(isSeedManifest
+                    ? {
+                          seedManifest: body,
+                          candidateId: body.candidate_id,
+                          marketType: body.market_type,
+                          pricing: body.pricing,
+                          flags: body.flags
+                      }
+                    : {})
             } as SwarmWorkflowParams;
 
             if (asyncMode) {
@@ -659,6 +734,11 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
                 result.finalAnalysis = prov.judgment;
             }
 
+            if (isSeedManifest && result?.finalAnalysis && typeof result.finalAnalysis === 'object') {
+                if (!result.finalAnalysis.candidate_id) {
+                    result.finalAnalysis.candidate_id = body.candidate_id;
+                }
+            }
             return serializeSwarmResult(c, result);
         } catch (err: any) {
             return handleServerError('Analyze', err, c);

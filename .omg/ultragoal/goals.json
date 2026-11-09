@@ -1,26 +1,26 @@
 [
   {
-    "id": "goal-1-phase1-thinking-harvest-redteam-variance",
-    "description": "Implement Phase 1: Preserve and harvest thinking tags in repairJson into metadata.reasoningTraces, define RedTeamAnalyst in constants and default analyst pool, and calculate ensemble variance with [CONTESTED_CONSENSUS] warning and confidence clamping.",
+    "id": "goal-1-seed-manifest-contract",
+    "description": "Task 1.1: Add SeedManifest server contract and validation in src/swarm/server/slimPayload.ts",
     "status": "completed",
-    "verification": "Tests verify thinking tags are harvested into metadata, RedTeamAnalyst generates counter-perspectives, and high variance triggers [CONTESTED_CONSENSUS] and confidence clamping."
+    "verification": "SeedManifest interface, isSeedManifestRequest guard, and validateSeedManifestRequest validator implemented and exported."
   },
   {
-    "id": "goal-2-phase2-dialectic-hypothesis-emergency-fallback",
-    "description": "Implement Phase 2: Dynamic hypothesis and counter-hypothesis schemas, HypothesisValidationLayer registration with Debate Digest in synthesis prompt, and context-aware emergency synthesis fallback with 200-token cap in partialResult.",
+    "id": "goal-2-tool-registry-scoping",
+    "description": "Task 1.3: Add scoped(whitelistedNames: string[]) to ToolRegistry in src/swarm/tools/registry.ts",
     "status": "completed",
-    "verification": "Dialectic debate digest synthesized into manager prompt, and emergency synthesis executed before pickBestAnalystOutput on manager failure."
+    "verification": "ToolRegistry.scoped returns a registry only executing tools in whitelist, rejecting non-whitelisted tools. 8/8 unit tests pass."
   },
   {
-    "id": "goal-3-phase3-meta-learning-failure-reflection",
-    "description": "Implement Phase 3: Asynchronous offline failure reflection on loss outcomes in feedback.ts and offlineReflection.ts, upserting structured lessons into MemoryCortex via upsertGradedLesson.",
+    "id": "goal-3-route-parser-seed-manifest",
+    "description": "Task 1.2: Support SeedManifest in analyze and stream routes in src/swarm/server/routes/analyze.ts and streaming.ts",
     "status": "completed",
-    "verification": "Integration tests verify loss outcome triggers asynchronous failure reflection and creates queryable graded_lesson point in cortex."
+    "verification": "Routes accept SeedManifest with manifest_version 'v2-seed', populate candidateId, pricing, marketType, flags, scope.eventIds, and scope.sport without requiring monolithic data string, and enforce tool scoping. Typecheck passes cleanly."
   },
   {
-    "id": "goal-4-phase4-verification-and-clear-todo",
-    "description": "Implement Phase 4: Run full verification gateways (npm run lint, repairJson tests, criticVeto tests, offlineReflection tests, npm run test:unit, npm run build) and clear todo.md.",
+    "id": "goal-4-unit-and-contract-tests",
+    "description": "Task 1.4: Unit and contract tests for SeedManifest and scoped ToolRegistry",
     "status": "completed",
-    "verification": "All verification commands exit 0 and todo.md is cleared."
+    "verification": "Unit and contract tests in seedManifest.test.ts (15 tests) and registry.test.ts (8 tests) pass; npm run lint and full 144-file vitest run pass cleanly."
   }
 ]

@@ -13,6 +13,7 @@ import type { SwarmTool, ToolRegistry } from "../tools/index.ts";
 import type { AnalystConsensusDigest } from "./consensusPipeline.ts";
 import type { Blackboard } from "./blackboard.ts";
 import type { RetrievalContextEnvelope, SnapshotRef, TrustedRetrievalScope } from "./historyScope.ts";
+import type { SeedManifest, SeedManifestPricing, SeedManifestFlags } from "../server/slimPayload.ts";
 export type { RetrievalContextEnvelope, SnapshotRef, TrustedRetrievalScope };
 export interface SwarmStagePayload {
     stage: 'routing' | 'cluster_aggregation' | 'partial_prediction' | 'manager_synthesis' | 'critic_verification' | 'completed' | 'scorecard' | 'critic_scorecard' | 'wave_progress';
@@ -59,6 +60,11 @@ export interface SwarmWorkflowParams {
     cortex?: MemoryCortex;
     memoryCortex?: MemoryCortex;
     tools?: SwarmTool[] | ToolRegistry;
+    seedManifest?: SeedManifest;
+    candidateId?: string;
+    marketType?: string;
+    pricing?: SeedManifestPricing;
+    flags?: SeedManifestFlags;
 }
 
 export interface SwarmWorkflowResult {

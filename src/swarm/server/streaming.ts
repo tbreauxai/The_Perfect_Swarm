@@ -72,6 +72,12 @@ export async function handleSwarmSse(
                 delete payload.workflowId;
             }
             // PS1: partial runs are still swarm_complete, flagged with status:'partial'; degraded = seat ids with no backup left.
+            if (params.candidateId) {
+                payload.candidate_id = params.candidateId;
+            }
+            if (params.seedManifest) {
+                payload.manifest_version = params.seedManifest.manifest_version;
+            }
             payload.status = (result as any).status || 'complete';
             payload.degraded = Array.isArray((result as any).degraded) ? (result as any).degraded : [];
 

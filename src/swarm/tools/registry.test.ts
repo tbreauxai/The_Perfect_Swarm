@@ -15,6 +15,17 @@ describe('ToolRegistry', () => {
         }
     };
 
+    const mockTool2: SwarmTool = {
+        name: 'test_multiplier',
+        description: 'Test multiplication tool',
+        parameters: {
+            x: { type: 'number', description: 'number', required: true }
+        },
+        execute(params: { x: number }) {
+            return params.x * 2;
+        }
+    };
+
     it('registers and unregisters tools cleanly', () => {
         const reg = new ToolRegistry([mockTool]);
         expect(reg.has('test_calc')).toBe(true);
@@ -89,5 +100,29 @@ describe('ToolRegistry', () => {
         const text = 'Before [TOOL_CALL: {"tool": "test_calc", "parameters": {"a": 1}}] After';
         const stripped = reg.stripToolCalls(text);
         expect(stripped).toBe('Before  After');
+    });
+
+    it('creates a scoped registry that prevents calling tools outside whitelist', async () => {
+        const parentReg = new ToolRegistry([mockTool, mockTool2]);
+        const scoped = parentReg.scoped(['test_calc']);
+
+        expect(scoped.has('test_calc')).toBe(true);
+        expect(scoped.has('test_multiplier')).toBe(false);
+        expect(scoped.list()).toHaveLength(1);
+        expect(scoped.list()[0].name).toBe('test_calc');
+
+        // Whitelisted tool executes
+        const okRes = await scoped.execute('test_calc', { a: 2, b: 3 });
+        expect(okRes.success).toBe(true);
+        expect(okRes.result).toBe(5);
+
+        // Disallowed tool rejected
+        const blockedRes = await scoped.execute('test_multiplier', { x: 5 });
+        expect(blockedRes.success).toBe(false);
+        expect(blockedRes.error).toContain('not permitted by the scoped manifest whitelist');
+
+        // Cannot bypass via direct register
+        scoped.register(mockTool2);
+        expect(scoped.has('test_multiplier')).toBe(false);
     });
 });

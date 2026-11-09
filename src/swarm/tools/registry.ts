@@ -29,8 +29,12 @@ function extractJsonObjects(text: string): string[] {
  */
 export class ToolRegistry {
     private tools: Map<string, SwarmTool> = new Map();
+    private whitelist?: Set<string>;
 
-    constructor(initialTools?: SwarmTool[]) {
+    constructor(initialTools?: SwarmTool[], whitelist?: string[]) {
+        if (whitelist) {
+            this.whitelist = new Set(whitelist.map((n) => String(n).trim()).filter(Boolean));
+        }
         if (initialTools) {
             this.registerAll(initialTools);
         }
@@ -39,6 +43,9 @@ export class ToolRegistry {
     register(tool: SwarmTool): void {
         if (!tool || !tool.name) {
             throw new Error('Tool must have a valid name.');
+        }
+        if (this.whitelist && !this.whitelist.has(tool.name)) {
+            return;
         }
         this.tools.set(tool.name, tool);
     }
@@ -54,15 +61,32 @@ export class ToolRegistry {
     }
 
     get(name: string): SwarmTool | undefined {
+        if (this.whitelist && !this.whitelist.has(name)) {
+            return undefined;
+        }
         return this.tools.get(name);
     }
 
     has(name: string): boolean {
+        if (this.whitelist && !this.whitelist.has(name)) {
+            return false;
+        }
         return this.tools.has(name);
     }
 
     list(): SwarmTool[] {
-        return Array.from(this.tools.values());
+        const all = Array.from(this.tools.values());
+        if (!this.whitelist) return all;
+        return all.filter((t) => this.whitelist!.has(t.name));
+    }
+
+    /**
+     * Creates a child scoped ToolRegistry strictly restricted to the specified whitelisted tool names.
+     */
+    scoped(whitelistedNames: string[]): ToolRegistry {
+        const allowed = whitelistedNames.map((n) => String(n).trim()).filter(Boolean);
+        const filtered = this.list().filter((t) => allowed.includes(t.name));
+        return new ToolRegistry(filtered, allowed);
     }
 
     /**
@@ -70,6 +94,17 @@ export class ToolRegistry {
      */
     async execute(name: string, parameters: any = {}): Promise<ToolExecutionResult> {
         const startTime = Date.now();
+
+        if (this.whitelist && !this.whitelist.has(name)) {
+            return {
+                tool: name,
+                parameters,
+                error: `Tool '${name}' is not permitted by the scoped manifest whitelist. Available tools: ${Array.from(this.whitelist).join(', ')}`,
+                success: false,
+                durationMs: Date.now() - startTime
+            };
+        }
+
         const tool = this.tools.get(name);
 
         if (!tool) {
