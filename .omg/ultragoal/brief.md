@@ -1,18 +1,16 @@
-# Ultragoal Brief: Phase 2 - Build Read-Only Database Views & Tool Endpoints
+# Phase 3: Two-Hop "Triage & Fetch" Swarm Loop
 
 ## Objective
-Implement the Swarm-side deterministic tool wrappers for the 6 read-only database endpoints, ensuring deterministic execution, strict parameter validation, and compact markdown/JSON output formatting.
+Implement a Planner-Executor pattern:
+- **Hop 1 (Triage Planner)** selects up to 3 tools based on `SeedManifest` + Qdrant lessons.
+- **Parallel Execution Layer** queries Supabase via tools with a 10-minute game-level cache and single-flight coalescing, assembling a token-dense `CuratedDossier` (300-500 tokens).
+- **Hop 2 (Specialist Debate)** grounds specialist analysts with `CuratedDossier` as primary evidence block and disables multi-turn ad-hoc tool calling in Hop 2.
+- Emits SSE events: `hop1_plan`, `hop1_exec`, `curated_dossier`, `analyst_start`.
 
-## Architecture Boundaries & Constraints
-- Implement tools in `src/swarm/tools/dueloddsRpcTools.ts`.
-- All 6 tools implement `SwarmTool`:
-  1. `get_matchup_fundamentals` (calls Supabase RPC `get_matchup_fundamentals_v1`)
-  2. `get_injury_and_roster_delta` (calls Supabase RPC `get_injury_and_roster_delta_v1`)
-  3. `get_player_prop_splits` (calls Supabase RPC `get_player_prop_splits_v1`)
-  4. `get_environment_and_weather` (calls Supabase RPC `get_environment_and_weather_v1`, short-circuits when `is_dome: true`)
-  5. `get_market_movement` (calls Supabase RPC `get_market_movement_v1`)
-  6. `get_historical_lessons` (queries Qdrant or Supabase `lessons` table for routing_rule)
-- Register all 6 tools in `src/swarm/tools/builtin.ts` and export in `src/swarm/tools/index.ts`.
-- Format results into compact token-dense blocks (<= 250 tokens).
-- Maintain Node 22 erasableSyntaxOnly TypeScript compatibility.
-- 100% test coverage for input validation, error handling, token density, and dome short-circuiting in `src/swarm/tools/dueloddsRpcTools.test.ts`.
+## Constraints & Architecture Boundaries
+- Preserve existing streaming SSE and REST dispatch behavior.
+- Use Node 22 erasableSyntaxOnly TypeScript syntax.
+- Ensure strict 1500ms timeout per tool execution in Hop 1.
+- Tool selection hard cap: max 3 tool calls, whitelisted against `manifest.available_tools`.
+- GameQueryCache TTL = 10 minutes (600,000ms), keyed by `(game_id, tool_name, param_hash)`, with single-flight promise deduplication.
+- Zero conversational filler.

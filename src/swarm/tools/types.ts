@@ -13,7 +13,7 @@ export interface SwarmTool<TParams = any, TResult = any> {
     readonly name: string;
     readonly description: string;
     readonly parameters: Record<string, ToolParameterSchema>;
-    execute(params: TParams): Promise<TResult> | TResult;
+    execute(params: TParams, context?: any): Promise<TResult> | TResult;
 }
 
 export interface ToolCallRequest {

@@ -267,6 +267,11 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
         });
 
         // 3. Construct Analyst Execution Function
+        const curatedDossierText = typeof params.curatedDossier === 'string'
+            ? params.curatedDossier
+            : params.curatedDossier?.markdown;
+        const disableAdHocTools = Boolean(curatedDossierText || params.seedManifest);
+
         const executeAnalyst = createAnalystExecutor({
             task,
             chunks,
@@ -283,6 +288,8 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
             bypassCache,
             scorecardMode: isScorecardMode(params, settings),
             onStage: params.onStage,
+            curatedDossier: curatedDossierText,
+            disableAdHocTools,
             onPromptCompression: (m) => {
                 workflowOriginalPromptTokens += m.originalTokens;
                 workflowCompressedPromptTokens += m.compressedTokens;

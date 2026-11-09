@@ -39,6 +39,11 @@ import {
   executeScorecardSynthesis,
   emptySynthesisResult,
 } from "./scorecardManager.ts";
+import { planTriage, type TriagePlan } from "./triagePlanner.ts";
+import { executeTriage, type CuratedDossier } from "./triageExecutor.ts";
+import { globalGameQueryCache } from "../cache/gameQueryCache.ts";
+export { planTriage, executeTriage, globalGameQueryCache };
+export type { TriagePlan, CuratedDossier };
 
 import { SwarmContext } from '../context.ts';
 import { globalMetricsCollector } from '../profiler.ts';
@@ -229,6 +234,49 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             const historicalContext = mathBlock
                 ? `${rawHistoricalContext}\n\n${mathBlock}`
                 : rawHistoricalContext;
+
+            // Hop 1: Two-Hop Triage & Fetch (when SeedManifest is provided)
+            let curatedDossier: CuratedDossier | undefined = params.curatedDossier;
+            const env = typeof process !== "undefined" ? process.env : {} as Record<string, string | undefined>;
+            if (params.seedManifest && !curatedDossier) {
+                // 1. Triage Plan
+                const plan = await planTriage(params.seedManifest, {
+                    context,
+                    env,
+                    qdrantClient: (params as any).qdrantClient
+                });
+                params.onStage?.({
+                    stage: 'hop1_plan',
+                    plan
+                });
+
+                // 2. Parallel Fetch & Dossier Assemble
+                curatedDossier = await executeTriage(plan, params.seedManifest, {
+                    toolRegistry,
+                    cache: globalGameQueryCache,
+                    env,
+                    qdrantClient: (params as any).qdrantClient
+                });
+                params.onStage?.({
+                    stage: 'hop1_exec',
+                    sections: curatedDossier.sections,
+                    durationMs: curatedDossier.totalDurationMs
+                });
+                params.onStage?.({
+                    stage: 'curated_dossier',
+                    dossier: curatedDossier
+                });
+                params.curatedDossier = curatedDossier;
+            }
+
+            // Hop 2 Specialist Debate Start Event
+            if (params.seedManifest || curatedDossier) {
+                params.onStage?.({
+                    stage: 'analyst_start',
+                    analysts: analysts.map(a => a.role),
+                    hasCuratedDossier: Boolean(curatedDossier)
+                });
+            }
 
             // Step 4: Run Cluster Pipeline
             const clusterResult = await runClusterPipeline({

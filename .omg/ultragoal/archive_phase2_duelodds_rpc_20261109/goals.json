@@ -1,0 +1,26 @@
+[
+  {
+    "id": "goal-1-rpc-tools-matchup-weather",
+    "description": "Task 2.1: Implement DuelOdds Database RPC Tool Set (Tools 1-5: fundamentals, injury delta, player prop splits, environment/weather, market movement) in src/swarm/tools/dueloddsRpcTools.ts",
+    "status": "completed",
+    "verification": "Tools 1-5 implemented conforming to SwarmTool contract, calling corresponding Supabase RPCs with parameter validation and compact formatted summaries."
+  },
+  {
+    "id": "goal-2-rpc-tool-historical-lessons",
+    "description": "Task 2.2: Implement get_historical_lessons tool querying Qdrant / Supabase lessons table for routing_rule",
+    "status": "completed",
+    "verification": "Tool 6 get_historical_lessons implemented with fallback from Qdrant to Supabase lessons table."
+  },
+  {
+    "id": "goal-3-register-builtin-tools",
+    "description": "Task 2.3: Register all 6 tools in standardBuiltinTools and globalToolRegistry in src/swarm/tools/builtin.ts and src/swarm/tools/index.ts",
+    "status": "completed",
+    "verification": "All 6 tools registered in standardBuiltinTools and globalToolRegistry, and exported from index.ts."
+  },
+  {
+    "id": "goal-4-unit-and-mock-tests",
+    "description": "Task 2.4: Unit & mock execution tests in src/swarm/tools/dueloddsRpcTools.test.ts",
+    "status": "completed",
+    "verification": "Tests verify parameter validation, error handling, token density (<=250 tokens), is_dome short-circuit, and full test suite passes."
+  }
+]

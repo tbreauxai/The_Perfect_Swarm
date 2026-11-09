@@ -2,6 +2,7 @@ export * from './types.ts';
 export * from './semanticSimilarityEngine.ts';
 export * from './payloadCache.ts';
 export * from './semanticBaselineCache.ts';
+export * from './gameQueryCache.ts';
 
 import { PayloadCache } from './payloadCache.ts';
 import { SemanticBaselineCache } from './semanticBaselineCache.ts';

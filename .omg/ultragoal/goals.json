@@ -1,26 +1,32 @@
 [
   {
-    "id": "goal-1-rpc-tools-matchup-weather",
-    "description": "Task 2.1: Implement DuelOdds Database RPC Tool Set (Tools 1-5: fundamentals, injury delta, player prop splits, environment/weather, market movement) in src/swarm/tools/dueloddsRpcTools.ts",
+    "id": "goal-1-game-query-cache",
+    "description": "Task 3.1: Shared Game-Level Query Cache with Single-Flight Fetch (src/swarm/cache/gameQueryCache.ts)",
     "status": "completed",
-    "verification": "Tools 1-5 implemented conforming to SwarmTool contract, calling corresponding Supabase RPCs with parameter validation and compact formatted summaries."
+    "verification": "GameQueryCache implemented with 10-minute TTL, single-flight in-flight promise coalescing, keyed by (game_id, tool_name, param_hash)."
   },
   {
-    "id": "goal-2-rpc-tool-historical-lessons",
-    "description": "Task 2.2: Implement get_historical_lessons tool querying Qdrant / Supabase lessons table for routing_rule",
+    "id": "goal-2-triage-planner",
+    "description": "Task 3.2: Hop 1 — Triage Planner Module (src/swarm/engine/triagePlanner.ts)",
     "status": "completed",
-    "verification": "Tool 6 get_historical_lessons implemented with fallback from Qdrant to Supabase lessons table."
+    "verification": "TriagePlanner selects <=3 tools based on SeedManifest and routing lessons, enforcing available_tools whitelist and JSON schema."
   },
   {
-    "id": "goal-3-register-builtin-tools",
-    "description": "Task 2.3: Register all 6 tools in standardBuiltinTools and globalToolRegistry in src/swarm/tools/builtin.ts and src/swarm/tools/index.ts",
+    "id": "goal-3-triage-executor-dossier",
+    "description": "Task 3.3: Parallel Execution Layer & Curated Dossier Assembler (src/swarm/engine/triageExecutor.ts)",
     "status": "completed",
-    "verification": "All 6 tools registered in standardBuiltinTools and globalToolRegistry, and exported from index.ts."
+    "verification": "TriageExecutor runs tools concurrently with 1500ms timeout per call and GameQueryCache, producing 300-500 token CuratedDossier."
   },
   {
-    "id": "goal-4-unit-and-mock-tests",
-    "description": "Task 2.4: Unit & mock execution tests in src/swarm/tools/dueloddsRpcTools.test.ts",
+    "id": "goal-4-hop2-specialist-grounding",
+    "description": "Task 3.4: Hop 2 — Specialist Debate Pipeline Grounding & SSE Events (src/swarm/engine/analystExecution.ts & src/swarm/engine/clusterPipeline.ts)",
     "status": "completed",
-    "verification": "Tests verify parameter validation, error handling, token density (<=250 tokens), is_dome short-circuit, and full test suite passes."
+    "verification": "Analysts receive CuratedDossier as primary evidence without ad-hoc tool calling in Hop 2; SSE events hop1_plan, hop1_exec, curated_dossier emitted."
+  },
+  {
+    "id": "goal-5-pipeline-unit-latency-tests",
+    "description": "Task 3.5: Two-Hop Pipeline Unit & Latency Tests (src/swarm/engine/triagePipeline.test.ts)",
+    "status": "completed",
+    "verification": "Tests verify <=3 tool budget truncation, GameQueryCache cache hit <5ms, and full pipeline integration."
   }
 ]

@@ -90,38 +90,38 @@ Implement the Swarm-side deterministic tool wrappers for the 6 read-only databas
 
 ---
 
-# Phase 3: Implement a Two-Hop "Triage & Fetch" Swarm Loop (Pending)
+# Phase 3: Implement a Two-Hop "Triage & Fetch" Swarm Loop (Completed)
 
 ## Goal
 Implement a Planner-Executor pattern: Hop 1 Triage Planner selects up to 3 tools based on Seed Manifest + Qdrant lessons; Parallel Execution Layer queries Supabase with a 10-minute game-level cache and stitches a Curated Dossier; Hop 2 Specialists debate and price the pick.
 
 ### Task 3.1: Shared Game-Level Query Cache with Single-Flight Fetch
-- [ ] **File**: `src/swarm/cache/gameQueryCache.ts`
-  - [ ] Implement `GameQueryCache` with in-memory LRU / Map keyed by `(game_id, tool_name, param_hash)`.
-  - [ ] Set default TTL = 10 minutes (600,000ms).
-  - [ ] Add in-flight promise coalescing (`single-flight`) so concurrent bets on the same game share one DB roundtrip.
+- [x] **File**: `src/swarm/cache/gameQueryCache.ts`
+  - [x] Implement `GameQueryCache` with in-memory LRU / Map keyed by `(game_id, tool_name, param_hash)`.
+  - [x] Set default TTL = 10 minutes (600,000ms).
+  - [x] Add in-flight promise coalescing (`single-flight`) so concurrent bets on the same game share one DB roundtrip.
 
 ### Task 3.2: Hop 1 — Triage Planner Module
-- [ ] **File**: `src/swarm/engine/triagePlanner.ts`
-  - [ ] Configure ultra-fast model (default: `gemini-2.5-flash-lite`, Groq Llama 3.3, or Mistral Small).
-  - [ ] Input: `SeedManifest` + Qdrant routing lessons (via `get_historical_lessons`).
-  - [ ] Output: Strict JSON schema `{ tool_calls: Array<{ tool: string; parameters: Record<string, any> }> }`.
-  - [ ] Enforce Guardrails: Hard cap `max_tool_calls = 3` and filter against `manifest.available_tools`.
+- [x] **File**: `src/swarm/engine/triagePlanner.ts`
+  - [x] Configure ultra-fast model (default: `gemini-2.5-flash-lite`, Groq Llama 3.3, or Mistral Small).
+  - [x] Input: `SeedManifest` + Qdrant routing lessons (via `get_historical_lessons`).
+  - [x] Output: Strict JSON schema `{ tool_calls: Array<{ tool: string; parameters: Record<string, any> }> }`.
+  - [x] Enforce Guardrails: Hard cap `max_tool_calls = 3` and filter against `manifest.available_tools`.
 
 ### Task 3.3: Parallel Execution Layer & Curated Dossier Assembler
-- [ ] **File**: `src/swarm/engine/triageExecutor.ts`
-  - [ ] Concurrently execute selected tools via `Promise.all` wrapped in `GameQueryCache`.
-  - [ ] Enforce 1500ms timeout per tool execution.
-  - [ ] Assemble token-dense `CuratedDossier` Markdown block (target: 300–500 tokens).
+- [x] **File**: `src/swarm/engine/triageExecutor.ts`
+  - [x] Concurrently execute selected tools via `Promise.all` wrapped in `GameQueryCache`.
+  - [x] Enforce 1500ms timeout per tool execution.
+  - [x] Assemble token-dense `CuratedDossier` Markdown block (target: 300–500 tokens).
 
 ### Task 3.4: Hop 2 — Specialist Debate Pipeline Grounding
-- [ ] **File**: `src/swarm/engine/analystExecution.ts` & `src/swarm/engine/clusterPipeline.ts`
-  - [ ] Ground specialist analysts with `CuratedDossier` as primary evidence block.
-  - [ ] Disable multi-turn ad-hoc tool calling in Hop 2; specialists strictly synthesize and adjust probability.
-  - [ ] Emit SSE events: `hop1_plan`, `hop1_exec`, `curated_dossier`, `analyst_start`.
+- [x] **File**: `src/swarm/engine/analystExecution.ts` & `src/swarm/engine/clusterPipeline.ts`
+  - [x] Ground specialist analysts with `CuratedDossier` as primary evidence block.
+  - [x] Disable multi-turn ad-hoc tool calling in Hop 2; specialists strictly synthesize and adjust probability.
+  - [x] Emit SSE events: `hop1_plan`, `hop1_exec`, `curated_dossier`, `analyst_start`.
 
 ### Task 3.5: Two-Hop Pipeline Unit & Latency Tests
-- [ ] **File**: `src/swarm/engine/triagePipeline.test.ts`
-  - [ ] Test hard tool budget enforcement (truncates > 3 tool calls).
-  - [ ] Test GameQueryCache hits across multiple evaluations on identical `game_id`.
-  - [ ] Benchmark execution time: assert cached DB roundtrips execute in < 5ms.
+- [x] **File**: `src/swarm/engine/triagePipeline.test.ts`
+  - [x] Test hard tool budget enforcement (truncates > 3 tool calls).
+  - [x] Test GameQueryCache hits across multiple evaluations on identical `game_id`.
+  - [x] Benchmark execution time: assert cached DB roundtrips execute in < 5ms.

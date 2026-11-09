@@ -16,7 +16,7 @@ import type { RetrievalContextEnvelope, SnapshotRef, TrustedRetrievalScope } fro
 import type { SeedManifest, SeedManifestPricing, SeedManifestFlags } from "../server/slimPayload.ts";
 export type { RetrievalContextEnvelope, SnapshotRef, TrustedRetrievalScope };
 export interface SwarmStagePayload {
-    stage: 'routing' | 'cluster_aggregation' | 'partial_prediction' | 'manager_synthesis' | 'critic_verification' | 'completed' | 'scorecard' | 'critic_scorecard' | 'wave_progress';
+    stage: 'routing' | 'cluster_aggregation' | 'partial_prediction' | 'manager_synthesis' | 'critic_verification' | 'completed' | 'scorecard' | 'critic_scorecard' | 'wave_progress' | 'hop1_plan' | 'hop1_exec' | 'curated_dossier' | 'analyst_start';
     task?: string;
     digests?: Record<string, ClusterDigest>;
     partialPrediction?: any;
@@ -65,6 +65,7 @@ export interface SwarmWorkflowParams {
     marketType?: string;
     pricing?: SeedManifestPricing;
     flags?: SeedManifestFlags;
+    curatedDossier?: any;
 }
 
 export interface SwarmWorkflowResult {
