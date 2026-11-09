@@ -1,0 +1,26 @@
+[
+  {
+    "id": "goal-1-seed-manifest-contract",
+    "description": "Task 1.1: Add SeedManifest server contract and validation in src/swarm/server/slimPayload.ts",
+    "status": "completed",
+    "verification": "SeedManifest interface, isSeedManifestRequest guard, and validateSeedManifestRequest validator implemented and exported."
+  },
+  {
+    "id": "goal-2-tool-registry-scoping",
+    "description": "Task 1.3: Add scoped(whitelistedNames: string[]) to ToolRegistry in src/swarm/tools/registry.ts",
+    "status": "completed",
+    "verification": "ToolRegistry.scoped returns a registry only executing tools in whitelist, rejecting non-whitelisted tools. 8/8 unit tests pass."
+  },
+  {
+    "id": "goal-3-route-parser-seed-manifest",
+    "description": "Task 1.2: Support SeedManifest in analyze and stream routes in src/swarm/server/routes/analyze.ts and streaming.ts",
+    "status": "completed",
+    "verification": "Routes accept SeedManifest with manifest_version 'v2-seed', populate candidateId, pricing, marketType, flags, scope.eventIds, and scope.sport without requiring monolithic data string, and enforce tool scoping. Typecheck passes cleanly."
+  },
+  {
+    "id": "goal-4-unit-and-contract-tests",
+    "description": "Task 1.4: Unit and contract tests for SeedManifest and scoped ToolRegistry",
+    "status": "completed",
+    "verification": "Unit and contract tests in seedManifest.test.ts (15 tests) and registry.test.ts (8 tests) pass; npm run lint and full 144-file vitest run pass cleanly."
+  }
+]

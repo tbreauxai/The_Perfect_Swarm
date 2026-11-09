@@ -11,6 +11,15 @@ import {
     monteCarloBootstrapTool
 } from './forecastingTools.ts';
 import { dueloddsSupabaseLookupTool } from './supabaseTools.ts';
+import {
+    getMatchupFundamentalsTool,
+    getInjuryAndRosterDeltaTool,
+    getPlayerPropSplitsTool,
+    getEnvironmentAndWeatherTool,
+    getMarketMovementTool,
+    getHistoricalLessonsTool,
+    dueloddsRpcTools
+} from './dueloddsRpcTools.ts';
 
 export * from './mathTools.ts';
 export * from './statsTools.ts';
@@ -19,6 +28,7 @@ export * from './dataTools.ts';
 export * from './dateTools.ts';
 export * from './forecastingTools.ts';
 export * from './supabaseTools.ts';
+export * from './dueloddsRpcTools.ts';
 
 export const standardBuiltinTools: SwarmTool[] = [
     calculatorTool,
@@ -36,6 +46,11 @@ export const standardBuiltinTools: SwarmTool[] = [
     autocorrelationRegimeTool,
     kellyEdgeSizerTool,
     monteCarloBootstrapTool,
-    dueloddsSupabaseLookupTool
+    dueloddsSupabaseLookupTool,
+    getMatchupFundamentalsTool,
+    getInjuryAndRosterDeltaTool,
+    getPlayerPropSplitsTool,
+    getEnvironmentAndWeatherTool,
+    getMarketMovementTool,
+    getHistoricalLessonsTool
 ];
-

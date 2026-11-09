@@ -1,26 +1,26 @@
 [
   {
-    "id": "goal-1-seed-manifest-contract",
-    "description": "Task 1.1: Add SeedManifest server contract and validation in src/swarm/server/slimPayload.ts",
+    "id": "goal-1-rpc-tools-matchup-weather",
+    "description": "Task 2.1: Implement DuelOdds Database RPC Tool Set (Tools 1-5: fundamentals, injury delta, player prop splits, environment/weather, market movement) in src/swarm/tools/dueloddsRpcTools.ts",
     "status": "completed",
-    "verification": "SeedManifest interface, isSeedManifestRequest guard, and validateSeedManifestRequest validator implemented and exported."
+    "verification": "Tools 1-5 implemented conforming to SwarmTool contract, calling corresponding Supabase RPCs with parameter validation and compact formatted summaries."
   },
   {
-    "id": "goal-2-tool-registry-scoping",
-    "description": "Task 1.3: Add scoped(whitelistedNames: string[]) to ToolRegistry in src/swarm/tools/registry.ts",
+    "id": "goal-2-rpc-tool-historical-lessons",
+    "description": "Task 2.2: Implement get_historical_lessons tool querying Qdrant / Supabase lessons table for routing_rule",
     "status": "completed",
-    "verification": "ToolRegistry.scoped returns a registry only executing tools in whitelist, rejecting non-whitelisted tools. 8/8 unit tests pass."
+    "verification": "Tool 6 get_historical_lessons implemented with fallback from Qdrant to Supabase lessons table."
   },
   {
-    "id": "goal-3-route-parser-seed-manifest",
-    "description": "Task 1.2: Support SeedManifest in analyze and stream routes in src/swarm/server/routes/analyze.ts and streaming.ts",
+    "id": "goal-3-register-builtin-tools",
+    "description": "Task 2.3: Register all 6 tools in standardBuiltinTools and globalToolRegistry in src/swarm/tools/builtin.ts and src/swarm/tools/index.ts",
     "status": "completed",
-    "verification": "Routes accept SeedManifest with manifest_version 'v2-seed', populate candidateId, pricing, marketType, flags, scope.eventIds, and scope.sport without requiring monolithic data string, and enforce tool scoping. Typecheck passes cleanly."
+    "verification": "All 6 tools registered in standardBuiltinTools and globalToolRegistry, and exported from index.ts."
   },
   {
-    "id": "goal-4-unit-and-contract-tests",
-    "description": "Task 1.4: Unit and contract tests for SeedManifest and scoped ToolRegistry",
+    "id": "goal-4-unit-and-mock-tests",
+    "description": "Task 2.4: Unit & mock execution tests in src/swarm/tools/dueloddsRpcTools.test.ts",
     "status": "completed",
-    "verification": "Unit and contract tests in seedManifest.test.ts (15 tests) and registry.test.ts (8 tests) pass; npm run lint and full 144-file vitest run pass cleanly."
+    "verification": "Tests verify parameter validation, error handling, token density (<=250 tokens), is_dome short-circuit, and full test suite passes."
   }
 ]

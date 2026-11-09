@@ -1,7 +1,6 @@
-{"timestamp":"2026-11-08T21:52:55.000Z","goalId":"goal-1-seed-manifest-contract","status":"in-progress","evidence":"Initialized ultragoal for Phase 1 SeedManifest ingestion from todo.md."}
-{"event":"goal_completed","goalId":"goal-1-seed-manifest-contract","timestamp":"2026-11-08T22:06:15Z"}
-{"event":"goal_completed","goalId":"goal-2-tool-registry-scoping","timestamp":"2026-11-08T22:06:15Z"}
-{"event":"goal_completed","goalId":"goal-3-route-parser-seed-manifest","timestamp":"2026-11-08T22:06:15Z"}
-{"event":"goal_started","goalId":"goal-4-unit-and-contract-tests","timestamp":"2026-11-08T22:06:15Z"}
-{"event":"goal_completed","goalId":"goal-4-unit-and-contract-tests","timestamp":"2026-11-08T22:10:18Z"}
-{"event":"ultragoal_completed","timestamp":"2026-11-08T22:10:18Z"}
+{"event":"ultragoal_started","phase":2,"timestamp":"2026-11-08T23:27:53Z"}
+{"event":"goal_started","goalId":"goal-1-rpc-tools-matchup-weather","timestamp":"2026-11-08T23:27:53Z"}
+{"timestamp":"2026-11-08T23:43:10-06:00","goalId":"goal-1-rpc-tools-matchup-weather","action":"completed","summary":"Tools 1-5 implemented in src/swarm/tools/dueloddsRpcTools.ts"}
+{"timestamp":"2026-11-08T23:43:10-06:00","goalId":"goal-2-rpc-tool-historical-lessons","action":"completed","summary":"Tool 6 get_historical_lessons implemented with Qdrant + Supabase fallback in src/swarm/tools/dueloddsRpcTools.ts"}
+{"timestamp":"2026-11-08T23:43:10-06:00","goalId":"goal-3-register-builtin-tools","action":"completed","summary":"Tools registered in standardBuiltinTools in src/swarm/tools/builtin.ts and exported from src/swarm/tools/index.ts"}
+{"timestamp":"2026-11-08T23:43:10-06:00","goalId":"goal-4-unit-and-mock-tests","action":"completed","summary":"Unit tests in src/swarm/tools/dueloddsRpcTools.test.ts (21 tests) passed; typecheck, lint, and build smoke test passed"}
