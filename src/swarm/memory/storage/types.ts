@@ -19,6 +19,8 @@ export interface StorageFilterOptions {
     includeShared?: boolean;
     targetApps?: string | string[];
     maxPoints?: number;
+    ruleType?: string;
+    marketType?: string;
 }
 
 export interface StorageQueryOptions extends StorageFilterOptions {
@@ -235,6 +237,16 @@ export function matchesScopedMemoryFilter(
         if (!hasTimestamp) {
             return false;
         }
+    }
+
+    // 7. Enforce ruleType and marketType filters
+    if (options.ruleType !== undefined && options.ruleType.trim() !== '') {
+        const itemRuleType = payload.rule_type || payload.ruleType;
+        if (itemRuleType !== options.ruleType) return false;
+    }
+    if (options.marketType !== undefined && options.marketType.trim() !== '') {
+        const itemMarketType = payload.market_type || payload.marketType;
+        if (itemMarketType !== options.marketType) return false;
     }
 
     return true;

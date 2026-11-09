@@ -1,0 +1,32 @@
+[
+  {
+    "id": "goal-1-game-query-cache",
+    "description": "Task 3.1: Shared Game-Level Query Cache with Single-Flight Fetch (src/swarm/cache/gameQueryCache.ts)",
+    "status": "completed",
+    "verification": "GameQueryCache implemented with 10-minute TTL, single-flight in-flight promise coalescing, keyed by (game_id, tool_name, param_hash)."
+  },
+  {
+    "id": "goal-2-triage-planner",
+    "description": "Task 3.2: Hop 1 — Triage Planner Module (src/swarm/engine/triagePlanner.ts)",
+    "status": "completed",
+    "verification": "TriagePlanner selects <=3 tools based on SeedManifest and routing lessons, enforcing available_tools whitelist and JSON schema."
+  },
+  {
+    "id": "goal-3-triage-executor-dossier",
+    "description": "Task 3.3: Parallel Execution Layer & Curated Dossier Assembler (src/swarm/engine/triageExecutor.ts)",
+    "status": "completed",
+    "verification": "TriageExecutor runs tools concurrently with 1500ms timeout per call and GameQueryCache, producing 300-500 token CuratedDossier."
+  },
+  {
+    "id": "goal-4-hop2-specialist-grounding",
+    "description": "Task 3.4: Hop 2 — Specialist Debate Pipeline Grounding & SSE Events (src/swarm/engine/analystExecution.ts & src/swarm/engine/clusterPipeline.ts)",
+    "status": "completed",
+    "verification": "Analysts receive CuratedDossier as primary evidence without ad-hoc tool calling in Hop 2; SSE events hop1_plan, hop1_exec, curated_dossier emitted."
+  },
+  {
+    "id": "goal-5-pipeline-unit-latency-tests",
+    "description": "Task 3.5: Two-Hop Pipeline Unit & Latency Tests (src/swarm/engine/triagePipeline.test.ts)",
+    "status": "completed",
+    "verification": "Tests verify <=3 tool budget truncation, GameQueryCache cache hit <5ms, and full pipeline integration."
+  }
+]

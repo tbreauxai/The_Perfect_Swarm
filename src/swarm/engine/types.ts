@@ -75,6 +75,8 @@ export interface SwarmWorkflowResult {
     partial?: boolean;
     /** Seat ids that failed with no backup left (a seat that recovered via a fallback is not listed). */
     degraded?: string[];
+    /** List of tool names executed during Hop 1 triage or workflow */
+    tools_called?: string[];
     events: SwarmEvent[];
     finalAnalysis: any;
     metrics?: SwarmBaselineReport;

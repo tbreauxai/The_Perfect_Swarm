@@ -160,17 +160,22 @@ export class QdrantLearningStore {
         }
 
         if (typeof this.client.createPayloadIndex === 'function') {
-            try {
-                await withTimeout(
-                    this.client.createPayloadIndex(this.collection, {
-                        field_name: 'ts',
-                        field_schema: 'integer'
-                    }),
-                    QDRANT_TIMEOUT_MS,
-                    'createPayloadIndex'
-                );
-            } catch {
-                // Idempotent: ignore if index already exists
+            const indexes: Array<{ field_name: string; field_schema: 'integer' | 'keyword' }> = [
+                { field_name: 'ts', field_schema: 'integer' },
+                { field_name: 'rule_type', field_schema: 'keyword' },
+                { field_name: 'sport', field_schema: 'keyword' },
+                { field_name: 'market_type', field_schema: 'keyword' }
+            ];
+            for (const idx of indexes) {
+                try {
+                    await withTimeout(
+                        this.client.createPayloadIndex(this.collection, idx),
+                        QDRANT_TIMEOUT_MS,
+                        `createPayloadIndex:${idx.field_name}`
+                    );
+                } catch {
+                    // Idempotent: ignore if index already exists
+                }
             }
         }
     }
@@ -303,6 +308,91 @@ export class QdrantLearningStore {
             ts: Date.now(),
             data: { generation, policy, reward, timestamp: Date.now() }
         });
+    }
+
+    /** Persist a structured routing rule (e.g. from post-mortem analysis). */
+    public saveRoutingRule(rule: {
+        id?: string;
+        rule_type?: string;
+        sport: string;
+        market_type: string;
+        lesson: string;
+        mandated_tools?: string[];
+        confidence?: number;
+        sample_size?: number;
+        timestamp?: number;
+    }): Promise<void> {
+        const sport = (rule.sport || '').trim().toLowerCase();
+        const marketType = (rule.market_type || '').trim().toLowerCase();
+        const rawId = rule.id || `routing_rule:${sport}:${marketType}:${crypto.createHash('sha1').update(rule.lesson).digest('hex').slice(0, 8)}`;
+        const pointId = ensureUuid(rawId);
+        return this.upsert(pointId, {
+            kind: 'routing_rule',
+            rule_type: rule.rule_type || 'routing_rule',
+            sport,
+            market_type: marketType,
+            key: rawId,
+            originalKey: rawId,
+            lesson: rule.lesson,
+            mandated_tools: Array.isArray(rule.mandated_tools) ? rule.mandated_tools : [],
+            confidence: rule.confidence ?? 1.0,
+            sample_size: rule.sample_size ?? 1,
+            ts: rule.timestamp || Date.now(),
+            data: rule
+        });
+    }
+
+    /** Query routing rules matching sport and market_type. */
+    public async queryRoutingRules(options: {
+        sport?: string;
+        market_type?: string;
+        limit?: number;
+    }): Promise<Array<{
+        id: string;
+        sport: string;
+        market_type: string;
+        lesson: string;
+        mandated_tools: string[];
+        rule_type: string;
+    }>> {
+        const ok = await this.readyPromise;
+        if (!ok || !this.client) return [];
+
+        const must: any[] = [{ key: 'rule_type', match: { value: 'routing_rule' } }];
+        if (options.sport) {
+            must.push({ key: 'sport', match: { value: options.sport.trim().toLowerCase() } });
+        }
+        if (options.market_type) {
+            must.push({ key: 'market_type', match: { value: options.market_type.trim().toLowerCase() } });
+        }
+
+        try {
+            const res: any = await withTimeout(
+                this.client.scroll(this.collection, {
+                    filter: { must },
+                    limit: options.limit || 10,
+                    with_payload: true,
+                    with_vector: false
+                }),
+                QDRANT_TIMEOUT_MS,
+                'queryRoutingRules'
+            );
+
+            return (res?.points || []).map((pt: any) => {
+                const p = pt.payload || {};
+                return {
+                    id: String(pt.id),
+                    sport: p.sport || '',
+                    market_type: p.market_type || '',
+                    lesson: p.lesson || p.data?.lesson || '',
+                    mandated_tools: Array.isArray(p.mandated_tools) ? p.mandated_tools : (p.data?.mandated_tools || []),
+                    rule_type: p.rule_type || 'routing_rule'
+                };
+            });
+        } catch (err) {
+            this.warn('queryRoutingRules', err);
+            return [];
+        }
     }
 
     /**

@@ -78,6 +78,7 @@ export function serializeSwarmResult(c: any, result: any): Response {
         // PS1: partial runs return 200 with status:'partial' (and keep workflowId); degraded = seat ids with no backup left.
         result.status = result.status || 'complete';
         result.degraded = Array.isArray(result.degraded) ? result.degraded : [];
+        result.tools_called = Array.isArray(result.tools_called) ? result.tools_called : [];
 
         const seen = new WeakSet();
         const safeReplacer = (_key: string, value: any) => {

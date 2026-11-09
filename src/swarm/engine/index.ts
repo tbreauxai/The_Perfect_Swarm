@@ -469,11 +469,28 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             const degraded = getDegraded(context);
             const status: SwarmRunStatus = managerFailed ? 'partial' : 'complete';
 
+            const toolsCalled = new Set<string>();
+            if (curatedDossier?.sections) {
+                for (const sec of curatedDossier.sections) {
+                    if (sec.tool) toolsCalled.add(sec.tool);
+                }
+            }
+            for (const ev of context.events) {
+                const anyEv = ev as any;
+                if (anyEv.tool) toolsCalled.add(anyEv.tool);
+                if (anyEv.output?.tool) toolsCalled.add(anyEv.output.tool);
+            }
+            const toolsCalledList = Array.from(toolsCalled);
+            if (finalAnalysis && typeof finalAnalysis === 'object') {
+                finalAnalysis.tools_called = toolsCalledList;
+            }
+
             return {
                 workflowId: (context as any).id,
                 status,
                 partial: managerFailed,
                 degraded,
+                tools_called: toolsCalledList,
                 events: context.events,
                 finalAnalysis,
                 metrics: learningResult.metrics,

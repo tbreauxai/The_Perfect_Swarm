@@ -738,6 +738,9 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
                 if (!result.finalAnalysis.candidate_id) {
                     result.finalAnalysis.candidate_id = body.candidate_id;
                 }
+                if (!result.finalAnalysis.tools_called) {
+                    result.finalAnalysis.tools_called = Array.isArray(result.tools_called) ? result.tools_called : [];
+                }
             }
             return serializeSwarmResult(c, result);
         } catch (err: any) {

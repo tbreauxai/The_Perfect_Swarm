@@ -35,7 +35,10 @@ const REQUIRED_INDEXES: Array<{ field: string; schema: 'keyword' | 'float' | 'in
     { field: 'verified', schema: 'bool' },
     { field: 'outcome', schema: 'keyword' },
     { field: 'gradedAt', schema: 'keyword' },
-    { field: 'feedbackProcessed', schema: 'bool' }
+    { field: 'feedbackProcessed', schema: 'bool' },
+    { field: 'rule_type', schema: 'keyword' },
+    { field: 'sport', schema: 'keyword' },
+    { field: 'market_type', schema: 'keyword' }
 ];
 
 export class QdrantStorageAdapter implements StorageBackend {
@@ -440,6 +443,12 @@ export class QdrantStorageAdapter implements StorageBackend {
             }
             if (options.verifiedOnly) {
                 filterMust.push({ key: 'verified', match: { value: true } });
+            }
+            if (options.ruleType || (options as any).rule_type) {
+                filterMust.push({ key: 'rule_type', match: { value: options.ruleType || (options as any).rule_type } });
+            }
+            if (options.marketType || (options as any).market_type) {
+                filterMust.push({ key: 'market_type', match: { value: options.marketType || (options as any).market_type } });
             }
 
             const filter = filterMust.length > 0 ? { must: filterMust } : undefined;

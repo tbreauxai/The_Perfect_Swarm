@@ -80,6 +80,7 @@ export async function handleSwarmSse(
             }
             payload.status = (result as any).status || 'complete';
             payload.degraded = Array.isArray((result as any).degraded) ? (result as any).degraded : [];
+            payload.tools_called = Array.isArray((result as any).tools_called) ? (result as any).tools_called : [];
 
             await sendEvent('swarm_complete', payload);
         } catch (err: any) {

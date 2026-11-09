@@ -38,6 +38,47 @@ export interface TriagePlannerOptions {
 const MAX_TOOL_BUDGET = 3;
 
 /**
+ * Extracts tools explicitly mandated or strongly signaled by routing lessons.
+ */
+export function extractMandatedTools(lessons: string[] = [], availableTools: Set<string>): string[] {
+  const mandated = new Set<string>();
+  const KNOWN_TOOLS = [
+    'get_matchup_fundamentals',
+    'get_injury_and_roster_delta',
+    'get_player_prop_splits',
+    'get_environment_and_weather',
+    'get_market_movement',
+    'get_historical_lessons'
+  ];
+
+  for (const lesson of lessons) {
+    const text = lesson.toLowerCase();
+    for (const tool of KNOWN_TOOLS) {
+      if (availableTools.has(tool) && text.includes(tool.toLowerCase())) {
+        mandated.add(tool);
+      }
+    }
+    if ((text.includes('weather') || text.includes('wind') || text.includes('environment')) && availableTools.has('get_environment_and_weather')) {
+      mandated.add('get_environment_and_weather');
+    }
+    if ((text.includes('injury') || text.includes('roster')) && availableTools.has('get_injury_and_roster_delta')) {
+      mandated.add('get_injury_and_roster_delta');
+    }
+    if ((text.includes('market movement') || text.includes('steam') || text.includes('divergence')) && availableTools.has('get_market_movement')) {
+      mandated.add('get_market_movement');
+    }
+    if ((text.includes('fundamentals') || text.includes('net margin') || text.includes('pace')) && availableTools.has('get_matchup_fundamentals')) {
+      mandated.add('get_matchup_fundamentals');
+    }
+    if (text.includes('prop') && availableTools.has('get_player_prop_splits')) {
+      mandated.add('get_player_prop_splits');
+    }
+  }
+
+  return Array.from(mandated);
+}
+
+/**
  * Deterministic fallback planning logic based on SeedManifest flags and available tools.
  * Used when no LLM key is configured, during offline test runs, or on LLM JSON parse errors.
  */
@@ -48,52 +89,81 @@ export function buildDeterministicTriagePlan(
   const available = new Set(manifest.available_tools.map((t) => t.trim()));
   const calls: TriageToolCall[] = [];
 
+  // Step 0: Prioritize mandated tools identified from past post-mortems / routing rules
+  const mandatedTools = extractMandatedTools(lessons, available);
+  for (const tool of mandatedTools) {
+    if (tool === 'get_environment_and_weather' && manifest.flags?.is_dome) continue;
+    if (calls.some(c => c.tool === tool)) continue;
+    if (calls.length >= MAX_TOOL_BUDGET) break;
+
+    const params: Record<string, any> = { game_id: manifest.game_id };
+    if (tool === 'get_market_movement') params.market_type = manifest.market_type;
+    if (tool === 'get_matchup_fundamentals') params.window = 'L10';
+    if (tool === 'get_player_prop_splits') {
+      params.player_id = manifest.pricing.selection;
+      params.stat_category = 'default';
+      params.line = manifest.pricing.line;
+    }
+    calls.push({ tool, parameters: params });
+  }
+
   // Rule 1: If active injury tags exist, prioritize injury delta
-  if (manifest.flags?.has_active_injury_tags && available.has('get_injury_and_roster_delta')) {
-    calls.push({
-      tool: 'get_injury_and_roster_delta',
-      parameters: { game_id: manifest.game_id }
-    });
+  if (calls.length < MAX_TOOL_BUDGET && manifest.flags?.has_active_injury_tags && available.has('get_injury_and_roster_delta')) {
+    if (!calls.some(c => c.tool === 'get_injury_and_roster_delta')) {
+      calls.push({
+        tool: 'get_injury_and_roster_delta',
+        parameters: { game_id: manifest.game_id }
+      });
+    }
   }
 
   // Rule 2: If player prop, prioritize player prop splits
-  if (manifest.market_type === 'player_prop' && available.has('get_player_prop_splits')) {
-    calls.push({
-      tool: 'get_player_prop_splits',
-      parameters: {
-        player_id: manifest.pricing.selection,
-        stat_category: 'default',
-        line: manifest.pricing.line
-      }
-    });
+  if (calls.length < MAX_TOOL_BUDGET && manifest.market_type === 'player_prop' && available.has('get_player_prop_splits')) {
+    if (!calls.some(c => c.tool === 'get_player_prop_splits')) {
+      calls.push({
+        tool: 'get_player_prop_splits',
+        parameters: {
+          player_id: manifest.pricing.selection,
+          stat_category: 'default',
+          line: manifest.pricing.line
+        }
+      });
+    }
   }
 
   // Rule 3: If not dome and within 48h, check weather/environment
   if (
+    calls.length < MAX_TOOL_BUDGET &&
     !manifest.flags?.is_dome &&
     (manifest.flags?.hours_to_kickoff ?? 0) <= 48 &&
     available.has('get_environment_and_weather')
   ) {
-    calls.push({
-      tool: 'get_environment_and_weather',
-      parameters: { game_id: manifest.game_id, is_dome: false }
-    });
+    if (!calls.some(c => c.tool === 'get_environment_and_weather')) {
+      calls.push({
+        tool: 'get_environment_and_weather',
+        parameters: { game_id: manifest.game_id, is_dome: false }
+      });
+    }
   }
 
   // Rule 4: Market movement (spread / total / moneyline steam)
   if (calls.length < MAX_TOOL_BUDGET && available.has('get_market_movement')) {
-    calls.push({
-      tool: 'get_market_movement',
-      parameters: { game_id: manifest.game_id, market_type: manifest.market_type }
-    });
+    if (!calls.some(c => c.tool === 'get_market_movement')) {
+      calls.push({
+        tool: 'get_market_movement',
+        parameters: { game_id: manifest.game_id, market_type: manifest.market_type }
+      });
+    }
   }
 
   // Rule 5: Matchup fundamentals (pace, net margins)
   if (calls.length < MAX_TOOL_BUDGET && available.has('get_matchup_fundamentals')) {
-    calls.push({
-      tool: 'get_matchup_fundamentals',
-      parameters: { game_id: manifest.game_id, window: 'L10' }
-    });
+    if (!calls.some(c => c.tool === 'get_matchup_fundamentals')) {
+      calls.push({
+        tool: 'get_matchup_fundamentals',
+        parameters: { game_id: manifest.game_id, window: 'L10' }
+      });
+    }
   }
 
   // Enforce strict cap: at most 3 tool calls
@@ -101,7 +171,7 @@ export function buildDeterministicTriagePlan(
 
   return {
     tool_calls: finalCalls,
-    reasoning: `Deterministic triage based on manifest flags (injury: ${manifest.flags.has_active_injury_tags}, dome: ${manifest.flags.is_dome}, market: ${manifest.market_type}).`,
+    reasoning: `Deterministic triage based on manifest flags and routing rules (injury: ${manifest.flags.has_active_injury_tags}, dome: ${manifest.flags.is_dome}, market: ${manifest.market_type}, mandated: [${mandatedTools.join(', ')}]).`,
     historical_lessons: lessons,
     candidate_id: manifest.candidate_id,
     game_id: manifest.game_id,
@@ -169,7 +239,7 @@ export async function planTriage(
   }
 
   const lessonsPrompt = lessons.length > 0
-    ? `\nHistorical Routing Lessons:\n${lessons.map((l, i) => `${i + 1}. ${l}`).join('\n')}`
+    ? `\nMANDATORY DATA REQUIREMENTS FROM PAST LOSSES (ROUTING RULES):\n${lessons.map((l, i) => `RULE ${i + 1}: ${l}`).join('\n')}\nYou MUST prioritize and include tools mandated by these rules.`
     : '';
 
   const prompt = `You are the Hop 1 Triage Planner for an algorithmic sports betting swarm.
@@ -190,6 +260,7 @@ Guardrail Rules:
 2. Select ONLY tools that exist in Available Tools Whitelist. Any tool not in the whitelist is forbidden.
 3. If flags.is_dome is true, do NOT call get_environment_and_weather.
 4. For all game-level tools, provide "game_id": "${manifest.game_id}".
+5. Prioritize tools mandated by MANDATORY DATA REQUIREMENTS FROM PAST LOSSES.
 
 Return ONLY a valid JSON object matching this schema:
 {
@@ -235,9 +306,22 @@ Return ONLY a valid JSON object matching this schema:
         if (validatedCalls.length >= MAX_TOOL_BUDGET) break;
       }
 
+      // Enforce mandated tools if missing and budget remains
+      const mandated = extractMandatedTools(lessons, available);
+      for (const mTool of mandated) {
+        if (validatedCalls.length >= MAX_TOOL_BUDGET) break;
+        if (mTool === 'get_environment_and_weather' && manifest.flags.is_dome) continue;
+        if (!validatedCalls.some(c => c.tool === mTool)) {
+          const mParams: Record<string, any> = { game_id: manifest.game_id };
+          if (mTool === 'get_market_movement') mParams.market_type = manifest.market_type;
+          if (mTool === 'get_matchup_fundamentals') mParams.window = 'L10';
+          validatedCalls.push({ tool: mTool, parameters: mParams });
+        }
+      }
+
       if (validatedCalls.length > 0) {
         return {
-          tool_calls: validatedCalls,
+          tool_calls: validatedCalls.slice(0, MAX_TOOL_BUDGET),
           reasoning: typeof parsed.reasoning === 'string' ? parsed.reasoning : 'Selected via Hop 1 LLM planner',
           historical_lessons: lessons,
           candidate_id: manifest.candidate_id,

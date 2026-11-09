@@ -90,7 +90,7 @@ Implement the Swarm-side deterministic tool wrappers for the 6 read-only databas
 
 ---
 
-# Phase 3: Implement a Two-Hop "Triage & Fetch" Swarm Loop (Completed)
+# Phase 3: Implement a Two-Hop "Triage & Fetch" Swarm Loop (Complete)
 
 ## Goal
 Implement a Planner-Executor pattern: Hop 1 Triage Planner selects up to 3 tools based on Seed Manifest + Qdrant lessons; Parallel Execution Layer queries Supabase with a 10-minute game-level cache and stitches a Curated Dossier; Hop 2 Specialists debate and price the pick.
@@ -125,3 +125,30 @@ Implement a Planner-Executor pattern: Hop 1 Triage Planner selects up to 3 tools
   - [x] Test hard tool budget enforcement (truncates > 3 tool calls).
   - [x] Test GameQueryCache hits across multiple evaluations on identical `game_id`.
   - [x] Benchmark execution time: assert cached DB roundtrips execute in < 5ms.
+
+---
+
+# Phase 4: Upgrade the Qdrant Post-Mortem Loop (Meta-Learning) (Completed)
+
+## Goal
+Ingest structured `[ROUTING RULE]` lessons from Qdrant directly into the Hop 1 Triage Planner, enforce mandatory data requirements identified in past post-mortems, and emit complete `tools_called` telemetry in all workflow responses.
+
+### Task 4.1: Vector Index & Collection Schema for Routing Rules
+- [x] **File**: `src/swarm/memory/cortex.ts` & `src/swarm/learning-persistence.ts`
+  - [x] Configure Qdrant collection payload filter index for `rule_type`, `sport`, and `market_type`.
+  - [x] Support storing and querying structured routing rules with vector similarity and payload filters.
+
+### Task 4.2: Triage Planner Routing Rule Ingestion
+- [x] **File**: `src/swarm/engine/triagePlanner.ts`
+  - [x] Before Hop 1 generates `tool_calls`, query Qdrant / Supabase for `rule_type = 'routing_rule'` matching `sport` and `market_type`.
+  - [x] Inject retrieved routing rules as high-priority constraints into Hop 1 prompt: `"MANDATORY DATA REQUIREMENTS FROM PAST LOSSES: ..."`.
+
+### Task 4.3: Tool Execution Logging in Workflow Result
+- [x] **File**: `src/swarm/engine/index.ts` & `src/swarm/server/routes/analyze.ts`
+  - [x] Ensure final workflow response includes `tools_called: string[]` in top-level JSON and SSE completion events.
+  - [x] Attach `tools_called` to judgment output for downstream recording.
+
+### Task 4.4: Meta-Learning Feedback Loop Unit & Integration Tests
+- [x] **File**: `src/swarm/engine/routingRuleInjection.test.ts`
+  - [x] Test that when a `[ROUTING RULE | NFL | Totals]` exists in Qdrant, Hop 1 Planner is forced to include the mandated tools (`get_environment_and_weather`, `get_injury_and_roster_delta`).
+  - [x] Verify `tools_called` telemetry is populated in workflow results.
