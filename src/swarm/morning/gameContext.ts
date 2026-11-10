@@ -1081,7 +1081,7 @@ export function validateRpcResultRow(
             st.status === 'empty' ||
             st.status === 'empty_valid' ||
             (secKey === 'weather' &&
-                (st.status === 'not_applicable' || st.status === 'empty' || st.status === 'empty_valid') &&
+                st.status === 'not_applicable' &&
                 (venueSec.data?.indoor === true || weatherSec.data?.dome_closed === true));
 
         if (!statusOk) {

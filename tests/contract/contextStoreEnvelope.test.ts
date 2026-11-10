@@ -134,6 +134,7 @@ describe('Contract: DuelOdds read_game_context_v1 Envelope & Reader Adapter', ()
 
         const result = await readGameContextFromStore(mockPublishableConfig, scopeRes.scope, fetchFn as any);
         expect(result.status).toBe('ok');
+        if (result.status !== 'ok') return;
         expect(result.results).toHaveLength(1);
         expect(result.results[0].status).toBe('unavailable');
         expect(result.results[0].unavailable_reason).toBe('no_snapshot');
@@ -248,6 +249,7 @@ describe('Contract: DuelOdds read_game_context_v1 Envelope & Reader Adapter', ()
         expect(aliasCalled).toBe(true);
         expect(rpcCalledWithCanonical).toBe(true);
         expect(result.status).toBe('ok');
+        if (result.status !== 'ok') return;
     });
 
     it('5. Unresolved skip: unresolved 32-hex ID is skipped with logged reason (count + id), never guessed', async () => {
@@ -287,6 +289,7 @@ describe('Contract: DuelOdds read_game_context_v1 Envelope & Reader Adapter', ()
 
         const result = await readGameContextFromStore(mockPublishableConfig, scopeRes.scope, fetchFn as any);
         expect(result.status).toBe('ok');
+        if (result.status !== 'ok') return;
         expect(result.results).toHaveLength(0); // skipped, no remaining eventIds
         expect(warnSpy).toHaveBeenCalledWith(
             expect.stringContaining(`Unresolved 32-hex id skipped: count=1, id=${unresolvableHex}`)
@@ -339,6 +342,7 @@ describe('Contract: DuelOdds read_game_context_v1 Envelope & Reader Adapter', ()
         // Fails closed (no context) when config is null
         const closedResult = await readGameContextFromStore(null, scopeRes.scope, fetchFn as any);
         expect(closedResult.status).toBe('store_not_ready');
+        if (closedResult.status !== 'store_not_ready') return;
         expect(closedResult.reason).toBe('missing_readonly_key');
     });
 
