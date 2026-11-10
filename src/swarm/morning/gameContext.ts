@@ -25,6 +25,8 @@ export type UnavailableContextReason =
 
 export type SectionSourceStatusValue =
     | 'ok'
+    | 'ready'
+    | 'empty'
     | 'empty_valid'
     | 'missing'
     | 'stale'
@@ -42,11 +44,11 @@ export type SectionSourceStatusMap = Record<HistoryContextSectionKey, SectionSou
 export interface GameSectionData {
     event_id: string;
     sport: string;
-    league: string;
-    season: string;
+    league?: string;
+    season?: string;
     game_date: string;
     scheduled_start: string;
-    status_at_capture: 'scheduled' | 'in_progress' | 'postponed' | 'cancelled';
+    status_at_capture?: 'scheduled' | 'in_progress' | 'postponed' | 'cancelled';
     home_team_id: string;
     home_team: string;
     away_team_id: string;
@@ -56,10 +58,10 @@ export interface GameSectionData {
 
 export interface VenueSectionData {
     venue_id: string | null;
-    name: string;
-    city: string;
+    name: string | null;
+    city: string | null;
     region: string | null;
-    country: string;
+    country: string | null;
     surface: string | null;
     indoor: boolean | null;
     timezone: string | null;
@@ -102,7 +104,7 @@ export interface InjuryItemData {
 }
 
 export interface WeatherSectionData {
-    condition: string;
+    condition: string | null;
     temp_c: number | null;
     wind_kph: number | null;
     wind_dir: string | null;
@@ -212,6 +214,8 @@ const UNAVAILABLE_REASONS = new Set<string>([
 
 const SOURCE_STATUS_VALUES = new Set<string>([
     'ok',
+    'ready',
+    'empty',
     'empty_valid',
     'missing',
     'stale',
@@ -331,71 +335,76 @@ function validateGameSection(
     expectedDate: string
 ): GameSectionData | null {
     if (!isPlainObject(raw)) return null;
+    const scheduledStart = raw.scheduled_start ?? raw.commence_time;
     if (
         !isBoundedString(raw.event_id) ||
         raw.event_id !== expectedEventId ||
         !isBoundedString(raw.sport) ||
         raw.sport !== expectedSport ||
-        !isBoundedString(raw.league) ||
-        !isBoundedString(raw.season) ||
+        (raw.league !== undefined && !isBoundedString(raw.league)) ||
+        (raw.season !== undefined && !isBoundedString(raw.season)) ||
         !isBoundedString(raw.game_date) ||
         raw.game_date !== expectedDate ||
         !isValidCalendarDate(raw.game_date) ||
-        parseTimestampMs(raw.scheduled_start) === null ||
-        typeof raw.status_at_capture !== 'string' ||
-        !GAME_CAPTURE_STATUSES.has(raw.status_at_capture) ||
+        parseTimestampMs(scheduledStart) === null ||
+        (raw.status_at_capture !== undefined &&
+            (typeof raw.status_at_capture !== 'string' ||
+                !GAME_CAPTURE_STATUSES.has(raw.status_at_capture))) ||
         !isBoundedString(raw.home_team_id) ||
         !isBoundedString(raw.home_team) ||
         !isBoundedString(raw.away_team_id) ||
         !isBoundedString(raw.away_team) ||
-        typeof raw.neutral_site !== 'boolean'
+        (typeof raw.neutral_site !== 'boolean' && raw.neutral_site !== null && raw.neutral_site !== undefined)
     ) {
         return null;
     }
     return {
         event_id: raw.event_id,
         sport: raw.sport,
-        league: raw.league,
-        season: raw.season,
+        ...(typeof raw.league === 'string' ? { league: raw.league } : {}),
+        ...(typeof raw.season === 'string' ? { season: raw.season } : {}),
         game_date: raw.game_date,
-        scheduled_start: raw.scheduled_start as string,
-        status_at_capture: raw.status_at_capture as GameSectionData['status_at_capture'],
+        scheduled_start: scheduledStart as string,
+        ...(raw.status_at_capture !== undefined
+            ? { status_at_capture: raw.status_at_capture as GameSectionData['status_at_capture'] }
+            : {}),
         home_team_id: raw.home_team_id,
         home_team: raw.home_team,
         away_team_id: raw.away_team_id,
         away_team: raw.away_team,
-        neutral_site: raw.neutral_site
+        neutral_site: raw.neutral_site === true
     };
 }
 
 function validateVenueSection(raw: unknown): { ok: true; data: VenueSectionData | null } | { ok: false } {
     if (raw === null) return { ok: true, data: null };
     if (!isPlainObject(raw)) return { ok: false };
+    const region = raw.region !== undefined ? raw.region : (raw.state !== undefined ? raw.state : null);
     if (
         !isNullableBoundedString(raw.venue_id) ||
-        !isBoundedString(raw.name) ||
-        !isBoundedString(raw.city) ||
-        !isNullableBoundedString(raw.region) ||
-        !isBoundedString(raw.country) ||
-        !isNullableBoundedString(raw.surface) ||
+        !isNullableBoundedString(raw.name) ||
+        !isNullableBoundedString(raw.city) ||
+        !isNullableBoundedString(region) ||
+        !isNullableBoundedString(raw.country) ||
+        (raw.surface !== undefined && !isNullableBoundedString(raw.surface)) ||
         !isNullableBoolean(raw.indoor) ||
-        !isNullableBoundedString(raw.timezone) ||
-        !isNullableFiniteNumber(raw.altitude_m)
+        (raw.timezone !== undefined && !isNullableBoundedString(raw.timezone)) ||
+        (raw.altitude_m !== undefined && !isNullableFiniteNumber(raw.altitude_m))
     ) {
         return { ok: false };
     }
     return {
         ok: true,
         data: {
-            venue_id: raw.venue_id,
-            name: raw.name,
-            city: raw.city,
-            region: raw.region,
-            country: raw.country,
-            surface: raw.surface,
-            indoor: raw.indoor,
-            timezone: raw.timezone,
-            altitude_m: raw.altitude_m
+            venue_id: (raw.venue_id as string) ?? null,
+            name: (raw.name as string) ?? null,
+            city: (raw.city as string) ?? null,
+            region: (region as string) ?? null,
+            country: (raw.country as string) ?? null,
+            surface: (raw.surface as string) ?? null,
+            indoor: typeof raw.indoor === 'boolean' ? raw.indoor : null,
+            timezone: (raw.timezone as string) ?? null,
+            altitude_m: typeof raw.altitude_m === 'number' ? raw.altitude_m : null
         }
     };
 }
@@ -547,27 +556,31 @@ function validateWeatherSection(
 ): { ok: true; data: WeatherSectionData | null } | { ok: false } {
     if (raw === null) return { ok: true, data: null };
     if (!isPlainObject(raw)) return { ok: false };
+    const cond = raw.condition !== undefined ? raw.condition : (raw.summary !== undefined ? raw.summary : null);
+    const tempC = raw.temp_c !== undefined ? raw.temp_c : (raw.temperature_c !== undefined ? raw.temperature_c : null);
+    const windKph = raw.wind_kph !== undefined ? raw.wind_kph : (typeof raw.wind_mps === 'number' ? Math.round(raw.wind_mps * 3.6 * 10) / 10 : null);
+    const precipProb = raw.precip_prob !== undefined ? raw.precip_prob : (raw.precip_probability !== undefined ? raw.precip_probability : null);
     if (
-        !isBoundedString(raw.condition) ||
-        !isNullableFiniteNumber(raw.temp_c) ||
-        !isNullableFiniteNumber(raw.wind_kph) ||
-        !isNullableBoundedString(raw.wind_dir) ||
-        !isNullableFiniteNumber(raw.precip_prob) ||
-        !isNullableFiniteNumber(raw.humidity_pct) ||
-        !isNullableBoolean(raw.dome_closed)
+        !isNullableBoundedString(cond) ||
+        !isNullableFiniteNumber(tempC) ||
+        !isNullableFiniteNumber(windKph) ||
+        (raw.wind_dir !== undefined && !isNullableBoundedString(raw.wind_dir)) ||
+        !isNullableFiniteNumber(precipProb) ||
+        (raw.humidity_pct !== undefined && !isNullableFiniteNumber(raw.humidity_pct)) ||
+        (raw.dome_closed !== undefined && !isNullableBoolean(raw.dome_closed))
     ) {
         return { ok: false };
     }
     return {
         ok: true,
         data: {
-            condition: raw.condition,
-            temp_c: raw.temp_c,
-            wind_kph: raw.wind_kph,
-            wind_dir: raw.wind_dir,
-            precip_prob: raw.precip_prob,
-            humidity_pct: raw.humidity_pct,
-            dome_closed: raw.dome_closed
+            condition: (cond as string) ?? null,
+            temp_c: typeof tempC === 'number' ? tempC : null,
+            wind_kph: typeof windKph === 'number' ? windKph : null,
+            wind_dir: (raw.wind_dir as string) ?? null,
+            precip_prob: typeof precipProb === 'number' ? precipProb : null,
+            humidity_pct: typeof raw.humidity_pct === 'number' ? raw.humidity_pct : null,
+            dome_closed: typeof raw.dome_closed === 'boolean' ? raw.dome_closed : null
         }
     };
 }
@@ -671,6 +684,249 @@ function validateSourceStatusMap(
     return { ok: true, map: result as SectionSourceStatusMap };
 }
 
+export function adaptContextEnvelope(rawRow: unknown): Record<string, unknown> | null {
+    if (!isPlainObject(rawRow)) {
+        console.warn('[HistoryContextStore] Invalid raw row: expected object');
+        return null;
+    }
+
+    if (!isPlainObject(rawRow.sections)) {
+        console.warn('[HistoryContextStore] Malformed row: missing sections object');
+        return null;
+    }
+
+    const adaptedSections: Record<string, unknown> = {};
+    const existingSourceStatus: Record<string, unknown> = isPlainObject(rawRow.source_status)
+        ? { ...rawRow.source_status }
+        : {};
+
+    const rawSections = rawRow.sections as Record<string, unknown>;
+
+    // Locate game item first so dependent sections can reference home/away team
+    let gameItem: Record<string, unknown> | null = null;
+    if (isPlainObject(rawSections.game)) {
+        if (Array.isArray(rawSections.game.items) && rawSections.game.items.length > 0 && isPlainObject(rawSections.game.items[0])) {
+            gameItem = rawSections.game.items[0] as Record<string, unknown>;
+        } else if (!('items' in rawSections.game) && !('status' in rawSections.game)) {
+            gameItem = rawSections.game as Record<string, unknown>;
+        }
+    }
+
+    for (const key of HISTORY_CONTEXT_SECTIONS) {
+        const rawSec = rawSections[key];
+        if (rawSec === undefined || rawSec === null) {
+            adaptedSections[key] = (key === 'game' || key === 'venue' || key === 'weather') ? null : [];
+            if (!existingSourceStatus[key]) {
+                existingSourceStatus[key] = { status: 'missing', observed_at: null, source_ref: null };
+            }
+            continue;
+        }
+
+        // If not in envelope shape (legacy format), pass through
+        if (!isPlainObject(rawSec) || (!('status' in rawSec) && !('items' in rawSec))) {
+            adaptedSections[key] = rawSec;
+            continue;
+        }
+
+        const secStatus = typeof rawSec.status === 'string' ? rawSec.status : 'empty';
+        if (rawSec.items !== undefined && !Array.isArray(rawSec.items)) {
+            console.warn(`[HistoryContextStore] Malformed section envelope for ${key}: items is not an array`);
+            return null;
+        }
+        const items = Array.isArray(rawSec.items) ? rawSec.items : [];
+
+        if (!existingSourceStatus[key]) {
+            existingSourceStatus[key] = {
+                status: secStatus === 'ready' ? 'ok' : secStatus,
+                observed_at: typeof rawSec.observed_at === 'string' ? rawSec.observed_at : null,
+                source_ref: typeof rawSec.source === 'string' ? rawSec.source : (typeof rawSec.source_ref === 'string' ? rawSec.source_ref : null)
+            };
+        }
+
+        if (secStatus === 'empty' || items.length === 0) {
+            adaptedSections[key] = (key === 'game' || key === 'venue' || key === 'weather') ? null : [];
+            continue;
+        }
+
+        if (key === 'game') {
+            const item = items[0];
+            if (!isPlainObject(item)) {
+                console.warn('[HistoryContextStore] Malformed game section item: not an object');
+                return null;
+            }
+            adaptedSections.game = {
+                ...item,
+                scheduled_start: item.scheduled_start ?? item.commence_time
+            };
+        } else if (key === 'venue') {
+            const item = items[0];
+            if (isPlainObject(item)) {
+                adaptedSections.venue = {
+                    ...item,
+                    region: item.region ?? item.state ?? null
+                };
+            } else {
+                adaptedSections.venue = null;
+            }
+        } else if (key === 'weather') {
+            const item = items[0];
+            adaptedSections.weather = isPlainObject(item) ? item : null;
+        } else if (key === 'form') {
+            const formItems: Array<Record<string, unknown>> = [];
+            for (const item of items) {
+                if (!isPlainObject(item)) continue;
+                if (typeof item.team_id === 'string') {
+                    formItems.push(item);
+                } else if (gameItem && (typeof item.home_score === 'number' || typeof item.away_score === 'number')) {
+                    const hScore = typeof item.home_score === 'number' ? item.home_score : 0;
+                    const aScore = typeof item.away_score === 'number' ? item.away_score : 0;
+                    const homeId = item.home_team_id;
+                    const awayId = item.away_team_id;
+                    const compAt = item.completed_at || (typeof item.game_date === 'string' ? `${item.game_date}T23:59:59.000Z` : null);
+
+                    if (homeId === gameItem.home_team_id || homeId === gameItem.away_team_id) {
+                        const margin = hScore - aScore;
+                        formItems.push({
+                            team_id: homeId,
+                            event_id: item.event_id,
+                            completed_at: compAt,
+                            opponent_id: awayId,
+                            is_home: true,
+                            points_for: hScore,
+                            points_against: aScore,
+                            margin,
+                            result: margin > 0 ? 'W' : margin < 0 ? 'L' : 'D',
+                            rest_days: typeof item.rest_days === 'number' ? item.rest_days : null
+                        });
+                    }
+                    if (awayId === gameItem.home_team_id || awayId === gameItem.away_team_id) {
+                        const margin = aScore - hScore;
+                        formItems.push({
+                            team_id: awayId,
+                            event_id: item.event_id,
+                            completed_at: compAt,
+                            opponent_id: homeId,
+                            is_home: false,
+                            points_for: aScore,
+                            points_against: hScore,
+                            margin,
+                            result: margin > 0 ? 'W' : margin < 0 ? 'L' : 'D',
+                            rest_days: typeof item.rest_days === 'number' ? item.rest_days : null
+                        });
+                    }
+                } else {
+                    formItems.push(item);
+                }
+            }
+            adaptedSections.form = formItems;
+        } else if (key === 'h2h') {
+            const h2hItems: Array<Record<string, unknown>> = [];
+            for (const item of items) {
+                if (!isPlainObject(item)) continue;
+                if (typeof item.margin_home === 'number' && typeof item.total_points === 'number') {
+                    h2hItems.push(item);
+                } else if (typeof item.home_score === 'number' && typeof item.away_score === 'number') {
+                    const hScore = item.home_score;
+                    const aScore = item.away_score;
+                    const compAt = item.completed_at || (typeof item.game_date === 'string' ? `${item.game_date}T23:59:59.000Z` : null);
+                    h2hItems.push({
+                        event_id: item.event_id,
+                        completed_at: compAt,
+                        home_team_id: item.home_team_id,
+                        away_team_id: item.away_team_id,
+                        home_score: hScore,
+                        away_score: aScore,
+                        winner_team_id: item.winner_team_id ?? (hScore > aScore ? item.home_team_id : aScore > hScore ? item.away_team_id : null),
+                        margin_home: hScore - aScore,
+                        total_points: hScore + aScore
+                    });
+                } else {
+                    h2hItems.push(item);
+                }
+            }
+            adaptedSections.h2h = h2hItems;
+        } else if (key === 'injuries') {
+            const injuryItems: Array<Record<string, unknown>> = [];
+            for (const item of items) {
+                if (!isPlainObject(item)) continue;
+                injuryItems.push({
+                    team_id: item.team_id,
+                    player_id: typeof item.player_id === 'string' && item.player_id ? item.player_id : (typeof item.player_name === 'string' ? item.player_name : 'unknown'),
+                    player_name: item.player_name,
+                    position: item.position ?? null,
+                    status: item.status,
+                    reason: item.reason ?? item.detail ?? null,
+                    reported_at: item.reported_at ?? null
+                });
+            }
+            adaptedSections.injuries = injuryItems;
+        } else if (key === 'odds') {
+            const hasSpreadOrMl = items.some((it) => isPlainObject(it) && (it.spread_home !== undefined || it.ml_home !== undefined));
+            if (hasSpreadOrMl) {
+                adaptedSections.odds = items;
+            } else {
+                const byBook = new Map<string, Record<string, unknown>>();
+                for (const item of items) {
+                    if (!isPlainObject(item)) continue;
+                    const book = typeof item.book === 'string' ? item.book : 'unknown';
+                    let entry = byBook.get(book);
+                    if (!entry) {
+                        entry = {
+                            book,
+                            captured_at: item.snapshot_at || item.captured_at || new Date().toISOString(),
+                            is_opening: false,
+                            spread_home: null,
+                            spread_away: null,
+                            spread_price_home: null,
+                            spread_price_away: null,
+                            total: null,
+                            over_price: null,
+                            under_price: null,
+                            ml_home: null,
+                            ml_away: null,
+                            draw_price: null
+                        };
+                        byBook.set(book, entry);
+                    }
+                    const mkt = item.market;
+                    const sel = item.selection;
+                    const price = typeof item.american_price === 'number' ? item.american_price : null;
+                    const line = typeof item.line === 'number' ? item.line : null;
+                    if (mkt === 'h2h') {
+                        if (sel === gameItem?.home_team || sel === gameItem?.home_team_id) {
+                            entry.ml_home = price;
+                        } else if (sel === gameItem?.away_team || sel === gameItem?.away_team_id) {
+                            entry.ml_away = price;
+                        }
+                    } else if (mkt === 'spreads') {
+                        if (sel === gameItem?.home_team || sel === gameItem?.home_team_id) {
+                            entry.spread_home = line;
+                            entry.spread_price_home = price;
+                        } else if (sel === gameItem?.away_team || sel === gameItem?.away_team_id) {
+                            entry.spread_away = line;
+                            entry.spread_price_away = price;
+                        }
+                    } else if (mkt === 'totals') {
+                        entry.total = line;
+                        if (typeof sel === 'string' && sel.toLowerCase().includes('over')) {
+                            entry.over_price = price;
+                        } else if (typeof sel === 'string' && sel.toLowerCase().includes('under')) {
+                            entry.under_price = price;
+                        }
+                    }
+                }
+                adaptedSections.odds = Array.from(byBook.values());
+            }
+        }
+    }
+
+    return {
+        ...rawRow,
+        sections: adaptedSections,
+        source_status: existingSourceStatus
+    };
+}
+
 export function validateRpcResultRow(
     rawRow: unknown,
     expected: { sport: string; game_date: string; event_id: string },
@@ -716,7 +972,7 @@ export function validateRpcResultRow(
     }
 
     const rawStatus = rawRow.status;
-    if (rawStatus === 'unavailable') {
+    if (rawStatus === 'unavailable' || rawStatus === 'empty') {
         const reason =
             typeof rawRow.unavailable_reason === 'string' &&
             UNAVAILABLE_REASONS.has(rawRow.unavailable_reason)
@@ -752,16 +1008,21 @@ export function validateRpcResultRow(
         return baseUnavailable('not_yet_observed');
     }
 
-    const sourceStatusValidation = validateSourceStatusMap(rawRow.source_status, asOfMs);
+    const adaptedRow = adaptContextEnvelope(rawRow);
+    if (!adaptedRow) {
+        return baseUnavailable('sections_incomplete');
+    }
+
+    const sourceStatusValidation = validateSourceStatusMap(adaptedRow.source_status, asOfMs);
     if (!sourceStatusValidation.ok) {
         return baseUnavailable(sourceStatusValidation.reason);
     }
     const sourceStatus = sourceStatusValidation.map;
 
-    if (!isPlainObject(rawRow.sections)) {
+    if (!isPlainObject(adaptedRow.sections)) {
         return baseUnavailable('sections_incomplete');
     }
-    const rawSections = rawRow.sections;
+    const rawSections = adaptedRow.sections as Record<string, unknown>;
     for (const k of Object.keys(rawSections)) {
         if (!HISTORY_CONTEXT_SECTIONS.includes(k as HistoryContextSectionKey)) {
             return baseUnavailable('sections_incomplete');
@@ -816,6 +1077,8 @@ export function validateRpcResultRow(
         const st = sourceStatus[secKey];
         const statusOk =
             st.status === 'ok' ||
+            st.status === 'ready' ||
+            st.status === 'empty' ||
             st.status === 'empty_valid' ||
             (secKey === 'weather' &&
                 st.status === 'not_applicable' &&
@@ -843,7 +1106,7 @@ export function validateRpcResultRow(
                         : oddsSec.latestCapturedMs;
             }
             if (secObsMs === null) {
-                if (st.status === 'ok' && secKey !== 'weather') {
+                if ((st.status === 'ok' || st.status === 'ready') && secKey !== 'weather') {
                     freshnessViolations.push(secKey);
                     continue;
                 }
@@ -936,14 +1199,15 @@ export function formatGameContextForPrompt(
         const g = sec.game;
         const lines: string[] = [];
 
+        const statusPart = g.status_at_capture ? ` | status=${g.status_at_capture}` : '';
         lines.push(
-            `EVENT ${sanitizePromptValue(g.event_id)} (${sanitizePromptValue(g.sport)} | ${sanitizePromptValue(g.game_date)} | start=${sanitizePromptValue(g.scheduled_start)} | status=${g.status_at_capture}): ${sanitizePromptValue(g.away_team)} (${sanitizePromptValue(g.away_team_id)}) @ ${sanitizePromptValue(g.home_team)} (${sanitizePromptValue(g.home_team_id)}) [snapshot_id=${row.snapshot_id}, content_hash=${row.content_hash}]`
+            `EVENT ${sanitizePromptValue(g.event_id)} (${sanitizePromptValue(g.sport)} | ${sanitizePromptValue(g.game_date)} | start=${sanitizePromptValue(g.scheduled_start)}${statusPart}): ${sanitizePromptValue(g.away_team)} (${sanitizePromptValue(g.away_team_id)}) @ ${sanitizePromptValue(g.home_team)} (${sanitizePromptValue(g.home_team_id)}) [snapshot_id=${row.snapshot_id}, content_hash=${row.content_hash}]`
         );
 
         if (sec.venue) {
             const v = sec.venue;
             lines.push(
-                `  Venue: ${sanitizePromptValue(v.name)}, ${sanitizePromptValue(v.city)}, ${sanitizePromptValue(v.country)} (indoor=${String(v.indoor)}, surface=${sanitizePromptValue(v.surface || 'N/A')})`
+                `  Venue: ${sanitizePromptValue(v.name || 'N/A')}, ${sanitizePromptValue(v.city || 'N/A')}, ${sanitizePromptValue(v.country || 'N/A')} (indoor=${String(v.indoor)}, surface=${sanitizePromptValue(v.surface || 'N/A')})`
             );
         }
 
@@ -988,7 +1252,7 @@ export function formatGameContextForPrompt(
         if (sec.weather) {
             const w = sec.weather;
             lines.push(
-                `  Weather: ${sanitizePromptValue(w.condition)}, tempC=${w.temp_c ?? 'N/A'}, windKph=${w.wind_kph ?? 'N/A'}, precip=${w.precip_prob ?? 'N/A'}`
+                `  Weather: ${sanitizePromptValue(w.condition || 'N/A')}, tempC=${w.temp_c ?? 'N/A'}, windKph=${w.wind_kph ?? 'N/A'}, precip=${w.precip_prob ?? 'N/A'}`
             );
         }
 
@@ -1054,8 +1318,93 @@ export async function readGameContextFromStore(
         };
     }
 
-    const expectedOrder: Array<{ sport: string; game_date: string; event_id: string }> = [];
+    const HEX_32_REGEX = /^[0-9a-f]{32}$/i;
+    const resolvedGroups: Array<{
+        sport: string;
+        date: string;
+        eventIds: string[];
+        entityIds?: string[];
+    }> = [];
+
     for (const g of scope.groups) {
+        const hexEventIds = g.eventIds.filter((id) => HEX_32_REGEX.test(id));
+        const hexEntityIds = (g.entityIds || []).filter((id) => HEX_32_REGEX.test(id));
+        const allHex = Array.from(new Set([...hexEventIds, ...hexEntityIds]));
+
+        const aliasMap = new Map<string, string>();
+        if (allHex.length > 0) {
+            try {
+                const aliasUrl = `${cfg.supabaseUrl}/rest/v1/canonical_game_aliases?provider=eq.Odds%20API&game_date=eq.${encodeURIComponent(g.date)}&provider_event_id=in.(${allHex.map((id) => encodeURIComponent(id)).join(',')})&select=provider_event_id,event_id`;
+                const aliasRes = await fetchFn(aliasUrl, {
+                    method: 'GET',
+                    headers: {
+                        apikey: cfg.supabasePublishableKey,
+                        Authorization: `Bearer ${cfg.supabasePublishableKey}`,
+                        Accept: 'application/json'
+                    }
+                });
+                if (aliasRes.ok) {
+                    const aliasData = await aliasRes.json();
+                    if (Array.isArray(aliasData)) {
+                        for (const row of aliasData) {
+                            if (
+                                isPlainObject(row) &&
+                                typeof row.provider_event_id === 'string' &&
+                                typeof row.event_id === 'string'
+                            ) {
+                                aliasMap.set(row.provider_event_id, row.event_id);
+                            }
+                        }
+                    }
+                } else {
+                    console.warn(`[HistoryContextStore] canonical_game_aliases lookup returned status ${aliasRes.status}`);
+                }
+            } catch (err: any) {
+                console.warn(`[HistoryContextStore] canonical_game_aliases lookup error: ${String(err?.message || err)}`);
+            }
+        }
+
+        const resolvedEventIds: string[] = [];
+        for (const evId of g.eventIds) {
+            if (HEX_32_REGEX.test(evId)) {
+                const canonical = aliasMap.get(evId);
+                if (canonical) {
+                    resolvedEventIds.push(canonical);
+                } else {
+                    console.warn(`[HistoryContextStore] Unresolved 32-hex id skipped: count=1, id=${evId}`);
+                }
+            } else {
+                resolvedEventIds.push(evId);
+            }
+        }
+
+        let resolvedEntityIds: string[] | undefined = undefined;
+        if (g.entityIds) {
+            resolvedEntityIds = [];
+            for (const entId of g.entityIds) {
+                if (HEX_32_REGEX.test(entId)) {
+                    const canonical = aliasMap.get(entId);
+                    if (canonical) {
+                        resolvedEntityIds.push(canonical);
+                    } else {
+                        console.warn(`[HistoryContextStore] Unresolved 32-hex id skipped: count=1, id=${entId}`);
+                    }
+                } else {
+                    resolvedEntityIds.push(entId);
+                }
+            }
+        }
+
+        resolvedGroups.push({
+            sport: g.sport,
+            date: g.date,
+            eventIds: resolvedEventIds,
+            ...(resolvedEntityIds ? { entityIds: resolvedEntityIds } : {})
+        });
+    }
+
+    const expectedOrder: Array<{ sport: string; game_date: string; event_id: string }> = [];
+    for (const g of resolvedGroups) {
         for (const evId of g.eventIds) {
             expectedOrder.push({
                 sport: g.sport,
@@ -1078,7 +1427,7 @@ export async function readGameContextFromStore(
     }
 
     const rpcBody = {
-        groups: scope.groups.map((g) => ({
+        groups: resolvedGroups.map((g) => ({
             sport: g.sport,
             date: g.date,
             eventIds: g.eventIds,
@@ -1165,7 +1514,8 @@ export async function readGameContextFromStore(
         };
     }
 
-    if (!isPlainObject(payload) || payload.schema_ver !== 1 || !Array.isArray(payload.results)) {
+    if (!isPlainObject(payload)) {
+        console.warn('[HistoryContextStore] Malformed RPC response envelope: payload is not an object');
         return {
             status: 'outage',
             httpStatus: 503,
@@ -1174,7 +1524,57 @@ export async function readGameContextFromStore(
         };
     }
 
-    const acceptedAsOfMs = parseTimestampMs(payload.as_of);
+    // Top-level status "empty" or items: [] is a valid no-context result, not an error
+    if (
+        payload.status === 'empty' ||
+        (payload.status === 'ready' && Array.isArray(payload.items) && payload.items.length === 0) ||
+        (payload.schema_ver === 1 && Array.isArray(payload.results) && payload.results.length === 0)
+    ) {
+        return {
+            status: 'ok',
+            asOf: scope.asOf,
+            results: expectedOrder.map((exp) => ({
+                event_id: exp.event_id,
+                game_date: exp.game_date,
+                sport: exp.sport,
+                status: 'unavailable',
+                unavailable_reason: 'no_snapshot',
+                snapshot_id: null,
+                content_hash: null,
+                version: null,
+                schema_ver: 1,
+                created_at: null,
+                observed_at: null,
+                decision_as_of: null,
+                sections: null,
+                source_status: null,
+                integrity_source: 'none',
+                freshness_violations: [],
+                available_sections: []
+            })),
+            byEventId: new Map(),
+            allReadyForSlim: false,
+            missingRequiredSectionsByEvent: {},
+            formattedBlock: ''
+        };
+    }
+
+    let rawResults: unknown[];
+    if (Array.isArray(payload.items)) {
+        rawResults = payload.items;
+    } else if (Array.isArray(payload.results)) {
+        rawResults = payload.results;
+    } else {
+        console.warn('[HistoryContextStore] Malformed RPC response envelope from read_game_context_v1: missing results or items array');
+        return {
+            status: 'outage',
+            httpStatus: 503,
+            error: 'history_context_read_failed',
+            detail: 'Malformed RPC response envelope from read_game_context_v1'
+        };
+    }
+
+    const acceptedAsOfMs = typeof payload.as_of === 'string' ? parseTimestampMs(payload.as_of) : scope.asOfMs;
     if (acceptedAsOfMs === null || acceptedAsOfMs > scope.asOfMs) {
         return {
             status: 'outage',
@@ -1184,12 +1584,12 @@ export async function readGameContextFromStore(
         };
     }
 
-    if (payload.results.length !== expectedOrder.length) {
+    if (rawResults.length !== expectedOrder.length) {
         return {
             status: 'outage',
             httpStatus: 503,
             error: 'history_context_read_failed',
-            detail: `RPC results count (${payload.results.length}) does not match requested event count (${expectedOrder.length})`
+            detail: `RPC results count (${rawResults.length}) does not match requested event count (${expectedOrder.length})`
         };
     }
 
@@ -1204,7 +1604,7 @@ export async function readGameContextFromStore(
 
     for (let i = 0; i < expectedOrder.length; i++) {
         const exp = expectedOrder[i];
-        const rawRow = payload.results[i];
+        const rawRow = rawResults[i];
         const validated = validateRpcResultRow(rawRow, exp, scope.asOfMs, refMap);
         validatedRows.push(validated);
         byEventId.set(exp.event_id, validated);

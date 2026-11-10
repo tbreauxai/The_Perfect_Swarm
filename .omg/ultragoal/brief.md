@@ -1,11 +1,17 @@
-# Phase 4: Upgrade the Qdrant Post-Mortem Loop (Meta-Learning)
+# Read DuelOdds' Real Context-Store Envelope
 
 ## Objective
-Ingest structured `[ROUTING RULE]` lessons from Qdrant directly into the Hop 1 Triage Planner, enforce mandatory data requirements identified in past post-mortems, and emit complete `tools_called` telemetry in all workflow responses.
+Update The_Perfect_Swarm's context store reader to accept DuelOdds' real `read_game_context_v1` envelope (`{ status: "ready" | "empty", items: [...] }`), resolve 32-hex Odds API ids to ESPN canonical event_ids via `canonical_game_aliases`, declare publishable key environment variables, and establish full contract test coverage.
 
 ## Constraints & Architecture Boundaries
-- Strict typing and Node 22 erasableSyntaxOnly compliance.
-- Qdrant collection payload filter indexing for `rule_type`, `sport`, and `market_type`.
-- Ingest rules as high-priority constraints: `"MANDATORY DATA REQUIREMENTS FROM PAST LOSSES: ..."`.
-- Include `tools_called: string[]` in top-level JSON responses, SSE completion events, and judgment output.
+- Swarm-only (no DuelOdds changes).
+- Branch: `feat/context-store-reader`.
+- Explicit `git add <named files>`, never `-A`.
+- Never reset, checkout ., restore, clean, rebase, squash or force-push.
+- Node 22 strip-only TypeScript: no parameter properties, enums, namespaces, import=require or decorators.
+- Use read-only publishable key (`SUPABASE_PUBLISHABLE_KEY`), never service-role key. Fail closed if unset.
+- Status "empty" or `items: []` is valid no-context result, not an error.
+- Missing stays missing (no zero or default values); never fabricate sections.
+- Unresolved 32-hex ids skipped with logged reason (count + id), keeping 40-entity cap.
+- Preserve historyScope security gate: app tokens never unlock private history.
 - Zero conversational filler.

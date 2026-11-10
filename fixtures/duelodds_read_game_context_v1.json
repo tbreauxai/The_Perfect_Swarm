@@ -1,0 +1,266 @@
+{
+  "ready": {
+    "schema_ver": 1,
+    "as_of": "2026-11-06T18:00:00.000Z",
+    "results": [
+      {
+        "event_id": "nba-401584793",
+        "game_date": "2026-11-06",
+        "sport": "basketball_nba",
+        "status": "ready",
+        "unavailable_reason": null,
+        "snapshot_id": "00000000-0000-4000-8000-000000000010",
+        "content_hash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+        "version": "1",
+        "schema_ver": 1,
+        "created_at": "2026-11-06T17:55:00.000Z",
+        "observed_at": "2026-11-06T17:55:00.000Z",
+        "decision_as_of": "2026-11-06T17:55:00.000Z",
+        "sections": {
+          "game": {
+            "status": "ready",
+            "source": "espn",
+            "observed_at": "2026-11-06T17:55:00.000Z",
+            "fetched_at": "2026-11-06T17:55:00.000Z",
+            "available_at": "2026-11-06T17:55:00.000Z",
+            "valid_until": null,
+            "items": [
+              {
+                "event_id": "nba-401584793",
+                "game_date": "2026-11-06",
+                "sport": "basketball_nba",
+                "home_team_id": "BOS",
+                "away_team_id": "LAL",
+                "home_team": "Boston Celtics",
+                "away_team": "Los Angeles Lakers",
+                "commence_time": "2026-11-06T23:30:00.000Z",
+                "venue_id": "v-td-garden",
+                "neutral_site": false
+              }
+            ]
+          },
+          "venue": {
+            "status": "ready",
+            "source": "espn",
+            "observed_at": "2026-11-06T17:55:00.000Z",
+            "fetched_at": "2026-11-06T17:55:00.000Z",
+            "available_at": "2026-11-06T17:55:00.000Z",
+            "valid_until": null,
+            "items": [
+              {
+                "venue_id": "v-td-garden",
+                "name": "TD Garden",
+                "city": "Boston",
+                "state": "MA",
+                "country": "USA",
+                "indoor": true
+              }
+            ]
+          },
+          "form": {
+            "status": "ready",
+            "source": "verified_stats_cache",
+            "observed_at": "2026-11-06T17:55:00.000Z",
+            "fetched_at": "2026-11-06T17:55:00.000Z",
+            "available_at": "2026-11-06T17:55:00.000Z",
+            "valid_until": null,
+            "items": [
+              {
+                "event_id": "nba-401580001",
+                "game_date": "2026-11-01",
+                "sport": "basketball_nba",
+                "home_team_id": "BOS",
+                "away_team_id": "NYK",
+                "home_score": 114,
+                "away_score": 102,
+                "completed_at": "2026-11-01T23:50:00.000Z",
+                "source_ref": "espn:401580001"
+              }
+            ]
+          },
+          "h2h": {
+            "status": "ready",
+            "source": "verified_stats_cache",
+            "observed_at": "2026-11-06T17:55:00.000Z",
+            "fetched_at": "2026-11-06T17:55:00.000Z",
+            "available_at": "2026-11-06T17:55:00.000Z",
+            "valid_until": null,
+            "items": [
+              {
+                "event_id": "nba-401570001",
+                "game_date": "2026-03-01",
+                "sport": "basketball_nba",
+                "home_team_id": "BOS",
+                "away_team_id": "LAL",
+                "home_score": 110,
+                "away_score": 105,
+                "completed_at": "2026-03-01T23:50:00.000Z",
+                "source_ref": "espn:401570001"
+              }
+            ]
+          },
+          "injuries": {
+            "status": "ready",
+            "source": "espn",
+            "observed_at": "2026-11-06T17:55:00.000Z",
+            "fetched_at": "2026-11-06T17:55:00.000Z",
+            "available_at": "2026-11-06T17:55:00.000Z",
+            "valid_until": null,
+            "items": [
+              {
+                "team_id": "BOS",
+                "player_id": "p-porzingis",
+                "player_name": "Kristaps Porzingis",
+                "status": "questionable",
+                "detail": "ankle",
+                "reported_at": "2026-11-06T15:00:00.000Z",
+                "source_ref": "espn:injuries"
+              }
+            ]
+          },
+          "weather": {
+            "status": "empty",
+            "source": "none",
+            "observed_at": null,
+            "fetched_at": null,
+            "available_at": null,
+            "valid_until": null,
+            "items": []
+          },
+          "odds": {
+            "status": "ready",
+            "source": "line_snapshots",
+            "observed_at": "2026-11-06T17:55:00.000Z",
+            "fetched_at": "2026-11-06T17:55:00.000Z",
+            "available_at": "2026-11-06T17:55:00.000Z",
+            "valid_until": null,
+            "items": [
+              {
+                "book": "fanduel",
+                "market": "h2h",
+                "selection": "Boston Celtics",
+                "player_id": null,
+                "line": null,
+                "american_price": -145,
+                "snapshot_at": "2026-11-06T17:55:00.000Z",
+                "provider": "odds_api",
+                "provider_event_id": "oa-401584793",
+                "mapping_status": "verified",
+                "source_ref": "line_snapshots:oa-401584793"
+              },
+              {
+                "book": "fanduel",
+                "market": "spreads",
+                "selection": "Boston Celtics",
+                "player_id": null,
+                "line": -3.5,
+                "american_price": -110,
+                "snapshot_at": "2026-11-06T17:55:00.000Z",
+                "provider": "odds_api",
+                "provider_event_id": "oa-401584793",
+                "mapping_status": "verified",
+                "source_ref": "line_snapshots:oa-401584793"
+              }
+            ]
+          }
+        },
+        "source_status": {
+          "game": { "status": "ready", "observed_at": "2026-11-06T17:55:00.000Z" },
+          "venue": { "status": "ready", "observed_at": "2026-11-06T17:55:00.000Z" },
+          "form": { "status": "ready", "observed_at": "2026-11-06T17:55:00.000Z" },
+          "h2h": { "status": "ready", "observed_at": "2026-11-06T17:55:00.000Z" },
+          "injuries": { "status": "ready", "observed_at": "2026-11-06T17:55:00.000Z" },
+          "weather": { "status": "empty", "observed_at": null },
+          "odds": { "status": "ready", "observed_at": "2026-11-06T17:55:00.000Z" }
+        }
+      },
+      {
+        "event_id": "nba-401584794",
+        "game_date": "2026-11-06",
+        "sport": "basketball_nba",
+        "status": "partial",
+        "unavailable_reason": "sections_incomplete",
+        "snapshot_id": "00000000-0000-4000-8000-000000000011",
+        "content_hash": "b1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+        "version": "1",
+        "schema_ver": 1,
+        "created_at": "2026-11-06T17:55:00.000Z",
+        "observed_at": "2026-11-06T17:55:00.000Z",
+        "decision_as_of": "2026-11-06T17:55:00.000Z",
+        "sections": {
+          "game": {
+            "status": "ready",
+            "source": "espn",
+            "observed_at": "2026-11-06T17:55:00.000Z",
+            "fetched_at": "2026-11-06T17:55:00.000Z",
+            "available_at": "2026-11-06T17:55:00.000Z",
+            "valid_until": null,
+            "items": [
+              {
+                "event_id": "nba-401584794",
+                "game_date": "2026-11-06",
+                "sport": "basketball_nba",
+                "home_team_id": "GSW",
+                "away_team_id": "DEN",
+                "home_team": "Golden State Warriors",
+                "away_team": "Denver Nuggets",
+                "commence_time": "2026-11-07T02:00:00.000Z",
+                "venue_id": null,
+                "neutral_site": false
+              }
+            ]
+          },
+          "venue": {
+            "status": "empty",
+            "source": "none",
+            "observed_at": null,
+            "items": []
+          },
+          "form": {
+            "status": "empty",
+            "source": "none",
+            "observed_at": null,
+            "items": []
+          },
+          "h2h": {
+            "status": "empty",
+            "source": "none",
+            "observed_at": null,
+            "items": []
+          },
+          "injuries": {
+            "status": "missing",
+            "source": "none",
+            "observed_at": null,
+            "items": []
+          },
+          "weather": {
+            "status": "empty",
+            "source": "none",
+            "observed_at": null,
+            "items": []
+          },
+          "odds": {
+            "status": "empty",
+            "source": "none",
+            "observed_at": null,
+            "items": []
+          }
+        },
+        "source_status": {
+          "game": { "status": "ready", "observed_at": "2026-11-06T17:55:00.000Z" },
+          "venue": { "status": "empty", "observed_at": null },
+          "form": { "status": "empty", "observed_at": null },
+          "h2h": { "status": "empty", "observed_at": null },
+          "injuries": { "status": "missing", "observed_at": null },
+          "weather": { "status": "empty", "observed_at": null },
+          "odds": { "status": "empty", "observed_at": null }
+        }
+      }
+    ]
+  },
+  "empty": {
+    "status": "empty",
+    "items": []
+  }
+}

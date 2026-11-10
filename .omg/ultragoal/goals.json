@@ -1,26 +1,29 @@
-[
-  {
-    "id": "goal-1-vector-index-routing-rules",
-    "description": "Task 4.1: Vector Index & Collection Schema for Routing Rules (src/swarm/memory/cortex.ts & src/swarm/learning-persistence.ts)",
-    "status": "completed",
-    "verification": "Qdrant collection and MemoryCortex support payload filter indexing and storage/query of rule_type, sport, and market_type."
-  },
-  {
-    "id": "goal-2-triage-planner-rule-ingestion",
-    "description": "Task 4.2: Triage Planner Routing Rule Ingestion (src/swarm/engine/triagePlanner.ts)",
-    "status": "completed",
-    "verification": "Hop 1 Planner queries routing rules by sport and market_type, injects mandatory data requirements into prompt, and enforces mandated tools."
-  },
-  {
-    "id": "goal-3-tool-execution-telemetry",
-    "description": "Task 4.3: Tool Execution Logging in Workflow Result (src/swarm/engine/index.ts & src/swarm/server/routes/analyze.ts)",
-    "status": "completed",
-    "verification": "Final workflow response and SSE completion event include tools_called: string[], attached to judgment output."
-  },
-  {
-    "id": "goal-4-meta-learning-feedback-tests",
-    "description": "Task 4.4: Meta-Learning Feedback Loop Unit & Integration Tests (src/swarm/engine/routingRuleInjection.test.ts)",
-    "status": "completed",
-    "verification": "Tests verify mandatory tool enforcement when [ROUTING RULE] exists and tools_called telemetry is populated in results."
-  }
-]
+{
+  "activeGoalId": null,
+  "goals": [
+    {
+      "id": "goal-1-p0-adapter",
+      "title": "P0 Adapter in gameContext.ts",
+      "description": "Accept the real envelope { status: ready | empty, items: [...] } per the migration. Add adapter that maps each item to existing sections + source_status.",
+      "status": "completed"
+    },
+    {
+      "id": "goal-2-env-names",
+      "title": "Env names in render.yaml and .env.example",
+      "description": "Declare SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY without values.",
+      "status": "completed"
+    },
+    {
+      "id": "goal-3-id-resolution",
+      "title": "32-Hex ID resolution before RPC",
+      "description": "Resolve 32-hex Odds API IDs to ESPN canonical event_ids via canonical_game_aliases read. Unresolved IDs skipped with warning.",
+      "status": "completed"
+    },
+    {
+      "id": "goal-4-contract-test-and-verify",
+      "title": "Contract tests, fixtures, and final verification",
+      "description": "Add fixtures/duelodds_read_game_context_v1.json and tests/contract/contextStoreEnvelope.test.ts covering ready, empty, malformed, hex resolution, unresolved skip, and publishable key enforcement.",
+      "status": "completed"
+    }
+  ]
+}
