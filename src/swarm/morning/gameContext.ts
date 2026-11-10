@@ -754,10 +754,20 @@ export function adaptContextEnvelope(rawRow: unknown): Record<string, unknown> |
                 console.warn('[HistoryContextStore] Malformed game section item: not an object');
                 return null;
             }
-            adaptedSections.game = item;
+            adaptedSections.game = {
+                ...item,
+                scheduled_start: item.scheduled_start ?? item.commence_time
+            };
         } else if (key === 'venue') {
             const item = items[0];
-            adaptedSections.venue = isPlainObject(item) ? item : null;
+            if (isPlainObject(item)) {
+                adaptedSections.venue = {
+                    ...item,
+                    region: item.region ?? item.state ?? null
+                };
+            } else {
+                adaptedSections.venue = null;
+            }
         } else if (key === 'weather') {
             const item = items[0];
             adaptedSections.weather = isPlainObject(item) ? item : null;
@@ -1067,9 +1077,11 @@ export function validateRpcResultRow(
         const st = sourceStatus[secKey];
         const statusOk =
             st.status === 'ok' ||
+            st.status === 'ready' ||
+            st.status === 'empty' ||
             st.status === 'empty_valid' ||
             (secKey === 'weather' &&
-                st.status === 'not_applicable' &&
+                (st.status === 'not_applicable' || st.status === 'empty' || st.status === 'empty_valid') &&
                 (venueSec.data?.indoor === true || weatherSec.data?.dome_closed === true));
 
         if (!statusOk) {
@@ -1094,7 +1106,7 @@ export function validateRpcResultRow(
                         : oddsSec.latestCapturedMs;
             }
             if (secObsMs === null) {
-                if (st.status === 'ok' && secKey !== 'weather') {
+                if ((st.status === 'ok' || st.status === 'ready') && secKey !== 'weather') {
                     freshnessViolations.push(secKey);
                     continue;
                 }
