@@ -200,5 +200,15 @@ export function parseStandardResponse(
         });
     }
 
-    return sanitizeModelOutput(rawContent, isJson);
+    const sanitizedOutput = sanitizeModelOutput(rawContent, isJson);
+    if (!sanitizedOutput.trim()) {
+        const finishReason = data?.choices?.[0]?.finish_reason ?? 'unknown';
+        const completionTokens = data?.usage?.completion_tokens ?? 'unknown';
+        const reasoningTokens = data?.usage?.completion_tokens_details?.reasoning_tokens ?? 'unknown';
+        throw new Error(
+            `[EMPTY_COMPLETION] ${providerName}/${modelToRecord} finish_reason=${finishReason} completion_tokens=${completionTokens} reasoning_tokens=${reasoningTokens}`
+        );
+    }
+
+    return sanitizedOutput;
 }
