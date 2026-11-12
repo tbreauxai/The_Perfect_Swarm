@@ -1,34 +1,47 @@
-Perfect Swarm: read DuelOdds' real context-store envelope | Swarm-only (no DuelOdds changes)
-Base: The_Perfect_Swarm main e6d18792. Contract source: DuelOdds 82e54e58, migration 20261107172900 L366-641 (read_game_context_v1).
-Branch: feat/context-store-reader. One PR.
+# Swarm Fix Plan: Consume Resolved Context from Duelodds
 
-GIT (do first)
+## Goal
+Make sure the Swarm actually uses the full context (injuries, form, judgments, etc.) once Duelodds tools start returning resolved data.
 
-- [x] git status clean or STOP. git checkout main && git pull --ff-only. git merge-base --is-ancestor e6d18792 HEAD or STOP.
-- [x] git checkout -b feat/context-store-reader. Commit after each step with explicit `git add <named files>`, never -A.
-- [x] Never reset, checkout ., restore, clean, rebase, squash or force-push.
-- [x] Node 22 strip-only TypeScript: no parameter properties, enums, namespaces, import=require or decorators.
+## Current Behavior
+- Latest Swarm recommendation (2026-11-12 21:11 UTC, “The Perfect Swarm (SSE)”) used raw Odds API event IDs.
+- `tools_called` was empty.
+- Supporting context exists in Duelodds under canonical IDs but was not pulled.
 
-1. [x] P0 adapter | gameContext.ts readGameContextFromStore (~L1044-1100) + parser (~L213-220, 327-354, 755-778)
-   Accept the real envelope: { status: "ready" | "empty", items: [...] } per the migration. Add one small adapter that maps each item to the swarm's
-   existing sections + source_status. status "empty" (or items: []) is a valid "no context" result, not an error. Missing stays missing, never zero
-   or a default; unknown/extra fields ignored; malformed shape returns a logged reason and no context. Never fabricate sections.
-   Done when: a ready fixture yields the same sections the swarm already consumes; empty yields no-context with no throw.
-2. [x] Env names only | render.yaml + .env.example
-   Declare SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY (sync: false in render.yaml, empty values). This path uses the read-only publishable key,
-   never the service-role key; fail closed (no context, logged reason) when either is unset. No values in any file.
-3. [x] ID resolution | same reader, before the RPC
-   If retrievalContext / entityIds arrive as 32-hex Odds API ids, resolve each to its ESPN canonical event_id with a read of canonical_game_aliases
-   (provider = Odds API, by provider_event_id + game_date). Unresolved ids are skipped with a logged reason (count + id), never guessed.
-   No truncation; keep the 40-entity cap and the existing entity_ids_limit_exceeded behaviour.
-4. [x] Contract test | new tests/contract/contextStoreEnvelope.test.ts + fixtures/duelodds_read_game_context_v1.json
-   Copy the fixture shape from the DuelOdds migration (ready with 2 items incl. one partial section, and empty). Assert adapter output, empty path,
-   malformed path, hex-to-canonical resolution (mocked alias read), unresolved skip, and that the publishable key (never service role) is used.
-   Keep the historyScope gate exactly as is: app tokens never unlock private history (add one assertion if not already covered).
+## Required Changes
 
-FINAL VERIFY (once): the repo's full test run, lint, typecheck and build. Then a startup smoke test: the real start command, then GET /api/health returns 200.
-Paste git log --oneline main..HEAD and git diff --stat main; confirm the diff isn't empty.
-git push -u origin feat/context-store-reader && gh pr create. NEVER push to main; push only the feature branch. No auto-merge.
+### 1. Prefer / Require Context Tools
+- Ensure the Swarm’s tool list and system prompt explicitly include (and prefer) the tools that return game context, snapshots, and judgments.
+- When an event ID is supplied, the Swarm should call the context tool(s) before finalizing a recommendation or pass.
+- If a tool returns a resolved canonical event ID, use that for any follow-up calls.
 
-TYLER: Merge outside 9-10 PM CT (Render auto-deploys on merge). Before or with the merge, set SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY in the Render
-dashboard (publishable/anon key only). No migration. If the swarm misbehaves, unset the key (reader falls back to no context) or roll back the Render deploy.
+### 2. Handle Resolved Data
+Once Duelodds tools resolve Odds API IDs and return context:
+- Consume the returned sections (odds, form, injuries, venue, existing judgment, etc.).
+- Include relevant signals in the reasoning (especially injuries and form).
+- Populate `tools_called` with the actual tools invoked.
+
+### 3. Prompt / Workflow Adjustments (if hard-coded)
+If the Swarm prompt or workflow is hard-coded and does not mention context tools:
+- Add a short instruction: “Always resolve and retrieve game context (injuries, form, prior judgments) before making a final recommendation or pass.”
+- Prefer tools that return structured context over raw odds-only paths when both are available.
+
+### 4. Logging
+- Log which tools were called and whether a canonical event ID was resolved.
+- This makes it easy to confirm the fix is working (non-empty `tools_called` + context usage).
+
+## Acceptance Criteria
+- New Swarm runs on the test NBA games show non-empty `tools_called`.
+- Recommendations reference or clearly use context signals (injuries, form, etc.) when available.
+- The Swarm no longer produces recommendations that only see raw odds when richer context exists.
+
+## Test Events
+- Odds API IDs that should resolve:
+  - `d5c5ae8d56762b45d1ec4b85337878f3` → `nba-401909977`
+  - `a98ff1ab79feb59277d989c656f16144` → `nba-401909976`
+- Context for both was marked `ready` at 16:55 UTC on 2026-11-12.
+
+## Notes
+- Most of the heavy lifting (alias resolution, re-judging `awaiting_lines`, tool implementation) is on the Duelodds side.
+- Swarm changes should be minimal: call the tools it’s given and use the richer data they return.
+- Coordinate deployment so Duelodds tools are updated before or at the same time as any Swarm prompt/tool-list changes.
