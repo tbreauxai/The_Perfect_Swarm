@@ -50,6 +50,9 @@ export class OpenRouterAdapter implements ProviderAdapter {
             maxTokens: options.config?.maxTokens || 8192,
             isJson,
             timeoutMs,
+            extraBody: options.config?.reasoning !== undefined
+                ? { reasoning: options.config.reasoning }
+                : undefined,
             headers: {
                 'HTTP-Referer': 'http://localhost:3000',
                 'X-Title': 'The Perfect Swarm'

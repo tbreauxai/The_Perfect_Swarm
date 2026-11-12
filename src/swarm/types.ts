@@ -168,6 +168,11 @@ export interface AgentRunConfig {
     responseMimeType?: string;
     temperature?: number;
     maxTokens?: number;
+    reasoning?: {
+        enabled?: boolean;
+        effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high';
+        exclude?: boolean;
+    };
     timeoutMs?: number;
     fallbackProviders?: ProviderCredential[];
     zodSchema?: any;
