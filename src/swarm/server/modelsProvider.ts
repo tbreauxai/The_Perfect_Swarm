@@ -27,6 +27,8 @@ const emptyCatalogState = (): ModelCatalogState => ({ providers: {} });
 let catalogState = emptyCatalogState();
 let catalogStateLoaded = false;
 let catalogStateLoadPromise: Promise<ModelCatalogState> | null = null;
+let probeAllPromise: Promise<void> | null = null;
+let catchUpPromise: Promise<void> | null = null;
 
 export function clearCatalogCache(): void {
     catalogCache.clear();
@@ -36,6 +38,8 @@ export function clearCatalogCache(): void {
     catalogState = emptyCatalogState();
     catalogStateLoaded = false;
     catalogStateLoadPromise = null;
+    probeAllPromise = null;
+    catchUpPromise = null;
 }
 
 async function loadCatalogState(store: QdrantLearningStore = getDefaultLearningStore()): Promise<ModelCatalogState> {
@@ -201,7 +205,7 @@ const CATALOG_PROVIDERS = ['groq', 'gemini', 'openrouter', 'mistral', 'nvidia', 
  * Probe every provider once. The morning and night schedule calls this.
  * A picker open reads the cache this fills and does not probe.
  */
-export async function probeAllProviders(
+async function runProbeAllProviders(
     env: Record<string, any> = {},
     store: QdrantLearningStore = getDefaultLearningStore()
 ): Promise<void> {
@@ -219,6 +223,34 @@ export async function probeAllProviders(
     }
     catalogState.lastProbeAt = Date.now();
     await store.saveCatalogState(catalogState);
+}
+
+export function probeAllProviders(
+    env: Record<string, any> = {},
+    store: QdrantLearningStore = getDefaultLearningStore()
+): Promise<void> {
+    if (probeAllPromise) return probeAllPromise;
+    probeAllPromise = runProbeAllProviders(env, store).finally(() => {
+        probeAllPromise = null;
+    });
+    return probeAllPromise;
+}
+
+export function ensureCatalogProbeFresh(
+    env: Record<string, any> = {},
+    store: QdrantLearningStore = getDefaultLearningStore(),
+    now: number = Date.now()
+): Promise<void> {
+    if (catchUpPromise) return catchUpPromise;
+    catchUpPromise = (async () => {
+        await loadCatalogState(store);
+        const lastProbeAt = catalogState.lastProbeAt;
+        if (typeof lastProbeAt === 'number' && now - lastProbeAt <= 24 * 60 * 60 * 1000) return;
+        await probeAllProviders(env, store);
+    })().finally(() => {
+        catchUpPromise = null;
+    });
+    return catchUpPromise;
 }
 
 const NON_CHAT = /tts|whisper|image|embed|ocr|lyria|transcribe|prompt-guard|orpheus|robotics|moderation|computer-use|realtime|speech|safeguard|deep-research|antigravity|nano-banana|clip-preview|omni|customtools/i;
