@@ -1334,7 +1334,7 @@ export async function readGameContextFromStore(
         const aliasMap = new Map<string, string>();
         if (allHex.length > 0) {
             try {
-                const aliasUrl = `${cfg.supabaseUrl}/rest/v1/canonical_game_aliases?provider=eq.Odds%20API&game_date=eq.${encodeURIComponent(g.date)}&provider_event_id=in.(${allHex.map((id) => encodeURIComponent(id)).join(',')})&select=provider_event_id,event_id`;
+                const aliasUrl = `${cfg.supabaseUrl}/rest/v1/canonical_game_aliases?provider=eq.oddsapi&game_date=eq.${encodeURIComponent(g.date)}&provider_event_id=in.(${allHex.map((id) => encodeURIComponent(id)).join(',')})&select=provider_event_id,event_id`;
                 const aliasRes = await fetchFn(aliasUrl, {
                     method: 'GET',
                     headers: {

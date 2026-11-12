@@ -212,7 +212,7 @@ describe('Contract: DuelOdds read_game_context_v1 Envelope & Reader Adapter', ()
             const urlStr = String(url);
             if (urlStr.includes('/rest/v1/canonical_game_aliases')) {
                 aliasCalled = true;
-                expect(urlStr).toContain('provider=eq.Odds%20API');
+                expect(urlStr).toContain('provider=eq.oddsapi');
                 expect(urlStr).toContain(hexId);
                 return new Response(
                     JSON.stringify([
