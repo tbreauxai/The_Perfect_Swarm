@@ -6,16 +6,17 @@ import { GeminiAdapter } from "./providers/gemini.ts";
 import { MistralAdapter } from "./providers/mistral.ts";
 import { GroqAdapter } from "./providers/groq.ts";
 import { globalProviderLimiter } from "./providers/limiter.ts";
+import { globalPayloadCache, PayloadCache } from "./cache.ts";
 
 const calls: string[] = [];
 
-function registerMock(name: string, ok: boolean) {
+function registerMock(name: string, ok: boolean, output?: string) {
   ProviderRegistry.register({
     providerName: name,
     async call() {
       calls.push(name);
       if (!ok) throw new Error("Mock API Error (400): primary down");
-      return JSON.stringify({ source: name });
+      return output ?? JSON.stringify({ source: name });
     },
   } as any);
 }
@@ -81,6 +82,57 @@ describe("Agent fallback order (PS3 preserveFallbackOrder)", () => {
       bypassCache: true,
     });
     expect(result.source).toBe("order-b-mock");
+  });
+
+  it("fails over from an empty completion without emitting a completed empty object", async () => {
+    registerMock("order-empty-mock", true, "");
+    const agent = new Agent(
+      "Manager Node",
+      "empty",
+      "order-empty-mock" as any,
+      "k",
+      undefined,
+      fallbacks,
+      lbFavoringB,
+    );
+    agent.preserveFallbackOrder = true;
+    const context = new SwarmContext();
+
+    const result = await agent.run("empty completion fallback", context, {
+      responseMimeType: "application/json",
+      bypassCache: true,
+    });
+
+    expect(result.source).toBe("order-a-mock");
+    expect(calls).toEqual(["order-empty-mock", "order-a-mock"]);
+    expect(context.events.some(
+      (event) => event.action === "Completed execution" && JSON.stringify(event.output) === "{}",
+    )).toBe(false);
+  });
+
+  it("retries a single empty target, fails with EMPTY_COMPLETION, and does not cache it", async () => {
+    const provider = "empty-single-mock";
+    const model = "empty-single-model";
+    const prompt = "empty completion is not cached";
+    const fingerprint = PayloadCache.computeFingerprint(
+      "agent_run:Empty Single",
+      prompt,
+      { model, maxTokens: 1500 },
+    );
+    globalPayloadCache.invalidate(fingerprint);
+    registerMock(provider, true, "");
+    const agent = new Agent("Empty Single", model, provider as any, "k");
+    const context = new SwarmContext();
+
+    await expect(agent.run(prompt, context, {
+      responseMimeType: "application/json",
+    })).rejects.toThrow("EMPTY_COMPLETION");
+
+    expect(calls).toEqual([provider, provider]);
+    expect(globalPayloadCache.get(fingerprint)).toBeNull();
+    expect(context.events.at(-1)?.action).toBe("Failed execution");
+    expect(context.events.at(-1)?.error).toContain("EMPTY_COMPLETION");
+    expect(context.events.some((event) => event.action === "Completed execution")).toBe(false);
   });
 
   it("in configured order, skips an open circuit and a dead model without calling them", async () => {

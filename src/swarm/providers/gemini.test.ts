@@ -30,6 +30,24 @@ describe('GeminiAdapter', () => {
         expect(result).toBe('{"result":"ok"}');
     });
 
+    it('does not pass OpenRouter reasoning settings to Gemini', async () => {
+        const generateContentMock = vi.fn().mockResolvedValue({
+            text: '{"result":"ok"}',
+            usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5 }
+        });
+        const adapter = new GeminiAdapter();
+
+        await adapter.call({
+            modelName: 'gemini-2.5-flash',
+            prompt: 'Test prompt',
+            apiKey: 'fake-key',
+            aiClient: { models: { generateContent: generateContentMock } } as any,
+            config: { reasoning: { enabled: false, exclude: true } }
+        });
+
+        expect(generateContentMock.mock.calls[0][0].config.reasoning).toBeUndefined();
+    });
+
     it('retries without responseMimeType if model throws 400/INVALID_ARGUMENT on format', async () => {
         let callCount = 0;
         const capturedConfigs: any[] = [];

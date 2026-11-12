@@ -14,7 +14,7 @@ import { recordDegraded } from "./partialResult.ts";
 /** The critic's seat id on the blackboard and in degraded[] (also when an analyst is borrowed as critic). */
 export const CRITIC_SEAT = "critic";
 /** A critic scorecard carries one key_risk per cited row (<= 30 rows), so it gets more room than an analyst. */
-export const SCORECARD_CRITIC_MAX_TOKENS = 1000;
+export const SCORECARD_CRITIC_MAX_TOKENS = 2000;
 
 export const SCORECARD_CRITIC_SYSTEM_INSTRUCTION =
   "You are the Swarm Scorecard Critic. You audit analyst scorecards against the cited table rows only. " +
@@ -84,6 +84,7 @@ export async function runScorecardCritic(p: {
         bypassCache,
         groqMode: "chat",
         maxTokens: SCORECARD_CRITIC_MAX_TOKENS,
+        reasoning: { enabled: false, exclude: true },
       },
       schema: CriticScorecardSchema,
     });

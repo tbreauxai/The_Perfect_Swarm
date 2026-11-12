@@ -1,26 +1,6 @@
 import { cleanToken, buildStandardMessages, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
 import { executeOpenAiCompatibleChat } from './baseOpenAi.ts';
 
-/**
- * Dead OpenRouter ids that callers still send (DuelOdds AI Lab defaults: aiLabUtils.ts:181, useSettingsStore.ts:20,
- * swarmPromptBuilder.ts:817, cloudflareSwarmClient.ts:60) mapped to the live free model. nemotron-3-ultra :free
- * returns 404 (its only endpoint: status -5, 0% uptime; Navigator, Oct 16 2:20 PM CT).
- */
-export const RETIRED_OPENROUTER_MODELS: Readonly<Record<string, string>> = {
-    'nvidia/nemotron-3-ultra-550b-a55b:free': 'nvidia/nemotron-3-super-120b-a12b:free'
-};
-const warnedRetired = new Set<string>();
-
-export function resolveOpenRouterModel(modelName: string): string {
-    const replacement = RETIRED_OPENROUTER_MODELS[String(modelName || '').trim()];
-    if (!replacement) return modelName;
-    if (!warnedRetired.has(modelName)) {
-        warnedRetired.add(modelName);
-        console.warn(`[OpenRouter] Model '${modelName}' is retired (404); using '${replacement}' instead.`);
-    }
-    return replacement;
-}
-
 export class OpenRouterAdapter implements ProviderAdapter {
     readonly providerName = 'openrouter';
 
@@ -37,7 +17,7 @@ export class OpenRouterAdapter implements ProviderAdapter {
         const messages = buildStandardMessages(options);
         const isJson = options.config?.responseMimeType === 'application/json';
         const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 30000;
-        const effectiveModel = resolveOpenRouterModel(options.modelName);
+        const effectiveModel = options.modelName;
 
         const callWith = (model: string) => executeOpenAiCompatibleChat(options, {
             providerName: this.providerName,
@@ -50,6 +30,9 @@ export class OpenRouterAdapter implements ProviderAdapter {
             maxTokens: options.config?.maxTokens || 8192,
             isJson,
             timeoutMs,
+            extraBody: options.config?.reasoning !== undefined
+                ? { reasoning: options.config.reasoning }
+                : undefined,
             headers: {
                 'HTTP-Referer': 'http://localhost:3000',
                 'X-Title': 'The Perfect Swarm'

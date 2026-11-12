@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import { sanitizeModelOutput, cleanToken, extractLargestValidJson, isKnownReasoningModel } from './adapter.ts';
+import { describe, it, expect, vi } from 'vitest';
+import { sanitizeModelOutput, cleanToken, extractLargestValidJson, isKnownReasoningModel, parseStandardResponse } from './adapter.ts';
+import { globalTelemetryCollector } from '../telemetry.ts';
 
 describe('Provider Adapter Output Sanitization', () => {
     it('cleans API tokens with various prefixes and whitespaces', () => {
@@ -57,6 +58,32 @@ describe('Provider Adapter Output Sanitization', () => {
         expect(isKnownReasoningModel('nvidia/nemotron-3-nano-omni-30b-a3b-reasoning')).toBe(true);
         expect(isKnownReasoningModel('deepseek-ai/deepseek-r1')).toBe(true);
         expect(isKnownReasoningModel('meta/llama-3.1-8b-instruct')).toBe(false);
+    });
+
+    it.each([
+        ['null content', null],
+        ['empty content', ''],
+        ['reasoning-only content', '<think>internal reasoning</think>']
+    ])('rejects %s and records token usage first', (_label, content) => {
+        const recordTokenUsage = vi.spyOn(globalTelemetryCollector, 'recordTokenUsage').mockImplementation(() => {});
+        try {
+            expect(() => parseStandardResponse(
+                {
+                    choices: [{ message: { content }, finish_reason: 'length' }],
+                    usage: {
+                        prompt_tokens: 4,
+                        completion_tokens: 10,
+                        completion_tokens_details: { reasoning_tokens: 10 }
+                    }
+                },
+                'test-provider',
+                { modelName: 'test-model', prompt: 'prompt', apiKey: 'key' },
+                true
+            )).toThrow(/\[EMPTY_COMPLETION\].*finish_reason=length completion_tokens=10 reasoning_tokens=10/);
+            expect(recordTokenUsage).toHaveBeenCalled();
+        } finally {
+            recordTokenUsage.mockRestore();
+        }
     });
 });
 
