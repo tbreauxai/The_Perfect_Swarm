@@ -266,7 +266,11 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
       });
 
       if (v2) {
-        const v2Result = parseAndValidateJudgeOutputV2(workflowResult?.finalAnalysis ?? workflowResult, game, { factors });
+        const rawFa = workflowResult?.finalAnalysis ?? workflowResult;
+        const fa = rawFa && typeof rawFa === 'object' && !Array.isArray(rawFa)
+          ? (({ tools_called: _toolsCalled, ...rest }: any) => rest)(rawFa)
+          : rawFa;
+        const v2Result = parseAndValidateJudgeOutputV2(fa, game, { factors });
         if (v2Result.ok === false) {
           // No in-run retry and no extra call. Failure 1: rejudge_count 1, re-judged next run.
           // Failure 2: stored as 'pass' with validation_flag 'validation_failed' and never re-judged.
