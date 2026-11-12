@@ -143,7 +143,8 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                              globalNodeCapacityManager.tryAcquireSlot(analyst.provider);
 
         const startTime = Date.now();
-        const toolPrompt = !config.disableAdHocTools && toolRegistry.list().length > 0 ? `\n\n${toolRegistry.renderPromptSchema()}` : '';
+        const adHocTools = !config.disableAdHocTools && String(analyst.provider).toLowerCase() !== 'groq';
+        const toolPrompt = adHocTools && toolRegistry.list().length > 0 ? `\n\n${toolRegistry.renderPromptSchema()}` : '';
         const isRedTeam = analyst.role === RED_TEAM_ANALYST_ROLE ||
             /red[-_]?team/i.test(analyst.role) ||
             /red[-_]?team/i.test((analyst as any).id || '');
@@ -226,7 +227,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
             
             let toolResults: any[] = [];
             let strippedOutput = rawOutput;
-            if (!config.disableAdHocTools) {
+            if (adHocTools) {
                 const proc = await processAndRecordToolCalls({
                     rawOutput,
                     toolRegistry,
