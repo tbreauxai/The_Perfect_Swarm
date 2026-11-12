@@ -1,6 +1,6 @@
 import { globalFeedbackEngine, analystLedger } from '../feedback.ts';
 import { globalSpecialistProfiler } from '../loadBalancer.ts';
-import { QdrantLearningStore } from '../learning-persistence.ts';
+import { getDefaultLearningStore, QdrantLearningStore } from '../learning-persistence.ts';
 import { getSupabaseConfig, hydrateCalibrationFromSupabase } from '../morning/supabase.ts';
 
 /**
@@ -24,7 +24,7 @@ export async function restoreLearningState(store?: QdrantLearningStore): Promise
         const supaCfg = getSupabaseConfig();
         const supabaseCalibrated = supaCfg ? await hydrateCalibrationFromSupabase(supaCfg).catch(() => 0) : 0;
 
-        const s = store || new QdrantLearningStore();
+        const s = store || getDefaultLearningStore();
         const ready = await s.whenReady();
         if (!ready) {
             const isProd = typeof process !== 'undefined' && process.env?.NODE_ENV === 'production';

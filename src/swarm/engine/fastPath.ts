@@ -44,6 +44,7 @@ export async function executeFastPath(
                         : globalToolRegistry))));
 
     const fastAnalyst = analysts[0];
+    const adHocTools = String(fastAnalyst.provider).toLowerCase() !== 'groq';
     context.addEvent({
         agentRole: 'Model Router',
         action: 'Fast-Path Short-Circuit Activated',
@@ -108,7 +109,7 @@ export async function executeFastPath(
 
     try {
         if (!finalAnalysis) {
-            const toolPrompt = toolRegistry.list().length > 0 ? `\n\n${toolRegistry.renderPromptSchema()}` : '';
+            const toolPrompt = adHocTools && toolRegistry.list().length > 0 ? `\n\n${toolRegistry.renderPromptSchema()}` : '';
             const baseInstruction = activeVariant?.systemPrompts?.[fastAnalyst.id || fastAnalyst.role]
                 || activeVariant?.systemPrompts?.[fastAnalyst.role]
                 || ANALYST_SYSTEM_INSTRUCTION;
@@ -146,14 +147,16 @@ export async function executeFastPath(
                 ...activeVariant?.parameters
             });
 
-                        const { toolResults, strippedOutput } = await processAndRecordToolCalls({
-                rawOutput,
-                toolRegistry,
-                context,
-                memoryCortex,
-                task,
-                targetAppId
-            });
+            const { toolResults, strippedOutput } = adHocTools
+                ? await processAndRecordToolCalls({
+                    rawOutput,
+                    toolRegistry,
+                    context,
+                    memoryCortex,
+                    task,
+                    targetAppId
+                })
+                : { toolResults: [], strippedOutput: rawOutput };
 
             const guarded = guardAnalystResponse(strippedOutput, fastAnalyst.role);
             for (const tr of toolResults) {

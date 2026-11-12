@@ -6,7 +6,7 @@ import { createTelemetryMiddleware } from '../telemetry.ts';
 import { initBenchmarker } from '../benchmark.ts';
 import type { SwarmServerOptions, SwarmServerApp } from './types.ts';
 import { restoreLearningState } from './learningState.ts';
-import { probeAllProviders } from './modelsProvider.ts';
+import { ensureCatalogProbeFresh, probeAllProviders } from './modelsProvider.ts';
 import { createAppAuthMiddleware } from './appAuth.ts';
 import { createCorsMiddleware } from './cors.ts';
 import { initFeedbackDedupe } from './feedbackDedupe.ts';
@@ -22,6 +22,27 @@ import {
 // Re-export all route helpers for 100% backward compatibility
 export * from './routes/helpers.ts';
 export * from './routes/types.ts';
+
+export function chicagoParts(now: Date | number): { dateKey: string; hour: number } {
+    const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Chicago',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        hourCycle: 'h23'
+    }).formatToParts(now instanceof Date ? now : new Date(now));
+    const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+    return {
+        dateKey: `${values.year}-${values.month}-${values.day}`,
+        hour: Number(values.hour)
+    };
+}
+
+export function scheduledChicagoProbeDateKey(now: Date | number, lastProbeDateKey: string): string | null {
+    const parts = chicagoParts(now);
+    return parts.hour === 3 && parts.dateKey !== lastProbeDateKey ? parts.dateKey : null;
+}
 
 /**
  * Creates a standalone, zero-external-dependency Hono app for headless swarm deployments.
@@ -53,23 +74,23 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
         );
     }
 
-    // Catalog probe runs at 6 AM and 10 PM CT, not on every picker open.
-    // Seats read the cache. A probe never competes with a live analysis.
+    // Catch up in the background because the free Render instance may sleep through the scheduled hour.
+    ensureCatalogProbeFresh(serverEnv).catch((err) =>
+        console.warn('[catalog] startup catch-up failed:', err?.message || err)
+    );
+
+    // The free Render instance may sleep through 3 AM; probe once per Chicago date when awake.
     if (typeof setInterval !== 'undefined') {
-        const CT_OFFSET_MS = 5 * 60 * 60 * 1000;
-        const PROBE_HOURS = new Set([6, 22]);
-        let lastProbeKey = '';
+        let lastProbeDateKey = '';
         setInterval(() => {
-            const ct = new Date(Date.now() - CT_OFFSET_MS);
-            const hour = ct.getUTCHours();
-            const key = `${ct.toISOString().slice(0, 10)}-${hour}`;
-            if (!PROBE_HOURS.has(hour) || key === lastProbeKey) return;
-            lastProbeKey = key;
+            const dateKey = scheduledChicagoProbeDateKey(new Date(), lastProbeDateKey);
+            if (!dateKey) return;
+            lastProbeDateKey = dateKey;
             const env = typeof process !== 'undefined' ? process.env : {};
             probeAllProviders(env as Record<string, any>).catch((err) =>
                 console.warn('[catalog] scheduled probe failed:', err?.message || err)
             );
-        }, 30 * 60 * 1000);
+        }, 15 * 60 * 1000);
     }
 
     app.listen = function (portOrOpts?: any, hostnameOrCb?: any, cb?: any): any {

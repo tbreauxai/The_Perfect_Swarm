@@ -5,10 +5,12 @@ import { SwarmContext } from '../context.ts';
 import { ToolRegistry } from '../tools/index.ts';
 import { globalProviderLimiter } from '../providers/limiter.ts';
 import { ProviderRegistry } from '../providers/registry.ts';
+import { globalSpecialistRouter, globalTokenBudgetManager } from '../loadBalancer.ts';
 
 describe('Module 4: Pre-Flight Wave Budget Pacing', () => {
     beforeEach(() => {
         globalProviderLimiter.reset();
+        globalTokenBudgetManager.reset();
         ProviderRegistry.register({
             providerName: 'groq',
             async call(options: any) {
@@ -30,6 +32,19 @@ describe('Module 4: Pre-Flight Wave Budget Pacing', () => {
                 });
             }
         } as any);
+    });
+
+    it('does not consume provider budget when planning two Groq seats', () => {
+        const analyst1 = new Agent('Analyst 1', 'test-model', 'groq' as any, 'mock-key');
+        const analyst2 = new Agent('Analyst 2', 'test-model', 'groq' as any, 'mock-key');
+        globalSpecialistRouter.planDistribution(
+            'Analyze report',
+            ['first chunk', 'second chunk'],
+            [analyst1, analyst2]
+        );
+
+        expect(globalTokenBudgetManager.getTokensUsedInWindow('groq')).toBe(0);
+        expect(globalTokenBudgetManager.canAllocate('groq', 4000)).toBe(true);
     });
 
     it('paces wave tasks sequentially when cumulative wave tokens exceed provider budget', async () => {

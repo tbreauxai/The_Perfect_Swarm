@@ -174,4 +174,42 @@ describe('Fast-Path Deterministic Tools & Action Plan Cache', () => {
         expect(insights.length).toBeGreaterThan(0);
         expect(insights[0].message).toContain('without JSON syntax.');
     });
+
+    it('does not send ad-hoc tool schema or parse tool replies for a Groq fast-path seat', async () => {
+        let capturedSystemInstruction = '';
+        let capturedPrompt = '';
+        ProviderRegistry.register({
+            providerName: 'groq',
+            async call(options) {
+                capturedSystemInstruction = options.systemInstruction || '';
+                capturedPrompt = options.prompt;
+                return '[TOOL_CALL:{"tool":"calculate_odds","parameters":{"odds":2.5}}]';
+            }
+        });
+        const tools = new ToolRegistry([{
+            name: 'calculate_odds',
+            description: 'Calculates implied probability',
+            parameters: { odds: { type: 'number', description: 'Decimal odds' } },
+            execute: async ({ odds }: { odds: number }) => ({ impliedProbability: 1 / odds })
+        }]);
+        const gameData = 'event_id|home|away\n123|Home team|Away team';
+
+        const result = await executeSwarmWorkflow({
+            task: 'calculate_odds for decimal 2.5',
+            data: gameData,
+            forceFullSwarm: false,
+            tools,
+            settings: {
+                appId: 'fast-groq-test',
+                agents: [
+                    { id: 'manager', role: 'Manager Node', provider: 'groq', apiKey: 'k', model: 'm' },
+                    { id: 'analyst', role: 'Fast Analyst', provider: 'groq', apiKey: 'k', model: 'm' }
+                ]
+            }
+        });
+
+        expect(capturedSystemInstruction).not.toContain(tools.renderPromptSchema());
+        expect(capturedPrompt).toContain(`Data:\n${gameData}`);
+        expect(result.events.some((event) => event.action === 'Executed Tool: calculate_odds')).toBe(false);
+    });
 });

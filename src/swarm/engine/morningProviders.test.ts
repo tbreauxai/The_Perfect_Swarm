@@ -261,7 +261,7 @@ describe("morning run end to end: no OpenRouter call, even as a fallback; AI Lab
             id: "critic",
             role: "Risk Critic",
             provider: "openrouter",
-            model: "nvidia/nemotron-3-super-120b-a12b:free",
+            model: "nvidia/nemotron-3.5-lightning:free",
           },
         ],
       },

@@ -83,7 +83,7 @@ export const GOOD_V1 = JSON.stringify({
 export async function runSlate(opts: {
   flag?: string;
   rows?: any[];
-  reply: string;
+  reply: string | Record<string, unknown>;
   noSpread?: boolean;
 }) {
   const gets: string[] = [];
@@ -148,6 +148,27 @@ afterEach(() => {
 });
 
 describe("JUDGMENT_SCHEMA_V2 on: write path", () => {
+  it.each([[], ["x"]])("ignores engine tools_called metadata %j", async (tools_called) => {
+    const reply = { ...JSON.parse(GOOD_V2), tools_called };
+    const { result, judgmentWrites } = await runSlate({ flag: "1", reply });
+
+    expect(result.errors).toEqual([]);
+    expect(judgmentWrites).toHaveLength(1);
+    expect(judgmentWrites[0]).toMatchObject({ schema_version: 2, side: "home" });
+  });
+
+  it("still rejects unknown v2 judgment keys", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const reply = { ...JSON.parse(GOOD_V2), unexpected: true };
+    const { result, judgmentWrites } = await runSlate({ flag: "1", reply });
+
+    expect(result.ok).toBe(false);
+    expect(result.errors[0].error).toContain("schema");
+    expect(warn.mock.calls.flat().join(" ")).toContain('Unrecognized key: "unexpected"');
+    expect(judgmentWrites).toHaveLength(1);
+    expect(judgmentWrites[0]).not.toHaveProperty("side");
+  });
+
   it("uses the v2 prompts and writes the v2 columns, no win_prob_* / fair_*", async () => {
     const { result, judgmentWrites, executeWorkflowFn } = await runSlate({
       flag: "1",

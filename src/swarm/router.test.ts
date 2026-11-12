@@ -127,9 +127,9 @@ describe('ModelRouter', () => {
         });
 
         it('should return correct models for openrouter', () => {
-            expect(ModelRouter.getRecommendedModel('openrouter', 'complex')).toBe('nvidia/nemotron-3-super-120b-a12b:free');
-            expect(ModelRouter.getRecommendedModel('openrouter', 'instant')).toBe('nvidia/nemotron-3-super-120b-a12b:free');
-            expect(ModelRouter.getRecommendedModel('openrouter', 'simple')).toBe('nvidia/nemotron-3-super-120b-a12b:free');
+            expect(ModelRouter.getRecommendedModel('openrouter', 'complex')).toBe('nvidia/nemotron-3.5-lightning:free');
+            expect(ModelRouter.getRecommendedModel('openrouter', 'instant')).toBe('nvidia/nemotron-3.5-lightning:free');
+            expect(ModelRouter.getRecommendedModel('openrouter', 'simple')).toBe('nvidia/nemotron-3.5-lightning:free');
         });
 
         it('should return mistral-small-latest for mistral', () => {

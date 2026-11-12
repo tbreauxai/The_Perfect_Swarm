@@ -31,6 +31,11 @@ function makeFakeQdrant() {
             upsertCalls.push(pts);
             for (const p of pts) points.set(String(p.id), p.payload);
         },
+        async retrieve(_collection: string, { ids }: any) {
+            return ids.flatMap((id: string) => points.has(id)
+                ? [{ id, payload: points.get(id) }]
+                : []);
+        },
         async scroll(_collection: string, { limit = 500, offset, filter }: any) {
             let ids = [...points.keys()];
             if (filter?.must) {
@@ -106,6 +111,38 @@ describe('QdrantLearningStore', () => {
         expect(loaded.profiles['Quant Specialist'].accuracyWins).toBe(2);
         expect(loaded.policies).toHaveLength(1);
         expect(loaded.policies[0].generation).toBe(3);
+    });
+
+    it('saves and retrieves model catalog state in one deterministic Qdrant point', async () => {
+        const fake = makeFakeQdrant();
+        const store = new QdrantLearningStore({ client: fake as any, collection: 'test_catalog' });
+        await store.whenReady();
+        const state = {
+            lastProbeAt: 123,
+            providers: { groq: { models: [{ id: 'm1' }], strikes: { m1: 0 } } }
+        };
+
+        await store.saveCatalogState(state);
+
+        expect(await store.loadCatalogState()).toEqual(state);
+        expect(fake.upsertCalls.flat()).toHaveLength(1);
+        expect(fake.upsertCalls.flat()[0].payload).toMatchObject({
+            kind: 'catalog',
+            key: 'model_catalog_v1',
+            data: state
+        });
+    });
+
+    it('returns null rather than throwing when catalog retrieval fails', async () => {
+        const fake = makeFakeQdrant();
+        fake.retrieve = async () => { throw new Error('unavailable'); };
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const store = new QdrantLearningStore({ client: fake as any, collection: 'test_catalog_error' });
+        await store.whenReady();
+
+        await expect(store.loadCatalogState()).resolves.toBeNull();
+        expect(warn).toHaveBeenCalled();
+        warn.mockRestore();
     });
 
     it('micro-batches rapid writes into single multi-point upsert on debounce flush', async () => {

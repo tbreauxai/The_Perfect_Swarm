@@ -1,46 +1,164 @@
 import { ProviderRegistry } from '../providers/registry.ts';
 import { globalProviderLimiter } from '../providers/limiter.ts';
+import { getDefaultLearningStore, QdrantLearningStore } from '../learning-persistence.ts';
 
 export const DEFAULT_PROVIDER_MODELS: Record<string, string> = {
-    gemini: 'gemini-3.5-flash',
+    gemini: 'gemini-3.1-flash-lite',
     groq: 'openai/gpt-oss-120b',
-    openrouter: 'nvidia/nemotron-3-super-120b-a12b:free',
+    openrouter: 'nvidia/nemotron-3.5-lightning:free',
     mistral: 'mistral-small-latest',
     cloudflare: '@cf/meta/llama-3.1-8b-instruct',
-    nvidia: 'nvidia/llama-3.3-nemotron-super-49b-v1.5'
+    nvidia: 'nvidia/nemotron-3.5-lightning-30b-a3b'
 };
 
 const catalogCache = new Map<string, { models: any[]; at: number }>();
 const inFlightProbes = new Map<string, Promise<any[]>>();
-export const CATALOG_CACHE_MS = 60 * 60 * 1000;
+export interface ProviderCatalogState {
+    models: any[];
+    strikes: Record<string, number>;
+}
+
+export interface ModelCatalogState {
+    lastProbeAt?: number;
+    providers: Record<string, ProviderCatalogState>;
+}
+
+const emptyCatalogState = (): ModelCatalogState => ({ providers: {} });
+let catalogState = emptyCatalogState();
+let catalogStateLoaded = false;
+let catalogStateLoadPromise: Promise<ModelCatalogState> | null = null;
+let probeAllPromise: Promise<void> | null = null;
+let catchUpPromise: Promise<void> | null = null;
 
 export function clearCatalogCache(): void {
     catalogCache.clear();
     availabilityCache.clear();
     deadModels.clear();
     inFlightProbes.clear();
+    catalogState = emptyCatalogState();
+    catalogStateLoaded = false;
+    catalogStateLoadPromise = null;
+    probeAllPromise = null;
+    catchUpPromise = null;
+}
+
+async function loadCatalogState(store: QdrantLearningStore = getDefaultLearningStore()): Promise<ModelCatalogState> {
+    if (catalogStateLoaded) return catalogState;
+    if (!catalogStateLoadPromise) {
+        catalogStateLoadPromise = (async () => {
+            const stored = await store.loadCatalogState();
+            if (stored && stored.providers && typeof stored.providers === 'object' && !Array.isArray(stored.providers)) {
+                catalogState = {
+                    ...(typeof stored.lastProbeAt === 'number' ? { lastProbeAt: stored.lastProbeAt } : {}),
+                    providers: stored.providers
+                } as ModelCatalogState;
+            }
+            catalogStateLoaded = true;
+            return catalogState;
+        })().catch((err) => {
+            console.warn('[catalog] persisted state load failed:', err?.message || err);
+            catalogStateLoaded = true;
+            return catalogState;
+        }).finally(() => {
+            catalogStateLoadPromise = null;
+        });
+    }
+    return catalogStateLoadPromise;
+}
+
+function fallbackCatalog(provider: string): any[] {
+    if (provider === 'simulated') {
+        return [{ id: 'simulated-swarm-v1', name: 'Simulated Swarm Model', free: true }];
+    }
+    const fixed = FIXED_CATALOGS[provider];
+    if (fixed) {
+        return fixed.map((model) => ({
+            ...model,
+            capability: capabilityScore(model.id),
+            available: true
+        }));
+    }
+    const model = DEFAULT_PROVIDER_MODELS[provider];
+    return model ? [{ id: model, name: model, available: true }] : [];
+}
+
+function catalogWithFallback(provider: string): any[] {
+    const stored = catalogState.providers[provider];
+    return stored ? stored.models : fallbackCatalog(provider);
+}
+
+export function applyDailyProbe(
+    previous: ProviderCatalogState | undefined,
+    probed: any[],
+    provider: string
+): ProviderCatalogState {
+    const models = new Map((previous?.models || []).filter((model) => model?.id).map((model) => [model.id, model]));
+    const strikes = { ...(previous?.strikes || {}) };
+    const fixedCatalog = Object.hasOwn(FIXED_CATALOGS, provider.toLowerCase());
+    if (fixedCatalog) models.clear();
+
+    for (const model of probed || []) {
+        if (!model?.id) continue;
+        const id = String(model.id);
+        const old = models.get(id);
+        if (fixedCatalog) {
+            models.set(id, { ...model, available: true, degraded: false });
+        } else if (model.availability === 'ok' || model.availability === 'limited') {
+            strikes[id] = 0;
+            const { degraded: _oldDegraded, ...existing } = old || {};
+            models.set(id, {
+                ...existing,
+                ...model,
+                available: true,
+                ...(model.availability === 'limited' ? { degraded: true } : {})
+            });
+        } else if (model.availability === 'dead') {
+            const strikeCount = (strikes[id] || 0) + 1;
+            strikes[id] = strikeCount;
+            if (strikeCount >= 3) {
+                models.delete(id);
+            } else {
+                models.set(id, {
+                    ...(old || {}),
+                    ...model,
+                    available: false,
+                    degraded: true
+                });
+            }
+        }
+    }
+
+    return { models: [...models.values()], strikes };
 }
 
 /**
  * Fetches available models from supported LLM providers with edge-safe fetch calls.
- * Chat models are kept. A model is live only if the same adapter a seat uses
- * returns generated text for a tiny prompt. Dead ids are dropped.
+ * Normal reads are memory/persistence/default only. Provider listing and tiny
+ * generation probes run only when forceRefresh is explicitly requested.
  */
 export async function fetchProviderModels(
     provider: string,
     clientKey?: string,
     env: Record<string, any> = {},
-    options?: { forceRefresh?: boolean; boundedWaitMs?: number }
+    options?: {
+        forceRefresh?: boolean;
+        boundedWaitMs?: number;
+        deferCatalogPersist?: boolean;
+        learningStore?: QdrantLearningStore;
+    }
 ): Promise<any[]> {
     const prov = provider.toLowerCase();
     const apiKey = clientKey || keyFor(prov, env);
     const cacheKey = `${prov}:${apiKey ? apiKey.slice(-6) : 'unkeyed'}`;
+    const store = options?.learningStore || getDefaultLearningStore();
 
     if (!options?.forceRefresh) {
         const cached = catalogCache.get(cacheKey);
-        if (cached && Date.now() - cached.at < CATALOG_CACHE_MS) {
-            return cached.models;
-        }
+        if (cached) return cached.models;
+        await loadCatalogState(store);
+        const models = catalogWithFallback(prov);
+        catalogCache.set(cacheKey, { models, at: Date.now() });
+        return models;
     }
 
     if (inFlightProbes.has(cacheKey)) {
@@ -50,11 +168,19 @@ export async function fetchProviderModels(
     const probePromise = (async () => {
         try {
             const listed = await listProviderModels(prov, clientKey, env);
-            const ranked = await rankModelsForAccount(prov, listed, apiKey);
-            if (ranked.length > 0) {
-                catalogCache.set(cacheKey, { models: ranked, at: Date.now() });
+            const ranked = await rankModelsForAccount(prov, listed, apiKey, true);
+            await loadCatalogState(store);
+            const next = applyDailyProbe(catalogState.providers[prov], ranked, prov);
+            catalogState.providers[prov] = next;
+            const result = next.models.length || Object.keys(next.strikes).length
+                ? next.models
+                : fallbackCatalog(prov);
+            catalogCache.set(cacheKey, { models: result, at: Date.now() });
+            if (!options?.deferCatalogPersist) {
+                catalogState.lastProbeAt = Date.now();
+                await store.saveCatalogState(catalogState);
             }
-            return ranked;
+            return result;
         } finally {
             inFlightProbes.delete(cacheKey);
         }
@@ -67,12 +193,7 @@ export async function fetchProviderModels(
         const timeoutPromise = new Promise<any[]>((resolve) => {
             timer = setTimeout(() => {
                 const existing = catalogCache.get(cacheKey);
-                if (existing) {
-                    resolve(existing.models);
-                } else {
-                    const fallbackModel = DEFAULT_PROVIDER_MODELS[prov];
-                    resolve(fallbackModel ? [{ id: fallbackModel, name: fallbackModel, available: true }] : []);
-                }
+                resolve(existing?.models || catalogWithFallback(prov));
             }, options.boundedWaitMs);
         });
         return Promise.race([probePromise, timeoutPromise]).finally(() => clearTimeout(timer));
@@ -87,14 +208,52 @@ const CATALOG_PROVIDERS = ['groq', 'gemini', 'openrouter', 'mistral', 'nvidia', 
  * Probe every provider once. The morning and night schedule calls this.
  * A picker open reads the cache this fills and does not probe.
  */
-export async function probeAllProviders(env: Record<string, any> = {}): Promise<void> {
+async function runProbeAllProviders(
+    env: Record<string, any> = {},
+    store: QdrantLearningStore = getDefaultLearningStore()
+): Promise<void> {
+    await loadCatalogState(store);
     for (const provider of CATALOG_PROVIDERS) {
         try {
-            await fetchProviderModels(provider, undefined, env);
+            await fetchProviderModels(provider, undefined, env, {
+                forceRefresh: true,
+                deferCatalogPersist: true,
+                learningStore: store
+            });
         } catch (err: any) {
             console.warn(`[catalog] scheduled probe failed for ${provider}:`, err?.message || err);
         }
     }
+    catalogState.lastProbeAt = Date.now();
+    await store.saveCatalogState(catalogState);
+}
+
+export function probeAllProviders(
+    env: Record<string, any> = {},
+    store: QdrantLearningStore = getDefaultLearningStore()
+): Promise<void> {
+    if (probeAllPromise) return probeAllPromise;
+    probeAllPromise = runProbeAllProviders(env, store).finally(() => {
+        probeAllPromise = null;
+    });
+    return probeAllPromise;
+}
+
+export function ensureCatalogProbeFresh(
+    env: Record<string, any> = {},
+    store: QdrantLearningStore = getDefaultLearningStore(),
+    now: number = Date.now()
+): Promise<void> {
+    if (catchUpPromise) return catchUpPromise;
+    catchUpPromise = (async () => {
+        await loadCatalogState(store);
+        const lastProbeAt = catalogState.lastProbeAt;
+        if (typeof lastProbeAt === 'number' && now - lastProbeAt <= 24 * 60 * 60 * 1000) return;
+        await probeAllProviders(env, store);
+    })().finally(() => {
+        catchUpPromise = null;
+    });
+    return catchUpPromise;
 }
 
 const NON_CHAT = /tts|whisper|image|embed|ocr|lyria|transcribe|prompt-guard|orpheus|robotics|moderation|computer-use|realtime|speech|safeguard|deep-research|antigravity|nano-banana|clip-preview|omni|customtools/i;
@@ -126,22 +285,24 @@ export function capabilityScore(id: string): number {
 }
 
 // Providers with a tight daily cap are not probed. A probe spends the
-// requests a seat needs. These lists are the known-good models and are
-// reviewed on the first of each month.
+// requests a seat needs. Review this fixed catalog periodically.
 const FIXED_CATALOGS: Record<string, { id: string; name: string }[]> = {
     openrouter: [
         { id: 'openrouter/free', name: 'OpenRouter Free' },
         { id: 'google/gemma-4-31b-it:free', name: 'Gemma 4 31B' },
-        { id: 'nvidia/nemotron-3-super-120b-a12b:free', name: 'Nemotron 3 Super 120B' }
+        { id: 'nvidia/nemotron-3.5-lightning:free', name: 'Nemotron 3.5 Lightning' }
     ],
     mistral: [
         { id: 'ministral-14b-latest', name: 'Ministral 14B' },
         { id: 'mistral-small-latest', name: 'Mistral Small' }
     ]
 };
-const FIXED_CATALOG_REVIEWED = '2026-10-01';
-
-export async function rankModelsForAccount(provider: string, models: any[], apiKey?: string): Promise<any[]> {
+export async function rankModelsForAccount(
+    provider: string,
+    models: any[],
+    apiKey?: string,
+    includeUnhealthy = false
+): Promise<any[]> {
     const prov = provider.toLowerCase();
     const fixed = FIXED_CATALOGS[prov];
     if (fixed) {
@@ -195,7 +356,7 @@ export async function rankModelsForAccount(provider: string, models: any[], apiK
     // provider window and the caller's 20s timeout fired first, so the
     // catalog never arrived. A rate limit is not cached, so the next
     // request probes those models fresh.
-    let live = batch.filter((m) => m.availability === 'ok');
+    let live = batch.filter((m) => m.availability === 'ok' || m.availability === 'limited');
 
     // 1. If none returned 'ok', check if previously cached live models exist for this provider
     if (live.length === 0) {
@@ -227,13 +388,14 @@ export async function rankModelsForAccount(provider: string, models: any[], apiK
     }
 
     live.sort((a, b) => b.capability - a.capability);
-    return live.map((m) => {
+    return (includeUnhealthy ? batch : live).map((m) => {
         const displayCap = capabilityScore(m.id);
         return {
             ...m,
             capability: displayCap,
             name: displayCap ? `${m.name} · c${displayCap}` : m.name,
-            available: m.availability !== 'dead'
+            available: m.availability !== 'dead',
+            ...(m.availability === 'limited' ? { degraded: true } : {})
         };
     });
 }

@@ -66,14 +66,14 @@ describe("startup benchmark: gated, no gemma, never retries a 429", () => {
     expect(calls).toEqual([]);
   });
 
-  it("targets: no gemma-4-31b; one OpenRouter model (nemotron-3-super :free)", () => {
+  it("targets: no gemma-4-31b; one current OpenRouter Nemotron model", () => {
     const ids = buildBenchmarkTargets(KEYS).map(
       (t) => `${t.provider}/${t.modelName}`,
     );
     expect(ids).toEqual([
       "groq/openai/gpt-oss-120b",
       "groq/openai/gpt-oss-20b",
-      "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
+      "openrouter/nvidia/nemotron-3.5-lightning:free",
     ]);
     expect(ids.join(" ")).not.toMatch(/gemma/i);
   });
@@ -85,11 +85,11 @@ describe("startup benchmark: gated, no gemma, never retries a 429", () => {
     const results = await b.run();
     expect(calls).toEqual([
       "groq/openai/gpt-oss-120b",
-      "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
+      "openrouter/nvidia/nemotron-3.5-lightning:free",
     ]);
     expect(results.map((r) => r.modelName)).toEqual([
       "openai/gpt-oss-120b",
-      "nvidia/nemotron-3-super-120b-a12b:free",
+      "nvidia/nemotron-3.5-lightning:free",
     ]);
     expect(results.every((r) => !r.passRouting && !r.passReasoning)).toBe(true);
   });

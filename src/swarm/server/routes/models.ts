@@ -7,7 +7,7 @@ import { globalTelemetryCollector } from '../../telemetry.ts';
 import { analystLedger } from '../../feedback.ts';
 import { globalSpecialistProfiler } from '../../loadBalancer.ts';
 import { buildCortexDiagnostics } from '../cortexDiagnostics.ts';
-import { fetchProviderModels } from '../modelsProvider.ts';
+import { ensureCatalogProbeFresh, fetchProviderModels } from '../modelsProvider.ts';
 import type { ServerRouteContext } from './types.ts';
 import { resolveEnvironment, handleServerError } from './helpers.ts';
 
@@ -22,6 +22,9 @@ export function registerModelsRoutes(app: Hono, ctx: ServerRouteContext): void {
             }
 
             const env = resolveEnvironment(c);
+            ensureCatalogProbeFresh(env).catch((err) =>
+                console.warn('[catalog] request catch-up failed:', err?.message || err)
+            );
             // Model listing uses server secrets only; ignore x-provider-key
             const models = await fetchProviderModels(provider, undefined, env, { boundedWaitMs: 8000 });
             return c.json(models);
