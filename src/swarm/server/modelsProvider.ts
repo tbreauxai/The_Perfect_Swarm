@@ -67,6 +67,9 @@ async function loadCatalogState(store: QdrantLearningStore = getDefaultLearningS
 }
 
 function fallbackCatalog(provider: string): any[] {
+    if (provider === 'simulated') {
+        return [{ id: 'simulated-swarm-v1', name: 'Simulated Swarm Model', free: true }];
+    }
     const fixed = FIXED_CATALOGS[provider];
     if (fixed) {
         return fixed.map((model) => ({
