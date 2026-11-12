@@ -187,10 +187,16 @@ describe('modelsProvider rankModelsForAccount & probing', () => {
         const fetch = vi.fn();
         vi.stubGlobal('fetch', fetch);
         const result = await fetchProviderModels('nvidia', 'key-123', {});
+        const deadModelIds = new Set([
+            'gemini-3.5-flash',
+            'nvidia/nemotron-3-super-120b-a12b:free',
+            'nvidia/llama-3.3-nemotron-super-49b-v1.5'
+        ]);
 
         expect(fetch).not.toHaveBeenCalled();
         expect(result.map((model) => model.id)).toEqual([DEFAULT_PROVIDER_MODELS.nvidia]);
         expect(result[0].available).toBe(true);
+        expect(Object.values(DEFAULT_PROVIDER_MODELS).filter((model) => deadModelIds.has(model))).toEqual([]);
     });
 
     it('serves stored last-good models on a cold read without provider calls', async () => {

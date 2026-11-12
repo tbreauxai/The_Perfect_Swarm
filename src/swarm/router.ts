@@ -147,7 +147,7 @@ export class ModelRouter {
             case 'groq':
                 return complexity === 'instant' ? 'openai/gpt-oss-20b' : 'openai/gpt-oss-120b';
             case 'openrouter':
-                return 'nvidia/nemotron-3-super-120b-a12b:free';
+                return 'nvidia/nemotron-3.5-lightning:free';
             case 'mistral':
                 // mistral-small-latest is available on Mistral free API tier
                 return 'mistral-small-latest';

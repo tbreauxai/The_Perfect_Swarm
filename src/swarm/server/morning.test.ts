@@ -133,7 +133,7 @@ describe('Morning Slate Engine - Unit & Integration Tests', () => {
       expect(agents).toEqual([
         { id: 'a1', role: 'Quant Proposer', provider: 'gemini', model: 'gemini-3.1-flash-lite' },
         { id: 'a2', role: 'Market Proposer', provider: 'groq', model: 'openai/gpt-oss-120b' },
-        { id: 'critic', role: 'Risk Critic', provider: 'openrouter', model: 'nvidia/nemotron-3-ultra-550b-a55b:free' },
+        { id: 'critic', role: 'Risk Critic', provider: 'openrouter', model: 'nvidia/nemotron-3.5-lightning:free' },
         { id: 'manager', role: 'GodView Compiler', provider: 'mistral', model: 'mistral-small-latest' }
       ]);
     });
@@ -791,7 +791,7 @@ describe('Morning Slate Engine - Unit & Integration Tests', () => {
       expect(capturedParams.settings.agents).toEqual([
         { id: 'a1', role: 'Quant Proposer', provider: 'gemini', model: 'gemini-3.1-flash-lite' },
         { id: 'a2', role: 'Market Proposer', provider: 'groq', model: 'openai/gpt-oss-120b' },
-        { id: 'critic', role: 'Risk Critic', provider: 'openrouter', model: 'nvidia/nemotron-3-ultra-550b-a55b:free' },
+        { id: 'critic', role: 'Risk Critic', provider: 'openrouter', model: 'nvidia/nemotron-3.5-lightning:free' },
         { id: 'manager', role: 'GodView Compiler', provider: 'mistral', model: 'mistral-small-latest' }
       ]);
     });

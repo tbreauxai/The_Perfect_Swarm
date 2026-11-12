@@ -50,7 +50,7 @@ export interface MorningAgentConfig {
  * Builds the default 4-agent DuelOdds pregame topology based on available API keys:
  * - a1: Quant Proposer (gemini-3.1-flash-lite) if GEMINI_API_KEY
  * - a2: Market Proposer (openai/gpt-oss-120b) if GROQ_API_KEY
- * - critic: Risk Critic (nvidia/nemotron-3-ultra-550b-a55b:free) if OPENROUTER_API_KEY
+ * - critic: Risk Critic (nvidia/nemotron-3.5-lightning:free) if OPENROUTER_API_KEY
  * - manager: GodView Compiler (mistral-small-latest) if MISTRAL_API_KEY
  */
 export function buildDefaultAgents(env: Record<string, string | undefined> = {}): MorningAgentConfig[] {
@@ -79,7 +79,7 @@ export function buildDefaultAgents(env: Record<string, string | undefined> = {})
       id: 'critic',
       role: 'Risk Critic',
       provider: 'openrouter',
-      model: 'nvidia/nemotron-3-ultra-550b-a55b:free'
+      model: 'nvidia/nemotron-3.5-lightning:free'
     });
   }
 

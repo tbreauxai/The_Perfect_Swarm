@@ -42,7 +42,7 @@ export function buildBenchmarkTargets(env: Record<string, any> = {}): BenchmarkT
         targets.push({ provider: 'groq', modelName: 'openai/gpt-oss-20b', apiKey: env.GROQ_API_KEY });
     }
     if (env.OPENROUTER_API_KEY) {
-        targets.push({ provider: 'openrouter', modelName: 'nvidia/nemotron-3-super-120b-a12b:free', apiKey: env.OPENROUTER_API_KEY });
+        targets.push({ provider: 'openrouter', modelName: 'nvidia/nemotron-3.5-lightning:free', apiKey: env.OPENROUTER_API_KEY });
     }
     return targets;
 }

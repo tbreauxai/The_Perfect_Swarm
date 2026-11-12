@@ -133,6 +133,18 @@ describe('QdrantLearningStore', () => {
         });
     });
 
+    it('returns null rather than throwing when catalog retrieval fails', async () => {
+        const fake = makeFakeQdrant();
+        fake.retrieve = async () => { throw new Error('unavailable'); };
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const store = new QdrantLearningStore({ client: fake as any, collection: 'test_catalog_error' });
+        await store.whenReady();
+
+        await expect(store.loadCatalogState()).resolves.toBeNull();
+        expect(warn).toHaveBeenCalled();
+        warn.mockRestore();
+    });
+
     it('micro-batches rapid writes into single multi-point upsert on debounce flush', async () => {
         const fake = makeFakeQdrant();
         const store = new QdrantLearningStore({
