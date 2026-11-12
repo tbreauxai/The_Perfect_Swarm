@@ -23,6 +23,7 @@ import { QdrantClient } from '@qdrant/js-client-rest';
 
 export const LEARNING_COLLECTION = 'swarm_learning';
 export const LEARNING_NAMESPACE = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
+export const MODEL_CATALOG_KEY = 'model_catalog_v1';
 const VECTOR_SIZE = 8;
 const QDRANT_TIMEOUT_MS = 8000;
 const BATCH_FLUSH_WINDOW_MS = 35;
@@ -65,6 +66,13 @@ export function ensureUuid(idOrKey: string): string {
 }
 
 export const toDeterministicUuid = ensureUuid;
+
+let defaultLearningStore: QdrantLearningStore | null = null;
+
+export function getDefaultLearningStore(): QdrantLearningStore {
+    defaultLearningStore ??= new QdrantLearningStore();
+    return defaultLearningStore;
+}
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
     let timer: any;
@@ -308,6 +316,45 @@ export class QdrantLearningStore {
             ts: Date.now(),
             data: { generation, policy, reward, timestamp: Date.now() }
         });
+    }
+
+    /** Persist the latest model catalog and strike counters as one idempotent point. */
+    public async saveCatalogState(state: Record<string, any>): Promise<void> {
+        const textId = `catalog:${MODEL_CATALOG_KEY}`;
+        await this.upsert(toUuidV5(textId), {
+            kind: 'catalog',
+            key: MODEL_CATALOG_KEY,
+            originalKey: textId,
+            ts: Date.now(),
+            data: state
+        });
+        await this.flush();
+    }
+
+    /** Load the latest model catalog state. Catalog reads are best-effort and never throw. */
+    public async loadCatalogState(): Promise<Record<string, any> | null> {
+        try {
+            const ok = await this.readyPromise;
+            if (!ok || !this.client || typeof this.client.retrieve !== 'function') return null;
+            const id = toUuidV5(`catalog:${MODEL_CATALOG_KEY}`);
+            const points: any[] = await withTimeout(
+                this.client.retrieve(this.collection, {
+                    ids: [id],
+                    with_payload: true,
+                    with_vector: false
+                }),
+                QDRANT_TIMEOUT_MS,
+                'retrieveCatalogState'
+            );
+            const payload = points?.[0]?.payload;
+            if (payload?.kind !== 'catalog' || payload?.key !== MODEL_CATALOG_KEY) return null;
+            return payload.data && typeof payload.data === 'object' && !Array.isArray(payload.data)
+                ? payload.data
+                : null;
+        } catch (err) {
+            this.warn('loadCatalogState', err);
+            return null;
+        }
     }
 
     /** Persist a structured routing rule (e.g. from post-mortem analysis). */
