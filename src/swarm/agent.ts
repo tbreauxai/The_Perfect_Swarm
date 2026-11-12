@@ -230,6 +230,15 @@ export class Agent {
                                 }
                             )
                         );
+                    }
+
+                    if (textOutput.trim() === '') {
+                        if (!effectiveConfig.bypassCache) {
+                            globalPayloadCache.invalidate(cacheFingerprint);
+                        }
+                        throw new Error(`[EMPTY_COMPLETION] ${currentTarget.provider}/${targetModel} returned blank output`);
+                    }
+                    if (!cachedText) {
                         globalPayloadCache.set(cacheFingerprint, textOutput);
                     }
 
@@ -358,6 +367,7 @@ export class Agent {
 
                     const isFailoverEligible = 
                         isTransientRateLimitOrSkip ||
+                        errMsg.includes('EMPTY_COMPLETION') ||
                         errMsg.includes('503') ||
                         errMsg.includes('502') ||
                         errMsg.includes('504') ||
