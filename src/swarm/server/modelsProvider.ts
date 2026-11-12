@@ -2,12 +2,12 @@ import { ProviderRegistry } from '../providers/registry.ts';
 import { globalProviderLimiter } from '../providers/limiter.ts';
 
 export const DEFAULT_PROVIDER_MODELS: Record<string, string> = {
-    gemini: 'gemini-3.5-flash',
+    gemini: 'gemini-3.1-flash-lite',
     groq: 'openai/gpt-oss-120b',
-    openrouter: 'nvidia/nemotron-3-super-120b-a12b:free',
+    openrouter: 'nvidia/nemotron-3.5-lightning:free',
     mistral: 'mistral-small-latest',
     cloudflare: '@cf/meta/llama-3.1-8b-instruct',
-    nvidia: 'nvidia/llama-3.3-nemotron-super-49b-v1.5'
+    nvidia: 'nvidia/nemotron-3.5-lightning-30b-a3b'
 };
 
 const catalogCache = new Map<string, { models: any[]; at: number }>();
@@ -126,20 +126,19 @@ export function capabilityScore(id: string): number {
 }
 
 // Providers with a tight daily cap are not probed. A probe spends the
-// requests a seat needs. These lists are the known-good models and are
-// reviewed on the first of each month.
+// requests a seat needs. Review this fixed catalog periodically.
 const FIXED_CATALOGS: Record<string, { id: string; name: string }[]> = {
     openrouter: [
         { id: 'openrouter/free', name: 'OpenRouter Free' },
         { id: 'google/gemma-4-31b-it:free', name: 'Gemma 4 31B' },
-        { id: 'nvidia/nemotron-3-super-120b-a12b:free', name: 'Nemotron 3 Super 120B' }
+        { id: 'nvidia/nemotron-3.5-lightning:free', name: 'Nemotron 3.5 Lightning' }
     ],
     mistral: [
         { id: 'ministral-14b-latest', name: 'Ministral 14B' },
         { id: 'mistral-small-latest', name: 'Mistral Small' }
     ]
 };
-const FIXED_CATALOG_REVIEWED = '2026-10-01';
+const FIXED_CATALOG_REVIEWED = '2026-11-12';
 
 export async function rankModelsForAccount(provider: string, models: any[], apiKey?: string): Promise<any[]> {
     const prov = provider.toLowerCase();
@@ -195,7 +194,7 @@ export async function rankModelsForAccount(provider: string, models: any[], apiK
     // provider window and the caller's 20s timeout fired first, so the
     // catalog never arrived. A rate limit is not cached, so the next
     // request probes those models fresh.
-    let live = batch.filter((m) => m.availability === 'ok');
+    let live = batch.filter((m) => m.availability === 'ok' || m.availability === 'limited');
 
     // 1. If none returned 'ok', check if previously cached live models exist for this provider
     if (live.length === 0) {
@@ -233,7 +232,8 @@ export async function rankModelsForAccount(provider: string, models: any[], apiK
             ...m,
             capability: displayCap,
             name: displayCap ? `${m.name} · c${displayCap}` : m.name,
-            available: m.availability !== 'dead'
+            available: m.availability !== 'dead',
+            ...(m.availability === 'limited' ? { degraded: true } : {})
         };
     });
 }

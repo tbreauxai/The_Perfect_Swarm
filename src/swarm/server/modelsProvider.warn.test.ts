@@ -28,10 +28,10 @@ describe('warnUnknownConfiguredModels', () => {
     await expect(warnUnknownConfiguredModels({ groq: ['x'] }, { GROQ_API_KEY: 'k' })).resolves.toEqual([]);
   });
 
-  it('recognizes the OpenRouter nemotron instant model from the live list', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ data: [{ id: 'nvidia/nemotron-3-super-120b-a12b:free', pricing: { prompt: '0', completion: '0' } }] }), { status: 200 })));
+  it('recognizes the OpenRouter Nemotron 3.5 Lightning model from the live list', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ data: [{ id: 'nvidia/nemotron-3.5-lightning:free', pricing: { prompt: '0', completion: '0' } }] }), { status: 200 })));
     const out = await warnUnknownConfiguredModels(
-      { openrouter: ['nvidia/nemotron-3-super-120b-a12b:free'] },
+      { openrouter: ['nvidia/nemotron-3.5-lightning:free'] },
       { OPENROUTER_API_KEY: 'k' }
     );
     expect(out).toEqual([]);

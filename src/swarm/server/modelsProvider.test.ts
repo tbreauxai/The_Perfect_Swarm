@@ -37,7 +37,7 @@ describe('modelsProvider rankModelsForAccount & probing', () => {
         expect(result.map(m => m.id)).toEqual([
             'openrouter/free',
             'google/gemma-4-31b-it:free',
-            'nvidia/nemotron-3-super-120b-a12b:free'
+            'nvidia/nemotron-3.5-lightning:free'
         ]);
         expect(mockCall).not.toHaveBeenCalled();
     });
@@ -80,6 +80,28 @@ describe('modelsProvider rankModelsForAccount & probing', () => {
         expect(result.length).toBeGreaterThan(0);
         expect(result[0].id).toBe('openai/gpt-oss-120b');
         expect(result[0].available).toBe(true);
+    });
+
+    it('keeps rate-limited models alongside live results and marks them degraded', async () => {
+        const mockCall = vi.fn(async (options: any) => {
+            if (options.modelName === 'limited-model') throw new Error('429 rate limit');
+            return 'ok';
+        });
+        vi.spyOn(ProviderRegistry, 'get').mockReturnValue({
+            providerName: 'groq',
+            call: mockCall
+        } as any);
+
+        const result = await rankModelsForAccount('groq', [
+            { id: 'live-model', name: 'Live' },
+            { id: 'limited-model', name: 'Limited' }
+        ], 'test-key');
+
+        expect(result).toHaveLength(2);
+        expect(result.find((model) => model.id === 'limited-model')).toMatchObject({
+            available: true,
+            degraded: true
+        });
     });
 
     it('records 404 as dead models but does not mark timeouts as dead', async () => {
