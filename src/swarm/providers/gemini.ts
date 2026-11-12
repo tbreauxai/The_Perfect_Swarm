@@ -26,6 +26,7 @@ export class GeminiAdapter implements ProviderAdapter {
         delete reqConfig.maxTokensCap;
         delete reqConfig.groqMode;
         delete reqConfig.timeoutMs;
+        delete reqConfig.reasoning;
         reqConfig.maxOutputTokens = options.role === 'catalog-probe'
             ? Math.max(options.config?.maxTokens || 256, 256)
             : (options.config?.maxTokens || 8192);
