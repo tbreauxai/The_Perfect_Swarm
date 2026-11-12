@@ -307,7 +307,6 @@ export class SpecialistAffinityRouter {
             specialistSummary[chosen.role].nodeHeadroom = Math.max(0, best.effectiveHeadroom - 1);
             specialistSummary[chosen.role].isSaturated = specialistSummary[chosen.role].nodeHeadroom <= 0;
 
-            this.tokenManager.recordUsage(chosen.provider, estTokens, chosen.role);
         }
 
         return {

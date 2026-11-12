@@ -187,7 +187,6 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
                     const chunk = chunks[chunkIdx];
                     const estTokens = Math.max(10, TokenEstimator.estimatePayloadTokens(chunk));
                     const { score: affinity, matchedDomain } = globalSpecialistRouter.scoreAffinity(analyst.role, `${task}\n${chunk}`);
-                    globalTokenBudgetManager.recordUsage(analyst.provider, estTokens, analyst.role);
                     routingPlan.assignments.push({
                         chunkIndex: chunkIdx,
                         estimatedTokens: estTokens,
@@ -217,7 +216,6 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
             const estTokens = Math.max(10, TokenEstimator.estimatePayloadTokens(chunks[0]));
             const assignments = analysts.map(analyst => {
                 const { score: affinity, matchedDomain } = globalSpecialistRouter.scoreAffinity(analyst.role, `${task}\n${chunks[0]}`);
-                globalTokenBudgetManager.recordUsage(analyst.provider, estTokens, analyst.role);
                 return {
                     chunkIndex: 0,
                     estimatedTokens: estTokens,
