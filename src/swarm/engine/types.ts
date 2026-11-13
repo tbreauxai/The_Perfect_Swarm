@@ -14,6 +14,7 @@ import type { AnalystConsensusDigest } from "./consensusPipeline.ts";
 import type { Blackboard } from "./blackboard.ts";
 import type { RetrievalContextEnvelope, SnapshotRef, TrustedRetrievalScope } from "./historyScope.ts";
 import type { SeedManifest, SeedManifestPricing, SeedManifestFlags } from "../server/slimPayload.ts";
+import type { GameContextStoreReadResult } from "../morning/gameContext.ts";
 export type { RetrievalContextEnvelope, SnapshotRef, TrustedRetrievalScope };
 export interface SwarmStagePayload {
     stage: 'routing' | 'cluster_aggregation' | 'partial_prediction' | 'manager_synthesis' | 'critic_verification' | 'completed' | 'scorecard' | 'critic_scorecard' | 'wave_progress' | 'hop1_plan' | 'hop1_exec' | 'curated_dossier' | 'analyst_start';
@@ -45,6 +46,7 @@ export interface SwarmWorkflowParams {
     retrievalContext?: RetrievalContextEnvelope;
     snapshotRefs?: SnapshotRef[];
     retrievalScope?: TrustedRetrievalScope;
+    preloadedGameContext?: GameContextStoreReadResult;
     date?: string;
     sport?: string;
     speculativeParallel?: boolean;

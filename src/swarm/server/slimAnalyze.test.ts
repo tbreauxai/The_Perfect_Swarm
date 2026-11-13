@@ -471,6 +471,43 @@ describe('slim-v1 /analyze + /stream', () => {
     expect(body.missingRequiredSections).toEqual({ 'nfl-1': ['odds'] });
   });
 
+  it('full request with scoped event IDs retrieves context and reports the context tool invocation', async () => {
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/canonical_game_aliases')) {
+        return new Response('[]', { status: 200 });
+      }
+      if (url.includes('/rpc/read_game_context_v1')) {
+        return new Response(JSON.stringify({ status: 'empty', items: [] }), { status: 200 });
+      }
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const app = mockApp();
+    const res = await app.request('/api/swarm/analyze', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        task: 'Analyze nfl-1 for a recommendation',
+        data: 'Raw odds only',
+        eventIds: ['nfl-1'],
+        date: '2026-11-06',
+        sport: 'americanfootball_nfl',
+        settings: { disableMemoryRetrieval: true }
+      })
+    });
+
+    expect(res.status).toBe(200);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/rpc/read_game_context_v1'))).toBe(true);
+    const body = await res.json();
+    expect(body.tools_called).toContain('read_game_context_v1');
+    expect(infoSpy.mock.calls.some((call) =>
+      call[0] === '[HistoryContextReader]' &&
+      String(call[1]).includes('"canonicalIdResolved":false')
+    )).toBe(true);
+  });
+
   it('full request with data + requiredContext returns 503 history_context_read_failed on store outage', async () => {
     vi.stubGlobal(
       'fetch',

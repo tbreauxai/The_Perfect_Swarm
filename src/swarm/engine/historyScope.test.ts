@@ -107,6 +107,24 @@ describe('historyScope validation and trusted scope binding', () => {
         }
     });
 
+    it('enables structured context retrieval for a scoped event ID without an explicit retrieval envelope', () => {
+        const result = resolveTrustedRetrievalScope({
+            body: {
+                eventIds: ['d5c5ae8d56762b45d1ec4b85337878f3'],
+                sport: 'basketball_nba',
+                date: '2026-11-12'
+            },
+            callerAppId: 'duelodds',
+            now: fixedNow
+        });
+
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+            expect(result.scope.usesContextStore).toBe(true);
+            expect(result.scope.groups[0].eventIds).toEqual(['d5c5ae8d56762b45d1ec4b85337878f3']);
+        }
+    });
+
     it('preserves multi-group scope without silent collapse and rejects conflicting root fields', () => {
         const multiGroup = resolveTrustedRetrievalScope({
             body: {

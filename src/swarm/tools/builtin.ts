@@ -11,6 +11,7 @@ import {
     monteCarloBootstrapTool
 } from './forecastingTools.ts';
 import { dueloddsSupabaseLookupTool } from './supabaseTools.ts';
+import { getGameContextTool } from './gameContextTool.ts';
 import {
     getMatchupFundamentalsTool,
     getInjuryAndRosterDeltaTool,
@@ -46,6 +47,7 @@ export const standardBuiltinTools: SwarmTool[] = [
     autocorrelationRegimeTool,
     kellyEdgeSizerTool,
     monteCarloBootstrapTool,
+    getGameContextTool,
     dueloddsSupabaseLookupTool,
     getMatchupFundamentalsTool,
     getInjuryAndRosterDeltaTool,
@@ -54,3 +56,5 @@ export const standardBuiltinTools: SwarmTool[] = [
     getMarketMovementTool,
     getHistoricalLessonsTool
 ];
+
+export { getGameContextTool } from './gameContextTool.ts';

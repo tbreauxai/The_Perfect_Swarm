@@ -389,7 +389,7 @@ describe('DuelOdds Database RPC Tools', () => {
   });
 
   describe('Registry Integration', () => {
-    it('registers all 6 DuelOdds database tools in globalToolRegistry', () => {
+    it('registers all DuelOdds database tools in globalToolRegistry', () => {
       for (const tool of dueloddsRpcTools) {
         expect(globalToolRegistry.has(tool.name)).toBe(true);
         expect(globalToolRegistry.get(tool.name)).toBeDefined();
@@ -404,6 +404,7 @@ describe('DuelOdds Database RPC Tools', () => {
       expect(schema).toContain('Tool: get_environment_and_weather');
       expect(schema).toContain('Tool: get_market_movement');
       expect(schema).toContain('Tool: get_historical_lessons');
+      expect(schema).toContain('Tool: get_game_context');
     });
   });
 });

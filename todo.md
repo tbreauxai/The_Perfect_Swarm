@@ -1,34 +1,134 @@
-Perfect Swarm: read DuelOdds' real context-store envelope | Swarm-only (no DuelOdds changes)
-Base: The_Perfect_Swarm main e6d18792. Contract source: DuelOdds 82e54e58, migration 20261107172900 L366-641 (read_game_context_v1).
-Branch: feat/context-store-reader. One PR.
+Swarm Fix: Enable Tool Calling (or Properly Intercept in Two-Hop Planner)
 
-GIT (do first)
+Problem
 
-- [x] git status clean or STOP. git checkout main && git pull --ff-only. git merge-base --is-ancestor e6d18792 HEAD or STOP.
-- [x] git checkout -b feat/context-store-reader. Commit after each step with explicit `git add <named files>`, never -A.
-- [x] Never reset, checkout ., restore, clean, rebase, squash or force-push.
-- [x] Node 22 strip-only TypeScript: no parameter properties, enums, namespaces, import=require or decorators.
+Agents are attempting to call the new filtered data tools, but the Swarm is sending provider requests with tool calling disabled. This causes immediate failures.
 
-1. [x] P0 adapter | gameContext.ts readGameContextFromStore (~L1044-1100) + parser (~L213-220, 327-354, 755-778)
-   Accept the real envelope: { status: "ready" | "empty", items: [...] } per the migration. Add one small adapter that maps each item to the swarm's
-   existing sections + source_status. status "empty" (or items: []) is a valid "no context" result, not an error. Missing stays missing, never zero
-   or a default; unknown/extra fields ignored; malformed shape returns a logged reason and no context. Never fabricate sections.
-   Done when: a ready fixture yields the same sections the swarm already consumes; empty yields no-context with no throw.
-2. [x] Env names only | render.yaml + .env.example
-   Declare SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY (sync: false in render.yaml, empty values). This path uses the read-only publishable key,
-   never the service-role key; fail closed (no context, logged reason) when either is unset. No values in any file.
-3. [x] ID resolution | same reader, before the RPC
-   If retrievalContext / entityIds arrive as 32-hex Odds API ids, resolve each to its ESPN canonical event_id with a read of canonical_game_aliases
-   (provider = Odds API, by provider_event_id + game_date). Unresolved ids are skipped with a logged reason (count + id), never guessed.
-   No truncation; keep the 40-entity cap and the existing entity_ids_limit_exceeded behaviour.
-4. [x] Contract test | new tests/contract/contextStoreEnvelope.test.ts + fixtures/duelodds_read_game_context_v1.json
-   Copy the fixture shape from the DuelOdds migration (ready with 2 items incl. one partial section, and empty). Assert adapter output, empty path,
-   malformed path, hex-to-canonical resolution (mocked alias read), unresolved skip, and that the publishable key (never service role) is used.
-   Keep the historyScope gate exactly as is: app tokens never unlock private history (add one assertion if not already covered).
+Observed error
 
-FINAL VERIFY (once): the repo's full test run, lint, typecheck and build. Then a startup smoke test: the real start command, then GET /api/health returns 200.
-Paste git log --oneline main..HEAD and git diff --stat main; confirm the diff isn't empty.
-git push -u origin feat/context-store-reader && gh pr create. NEVER push to main; push only the feature branch. No auto-merge.
+Groq API Error (400): 
+"Tool choice is none, but model called a tool"
+failed_generation: {
+  "name": "tool_execution",
+  "arguments": {
+    "tool": "get_matchup_fundamentals",
+    "parameters": {
+      "game_id": "nba-401909299",
+      "window": "season"
+    }
+  }
+}
 
-TYLER: Merge outside 9-10 PM CT (Render auto-deploys on merge). Before or with the merge, set SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY in the Render
-dashboard (publishable/anon key only). No migration. If the swarm misbehaves, unset the key (reader falls back to no context) or roll back the Render deploy.
+The model correctly tried to call get_matchup_fundamentals with a real game ID.
+The provider rejected it because the request was sent with tools disabled (tool_choice: none or equivalent).
+
+Root Cause
+
+Mismatch between prompt and runtime:
+
+
+
+
+
+The prompt tells agents the filtered tools exist and that the two-hop planner will perform tool calls.
+
+
+
+Agents are still emitting tool calls (or the planner is not intercepting them).
+
+
+
+The Swarm engine is sending the provider request with tool calling turned off.
+
+
+
+Result: provider rejects the call.
+
+Required Fix (choose one)
+
+Option A — Enable tool calling on provider requests (simplest)
+
+When agents are allowed to request data tools, send the provider request with tool calling enabled:
+
+
+
+
+
+Set tool_choice to "auto" (or the provider equivalent) instead of "none".
+
+
+
+Include the available tool definitions (get_matchup_fundamentals_v1, get_injury_and_roster_delta_v1, get_environment_and_weather_v1, get_market_movement_v1, get_player_prop_splits_v1, etc.) in the request.
+
+
+
+Let the provider return tool calls, then execute them via the two-hop planner / tool layer and continue the conversation.
+
+Option B — Fully intercept in the two-hop planner (preferred if you want to keep provider tool calling off)
+
+
+
+
+
+Detect when an agent emits a tool request (even if it appears as a pseudo tool_execution block or native tool call).
+
+
+
+Intercept it before it reaches the provider.
+
+
+
+Execute the tool via the existing two-hop planner.
+
+
+
+Inject the tool result back into the agent context.
+
+
+
+Never send a request that has tool_choice: none while the model is still trying to call tools.
+
+Additional Notes
+
+
+
+
+
+The Critic schema issue (missing pass field) is separate and still needs to be fixed, but it is not the cause of this tool error.
+
+
+
+The tools themselves appear to be live; the failure is only in how the Swarm invokes them.
+
+
+
+After the fix, tools_called on recommendations should start populating, and agents should be able to retrieve matchup fundamentals, injuries, weather, market movement, etc. on demand.
+
+Acceptance Criteria
+
+
+
+
+
+No more "Tool choice is none, but model called a tool" errors.
+
+
+
+Agents can successfully call at least one of the filtered tools (e.g. get_matchup_fundamentals_v1 with a slate event ID).
+
+
+
+Tool results appear in the agent context / final analysis.
+
+
+
+tools_called is non-empty on Swarm recommendations that used tools.
+
+
+
+Verification can proceed past the tool-calling stage (Critic pass field issue is tracked separately).
+
+Test
+
+Run a simple NBA or NHL parlay/recommendation request with only the compact slate in the prompt.
+Confirm an agent issues a filtered tool call, receives a result, and the run does not fail with the tool_choice error.

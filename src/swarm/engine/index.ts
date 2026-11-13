@@ -70,7 +70,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         const optimizationEnabled = optSettings?.enabled !== false;
 
         // 0a. Fast sub-computation cache check
-        if (optimizationEnabled && optSettings?.enableSubComputationCache !== false && !params.forceFullSwarm && !settings?.forceFullSwarm && !scorecardMode) {
+        if (optimizationEnabled && optSettings?.enableSubComputationCache !== false && !params.preloadedGameContext && !params.forceFullSwarm && !settings?.forceFullSwarm && !scorecardMode) {
             const subResult = checkSubComputationCache({
                 task,
                 context,
@@ -118,13 +118,16 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         // 0. Infer Task Complexity via ModelRouter
         // R2: scorecard mode always runs the full swarm (the fast path has no scorecards or blackboard).
         const forceFullSwarm = scorecardMode || (params.forceFullSwarm ?? settings?.forceFullSwarm ?? settings?.disableFastPath ?? false);
-        const bypassCache = params.bypassCache ?? false;
+        const bypassCache = Boolean(params.preloadedGameContext) || (params.bypassCache ?? false);
         const complexity: TaskComplexity = complexityOverride || ModelRouter.inferComplexity(task, (data || '').length, 1, forceFullSwarm);
         const deepAnalysisRequested = enableDeepAnalysis ?? settings?.enableDeepAnalysis ?? (complexity === 'complex');
 
         const agentConfigVersion = PayloadCache.hashString(
             (settings?.agents || []).map((a: any) => `${a.id || a.role}:${a.provider}/${a.model || ''}`).join('|')
             + (scorecardMode ? '|scorecardMode' : '') // R2: never share cache entries with non-scorecard runs
+            + (params.preloadedGameContext?.status === 'ok'
+                ? `|context:${params.preloadedGameContext.results.map(row => `${row.event_id}:${row.content_hash || 'none'}`).join('|')}`
+                : '')
         ).substring(0, 16);
 
         const cacheKey = PayloadCache.computeFingerprint(task, data || "", {
@@ -189,7 +192,17 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 targetAppId, memoryCortex, workflowStartTime, tieredCacheEnabled,
                 coordinationEnabled, toolRegistry
             );
-            if (fastResult) return fastResult;
+            if (fastResult) {
+                if (params.preloadedGameContext) {
+                    const toolsCalled = new Set(fastResult.tools_called || []);
+                    toolsCalled.add('read_game_context_v1');
+                    fastResult.tools_called = Array.from(toolsCalled);
+                    if (fastResult.finalAnalysis && typeof fastResult.finalAnalysis === 'object') {
+                        fastResult.finalAnalysis.tools_called = [...fastResult.tools_called];
+                    }
+                }
+                return fastResult;
+            }
         }
 
         let finalAnalysis: any = null;
@@ -227,7 +240,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 entityIds: params.entityIds,
                 retrievalContext: params.retrievalContext,
                 snapshotRefs: params.snapshotRefs,
-                retrievalScope: params.retrievalScope
+                retrievalScope: params.retrievalScope,
+                preloadedGameContext: params.preloadedGameContext
             });
 
             const mathBlock = profilingResult.mathGroundingReport?.promptBlock;
@@ -470,6 +484,9 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             const status: SwarmRunStatus = managerFailed ? 'partial' : 'complete';
 
             const toolsCalled = new Set<string>();
+            if (params.preloadedGameContext) {
+                toolsCalled.add('read_game_context_v1');
+            }
             if (curatedDossier?.sections) {
                 for (const sec of curatedDossier.sections) {
                     if (sec.tool) toolsCalled.add(sec.tool);
@@ -482,7 +499,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             }
             const toolsCalledList = Array.from(toolsCalled);
             if (finalAnalysis && typeof finalAnalysis === 'object') {
-                finalAnalysis.tools_called = toolsCalledList;
+                finalAnalysis.tools_called = [...toolsCalledList];
             }
 
             return {

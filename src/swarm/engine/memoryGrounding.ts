@@ -333,15 +333,19 @@ export async function resolveMemoryGrounding(
                 // Inject validated immutable game context snapshot block if available
                 let contextStoreInjected = false;
                 if (gameContextResult?.status === 'ok' && gameContextResult.formattedBlock) {
-                    const currentBytes = utf8ByteLength(historicalContext);
-                    const storeBytes = utf8ByteLength(gameContextResult.formattedBlock);
-                    if (currentBytes + storeBytes <= MAX_PROMPT_HISTORY_BYTES) {
-                        historicalContext += `\n\n${gameContextResult.formattedBlock}`;
+                    if (String(p.data || '').includes('[IMMUTABLE GAME CONTEXT SNAPSHOTS')) {
+                        contextStoreInjected = true;
                     } else {
-                        // Prioritize immutable game context within the 6000-byte history budget
-                        historicalContext = gameContextResult.formattedBlock;
+                        const currentBytes = utf8ByteLength(historicalContext);
+                        const storeBytes = utf8ByteLength(gameContextResult.formattedBlock);
+                        if (currentBytes + storeBytes <= MAX_PROMPT_HISTORY_BYTES) {
+                            historicalContext += `\n\n${gameContextResult.formattedBlock}`;
+                        } else {
+                            // Prioritize immutable game context within the 6000-byte history budget
+                            historicalContext = gameContextResult.formattedBlock;
+                        }
+                        contextStoreInjected = true;
                     }
-                    contextStoreInjected = true;
                 }
 
                 // On-demand Supabase pull for DuelOdds / sports workflows when not already populated by context store or runMorningSlate

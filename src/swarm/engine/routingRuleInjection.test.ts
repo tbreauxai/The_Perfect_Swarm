@@ -177,6 +177,15 @@ describe('Phase 4: Qdrant Post-Mortem Loop & Routing Rule Ingestion', () => {
       const result = await executeSwarmWorkflow({
         task: 'Analyze candidate cand-buf-nyj-total',
         seedManifest: nflTotalsManifest,
+        preloadedGameContext: {
+          status: 'ok',
+          asOf: '2026-11-06T18:00:00.000Z',
+          results: [],
+          byEventId: new Map(),
+          allReadyForSlim: false,
+          missingRequiredSectionsByEvent: {},
+          formattedBlock: ''
+        },
         tools: registry,
         forceFullSwarm: true,
         bypassCache: true,
@@ -193,6 +202,7 @@ describe('Phase 4: Qdrant Post-Mortem Loop & Routing Rule Ingestion', () => {
       expect(Array.isArray(result.tools_called)).toBe(true);
       expect(result.tools_called.length).toBeGreaterThan(0);
       expect(result.tools_called).toContain('get_environment_and_weather');
+      expect(result.tools_called).toContain('read_game_context_v1');
 
       // Verify tools_called attached to finalAnalysis
       expect(result.finalAnalysis).toBeDefined();
