@@ -1,52 +1,110 @@
-Follow-up: Tool Calling Still Disabled on Provider Requests
-Status
-The previous fix did not resolve the issue. The error is still occurring:
+Swarm Fix: Risk Critic Must Emit Top-Level "pass" Field
 
-Groq API Error (400): "Tool choice is none, but model called a tool"
-failed_generation: {
-  "name": "tool_execution",
-  "arguments": {
-    "tool": "get_matchup_fundamentals",
-    "parameters": {
-      "game_id": "nba-401909299",
-      "window": "season"
-    }
-  }
+Current Failure
+
+Risk Critic — Verification FAILED on attempt 1. Feedback: Critic output missing pass field.
+Risk Critic — Verification FAILED on attempt 2. Feedback: Critic output missing pass field.
+system — Exhausted 2 retries. Proposer failed to pass verification (RLAIF Rating: 35%).
+
+Current Risk Critic model: groq / openai/gpt-oss-120b
+
+Problem
+
+The verifier requires a top-level boolean "pass" field on the Risk Critic (and GodView Compiler) output. The Critic is still not emitting it.
+
+The prompt already instructs:
+
+
+
+The Risk Critic and GodView Compiler MUST also include top-level boolean "pass"
+
+Despite this, the actual JSON returned by the Critic lacks the field.
+
+Required Fix
+
+1. Force the field in the Critic output contract
+
+The Risk Critic must always return a single top-level JSON object that includes:
+
+{
+  "analysis": "...",
+  "picks": [],
+  "scorecards": [],
+  "pass": true
 }
-Newest Swarm recommendation (2026-11-13 09:20 UTC) still has tools_called: [].
-Agents are attempting to call the live tools with real game IDs.
-The provider is still rejecting them because the request arrives with tools disabled.
-Root Cause (unchanged)
-The Swarm is still constructing provider requests with tool_choice: "none" (or equivalent) while the model is trying to emit a tool call.
 
-The earlier change either:
+or
 
-Did not update the actual request builder used for Groq / OpenAI-compatible providers, or
-Only updated one code path while another still forces tools off.
-Required Change
-Search the Swarm codebase for every place that sets tool calling behavior, including:
+{
+  "analysis": "...",
+  "picks": [],
+  "scorecards": [],
+  "pass": false
+}
 
-tool_choice
-toolChoice
-"none"
-Groq / OpenAI-compatible request builders
-Any adapter that constructs chat completion payloads
-Then do one of the following:
 
-Preferred (enable tools)
-When agents are allowed to use the filtered data tools:
 
-Set tool_choice to "auto" (or provider equivalent) instead of "none".
-Include the tool definitions (get_matchup_fundamentals_v1, get_injury_and_roster_delta_v1, get_environment_and_weather_v1, get_market_movement_v1, get_player_prop_splits_v1, etc.) in the request.
-Handle the returned tool call via the two-hop planner and continue.
-Alternative (intercept before provider)
-Detect the tool request before it is sent.
-Execute it through the two-hop planner.
-Inject the result.
-Do not send any request that has tool_choice: none while the model is still attempting a tool call.
-Acceptance
-No more "Tool choice is none, but model called a tool" errors.
-At least one filtered tool call succeeds and its result appears in context.
-tools_called is non-empty on recommendations that used tools.
+
+
+"pass" is a boolean at the top level.
+
+
+
+true = no fatal issues found.
+
+
+
+false = proposed picks fail review.
+
+
+
+The critic’s scorecard should mirror the same verdict.
+
+2. Strengthen the prompt (near the output rules)
+
+Add an explicit example the model cannot miss:
+
+Risk Critic REQUIRED shape:
+{
+  "analysis": "No fatal issues.",
+  "picks": [],
+  "scorecards": [{"verdict": "pass"}],
+  "pass": true
+}
+Missing the top-level "pass" boolean is an automatic failure.
+
+3. Optional hardening
+
+
+
+
+
+Post-process the Critic response and inject "pass": false (or true) if the field is absent, so verification does not hard-fail on schema shape.
+
+
+
+Or switch the Risk Critic to a model that more reliably follows strict JSON schemas if openai/gpt-oss-120b continues to omit the field.
+
+4. GodView Compiler
+
+Must preserve and also emit the top-level "pass" field when required by the verifier.
+
+Acceptance Criteria
+
+
+
+
+
+Risk Critic responses include a top-level boolean "pass".
+
+
+
+Verification no longer fails with “Critic output missing pass field.”
+
+
+
+At least one full Swarm run completes without exhausting retries on this schema error.
+
 Test
-Run a compact-slate NBA/NHL recommendation request. Confirm an agent can call get_matchup_fundamentals_v1 (or similar) with a slate event ID without the provider rejecting the request.
+
+Run a simple recommendation request. Confirm the Critic JSON contains "pass": true or "pass": false and that verification proceeds.

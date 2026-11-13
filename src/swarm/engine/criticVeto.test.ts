@@ -26,6 +26,37 @@ describe('Critic Veto & Verification Engine Tests', () => {
         expect(missingPassJson.feedback).toContain('missing pass field');
     });
 
+    it('keeps the top-level pass contract explicit after compressing the critic prompt', async () => {
+        let capturedCriticPrompt = '';
+        ProviderRegistry.register({
+            providerName: 'critic-contract-test-prov',
+            async call(options) {
+                if (options.systemInstruction?.includes('Proposer')) {
+                    return JSON.stringify({ summary: 'Test proposal' });
+                }
+                capturedCriticPrompt = options.prompt || '';
+                return JSON.stringify({ pass: true, feedback: 'No fatal issues found.' });
+            }
+        });
+
+        const proposer = new Agent('Manager Node', 'model-contract-p', 'critic-contract-test-prov', 'k', undefined);
+        proposer.setSystemInstruction('Proposer Node');
+        const critic = new Agent('Risk Critic', 'model-contract-c', 'critic-contract-test-prov', 'k', undefined);
+        critic.setSystemInstruction('Critic Node');
+
+        const result = await new AnalysisLifecycle(proposer, critic, 1).executeAndVerify(
+            { dataSample: 'test data' },
+            new SwarmContext(),
+            'Generate a test proposal',
+            'Review the proposal.'
+        );
+
+        expect(result.success).toBe(true);
+        expect(capturedCriticPrompt).toContain('"pass":true');
+        expect(capturedCriticPrompt).toContain('"pass":false');
+        expect(capturedCriticPrompt).toContain('Missing the top-level boolean is an automatic failure.');
+    });
+
     it('a claim citing no field in the raw board is a veto', async () => {
         ProviderRegistry.register({
             providerName: 'critic-veto-test-prov',

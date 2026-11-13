@@ -6,6 +6,13 @@ import { globalPromptCompressor } from './compression.ts';
 import type { VerificationResult } from './types.ts';
 export type { VerificationResult };
 
+const VERIFICATION_OUTPUT_CONTRACT = `OUTPUT CONTRACT (mandatory):
+Return exactly one JSON object with a top-level boolean "pass" and a string "feedback".
+"pass": true means no fatal issues were found; "pass": false means the proposal fails review.
+Example passing response: {"pass":true,"feedback":"No fatal issues found."}
+Example failing response: {"pass":false,"feedback":"The proposal contains a fatal issue."}
+Do not omit "pass" or place it inside another object. Missing the top-level boolean is an automatic failure.`;
+
 export interface LifecycleExecutionResult {
     success: boolean;
     attempts: number;
@@ -116,17 +123,17 @@ export class AnalysisLifecycle {
                 ? currentProposal.slice(0, 6000)
                 : JSON.stringify(currentProposal, null, 2).slice(0, 6000);
 
-            let verifyPrompt = `${criticPrompt}${baselineSection}\n\n[Raw Data Sample]:\n${rawDataSample}\n\n[Proposed Analysis]:\n${proposalSample}\n\nEvaluate this proposal. Ensure it strictly respects the Historical Baselines and accurate data facts. You MUST output strict JSON in this format: { "pass": boolean, "feedback": "Detailed string explaining flaws, or confirming success" }.`;
+            const verificationTask = `${criticPrompt}${baselineSection}\n\n[Raw Data Sample]:\n${rawDataSample}\n\n[Proposed Analysis]:\n${proposalSample}\n\nEvaluate this proposal. Ensure it strictly respects the Historical Baselines and accurate data facts.`;
             
-            const compressedCritique = globalPromptCompressor.compress(verifyPrompt, {
+            const compressedCritique = globalPromptCompressor.compress(verificationTask, {
                 targetReductionRatio: 0.42,
                 similarityThreshold: 0.72,
                 preserveAnomalies: true,
                 stripBoilerplate: true
             });
-            verifyPrompt = compressedCritique.compressedText;
+            let verifyPrompt = `${compressedCritique.compressedText}\n\n${VERIFICATION_OUTPUT_CONTRACT}`;
             if (!verifyPrompt.includes('Evaluate this proposal')) {
-                verifyPrompt = `${criticPrompt}${baselineSection}\n\n[Raw Data Sample]:\n${rawDataSample}\n\n[Proposed Analysis]:\n${proposalSample}\n\nEvaluate this proposal. Ensure it strictly respects the Historical Baselines and accurate data facts. You MUST output strict JSON in this format: { "pass": boolean, "feedback": "Detailed string explaining flaws, or confirming success" }.`;
+                verifyPrompt = `${verificationTask}\n\n${VERIFICATION_OUTPUT_CONTRACT}`;
             }
 
             const verificationRaw = await this.critic.run(verifyPrompt, context, {
