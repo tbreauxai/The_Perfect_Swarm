@@ -47,9 +47,16 @@ function emitHistoryContextObservabilityLog(
         summary.partialCount = storeRead.results.filter((r) => r.status === 'partial').length;
         summary.unavailableCount = storeRead.results.filter((r) => r.status === 'unavailable').length;
         summary.allReadyForSlim = storeRead.allReadyForSlim;
+        summary.resolvedEventIds = storeRead.results.map((r) => r.event_id);
+        summary.canonicalIdResolved = storeRead.results.some(
+            (r) => !scope.eventIds.includes(r.event_id)
+        );
     } else {
         summary.reason = 'reason' in storeRead ? storeRead.reason : storeRead.error;
+        summary.resolvedEventIds = [];
+        summary.canonicalIdResolved = false;
     }
+    summary.tools_called = ['read_game_context_v1'];
     console.info('[HistoryContextReader]', JSON.stringify(summary));
 }
 
@@ -88,7 +95,8 @@ async function resolveSlimOrReject(
     }
     const useStoreForSlim = Boolean(
         scope &&
-            (scope.purpose === 'parlay' ||
+            (scope.usesContextStore ||
+                scope.purpose === 'parlay' ||
                 scope.purpose === 'bet-chat' ||
                 scope.requiredContext.length > 0 ||
                 scope.snapshotRefs.length > 0 ||
@@ -99,6 +107,12 @@ async function resolveSlimOrReject(
         const readCfg = getSupabaseReadOnlyConfig(env);
         const storeRead = await readGameContextFromStore(readCfg, scope, fetchFn);
         emitHistoryContextObservabilityLog(routeName, scope, storeRead);
+        const requiresContextStore =
+            scope.purpose === 'parlay' ||
+            scope.purpose === 'bet-chat' ||
+            scope.requiredContext.length > 0 ||
+            scope.snapshotRefs.length > 0 ||
+            (scope.hasExplicitRetrievalContext && scope.purpose !== 'morning');
 
         if (storeRead.status === 'invalid_scope') {
             return {
@@ -114,35 +128,37 @@ async function resolveSlimOrReject(
             !storeRead.allReadyForSlim ||
             Object.keys(storeRead.missingRequiredSectionsByEvent).length > 0
         ) {
+            if (requiresContextStore) {
+                return {
+                    ok: false,
+                    status: 422,
+                    error: 'slim_pull_failed',
+                    reason: 'slim_context_ineligible'
+                };
+            }
+        } else {
+            const effectiveDate = scope.date || scope.groups[0]?.date || String(body.date || '');
+            const effectiveSport = scope.sport || scope.groups[0]?.sport || String(body.sport || '');
+            let data = slimIdsStubData({
+                payload: 'slim-v1',
+                task: body.task,
+                date: effectiveDate,
+                sport: effectiveSport,
+                eventIds: scope.eventIds
+            });
+            if (storeRead.formattedBlock) {
+                data = `${data}\n\n${storeRead.formattedBlock}`;
+            }
             return {
-                ok: false,
-                status: 422,
-                error: 'slim_pull_failed',
-                reason: 'slim_context_ineligible'
+                ok: true,
+                task: body.task,
+                data,
+                eventIds: scope.eventIds,
+                date: effectiveDate,
+                sport: effectiveSport,
+                storeRead
             };
         }
-
-        const effectiveDate = scope.date || scope.groups[0]?.date || String(body.date || '');
-        const effectiveSport = scope.sport || scope.groups[0]?.sport || String(body.sport || '');
-        let data = slimIdsStubData({
-            payload: 'slim-v1',
-            task: body.task,
-            date: effectiveDate,
-            sport: effectiveSport,
-            eventIds: scope.eventIds
-        });
-        if (storeRead.formattedBlock) {
-            data = `${data}\n\n${storeRead.formattedBlock}`;
-        }
-        return {
-            ok: true,
-            task: body.task,
-            data,
-            eventIds: scope.eventIds,
-            date: effectiveDate,
-            sport: effectiveSport,
-            storeRead
-        };
     }
 
     const bad = validateSlimSwarmRequest(body);
@@ -235,6 +251,7 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
                 let task = body.task;
                 let data = body.data;
                 let slimMeta: { eventIds?: string[]; date?: string; sport?: string } = {};
+                let preloadedGameContext: GameContextStoreReadResult | undefined;
                 const isSlimRequest = isSlimSwarmRequest(body) || body?.payload === 'slim-v1';
                 if (isSeedManifest) {
                     task = body.task || `Analyze candidate ${body.candidate_id} for ${body.market_type || 'game'}`;
@@ -286,6 +303,7 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
                     task = slim.task;
                     data = slim.data;
                     slimMeta = { eventIds: slim.eventIds, date: slim.date, sport: slim.sport };
+                    preloadedGameContext = slim.storeRead;
                 } else if (!body.task || body.data === undefined) {
                     return c.json({ error: 'Missing required parameter: task and data' }, 400);
                 }
@@ -317,6 +335,7 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
                         getSupabaseReadOnlyConfig(env),
                         scopeCheck.scope
                     );
+                    preloadedGameContext = storeRead;
                     emitHistoryContextObservabilityLog('stream', scopeCheck.scope, storeRead);
 
                     if (storeRead.status === 'invalid_scope') {
@@ -408,6 +427,7 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
                     retrievalContext: scopeCheck.retrievalContext,
                     snapshotRefs: scopeCheck.snapshotRefs,
                     retrievalScope: scopeCheck.scope,
+                    ...(preloadedGameContext ? { preloadedGameContext } : {}),
                     ...(isSeedManifest
                         ? {
                               seedManifest: body,
@@ -675,6 +695,7 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
                 retrievalContext: scopeCheck.retrievalContext,
                 snapshotRefs: scopeCheck.snapshotRefs,
                 retrievalScope: scopeCheck.scope,
+                ...(preloadedGameContext ? { preloadedGameContext } : {}),
                 ...(isSeedManifest
                     ? {
                           seedManifest: body,

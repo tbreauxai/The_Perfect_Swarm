@@ -976,7 +976,8 @@ export function resolveTrustedRetrievalScope(
         purpose === 'parlay' ||
         purpose === 'bet-chat' ||
         requiredContext.length > 0 ||
-        parsedRefs.refs.length > 0;
+        parsedRefs.refs.length > 0 ||
+        (groups.length > 0 && uniqueEvents.length > 0);
 
     const scope: TrustedRetrievalScope = {
         callerAppId: trustedCallerAppId,

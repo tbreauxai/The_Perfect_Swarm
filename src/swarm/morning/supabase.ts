@@ -689,6 +689,23 @@ export interface OnDemandSupabaseContext {
   detail?: string;
 }
 
+export async function fetchOnDemandReadOnlySupabaseContext(
+  cfg: { supabaseUrl: string; supabasePublishableKey: string } | null,
+  params: OnDemandSupabaseQueryParams,
+  fetchFn: typeof fetch = fetch
+): Promise<OnDemandSupabaseContext> {
+  return fetchOnDemandSupabaseContext(
+    cfg
+      ? {
+          supabaseUrl: cfg.supabaseUrl,
+          supabaseServiceKey: cfg.supabasePublishableKey
+        }
+      : null,
+    params,
+    fetchFn
+  );
+}
+
 function normalizeSportToken(raw: string | undefined): string {
   const s = String(raw || '').trim().toLowerCase();
   if (!s) return '';

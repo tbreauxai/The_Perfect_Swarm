@@ -48,6 +48,7 @@ export async function processAndRecordToolCalls(
             action: `Executed Tool: ${tr.tool}`,
             modelName: 'Local/DeterministicTool',
             prompt: JSON.stringify(tr.parameters),
+            tool: tr.tool,
             output: tr.success ? tr.result : { error: tr.error },
             durationMs: tr.durationMs
         });

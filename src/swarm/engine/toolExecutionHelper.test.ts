@@ -57,6 +57,7 @@ describe('Tool Execution and Context Recording Helper', () => {
         expect(events).toHaveLength(1);
         expect(events[0].agentRole).toBe('Deterministic Tool Engine');
         expect(events[0].action).toBe('Executed Tool: mock_calculator');
+        expect(events[0].tool).toBe('mock_calculator');
 
         // Cached on Cortex
         expect(mockCortex.cacheActionPlan).toHaveBeenCalledWith('Calculate 2+3', expect.objectContaining({

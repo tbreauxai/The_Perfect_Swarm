@@ -154,6 +154,7 @@ export interface SwarmEvent {
     action: string;
     modelName: string;
     prompt: string;
+    tool?: string;
     output?: any;
     error?: string;
     durationMs?: number;
