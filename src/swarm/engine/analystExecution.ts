@@ -144,6 +144,9 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
 
         const startTime = Date.now();
         const adHocTools = !config.disableAdHocTools && String(analyst.provider).toLowerCase() !== 'groq';
+        const nativeTools = !config.disableAdHocTools && !scorecardMode && String(analyst.provider).toLowerCase() === 'groq'
+            ? toolRegistry.toOpenAiTools()
+            : [];
         const toolPrompt = adHocTools && toolRegistry.list().length > 0 ? `\n\n${toolRegistry.renderPromptSchema()}` : '';
         const isRedTeam = analyst.role === RED_TEAM_ANALYST_ROLE ||
             /red[-_]?team/i.test(analyst.role) ||
@@ -195,7 +198,8 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                     responseMimeType: "application/json",
                     bypassCache,
                     groqMode: (settings as any)?.responseSchema === 'morning_judge' ? 'morning' : 'chat',
-                    ...activeVariant?.parameters
+                    ...activeVariant?.parameters,
+                    ...(nativeTools.length > 0 ? { tools: nativeTools, toolChoice: 'auto' as const } : {})
                 };
                 if (scorecardMode) {
                     // R2-S1/S2: the prompt ENDS with the scorecard schema + "JSON only"; max output 800 tokens
@@ -227,7 +231,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
             
             let toolResults: any[] = [];
             let strippedOutput = rawOutput;
-            if (adHocTools) {
+            if (adHocTools || nativeTools.length > 0) {
                 const proc = await processAndRecordToolCalls({
                     rawOutput,
                     toolRegistry,
