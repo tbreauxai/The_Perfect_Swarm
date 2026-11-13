@@ -1,110 +1,40 @@
-Swarm Fix: Risk Critic Must Emit Top-Level "pass" Field
-
-Current Failure
-
-Risk Critic — Verification FAILED on attempt 1. Feedback: Critic output missing pass field.
-Risk Critic — Verification FAILED on attempt 2. Feedback: Critic output missing pass field.
-system — Exhausted 2 retries. Proposer failed to pass verification (RLAIF Rating: 35%).
-
-Current Risk Critic model: groq / openai/gpt-oss-120b
-
-Problem
-
-The verifier requires a top-level boolean "pass" field on the Risk Critic (and GodView Compiler) output. The Critic is still not emitting it.
-
-The prompt already instructs:
-
-
-
-The Risk Critic and GodView Compiler MUST also include top-level boolean "pass"
-
-Despite this, the actual JSON returned by the Critic lacks the field.
-
-Required Fix
-
-1. Force the field in the Critic output contract
-
-The Risk Critic must always return a single top-level JSON object that includes:
-
-{
-  "analysis": "...",
-  "picks": [],
-  "scorecards": [],
-  "pass": true
-}
-
-or
-
-{
-  "analysis": "...",
-  "picks": [],
-  "scorecards": [],
-  "pass": false
-}
-
-
-
-
-
-"pass" is a boolean at the top level.
-
-
-
-true = no fatal issues found.
-
-
-
-false = proposed picks fail review.
-
-
-
-The critic’s scorecard should mirror the same verdict.
-
-2. Strengthen the prompt (near the output rules)
-
-Add an explicit example the model cannot miss:
-
-Risk Critic REQUIRED shape:
-{
-  "analysis": "No fatal issues.",
-  "picks": [],
-  "scorecards": [{"verdict": "pass"}],
-  "pass": true
-}
-Missing the top-level "pass" boolean is an automatic failure.
-
-3. Optional hardening
-
-
-
-
-
-Post-process the Critic response and inject "pass": false (or true) if the field is absent, so verification does not hard-fail on schema shape.
-
-
-
-Or switch the Risk Critic to a model that more reliably follows strict JSON schemas if openai/gpt-oss-120b continues to omit the field.
-
-4. GodView Compiler
-
-Must preserve and also emit the top-level "pass" field when required by the verifier.
-
-Acceptance Criteria
-
-
-
-
-
-Risk Critic responses include a top-level boolean "pass".
-
-
-
-Verification no longer fails with “Critic output missing pass field.”
-
-
-
-At least one full Swarm run completes without exhausting retries on this schema error.
-
-Test
-
-Run a simple recommendation request. Confirm the Critic JSON contains "pass": true or "pass": false and that verification proceeds.
+The_Perfect_Swarm | ONE PR | fix/critic-pass-field | base 1c2745c2ce6871d586696cc41f7f06dcdfdfc195 ("risk critic update"; main HEAD = live Render deploy dep-dbrkeftg1s2s73ckr32g, rechecked Nov 13 ~11:5x AM CST) | SWARM ONLY, one pass
+GIT: git status (must be clean, else STOP) && git checkout main && git pull --ff-only && git merge-base --is-ancestor 1c2745c2 HEAD (else STOP) && git checkout -b fix/critic-pass-field
+RULES: commit after each step with explicit `git add <files>` (never -A). Never reset, checkout ., restore, clean, rebase, squash or force-push. Node 22 strip-only TS (no parameter properties, enums, namespaces, import=require or decorators). No secrets; tests use registered mock adapters (0 LLM calls). Source: /workspace/rootcause_swarm_critic_pass_field_2026-11-13.md + Tyler's live reply {"verifiable":false,"issues":["No analysis text provided to audit."]}.
+WHY: the Risk Critic (groq gpt-oss-120b) is called with no groqMode (lifecycle.ts L139-142), so it gets the 6,000-char cap: groq.ts L14 GROQ_MORNING_PROMPT_CHARS via groqPromptCharCap L19-21, applied at groq.ts L116-117, and agent.ts L128-130 slices the head the same way.
+ How capGroqPrompt (groq.ts L71-83) trims: nothing at all if length <= cap. Otherwise it first regex-deletes "Alternate Markets / Props / Recent News / Old News..." sections anywhere, then keeps the HEAD (slice(0, cap)).
+ Today's verifyPrompt (L111-137) is criticPrompt + historicalBaselines + 4k of JSON.stringify(rawData), which starts with `task`, then dataSample and rawBoard (the same board twice; verificationPipeline.ts L72-78), then the proposal, then "Evaluate this proposal", then the contract (L134), about 10.9k chars. So the head cut removes the proposal AND the pass contract, and analystReports almost never fit in the 4k sample.
+STEPS (file | function | action | done-when):
+1. src/swarm/lifecycle.ts | executeAndVerify, prompt build L111-137 | replace with an explicit budget, CAP = groqPromptCharCap(undefined) (= 6000, for every critic provider; do NOT raise the cap or add groqMode). Order:
+   (a) INSTR = VERIFICATION_OUTPUT_CONTRACT (L9-14) + criticPrompt + "Evaluate the [Proposal] below against the [Analyst Reports Sample]."
+   (b) "[Proposal]:" + proposal, always kept: JSON.stringify(currentProposal, null, 2), sliced to PROPOSAL_MAX = 3000 from the START, with only its END trimmed + "…[truncated]".
+   (c) "[Analyst Reports Sample]:" + rawData.analystReports, then baselines, then rawBoard (once). These fill only what's left: CAP − INSTR − proposal − headers − a 1-line reminder ('Reply only {"pass":boolean,"feedback":string}.'). Drop `task`, dataSample and the duplicate board entirely.
+   Don't run globalPromptCompressor over INSTR or the proposal; if you keep it, use it on (c) only. Delete the 'Evaluate this proposal' fallback at L135-137.
+   At the end, assert verifyPrompt.length <= CAP, so capGroqPrompt and the agent.ts slice are no-ops (the regex prune also never runs).
+   | done-when: the prompt starts with "OUTPUT CONTRACT", the proposal's first 3000 chars sit right after INSTR, no task text, length <= 6000. Commit "fix(critic): budgeted prompt, contract then proposal then reports, <= Groq 6k".
+2. src/swarm/parser/responseGuards.ts | guardVerificationResult L234-327 | add one helper readVerdict(obj) used by the object branch (L235-262), the JSON-string branch (L267-288) and the parseJsonSafe branch (L291-311)
+   Accepts: pass/passed/approved as boolean, or as strings "true"/"false" (case-insensitive); top-level `verdict` pass|approve|approved|accept -> true, fail|reject|rejected -> false; one-level nested {verification|result|critic}.{pass|passed|approved}
+   Also `verifiable:false` (boolean or "false") = an explicit FAIL: pass=false, NOT parseFailed, feedback = issues.join('; ') || feedback || 'Critic could not verify the proposal.'
+   DECISION: `verifiable:true` ALONE is NOT a pass (it means "could audit", not "approved"). With no pass/passed/approved/verdict it stays "missing pass field" + parseFailed. If a pass field is present, it decides.
+   Rejects: scorecards[].verdict ('pass' = no bet in DuelOdds), deeper nesting, and other strings. Feedback = feedback || nested.feedback || reason || ''
+   Return `parseFailed: true` (optional field on VerificationResult, src/swarm/types.ts L216-219) on the missing, empty and ambiguous paths | done-when: the guard tests below pass. Commit "fix(critic): accept string pass, verdict, one-level nested pass, verifiable:false".
+3. src/swarm/lifecycle.ts | failure branch L194-202 | when verification.parseFailed, console.warn(`[Critic] unparsed verification output (attempt ${attempt}): ${redactForLog(String(raw)).slice(0, 300)}`); log the raw output only, never the prompt
+   No redactor exists in src (rg redact/REDACTED/mask finds none), so add an exported redactForLog in responseGuards.ts that masks sk-or-v1-*, sk-*, gsk_*, nvapi-*, AIza*, eyJ* JWTs, "Bearer <x>" and 32+ char hex/base64 runs as [REDACTED] | done-when: the warn test below passes. Commit "feat(critic): log a redacted 300-char sample on unparsed verification".
+4. TESTS (style of src/swarm/engine/criticVeto.test.ts L29-58: register mock adapters and use real Agents; restore GroqAdapter after)
+   (a) new src/swarm/lifecycle.groqCap.test.ts: register a 'groq' mock that does `const p = capGroqPrompt(o.prompt, groqPromptCharCap(o.config?.groqMode))` and records p
+       It returns {"pass":true,"feedback":"ok"} only if p contains BOTH 'top-level boolean "pass"' AND 'PROPOSAL_MARKER_7f3a', else {"verifiable":false,"issues":["No analysis text provided to audit."]}
+       The proposer mock returns a >6k proposal whose first field holds 'PROPOSAL_MARKER_7f3a'. rawData = { task: 7k, historicalBaselines: 3k, analystReports: 5k, rawBoard: 3k }, all NON-repetitive (numbered lines with distinct values) so the compressor can't dedupe them
+       Expect: success true on attempt 1; p contains the contract and the marker; p has no task text; o.prompt.length <= 6000 and p === o.prompt (the cap is a no-op). This FAILS on 1c2745c2 (the baselines + 4k sample push the proposal and contract past 6000).
+   (b) guard units (src/swarm/parser.test.ts or a new responseGuards.verdict.test.ts), each as an object AND as a JSON string:
+       Accept: {pass:true}, {pass:"true"}, {pass:"FALSE"} -> false, {verdict:"pass"}, {verdict:"reject"} -> false, {verification:{pass:true}}, {result:{approved:"true"}}
+       Explicit fail: {verifiable:false,issues:[..]} -> pass false, parseFailed absent, feedback has the issue
+       Reject (pass false, parseFailed): {verifiable:true}, {scorecards:[{verdict:"pass"}]}, {a:{b:{pass:true}}}, {pass:"maybe"}, {}
+   (c) warn: a critic output containing 'sk-or-v1-' + 40 chars -> console.warn called once, no key in the message, sample <= 300 chars; verifiable:false does NOT warn. Keep criticVeto.test.ts L9-28 passing. Commit "test(critic): proposal survives groq 6k cap, verdict shapes, redacted log".
+OUT OF SCOPE: today's 11:06 AM CST Groq 400 (native tool calling with JSON mode, from b5d2df9) is a separate issue. Also leave out the optional rating change for parse failures, and no DuelOdds changes.
+SMOKE: npm run build && node scripts/smoke-start.mjs (Dockerfile CMD `node --experimental-strip-types server.ts`) -> "[smoke] GET /api/health -> 200" + "[smoke] PASS".
+VERIFY ONCE: env -u SWARM_APP_TOKEN npx vitest run (paste the real totals, never invent them); npm run lint (= tsc --noEmit); npx tsc --noEmit --erasableSyntaxOnly --verbatimModuleSyntax -p . (TS1484 lines already on main are not new); npm run build; npx oxlint if present (otherwise "not present"); the smoke test
+ secret scan: git diff main | rg -n "sk-or-v1-[A-Za-z0-9]{20,}|service_role|eyJ[A-Za-z0-9_-]{20,}|gsk_[A-Za-z0-9]{20,}|nvapi-[A-Za-z0-9_-]{20,}" returns nothing (test fixtures must use obviously fake keys shorter than 20 chars after the prefix, or build them at runtime).
+Paste git log --oneline main..HEAD and git diff --stat main; confirm the diff is non-empty. Then: git push -u origin fix/critic-pass-field && gh pr create --base main --title "fix(critic): contract + proposal survive Groq 6k, tolerant verdict guard, redacted failure log". No auto-merge.
+NEVER push to main; push only the feature branch.
+TYLER: Render srv-dan9l6ek1f9s73fvd6a0 auto-deploys on commit to main, so merge = deploy and needs your approval in Code Auditor's chat. Don't merge between 9 and 10 PM CT. Afterwards GET https://the-perfect-swarm.onrender.com/api/health -> 200, then run one chat parlay and look for "Verification PASSED", a real critique, or a "[Critic] unparsed" sample in Render logs.
+ Rollback: dep-dbrkeftg1s2s73ckr32g (commit 1c2745c2, live now); the one before it is dep-dbrk3149v7es73adh9rg (b5d2df9). No DB, KV, env or flag changes.
