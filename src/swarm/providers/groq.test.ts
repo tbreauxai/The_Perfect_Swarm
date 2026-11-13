@@ -217,5 +217,60 @@ describe('GroqAdapter Token Budget & Payload Sizing', () => {
             expect(callBodies[1].response_format).toBeUndefined();
             expect(result).toBe('{"status":"recovered"}');
         });
+
+        it('sends native tool definitions with auto tool choice when tools are configured', async () => {
+            let capturedBody: any = null;
+            globalThis.fetch = vi.fn().mockImplementation(async (_url: string, init: any) => {
+                capturedBody = JSON.parse(init.body);
+                return {
+                    ok: true,
+                    status: 200,
+                    json: async () => ({
+                        choices: [{
+                            message: {
+                                tool_calls: [{
+                                    function: {
+                                        name: 'get_matchup_fundamentals',
+                                        arguments: '{"game_id":"nba-401909299","window":"season"}'
+                                    }
+                                }]
+                            }
+                        }],
+                        usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 }
+                    })
+                };
+            });
+
+            const adapter = new GroqAdapter();
+            const result = await adapter.call({
+                modelName: 'openai/gpt-oss-120b',
+                prompt: 'Fetch matchup fundamentals',
+                apiKey: 'gsk-test',
+                config: {
+                    responseMimeType: 'application/json',
+                    tools: [{
+                        type: 'function',
+                        function: {
+                            name: 'get_matchup_fundamentals',
+                            description: 'Get game fundamentals',
+                            parameters: {
+                                type: 'object',
+                                properties: {
+                                    game_id: { type: 'string' },
+                                    window: { type: 'string', enum: ['season', 'L10'] }
+                                },
+                                required: ['game_id'],
+                                additionalProperties: false
+                            }
+                        }
+                    }]
+                }
+            });
+
+            expect(capturedBody.tools).toHaveLength(1);
+            expect(capturedBody.tool_choice).toBe('auto');
+            expect(result).toContain('get_matchup_fundamentals');
+            expect(result).toContain('nba-401909299');
+        });
     });
 });

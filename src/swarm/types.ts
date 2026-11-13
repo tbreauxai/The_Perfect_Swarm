@@ -147,6 +147,18 @@ export interface ProviderCredential {
     aiClient?: GoogleGenAI;
 }
 
+export type NativeToolChoice = 'auto' | 'none' | 'required' | { type: 'function'; function: { name: string } };
+
+export interface NativeToolDefinition {
+    type: 'function';
+    function: {
+        name: string;
+        description?: string;
+        parameters: Record<string, any>;
+        strict?: boolean;
+    };
+}
+
 export interface SwarmEvent {
     id: string;
     timestamp: string;
@@ -177,6 +189,10 @@ export interface AgentRunConfig {
     timeoutMs?: number;
     fallbackProviders?: ProviderCredential[];
     zodSchema?: any;
+    /** Optional OpenAI-compatible function calling schema for providers that support native tools. */
+    tools?: NativeToolDefinition[];
+    /** Optional tool choice override. Defaults to 'auto' when tools are provided. */
+    toolChoice?: NativeToolChoice;
     [key: string]: any;
 }
 

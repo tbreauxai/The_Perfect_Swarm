@@ -167,6 +167,18 @@ export class Agent {
                         ...config,
                         maxTokens: config?.maxTokens ?? this.maxTokens ?? defaultRoleTokens
                     };
+                    const nativeTools = Array.isArray(effectiveConfig.tools)
+                        ? effectiveConfig.tools
+                        : (effectiveConfig.toolRegistry && typeof (effectiveConfig.toolRegistry as any).toOpenAiTools === 'function'
+                            ? (effectiveConfig.toolRegistry as any).toOpenAiTools()
+                            : undefined);
+                    const effectiveRuntimeConfig: AgentRunConfig = nativeTools && nativeTools.length > 0
+                        ? {
+                            ...effectiveConfig,
+                            tools: nativeTools,
+                            toolChoice: effectiveConfig.toolChoice ?? 'auto'
+                        }
+                        : effectiveConfig;
 
                     const cacheFingerprint = PayloadCache.computeFingerprint(
                         `agent_run:${this.role}`,
@@ -215,7 +227,7 @@ export class Agent {
                                         systemInstruction: this.systemInstruction,
                                         apiKey: currentTarget.apiKey,
                                         aiClient: currentTarget.aiClient || this.aiClient,
-                                        config: effectiveConfig,
+                                        config: effectiveRuntimeConfig,
                                         timeoutMs,
                                         role: this.role,
                                         onHeaders: (headers) => {

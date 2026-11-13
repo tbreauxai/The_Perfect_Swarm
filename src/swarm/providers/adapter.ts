@@ -173,8 +173,36 @@ export function parseStandardResponse(
     effectiveModel?: string,
     durationMs?: number
 ): string {
-    const rawContent = data?.choices?.[0]?.message?.content || '';
+    const message = data?.choices?.[0]?.message || {};
+    const rawContent = message.content || '';
+    const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+    const legacyFunctionCall = message.function_call;
     const modelToRecord = effectiveModel || options.modelName;
+
+    const serializeToolCall = (toolCall: any): string | null => {
+        if (!toolCall) return null;
+        const fn = toolCall.function || toolCall;
+        const toolName = typeof fn.name === 'string' ? fn.name : (toolCall.name || null);
+        if (!toolName) return null;
+
+        let parsedArgs: any = {};
+        if (typeof fn.arguments === 'string') {
+            try {
+                parsedArgs = JSON.parse(fn.arguments);
+            } catch {
+                parsedArgs = { raw: fn.arguments };
+            }
+        } else if (fn.arguments && typeof fn.arguments === 'object') {
+            parsedArgs = fn.arguments;
+        }
+
+        return `[TOOL_CALL:${JSON.stringify({ tool: toolName, parameters: parsedArgs })}]`;
+    };
+
+    const serializedToolOutput = toolCalls.length > 0
+        ? toolCalls.map(serializeToolCall).filter(Boolean).join('\n')
+        : (legacyFunctionCall ? serializeToolCall(legacyFunctionCall) || '' : '');
+    const outputText = serializedToolOutput || rawContent;
 
     if (durationMs !== undefined) {
         globalTelemetryCollector.recordModelLatency(durationMs);
@@ -191,7 +219,7 @@ export function parseStandardResponse(
         });
     } else {
         const promptTokens = estimateTokens(options.prompt + (options.systemInstruction || ''));
-        const completionTokens = estimateTokens(rawContent);
+        const completionTokens = estimateTokens(outputText);
         globalTelemetryCollector.recordTokenUsage({
             promptTokens,
             completionTokens,
@@ -200,7 +228,7 @@ export function parseStandardResponse(
         });
     }
 
-    const sanitizedOutput = sanitizeModelOutput(rawContent, isJson);
+    const sanitizedOutput = sanitizeModelOutput(outputText, isJson);
     if (!sanitizedOutput.trim()) {
         const finishReason = data?.choices?.[0]?.finish_reason ?? 'unknown';
         const completionTokens = data?.usage?.completion_tokens ?? 'unknown';

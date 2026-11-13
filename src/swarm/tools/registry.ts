@@ -157,6 +157,40 @@ export class ToolRegistry {
     }
 
     /**
+     * Converts the registry into OpenAI-compatible function-calling definitions.
+     */
+    toOpenAiTools(): any[] {
+        return this.list().map((tool) => {
+            const required: string[] = [];
+            const properties: Record<string, any> = {};
+
+            for (const [paramName, schema] of Object.entries(tool.parameters || {})) {
+                const property: Record<string, any> = {
+                    type: schema.type,
+                    description: schema.description
+                };
+                if (schema.enum) property.enum = schema.enum;
+                properties[paramName] = property;
+                if (schema.required) required.push(paramName);
+            }
+
+            return {
+                type: 'function',
+                function: {
+                    name: tool.name,
+                    description: tool.description,
+                    parameters: {
+                        type: 'object',
+                        properties,
+                        required,
+                        additionalProperties: false
+                    }
+                }
+            };
+        });
+    }
+
+    /**
      * Formats available tools into a structured prompt schema for LLM instruction injection.
      */
     renderPromptSchema(): string {

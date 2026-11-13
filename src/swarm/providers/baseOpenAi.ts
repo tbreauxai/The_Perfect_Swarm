@@ -15,6 +15,8 @@ export interface OpenAiCompatibleConfig {
     timeoutMs: number;
     headers?: Record<string, string>;
     extraBody?: Record<string, any>;
+    tools?: any[];
+    toolChoice?: any;
     retryOnTimeout?: boolean;
     formatTimeoutError?: (timeoutMs: number, providerLabel: string) => string;
     format429Error?: (status: number, errorText: string, retryAfter: string | null, providerLabel: string) => string;
@@ -37,6 +39,8 @@ export async function executeOpenAiCompatibleChat(
 ): Promise<string> {
     const providerLabel = config.providerLabel || config.providerName;
     const effectiveModel = config.effectiveModel || options.modelName;
+    const resolvedTools = config.tools ?? options.config?.tools ?? [];
+    const resolvedToolChoice = config.toolChoice ?? options.config?.toolChoice ?? (resolvedTools.length > 0 ? 'auto' : undefined);
 
     const makeRequest = async (useJson: boolean): Promise<Response> => {
         const bodyPayload: Record<string, any> = {
@@ -45,6 +49,8 @@ export async function executeOpenAiCompatibleChat(
             max_tokens: config.maxTokens,
             ...(config.temperature !== undefined ? { temperature: config.temperature } : {}),
             ...(useJson ? { response_format: { type: 'json_object' } } : {}),
+            ...(resolvedTools.length > 0 ? { tools: resolvedTools } : {}),
+            ...(resolvedTools.length > 0 ? { tool_choice: resolvedToolChoice } : {}),
             ...(config.extraBody || {})
         };
 
