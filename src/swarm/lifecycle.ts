@@ -1,7 +1,8 @@
 import { Agent } from './agent.ts';
 import { SwarmContext } from './context.ts';
 import { parseJsonSafe, guardVerificationResult } from './parser.ts';
-import { globalPromptCompressor } from './compression.ts';
+import { redactForLog } from './parser/responseGuards.ts';
+import { groqPromptCharCap } from './providers/groq.ts';
 
 import type { VerificationResult } from './types.ts';
 export type { VerificationResult };
@@ -108,32 +109,54 @@ export class AnalysisLifecycle {
                 prompt: "[Internal Verification]"
             });
             
-            let baselineSection = "";
-            let cleanedRawData = rawData;
-            if (rawData && typeof rawData === 'object' && rawData.historicalBaselines) {
-                baselineSection = `\n\n[Historical Baselines & Past Lessons]:\n${rawData.historicalBaselines}`;
-                const { historicalBaselines, ...rest } = rawData;
-                cleanedRawData = rest;
-            }
+            const CAP = groqPromptCharCap(undefined);
+            const PROPOSAL_MAX = 3000;
+            const REMINDER = 'Reply only {"pass":boolean,"feedback":string}.';
 
-            const rawDataSample = typeof cleanedRawData === 'string'
-                ? cleanedRawData.slice(0, 4000)
-                : JSON.stringify(cleanedRawData).slice(0, 4000);
-            const proposalSample = typeof currentProposal === 'string'
-                ? currentProposal.slice(0, 6000)
-                : JSON.stringify(currentProposal, null, 2).slice(0, 6000);
+            const toSampleText = (value: unknown): string => {
+                if (value === null || value === undefined || value === '') return '';
+                if (typeof value === 'string') return value;
+                try {
+                    return JSON.stringify(value, null, 2);
+                } catch {
+                    return String(value);
+                }
+            };
 
-            const verificationTask = `${criticPrompt}${baselineSection}\n\n[Raw Data Sample]:\n${rawDataSample}\n\n[Proposed Analysis]:\n${proposalSample}\n\nEvaluate this proposal. Ensure it strictly respects the Historical Baselines and accurate data facts.`;
-            
-            const compressedCritique = globalPromptCompressor.compress(verificationTask, {
-                targetReductionRatio: 0.42,
-                similarityThreshold: 0.72,
-                preserveAnomalies: true,
-                stripBoilerplate: true
-            });
-            let verifyPrompt = `${compressedCritique.compressedText}\n\n${VERIFICATION_OUTPUT_CONTRACT}`;
-            if (!verifyPrompt.includes('Evaluate this proposal')) {
-                verifyPrompt = `${verificationTask}\n\n${VERIFICATION_OUTPUT_CONTRACT}`;
+            const proposalText = toSampleText(currentProposal);
+            const proposalSample = proposalText.length > PROPOSAL_MAX
+                ? `${proposalText.slice(0, PROPOSAL_MAX).trimEnd().replace(/\s+\S*$/, '')}…[truncated]`
+                : proposalText;
+
+            const analystReports = typeof rawData === 'object' && rawData && 'analystReports' in rawData
+                ? toSampleText((rawData as any).analystReports)
+                : '';
+            const historicalBaselines = typeof rawData === 'object' && rawData && 'historicalBaselines' in rawData
+                ? toSampleText((rawData as any).historicalBaselines)
+                : '';
+            const rawBoard = typeof rawData === 'object' && rawData && 'rawBoard' in rawData
+                ? toSampleText((rawData as any).rawBoard)
+                : (typeof rawData === 'string' ? rawData : '');
+
+            const reportSampleParts = [
+                analystReports ? `[Analyst Reports Sample]:\n${analystReports}` : '',
+                historicalBaselines ? `[Historical Baselines & Past Lessons]:\n${historicalBaselines}` : '',
+                rawBoard ? `[Raw Board Sample]:\n${rawBoard}` : ''
+            ].filter(Boolean);
+            const reportSample = reportSampleParts.join('\n\n');
+
+            const promptHeader = `${VERIFICATION_OUTPUT_CONTRACT}\n\n${criticPrompt}\n\nEvaluate the [Proposal] below against the [Analyst Reports Sample].`;
+            const proposalSection = `\n\n[Proposal]:\n${proposalSample}`;
+            const reportSection = `\n\n[Analyst Reports Sample]:\n`;
+            const trailer = `\n\n${REMINDER}`;
+            const maxReportBudget = CAP - (promptHeader.length + proposalSection.length + reportSection.length + trailer.length);
+            const limitedReportSample = reportSample.length > maxReportBudget
+                ? `${reportSample.slice(0, Math.max(0, maxReportBudget - 1)).trimEnd().replace(/\s+\S*$/, '')}…`
+                : reportSample;
+
+            const verifyPrompt = `${promptHeader}${proposalSection}${reportSection}${limitedReportSample}${trailer}`;
+            if (verifyPrompt.length > CAP) {
+                throw new Error(`Verification prompt exceeded Groq cap (${verifyPrompt.length} > ${CAP}).`);
             }
 
             const verificationRaw = await this.critic.run(verifyPrompt, context, {
@@ -142,6 +165,9 @@ export class AnalysisLifecycle {
             });
             
             const verification: VerificationResult = guardVerificationResult(verificationRaw);
+            if (verification.parseFailed) {
+                console.warn(`[Critic] unparsed verification output (attempt ${attempt}): ${redactForLog(String(verificationRaw)).slice(0, 300)}`);
+            }
 
             // A claim that cites no field in the raw board is a veto
             if (verification.pass && currentProposal) {

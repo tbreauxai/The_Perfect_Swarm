@@ -229,35 +229,183 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
 }
 
 /**
- * Domain guard for Critic VerificationResult: guaranteed boolean pass/fail and feedback string.
+ * Mask sensitive API keys and tokens from log output before emitting a console warning.
  */
-export function guardVerificationResult(input: unknown): VerificationResult {
-    if (typeof input === 'object' && input !== null) {
-        const obj = input as any;
-        if (Object.keys(obj).length === 0) {
-            return { pass: false, feedback: 'Critic returned an empty object.' };
-        }
-        if (typeof obj.pass === 'boolean') {
+export function redactForLog(value: unknown): string {
+    const text = typeof value === 'string' ? value : JSON.stringify(value ?? '');
+    return text
+        .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [REDACTED]')
+        .replace(/\b(?:sk-or-v1-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|gsk_[A-Za-z0-9_-]{20,}|nvapi-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z-_]{20,}|eyJ[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+){1,})\b/gi, '[REDACTED]')
+        .replace(/\b(?:[A-Fa-f0-9]{32,}|[A-Za-z0-9+/=_-]{32,})\b/g, '[REDACTED]');
+}
+
+function asString(value: unknown): string {
+    if (typeof value === 'string') return value.trim();
+    if (value === null || value === undefined) return '';
+    return String(value).trim();
+}
+
+function toBooleanLike(value: unknown): boolean | null {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase();
+        if (normalized === 'true') return true;
+        if (normalized === 'false') return false;
+    }
+    return null;
+}
+
+function verdictText(value: unknown): boolean | null {
+    if (typeof value !== 'string') return null;
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'pass' || normalized === 'approve' || normalized === 'approved' || normalized === 'accept') return true;
+    if (normalized === 'fail' || normalized === 'reject' || normalized === 'rejected') return false;
+    return null;
+}
+
+export function readVerdict(obj: unknown): { pass: boolean | null; feedback: string; parseFailed: boolean; reason?: string } {
+    if (!obj || typeof obj !== 'object') {
+        return { pass: null, feedback: 'Critic output missing pass field.', parseFailed: true, reason: 'not object' };
+    }
+
+    const source = obj as any;
+    const issuesText = Array.isArray(source.issues) ? source.issues.map(item => String(item)).join('; ') : '';
+    const feedbackText = asString(source.feedback || source.reason || issuesText || '');
+
+    if (source.verifiable !== undefined) {
+        const verifiable = toBooleanLike(source.verifiable);
+        if (verifiable === false) {
             return {
-                pass: obj.pass,
-                feedback: typeof obj.feedback === 'string' ? obj.feedback : String(obj.feedback || '')
+                pass: false,
+                feedback: issuesText || feedbackText || 'Critic could not verify the proposal.',
+                parseFailed: false,
+                reason: 'verifiable:false'
             };
         }
-        if (typeof obj.passed === 'boolean') {
+        if (verifiable === true) {
+            // Verifiable means it could audit, not that it passed.
+        }
+    }
+
+    if (Array.isArray(source.scorecards)) {
+        const blacklistedPass = source.scorecards.some((card: any) => card && typeof card === 'object' && verdictText(card.verdict) === true);
+        if (blacklistedPass) {
             return {
-                pass: obj.passed,
-                feedback: typeof obj.feedback === 'string' ? obj.feedback : 'Verification status evaluated.'
+                pass: false,
+                feedback: feedbackText || issuesText || '',
+                parseFailed: true,
+                reason: 'scorecards verdict pass'
             };
         }
-        if (typeof obj.approved === 'boolean') {
+    }
+
+    const directKeys = ['pass', 'passed', 'approved'] as const;
+    for (const key of directKeys) {
+        if (key in source) {
+            const value = source[key];
+            const boolValue = toBooleanLike(value);
+            if (boolValue !== null) {
+                return {
+                    pass: boolValue,
+                    feedback: feedbackText || '',
+                    parseFailed: false,
+                    reason: `direct ${key}`
+                };
+            }
             return {
-                pass: obj.approved,
-                feedback: typeof obj.feedback === 'string' ? obj.feedback : 'Approval status evaluated.'
+                pass: false,
+                feedback: feedbackText || `Critic output had an invalid ${key} value.`,
+                parseFailed: true,
+                reason: `invalid ${key}`
+            };
+        }
+    }
+
+    if ('verdict' in source) {
+        const verdictValue = verdictText(source.verdict);
+        if (verdictValue !== null) {
+            return {
+                pass: verdictValue,
+                feedback: feedbackText || '',
+                parseFailed: false,
+                reason: 'verdict'
             };
         }
         return {
             pass: false,
-            feedback: 'Critic output missing pass field.'
+            feedback: feedbackText || 'Critic output had an invalid verdict value.',
+            parseFailed: true,
+            reason: 'invalid verdict'
+        };
+    }
+
+    for (const key of ['verification', 'result', 'critic'] as const) {
+        if (!(key in source)) continue;
+        const nested = source[key];
+        if (!nested || typeof nested !== 'object' || Array.isArray(nested)) {
+            continue;
+        }
+
+        const nestedKeys = Object.keys(nested);
+        if (nestedKeys.some(child => child === 'pass' || child === 'passed' || child === 'approved' || child === 'verdict')) {
+            const nestedResult = readVerdict(nested);
+            if (nestedResult.pass !== null) {
+                return {
+                    pass: nestedResult.pass,
+                    feedback: feedbackText || nestedResult.feedback || '',
+                    parseFailed: nestedResult.parseFailed,
+                    reason: `nested ${key}`
+                };
+            }
+        }
+
+        const nestedDepth = nestedKeys.some(child => nested[child] && typeof nested[child] === 'object');
+        if (nestedDepth) {
+            return {
+                pass: false,
+                feedback: feedbackText || 'Critic output nested verdict too deeply.',
+                parseFailed: true,
+                reason: `nested ${key} depth`
+            };
+        }
+    }
+
+    if (source.verifiable !== undefined && toBooleanLike(source.verifiable) === true) {
+        return {
+            pass: false,
+            feedback: 'Critic output missing pass field.',
+            parseFailed: true,
+            reason: 'verifiable:true without verdict'
+        };
+    }
+
+    if (Object.keys(source).length === 0) {
+        return {
+            pass: false,
+            feedback: 'Critic returned an empty object.',
+            parseFailed: true,
+            reason: 'empty object'
+        };
+    }
+
+    return {
+        pass: false,
+        feedback: 'Critic output missing pass field.',
+        parseFailed: true,
+        reason: 'missing pass field'
+    };
+}
+
+/**
+ * Domain guard for Critic VerificationResult: guaranteed boolean pass/fail and feedback string.
+ */
+export function guardVerificationResult(input: unknown): VerificationResult {
+    if (typeof input === 'object' && input !== null) {
+        const verdict = readVerdict(input);
+        return {
+            pass: verdict.pass === true,
+            feedback: verdict.feedback || '',
+            ...(verdict.parseFailed ? { parseFailed: true } : {})
         };
     }
 
@@ -267,61 +415,40 @@ export function guardVerificationResult(input: unknown): VerificationResult {
     if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
         try {
             const parsed = JSON.parse(trimmed);
-            if (typeof parsed === 'object' && parsed !== null) {
-                if (Object.keys(parsed).length === 0) {
-                    return { pass: false, feedback: 'Critic returned an empty object.' };
-                }
-                if (typeof parsed.pass === 'boolean') {
-                    return { pass: parsed.pass, feedback: typeof parsed.feedback === 'string' ? parsed.feedback : '' };
-                }
-                if (typeof parsed.passed === 'boolean') {
-                    return { pass: parsed.passed, feedback: typeof parsed.feedback === 'string' ? parsed.feedback : '' };
-                }
-                if (typeof parsed.approved === 'boolean') {
-                    return { pass: parsed.approved, feedback: typeof parsed.feedback === 'string' ? parsed.feedback : '' };
-                }
-                return { pass: false, feedback: 'Critic output missing pass field.' };
+            if (parsed && typeof parsed === 'object') {
+                const verdict = readVerdict(parsed);
+                return {
+                    pass: verdict.pass === true,
+                    feedback: verdict.feedback || '',
+                    ...(verdict.parseFailed ? { parseFailed: true } : {})
+                };
             }
         } catch {
             // continue
         }
     }
 
-    // Try parsing safely
     const parsed = parseJsonSafe<any>(text, null);
     if (parsed && typeof parsed === 'object') {
-        if (typeof parsed.pass === 'boolean') {
-            return {
-                pass: parsed.pass,
-                feedback: typeof parsed.feedback === 'string' ? parsed.feedback : ''
-            };
-        }
-        if (typeof parsed.passed === 'boolean') {
-            return {
-                pass: parsed.passed,
-                feedback: typeof parsed.feedback === 'string' ? parsed.feedback : ''
-            };
-        }
-        if (typeof parsed.approved === 'boolean') {
-            return {
-                pass: parsed.approved,
-                feedback: typeof parsed.feedback === 'string' ? parsed.feedback : ''
-            };
-        }
+        const verdict = readVerdict(parsed);
+        return {
+            pass: verdict.pass === true,
+            feedback: verdict.feedback || '',
+            ...(verdict.parseFailed ? { parseFailed: true } : {})
+        };
     }
 
-    // Heuristic sentiment detection for unformatted text outputs
     const upper = text.toUpperCase();
     if (upper.includes('VERIFICATION PASSED') || upper.includes('"PASS": TRUE') || upper.includes('PASSED WITH')) {
         return { pass: true, feedback: text.trim() };
     }
     if (upper.includes('VERIFICATION FAILED') || upper.includes('"PASS": FALSE') || upper.includes('CRITIQUE FAILED')) {
-        return { pass: false, feedback: text.trim() };
+        return { pass: false, feedback: text.trim(), parseFailed: false };
     }
 
-    // Default fail-safe if critic output is completely ambiguous
     return {
         pass: false,
-        feedback: `Ambiguous critic output could not be verified: ${text.slice(0, 150)}`
+        feedback: `Ambiguous critic output could not be verified: ${text.slice(0, 150)}`,
+        parseFailed: true
     };
 }

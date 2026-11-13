@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { guardVerificationResult } from '../parser/responseGuards.ts';
 import { AnalysisLifecycle } from '../lifecycle.ts';
 import { Agent } from '../agent.ts';
@@ -109,5 +109,46 @@ describe('Critic Veto & Verification Engine Tests', () => {
         // Verification must be vetoed because claim cites non-existent field
         expect(result.success).toBe(false);
         expect(result.criticFeedback).toContain('Veto: Claim');
+    });
+
+    it('redacts sensitive keys in unparsed verification warnings and skips verifiable:false logs', async () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const secret = 'sk-or-v1-' + 'a'.repeat(40);
+
+        ProviderRegistry.register({
+            providerName: 'critic-redaction-test-prov',
+            async call(options) {
+                if (options.systemInstruction?.includes('Proposer')) {
+                    return JSON.stringify({ analysis: 'Check metrics and return a verdict.' });
+                }
+                return JSON.stringify({ verifiable: true, feedback: secret });
+            }
+        });
+
+        const proposer = new Agent('Manager Node', 'model-redact-p', 'critic-redaction-test-prov', 'k', undefined);
+        proposer.setSystemInstruction('Proposer Node');
+        const critic = new Agent('Critic Node', 'model-redact-c', 'critic-redaction-test-prov', 'k', undefined);
+        critic.setSystemInstruction('Critic Node');
+
+        const result = await new AnalysisLifecycle(proposer, critic, 1).executeAndVerify(
+            { task: 'Testing redaction', historicalBaselines: 'baseline' },
+            new SwarmContext(),
+            'Generate a proposal',
+            'Check the proposal.'
+        );
+
+        expect(result.success).toBe(false);
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        const warning = String(warnSpy.mock.calls[0][0]);
+        expect(warning).not.toContain(secret);
+        expect(warning).not.toContain('sk-or-v1-');
+        const sample = warning.slice(warning.indexOf('): ') + 4);
+        expect(sample.length).toBeLessThanOrEqual(300);
+
+        warnSpy.mockClear();
+        const plainResult = guardVerificationResult({ verifiable: false, issues: ['No analysis text provided to audit.'] });
+        expect(plainResult.pass).toBe(false);
+        expect(warnSpy).not.toHaveBeenCalled();
+        expect(plainResult.feedback).toContain('No analysis text provided to audit.');
     });
 });

@@ -216,6 +216,7 @@ export interface ProviderAdapter {
 export interface VerificationResult {
     pass: boolean;
     feedback?: string;
+    parseFailed?: boolean;
 }
 
 /**
