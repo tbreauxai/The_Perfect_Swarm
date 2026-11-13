@@ -1,47 +1,134 @@
-# Swarm Fix Plan: Consume Resolved Context from Duelodds
+Swarm Fix: Enable Tool Calling (or Properly Intercept in Two-Hop Planner)
 
-## Goal
-Make sure the Swarm actually uses the full context (injuries, form, judgments, etc.) once Duelodds tools start returning resolved data.
+Problem
 
-## Current Behavior
-- Latest Swarm recommendation (2026-11-12 21:11 UTC, “The Perfect Swarm (SSE)”) used raw Odds API event IDs.
-- `tools_called` was empty.
-- Supporting context exists in Duelodds under canonical IDs but was not pulled.
+Agents are attempting to call the new filtered data tools, but the Swarm is sending provider requests with tool calling disabled. This causes immediate failures.
 
-## Required Changes
+Observed error
 
-### 1. Prefer / Require Context Tools
-- Ensure the Swarm’s tool list and system prompt explicitly include (and prefer) the tools that return game context, snapshots, and judgments.
-- When an event ID is supplied, the Swarm should call the context tool(s) before finalizing a recommendation or pass.
-- If a tool returns a resolved canonical event ID, use that for any follow-up calls.
+Groq API Error (400): 
+"Tool choice is none, but model called a tool"
+failed_generation: {
+  "name": "tool_execution",
+  "arguments": {
+    "tool": "get_matchup_fundamentals",
+    "parameters": {
+      "game_id": "nba-401909299",
+      "window": "season"
+    }
+  }
+}
 
-### 2. Handle Resolved Data
-Once Duelodds tools resolve Odds API IDs and return context:
-- Consume the returned sections (odds, form, injuries, venue, existing judgment, etc.).
-- Include relevant signals in the reasoning (especially injuries and form).
-- Populate `tools_called` with the actual tools invoked.
+The model correctly tried to call get_matchup_fundamentals with a real game ID.
+The provider rejected it because the request was sent with tools disabled (tool_choice: none or equivalent).
 
-### 3. Prompt / Workflow Adjustments (if hard-coded)
-If the Swarm prompt or workflow is hard-coded and does not mention context tools:
-- Add a short instruction: “Always resolve and retrieve game context (injuries, form, prior judgments) before making a final recommendation or pass.”
-- Prefer tools that return structured context over raw odds-only paths when both are available.
+Root Cause
 
-### 4. Logging
-- Log which tools were called and whether a canonical event ID was resolved.
-- This makes it easy to confirm the fix is working (non-empty `tools_called` + context usage).
+Mismatch between prompt and runtime:
 
-## Acceptance Criteria
-- New Swarm runs on the test NBA games show non-empty `tools_called`.
-- Recommendations reference or clearly use context signals (injuries, form, etc.) when available.
-- The Swarm no longer produces recommendations that only see raw odds when richer context exists.
 
-## Test Events
-- Odds API IDs that should resolve:
-  - `d5c5ae8d56762b45d1ec4b85337878f3` → `nba-401909977`
-  - `a98ff1ab79feb59277d989c656f16144` → `nba-401909976`
-- Context for both was marked `ready` at 16:55 UTC on 2026-11-12.
 
-## Notes
-- Most of the heavy lifting (alias resolution, re-judging `awaiting_lines`, tool implementation) is on the Duelodds side.
-- Swarm changes should be minimal: call the tools it’s given and use the richer data they return.
-- Coordinate deployment so Duelodds tools are updated before or at the same time as any Swarm prompt/tool-list changes.
+
+
+The prompt tells agents the filtered tools exist and that the two-hop planner will perform tool calls.
+
+
+
+Agents are still emitting tool calls (or the planner is not intercepting them).
+
+
+
+The Swarm engine is sending the provider request with tool calling turned off.
+
+
+
+Result: provider rejects the call.
+
+Required Fix (choose one)
+
+Option A — Enable tool calling on provider requests (simplest)
+
+When agents are allowed to request data tools, send the provider request with tool calling enabled:
+
+
+
+
+
+Set tool_choice to "auto" (or the provider equivalent) instead of "none".
+
+
+
+Include the available tool definitions (get_matchup_fundamentals_v1, get_injury_and_roster_delta_v1, get_environment_and_weather_v1, get_market_movement_v1, get_player_prop_splits_v1, etc.) in the request.
+
+
+
+Let the provider return tool calls, then execute them via the two-hop planner / tool layer and continue the conversation.
+
+Option B — Fully intercept in the two-hop planner (preferred if you want to keep provider tool calling off)
+
+
+
+
+
+Detect when an agent emits a tool request (even if it appears as a pseudo tool_execution block or native tool call).
+
+
+
+Intercept it before it reaches the provider.
+
+
+
+Execute the tool via the existing two-hop planner.
+
+
+
+Inject the tool result back into the agent context.
+
+
+
+Never send a request that has tool_choice: none while the model is still trying to call tools.
+
+Additional Notes
+
+
+
+
+
+The Critic schema issue (missing pass field) is separate and still needs to be fixed, but it is not the cause of this tool error.
+
+
+
+The tools themselves appear to be live; the failure is only in how the Swarm invokes them.
+
+
+
+After the fix, tools_called on recommendations should start populating, and agents should be able to retrieve matchup fundamentals, injuries, weather, market movement, etc. on demand.
+
+Acceptance Criteria
+
+
+
+
+
+No more "Tool choice is none, but model called a tool" errors.
+
+
+
+Agents can successfully call at least one of the filtered tools (e.g. get_matchup_fundamentals_v1 with a slate event ID).
+
+
+
+Tool results appear in the agent context / final analysis.
+
+
+
+tools_called is non-empty on Swarm recommendations that used tools.
+
+
+
+Verification can proceed past the tool-calling stage (Critic pass field issue is tracked separately).
+
+Test
+
+Run a simple NBA or NHL parlay/recommendation request with only the compact slate in the prompt.
+Confirm an agent issues a filtered tool call, receives a result, and the run does not fail with the tool_choice error.
