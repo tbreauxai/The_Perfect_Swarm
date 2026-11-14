@@ -1,0 +1,38 @@
+{
+  "_note": "regenerate if the DuelOdds signatures change",
+  "source": "tbreauxai/DuelOdds supabase/migrations/<phase2_readonly_tool_rpcs>.sql + <phase2_tool_canonical_aliases>.sql (20261109000000/20261113130000 today; 20261114154045/20261114154050 after the reconcile PR)",
+  "source_commit": "6f71c6ac78c18f459c473dc3a485d5a594ffcf15 (DuelOdds main, Nov 14)",
+  "functions": {
+    "get_matchup_fundamentals_v1": {
+      "args": [
+        { "name": "p_game_id", "type": "TEXT", "required": true },
+        { "name": "p_window", "type": "TEXT", "required": false }
+      ]
+    },
+    "get_injury_and_roster_delta_v1": {
+      "args": [
+        { "name": "p_game_id", "type": "TEXT", "required": true },
+        { "name": "p_position_group", "type": "TEXT", "required": false }
+      ]
+    },
+    "get_player_prop_splits_v1": {
+      "args": [
+        { "name": "p_player_id", "type": "TEXT", "required": true },
+        { "name": "p_stat_category", "type": "TEXT", "required": true },
+        { "name": "p_last_n", "type": "INT", "required": false },
+        { "name": "p_line", "type": "NUMERIC", "required": false }
+      ]
+    },
+    "get_environment_and_weather_v1": {
+      "args": [
+        { "name": "p_game_id", "type": "TEXT", "required": true }
+      ]
+    },
+    "get_market_movement_v1": {
+      "args": [
+        { "name": "p_game_id", "type": "TEXT", "required": true },
+        { "name": "p_market_type", "type": "TEXT", "required": false }
+      ]
+    }
+  }
+}

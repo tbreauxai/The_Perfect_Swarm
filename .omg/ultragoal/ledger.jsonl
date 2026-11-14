@@ -1,2 +1,5 @@
-{"timestamp":"2026-11-09T18:29:00-06:00","goalId":"goal-1-p0-adapter","action":"started","summary":"Initialized ultragoal session on branch feat/context-store-reader and started Goal 1: P0 adapter"}
-{"timestamp":"2026-11-09T18:55:00.000Z","goalId":"goal-4-contract-test-and-verify","action":"completed","note":"All contract tests, lint, build, and smoke test passed"}
+{"timestamp":"2026-11-14T11:39:00-06:00","goalId":"goal-1-rpc-params-and-key","action":"started","summary":"Initialized ultragoal session on branch fix/tool-rpc-params and activated Goal 1: Send p*-prefixed RPC args & enforce publishable key"}
+{"timestamp":"2026-11-14T11:42:00-06:00","goalId":"goal-1-rpc-params-and-key","action":"completed","note":"Committed 6b0b6bc: p*-prefixed RPC args and publishable key enforcement"}
+{"timestamp":"2026-11-14T11:42:30-06:00","goalId":"goal-2-player-prop-splits-empty","action":"completed","note":"Committed f7fe34f: prop splits empty-valid on 0 logs, no fabricated sample"}
+{"timestamp":"2026-11-14T11:43:10-06:00","goalId":"goal-3-market-movement-fan-duel","action":"completed","note":"Committed 5d46817: market movement reads real FanDuel fields, no default prices"}
+{"timestamp":"2026-11-14T11:46:00-06:00","goalId":"goal-4-contract-tests-and-verify","action":"completed","note":"Committed 9e8c155: RPC arg contract tests and fixtures vs DuelOdds migration signatures; build and smoke pass"}

@@ -13,26 +13,35 @@ export interface SupabaseRpcConfig {
 }
 
 /**
- * Resolves Supabase credentials from environment (supports publishable anon key or service role key).
+ * Resolves Supabase credentials from environment (publishable anon key only).
  */
 export function resolveSupabaseRpcConfig(
   env: Record<string, string | undefined> = typeof process !== 'undefined' ? process.env : {}
 ): SupabaseRpcConfig | null {
   const url = env.SUPABASE_URL?.trim();
-  const key = (
+  const publishableKey = (
     env.SUPABASE_PUBLISHABLE_KEY ||
     env.SUPABASE_ANON_KEY ||
     env.SUPABASE_READ_ONLY_KEY ||
     env.PUBLIC_SUPABASE_ANON_KEY ||
+    ''
+  ).trim();
+  const serviceRoleKey = (
     env.SUPABASE_SERVICE_ROLE_KEY ||
     env.SUPABASE_SERVICE_KEY ||
     ''
   ).trim();
 
-  if (!url || !url.startsWith('http') || !key) {
+  if (!url || !url.startsWith('http') || !publishableKey) {
     return null;
   }
-  return { supabaseUrl: url, key };
+  if (
+    (serviceRoleKey && publishableKey === serviceRoleKey) ||
+    publishableKey.includes('service_role')
+  ) {
+    return null;
+  }
+  return { supabaseUrl: url, key: publishableKey };
 }
 
 export type SupabaseRpcCallResult<T = any> =
@@ -124,7 +133,7 @@ export const getMatchupFundamentalsTool: SwarmTool = {
     }
     const gameId = args.game_id.trim();
 
-    let windowVal = 'season';
+    let windowVal: string | undefined = undefined;
     if (args.window !== undefined) {
       const norm = String(args.window).trim();
       const match = ['l5', 'l10', 'season'].find(w => w === norm.toLowerCase());
@@ -141,7 +150,7 @@ export const getMatchupFundamentalsTool: SwarmTool = {
 
     const rpcRes = await callSupabaseRpc(
       'get_matchup_fundamentals_v1',
-      { game_id: gameId, window: windowVal },
+      { p_game_id: gameId, ...(windowVal !== undefined ? { p_window: windowVal } : {}) },
       { fetchFn: context?.fetchFn, env: context?.env }
     );
 
@@ -162,8 +171,9 @@ export const getMatchupFundamentalsTool: SwarmTool = {
     const homeAts = d.home_ats_split ?? d.home_ats ?? 'N/A';
     const awayAts = d.away_ats_split ?? d.away_ats ?? 'N/A';
 
+    const displayWindow = windowVal || 'season';
     const summary = [
-      `[MATCHUP FUNDAMENTALS: ${gameId} (${windowVal})]`,
+      `[MATCHUP FUNDAMENTALS: ${gameId} (${displayWindow})]`,
       `Pace: Home ${homePace} | Away ${awayPace}`,
       `Net Margins: Off ${netOff} | Def ${netDef}`,
       `ATS Splits: Home ${homeAts} | Away ${awayAts}`
@@ -172,7 +182,7 @@ export const getMatchupFundamentalsTool: SwarmTool = {
     return {
       success: true,
       game_id: gameId,
-      window: windowVal,
+      window: displayWindow,
       data: d,
       summary
     };
@@ -213,7 +223,7 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
 
     const rpcRes = await callSupabaseRpc(
       'get_injury_and_roster_delta_v1',
-      { game_id: gameId, ...(positionGroup ? { position_group: positionGroup } : {}) },
+      { p_game_id: gameId, ...(positionGroup ? { p_position_group: positionGroup } : {}) },
       { fetchFn: context?.fetchFn, env: context?.env }
     );
 
@@ -326,10 +336,10 @@ export const getPlayerPropSplitsTool: SwarmTool = {
     const rpcRes = await callSupabaseRpc(
       'get_player_prop_splits_v1',
       {
-        player_id: playerId,
-        stat_category: statCategory,
-        ...(args.last_n !== undefined ? { last_n: args.last_n } : {}),
-        ...(args.line !== undefined ? { line: args.line } : {})
+        p_player_id: playerId,
+        p_stat_category: statCategory,
+        ...(args.last_n !== undefined ? { p_last_n: Math.trunc(args.last_n) } : {}),
+        ...(args.line !== undefined ? { p_line: args.line } : {})
       },
       { fetchFn: context?.fetchFn, env: context?.env }
     );
@@ -344,22 +354,36 @@ export const getPlayerPropSplitsTool: SwarmTool = {
     }
 
     const d = rpcRes.data || {};
-    const hitRate = d.hit_rate !== undefined ? `${(d.hit_rate * 100).toFixed(1)}%` : 'N/A';
-    const overCount = d.over_count ?? 'N/A';
-    const sampleSize = d.sample_size ?? args.last_n ?? 'N/A';
-    const lineTarget = args.line ?? d.line ?? 'N/A';
+    const sampleSize = typeof d.sample_size === 'number' ? d.sample_size : Number(d.sample_size) || 0;
+    if (!sampleSize || sampleSize === 0) {
+      return {
+        success: true,
+        empty: true,
+        player_id: playerId,
+        stat_category: statCategory,
+        data: d,
+        summary: `[PLAYER PROP SPLITS: ${playerId} | ${statCategory}] No game logs available (sample 0); no splits.`
+      };
+    }
+
+    const hitRate = d.hit_rate_pct !== undefined && d.hit_rate_pct !== null ? `${d.hit_rate_pct}%` : 'N/A';
+    const homeHitRate = d.home_hit_rate_pct !== undefined && d.home_hit_rate_pct !== null ? `${d.home_hit_rate_pct}%` : 'N/A';
+    const awayHitRate = d.away_hit_rate_pct !== undefined && d.away_hit_rate_pct !== null ? `${d.away_hit_rate_pct}%` : 'N/A';
+    const mean = d.mean ?? 'N/A';
     const median = d.median ?? 'N/A';
-    const variance = d.variance ?? 'N/A';
+    const iqr = d.iqr ?? 'N/A';
+    const lineTarget = args.line ?? d.line ?? 'N/A';
     const recentLogs = Array.isArray(d.recent_logs)
-      ? d.recent_logs.slice(0, 5).join(', ')
-      : Array.isArray(d.game_log)
-        ? d.game_log.slice(0, 5).join(', ')
-        : 'N/A';
+      ? d.recent_logs
+          .slice(0, 5)
+          .map((l: any) => (typeof l === 'object' && l !== null ? (l.val ?? 'N/A') : l))
+          .join(', ')
+      : 'N/A';
 
     const summary = [
       `[PLAYER PROP SPLITS: ${playerId} | ${statCategory}]`,
-      `Hit Rate: ${hitRate} (${overCount}/${sampleSize} Over ${lineTarget})`,
-      `Median: ${median} | Variance: ${variance}`,
+      `Sample: ${sampleSize} | Mean: ${mean} | Median: ${median} | IQR: ${iqr}`,
+      `Hit Rate: ${hitRate} (Home: ${homeHitRate} | Away: ${awayHitRate}) Over ${lineTarget}`,
       `Recent: [${recentLogs}]`
     ].join('\n');
 
@@ -417,7 +441,7 @@ export const getEnvironmentAndWeatherTool: SwarmTool = {
 
     const rpcRes = await callSupabaseRpc(
       'get_environment_and_weather_v1',
-      { game_id: gameId },
+      { p_game_id: gameId },
       { fetchFn: context?.fetchFn, env: context?.env }
     );
 
@@ -508,7 +532,7 @@ export const getMarketMovementTool: SwarmTool = {
 
     const rpcRes = await callSupabaseRpc(
       'get_market_movement_v1',
-      { game_id: gameId, market_type: marketType },
+      { p_game_id: gameId, p_market_type: marketType },
       { fetchFn: context?.fetchFn, env: context?.env }
     );
 
@@ -522,17 +546,32 @@ export const getMarketMovementTool: SwarmTool = {
     }
 
     const d = rpcRes.data || {};
-    const openLine = d.open_line ?? d.opening_spread ?? d.opening_total ?? d.opening_line ?? 'N/A';
-    const openPrice = d.open_price ?? d.opening_price ?? '-110';
-    const currLine = d.current_line ?? d.current_spread ?? d.current_total ?? 'N/A';
-    const currPrice = d.current_price ?? '-110';
-    const delta = d.line_delta ?? d.spread_delta ?? d.total_delta ?? (
+    const snapshotsTracked = typeof d.snapshots_tracked === 'number' ? d.snapshots_tracked : Number(d.snapshots_tracked) || 0;
+    if (!snapshotsTracked || snapshotsTracked === 0) {
+      return {
+        success: true,
+        empty: true,
+        game_id: gameId,
+        market_type: marketType,
+        data: d,
+        summary: `[MARKET MOVEMENT: ${gameId} | ${marketType}] no FanDuel snapshots tracked (0 snapshots).`
+      };
+    }
+
+    const opening = typeof d.opening === 'object' && d.opening !== null ? d.opening : {};
+    const latest = typeof d.latest === 'object' && d.latest !== null ? d.latest : {};
+
+    const openLine = opening.spread ?? opening.total ?? opening.ml_home ?? opening.line ?? d.open_line ?? d.opening_spread ?? d.opening_total ?? d.opening_line ?? 'N/A';
+    const openPrice = opening.price ?? d.open_price ?? d.opening_price ?? 'N/A';
+    const currLine = latest.spread ?? latest.total ?? latest.ml_home ?? latest.line ?? d.current_line ?? d.current_spread ?? d.current_total ?? 'N/A';
+    const currPrice = latest.price ?? d.current_price ?? 'N/A';
+    const delta = d.line_delta ?? (
       typeof openLine === 'number' && typeof currLine === 'number'
         ? Number((currLine - openLine).toFixed(2))
-        : '0'
+        : 'N/A'
     );
     const steamDir = d.steam_direction || d.steam_dir || 'neutral';
-    const steamMag = d.steam_magnitude ?? (delta !== 'N/A' ? Math.abs(Number(delta)) : 0);
+    const steamMag = d.steam_magnitude ?? (typeof delta === 'number' ? Math.abs(delta) : 'N/A');
     const divergence = d.cross_book_divergence || d.divergence || 'none';
 
     const summary = [
