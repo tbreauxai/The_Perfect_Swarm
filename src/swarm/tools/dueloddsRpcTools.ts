@@ -13,26 +13,35 @@ export interface SupabaseRpcConfig {
 }
 
 /**
- * Resolves Supabase credentials from environment (supports publishable anon key or service role key).
+ * Resolves Supabase credentials from environment (publishable anon key only).
  */
 export function resolveSupabaseRpcConfig(
   env: Record<string, string | undefined> = typeof process !== 'undefined' ? process.env : {}
 ): SupabaseRpcConfig | null {
   const url = env.SUPABASE_URL?.trim();
-  const key = (
+  const publishableKey = (
     env.SUPABASE_PUBLISHABLE_KEY ||
     env.SUPABASE_ANON_KEY ||
     env.SUPABASE_READ_ONLY_KEY ||
     env.PUBLIC_SUPABASE_ANON_KEY ||
+    ''
+  ).trim();
+  const serviceRoleKey = (
     env.SUPABASE_SERVICE_ROLE_KEY ||
     env.SUPABASE_SERVICE_KEY ||
     ''
   ).trim();
 
-  if (!url || !url.startsWith('http') || !key) {
+  if (!url || !url.startsWith('http') || !publishableKey) {
     return null;
   }
-  return { supabaseUrl: url, key };
+  if (
+    (serviceRoleKey && publishableKey === serviceRoleKey) ||
+    publishableKey.includes('service_role')
+  ) {
+    return null;
+  }
+  return { supabaseUrl: url, key: publishableKey };
 }
 
 export type SupabaseRpcCallResult<T = any> =
@@ -124,7 +133,7 @@ export const getMatchupFundamentalsTool: SwarmTool = {
     }
     const gameId = args.game_id.trim();
 
-    let windowVal = 'season';
+    let windowVal: string | undefined = undefined;
     if (args.window !== undefined) {
       const norm = String(args.window).trim();
       const match = ['l5', 'l10', 'season'].find(w => w === norm.toLowerCase());
@@ -141,7 +150,7 @@ export const getMatchupFundamentalsTool: SwarmTool = {
 
     const rpcRes = await callSupabaseRpc(
       'get_matchup_fundamentals_v1',
-      { game_id: gameId, window: windowVal },
+      { p_game_id: gameId, ...(windowVal !== undefined ? { p_window: windowVal } : {}) },
       { fetchFn: context?.fetchFn, env: context?.env }
     );
 
@@ -162,8 +171,9 @@ export const getMatchupFundamentalsTool: SwarmTool = {
     const homeAts = d.home_ats_split ?? d.home_ats ?? 'N/A';
     const awayAts = d.away_ats_split ?? d.away_ats ?? 'N/A';
 
+    const displayWindow = windowVal || 'season';
     const summary = [
-      `[MATCHUP FUNDAMENTALS: ${gameId} (${windowVal})]`,
+      `[MATCHUP FUNDAMENTALS: ${gameId} (${displayWindow})]`,
       `Pace: Home ${homePace} | Away ${awayPace}`,
       `Net Margins: Off ${netOff} | Def ${netDef}`,
       `ATS Splits: Home ${homeAts} | Away ${awayAts}`
@@ -172,7 +182,7 @@ export const getMatchupFundamentalsTool: SwarmTool = {
     return {
       success: true,
       game_id: gameId,
-      window: windowVal,
+      window: displayWindow,
       data: d,
       summary
     };
@@ -213,7 +223,7 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
 
     const rpcRes = await callSupabaseRpc(
       'get_injury_and_roster_delta_v1',
-      { game_id: gameId, ...(positionGroup ? { position_group: positionGroup } : {}) },
+      { p_game_id: gameId, ...(positionGroup ? { p_position_group: positionGroup } : {}) },
       { fetchFn: context?.fetchFn, env: context?.env }
     );
 
@@ -326,10 +336,10 @@ export const getPlayerPropSplitsTool: SwarmTool = {
     const rpcRes = await callSupabaseRpc(
       'get_player_prop_splits_v1',
       {
-        player_id: playerId,
-        stat_category: statCategory,
-        ...(args.last_n !== undefined ? { last_n: args.last_n } : {}),
-        ...(args.line !== undefined ? { line: args.line } : {})
+        p_player_id: playerId,
+        p_stat_category: statCategory,
+        ...(args.last_n !== undefined ? { p_last_n: Math.trunc(args.last_n) } : {}),
+        ...(args.line !== undefined ? { p_line: args.line } : {})
       },
       { fetchFn: context?.fetchFn, env: context?.env }
     );
@@ -417,7 +427,7 @@ export const getEnvironmentAndWeatherTool: SwarmTool = {
 
     const rpcRes = await callSupabaseRpc(
       'get_environment_and_weather_v1',
-      { game_id: gameId },
+      { p_game_id: gameId },
       { fetchFn: context?.fetchFn, env: context?.env }
     );
 
@@ -508,7 +518,7 @@ export const getMarketMovementTool: SwarmTool = {
 
     const rpcRes = await callSupabaseRpc(
       'get_market_movement_v1',
-      { game_id: gameId, market_type: marketType },
+      { p_game_id: gameId, p_market_type: marketType },
       { fetchFn: context?.fetchFn, env: context?.env }
     );
 
