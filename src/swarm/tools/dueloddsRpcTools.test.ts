@@ -42,6 +42,24 @@ describe('DuelOdds Database RPC Tools', () => {
       expect(resolveSupabaseRpcConfig({ SUPABASE_ANON_KEY: 'key' })).toBeNull();
     });
 
+    it('rejects service-role key only environments with null', () => {
+      expect(
+        resolveSupabaseRpcConfig({
+          SUPABASE_URL: 'https://mock.supabase.co',
+          SUPABASE_SERVICE_ROLE_KEY: 'secret-service-role'
+        })
+      ).toBeNull();
+    });
+
+    it('rejects key containing service_role', () => {
+      expect(
+        resolveSupabaseRpcConfig({
+          SUPABASE_URL: 'https://mock.supabase.co',
+          SUPABASE_PUBLISHABLE_KEY: 'test-service_role-leak'
+        })
+      ).toBeNull();
+    });
+
     it('handles missing credentials gracefully on tool execution', async () => {
       const res = await (getMatchupFundamentalsTool as any).execute(
         { game_id: 'g-1' },
@@ -77,8 +95,8 @@ describe('DuelOdds Database RPC Tools', () => {
       const mockFetch = vi.fn(async (url: string, init: any) => {
         expect(url).toContain('/rest/v1/rpc/get_matchup_fundamentals_v1');
         const body = JSON.parse(init.body);
-        expect(body.game_id).toBe('game-kc-buf-2026');
-        expect(body.window).toBe('L5');
+        expect(body.p_game_id).toBe('game-kc-buf-2026');
+        expect(body.p_window).toBe('L5');
         return new Response(
           JSON.stringify({
             home_team: 'KC',
@@ -119,8 +137,8 @@ describe('DuelOdds Database RPC Tools', () => {
       const mockFetch = vi.fn(async (url: string, init: any) => {
         expect(url).toContain('/rest/v1/rpc/get_injury_and_roster_delta_v1');
         const body = JSON.parse(init.body);
-        expect(body.game_id).toBe('game-kc-buf-2026');
-        expect(body.position_group).toBe('WR');
+        expect(body.p_game_id).toBe('game-kc-buf-2026');
+        expect(body.p_position_group).toBe('WR');
         return new Response(
           JSON.stringify([
             { player_name: 'Rashee Rice', position: 'WR', status: 'OUT', minute_shift: -32.5 },
@@ -166,19 +184,26 @@ describe('DuelOdds Database RPC Tools', () => {
       const mockFetch = vi.fn(async (url: string, init: any) => {
         expect(url).toContain('/rest/v1/rpc/get_player_prop_splits_v1');
         const body = JSON.parse(init.body);
-        expect(body.player_id).toBe('p-mahomes-15');
-        expect(body.stat_category).toBe('pass_yds');
-        expect(body.last_n).toBe(10);
-        expect(body.line).toBe(265.5);
+        expect(body.p_player_id).toBe('p-mahomes-15');
+        expect(body.p_stat_category).toBe('pass_yds');
+        expect(body.p_last_n).toBe(10);
+        expect(body.p_line).toBe(265.5);
         return new Response(
           JSON.stringify({
-            hit_rate: 0.7,
-            over_count: 7,
             sample_size: 10,
-            line: 265.5,
+            mean: 280.2,
             median: 278.0,
-            variance: 420.5,
-            recent_logs: [292, 245, 310, 275, 280]
+            iqr: 35.0,
+            hit_rate_pct: 70.0,
+            home_hit_rate_pct: 75.0,
+            away_hit_rate_pct: 66.7,
+            recent_logs: [
+              { date: '2026-11-01', val: 292, min: 38, home: true },
+              { date: '2026-10-25', val: 245, min: 36, home: false },
+              { date: '2026-10-18', val: 310, min: 40, home: true },
+              { date: '2026-10-11', val: 275, min: 35, home: false },
+              { date: '2026-10-04', val: 280, min: 37, home: true }
+            ]
           }),
           { status: 200 }
         );
@@ -191,10 +216,39 @@ describe('DuelOdds Database RPC Tools', () => {
 
       expect(res.success).toBe(true);
       expect(res.summary).toContain('[PLAYER PROP SPLITS: p-mahomes-15 | pass_yds]');
-      expect(res.summary).toContain('Hit Rate: 70.0% (7/10 Over 265.5)');
-      expect(res.summary).toContain('Median: 278 | Variance: 420.5');
+      expect(res.summary).toContain('Sample: 10 | Mean: 280.2 | Median: 278 | IQR: 35');
+      expect(res.summary).toContain('Hit Rate: 70% (Home: 75% | Away: 66.7%) Over 265.5');
       expect(res.summary).toContain('Recent: [292, 245, 310, 275, 280]');
       expect(estimateTokens(res.summary)).toBeLessThanOrEqual(250);
+    });
+
+    it('returns empty-valid result when sample_size is 0', async () => {
+      const mockFetch = vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            sample_size: 0,
+            mean: null,
+            median: null,
+            iqr: null,
+            hit_rate_pct: null,
+            home_hit_rate_pct: null,
+            away_hit_rate_pct: null,
+            recent_logs: []
+          }),
+          { status: 200 }
+        )
+      );
+
+      const res = await (getPlayerPropSplitsTool as any).execute(
+        { player_id: 'p-mahomes-15', stat_category: 'pass_yds' },
+        { fetchFn: mockFetch as any, env: mockEnv }
+      );
+
+      expect(res.success).toBe(true);
+      expect(res.empty).toBe(true);
+      expect(res.summary).toBe(
+        '[PLAYER PROP SPLITS: p-mahomes-15 | pass_yds] No game logs available (sample 0); no splits.'
+      );
     });
   });
 
@@ -279,21 +333,30 @@ describe('DuelOdds Database RPC Tools', () => {
     });
 
     it('calls get_market_movement_v1 and formats open vs current, steam, divergence <= 250 tokens', async () => {
-      const mockFetch = vi.fn(async () =>
-        new Response(
+      const mockFetch = vi.fn(async (url: string, init: any) => {
+        expect(url).toContain('/rest/v1/rpc/get_market_movement_v1');
+        const body = JSON.parse(init.body);
+        expect(body.p_game_id).toBe('game-kc-buf-2026');
+        expect(body.p_market_type).toBe('spread');
+        return new Response(
           JSON.stringify({
-            open_line: -2.5,
-            open_price: '-110',
-            current_line: -3.5,
-            current_price: '-115',
+            snapshots_tracked: 8,
+            opening: {
+              spread: -2.5,
+              price: -110
+            },
+            latest: {
+              spread: -3.5,
+              price: -115
+            },
             line_delta: -1.0,
             steam_direction: 'home_steam',
             steam_magnitude: 1.0,
             cross_book_divergence: 'DraftKings -3.5 vs FanDuel -3.0'
           }),
           { status: 200 }
-        )
-      );
+        );
+      });
 
       const res = await (getMarketMovementTool as any).execute(
         { game_id: 'game-kc-buf-2026', market_type: 'spread' },
@@ -305,6 +368,29 @@ describe('DuelOdds Database RPC Tools', () => {
       expect(res.summary).toContain('Open: -2.5 (-110) -> Current: -3.5 (-115) | Delta: -1');
       expect(res.summary).toContain('Steam: home_steam (1 pts) | Divergence: DraftKings -3.5 vs FanDuel -3.0');
       expect(estimateTokens(res.summary)).toBeLessThanOrEqual(250);
+    });
+
+    it('returns empty-valid result when snapshots_tracked is 0', async () => {
+      const mockFetch = vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            snapshots_tracked: 0,
+            opening: null,
+            latest: null,
+            line_delta: null
+          }),
+          { status: 200 }
+        )
+      );
+
+      const res = await (getMarketMovementTool as any).execute(
+        { game_id: 'game-kc-buf-2026', market_type: 'spread' },
+        { fetchFn: mockFetch as any, env: mockEnv }
+      );
+
+      expect(res.success).toBe(true);
+      expect(res.empty).toBe(true);
+      expect(res.summary).toContain('no FanDuel snapshots');
     });
   });
 

@@ -554,7 +554,7 @@ export const getMarketMovementTool: SwarmTool = {
         game_id: gameId,
         market_type: marketType,
         data: d,
-        summary: `[MARKET MOVEMENT: ${gameId} | ${marketType}] No FanDuel snapshots tracked (0 snapshots).`
+        summary: `[MARKET MOVEMENT: ${gameId} | ${marketType}] no FanDuel snapshots tracked (0 snapshots).`
       };
     }
 
