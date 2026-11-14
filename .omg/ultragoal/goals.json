@@ -2,28 +2,32 @@
   "activeGoalId": null,
   "goals": [
     {
-      "id": "goal-1-p0-adapter",
-      "title": "P0 Adapter in gameContext.ts",
-      "description": "Accept the real envelope { status: ready | empty, items: [...] } per the migration. Add adapter that maps each item to existing sections + source_status.",
-      "status": "completed"
+      "id": "goal-1-rpc-params-and-key",
+      "title": "Send p*-prefixed RPC args & enforce publishable key",
+      "description": "Send p_game_id, p_window, p_position_group, p_player_id, p_stat_category, p_last_n (Math.trunc), p_line, p_market_type for the 5 RPC calls. Drop service-role fallbacks and reject keys containing 'service_role'.",
+      "status": "completed",
+      "verificationCriteria": "rg -n \"\\{ game_id:|player_id: playerId|market_type: marketType\" src/swarm/tools/dueloddsRpcTools.ts matches only result objects, not RPC bodies."
     },
     {
-      "id": "goal-2-env-names",
-      "title": "Env names in render.yaml and .env.example",
-      "description": "Declare SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY without values.",
-      "status": "completed"
+      "id": "goal-2-player-prop-splits-empty",
+      "title": "Read SQL keys and empty-valid prop splits",
+      "description": "Read sample_size, mean, median, iqr, hit_rate_pct, home_hit_rate_pct, away_hit_rate_pct, recent_logs[]. Handle sample_size 0 / null stats with empty: true without fabricated 0% hit rate or fake sample.",
+      "status": "completed",
+      "verificationCriteria": "0-row mock returns empty: true with '[PLAYER PROP SPLITS: <id> | <stat>] No game logs available (sample 0); no splits.'"
     },
     {
-      "id": "goal-3-id-resolution",
-      "title": "32-Hex ID resolution before RPC",
-      "description": "Resolve 32-hex Odds API IDs to ESPN canonical event_ids via canonical_game_aliases read. Unresolved IDs skipped with warning.",
-      "status": "completed"
+      "id": "goal-3-market-movement-fan-duel",
+      "title": "Read real FanDuel fields without default prices",
+      "description": "Read opening, latest, line_delta, deltas, snapshots_tracked from new SQL shape. Remove '-110' prices, '0' delta fallback, steam 0. Map 'ml'/'moneyline' unchanged. snapshots_tracked 0 -> empty: true.",
+      "status": "completed",
+      "verificationCriteria": "No '-110' literals left in src/swarm/tools/dueloddsRpcTools.ts."
     },
     {
-      "id": "goal-4-contract-test-and-verify",
-      "title": "Contract tests, fixtures, and final verification",
-      "description": "Add fixtures/duelodds_read_game_context_v1.json and tests/contract/contextStoreEnvelope.test.ts covering ready, empty, malformed, hex resolution, unresolved skip, and publishable key enforcement.",
-      "status": "completed"
+      "id": "goal-4-contract-tests-and-verify",
+      "title": "Fixtures, contract tests, and full verification",
+      "description": "Add fixtures/duelodds_tool_rpc_signatures_v1.json, tests/contract/toolRpcParams.test.ts, update src/swarm/tools/dueloddsRpcTools.test.ts, and run full test, lint, build, smoke suite.",
+      "status": "completed",
+      "verificationCriteria": "Contract tests pass against DuelOdds signatures fixture, unit tests pass, smoke test passes, secret scan clean."
     }
   ]
 }
