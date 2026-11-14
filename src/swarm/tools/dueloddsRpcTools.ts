@@ -546,17 +546,32 @@ export const getMarketMovementTool: SwarmTool = {
     }
 
     const d = rpcRes.data || {};
-    const openLine = d.open_line ?? d.opening_spread ?? d.opening_total ?? d.opening_line ?? 'N/A';
-    const openPrice = d.open_price ?? d.opening_price ?? '-110';
-    const currLine = d.current_line ?? d.current_spread ?? d.current_total ?? 'N/A';
-    const currPrice = d.current_price ?? '-110';
-    const delta = d.line_delta ?? d.spread_delta ?? d.total_delta ?? (
+    const snapshotsTracked = typeof d.snapshots_tracked === 'number' ? d.snapshots_tracked : Number(d.snapshots_tracked) || 0;
+    if (!snapshotsTracked || snapshotsTracked === 0) {
+      return {
+        success: true,
+        empty: true,
+        game_id: gameId,
+        market_type: marketType,
+        data: d,
+        summary: `[MARKET MOVEMENT: ${gameId} | ${marketType}] No FanDuel snapshots tracked (0 snapshots).`
+      };
+    }
+
+    const opening = typeof d.opening === 'object' && d.opening !== null ? d.opening : {};
+    const latest = typeof d.latest === 'object' && d.latest !== null ? d.latest : {};
+
+    const openLine = opening.spread ?? opening.total ?? opening.ml_home ?? opening.line ?? d.open_line ?? d.opening_spread ?? d.opening_total ?? d.opening_line ?? 'N/A';
+    const openPrice = opening.price ?? d.open_price ?? d.opening_price ?? 'N/A';
+    const currLine = latest.spread ?? latest.total ?? latest.ml_home ?? latest.line ?? d.current_line ?? d.current_spread ?? d.current_total ?? 'N/A';
+    const currPrice = latest.price ?? d.current_price ?? 'N/A';
+    const delta = d.line_delta ?? (
       typeof openLine === 'number' && typeof currLine === 'number'
         ? Number((currLine - openLine).toFixed(2))
-        : '0'
+        : 'N/A'
     );
     const steamDir = d.steam_direction || d.steam_dir || 'neutral';
-    const steamMag = d.steam_magnitude ?? (delta !== 'N/A' ? Math.abs(Number(delta)) : 0);
+    const steamMag = d.steam_magnitude ?? (typeof delta === 'number' ? Math.abs(delta) : 'N/A');
     const divergence = d.cross_book_divergence || d.divergence || 'none';
 
     const summary = [
