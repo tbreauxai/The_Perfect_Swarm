@@ -354,22 +354,36 @@ export const getPlayerPropSplitsTool: SwarmTool = {
     }
 
     const d = rpcRes.data || {};
-    const hitRate = d.hit_rate !== undefined ? `${(d.hit_rate * 100).toFixed(1)}%` : 'N/A';
-    const overCount = d.over_count ?? 'N/A';
-    const sampleSize = d.sample_size ?? args.last_n ?? 'N/A';
-    const lineTarget = args.line ?? d.line ?? 'N/A';
+    const sampleSize = typeof d.sample_size === 'number' ? d.sample_size : Number(d.sample_size) || 0;
+    if (!sampleSize || sampleSize === 0) {
+      return {
+        success: true,
+        empty: true,
+        player_id: playerId,
+        stat_category: statCategory,
+        data: d,
+        summary: `[PLAYER PROP SPLITS: ${playerId} | ${statCategory}] No game logs available (sample 0); no splits.`
+      };
+    }
+
+    const hitRate = d.hit_rate_pct !== undefined && d.hit_rate_pct !== null ? `${d.hit_rate_pct}%` : 'N/A';
+    const homeHitRate = d.home_hit_rate_pct !== undefined && d.home_hit_rate_pct !== null ? `${d.home_hit_rate_pct}%` : 'N/A';
+    const awayHitRate = d.away_hit_rate_pct !== undefined && d.away_hit_rate_pct !== null ? `${d.away_hit_rate_pct}%` : 'N/A';
+    const mean = d.mean ?? 'N/A';
     const median = d.median ?? 'N/A';
-    const variance = d.variance ?? 'N/A';
+    const iqr = d.iqr ?? 'N/A';
+    const lineTarget = args.line ?? d.line ?? 'N/A';
     const recentLogs = Array.isArray(d.recent_logs)
-      ? d.recent_logs.slice(0, 5).join(', ')
-      : Array.isArray(d.game_log)
-        ? d.game_log.slice(0, 5).join(', ')
-        : 'N/A';
+      ? d.recent_logs
+          .slice(0, 5)
+          .map((l: any) => (typeof l === 'object' && l !== null ? (l.val ?? 'N/A') : l))
+          .join(', ')
+      : 'N/A';
 
     const summary = [
       `[PLAYER PROP SPLITS: ${playerId} | ${statCategory}]`,
-      `Hit Rate: ${hitRate} (${overCount}/${sampleSize} Over ${lineTarget})`,
-      `Median: ${median} | Variance: ${variance}`,
+      `Sample: ${sampleSize} | Mean: ${mean} | Median: ${median} | IQR: ${iqr}`,
+      `Hit Rate: ${hitRate} (Home: ${homeHitRate} | Away: ${awayHitRate}) Over ${lineTarget}`,
       `Recent: [${recentLogs}]`
     ].join('\n');
 
