@@ -269,7 +269,8 @@ export async function upsertGameJudgmentV2(
   judgment: JudgmentV2,
   modelSnapshot: Record<string, any>,
   workflowId: string | null | undefined,
-  fetchFn: typeof fetch = fetch
+  fetchFn: typeof fetch = fetch,
+  toolsCalled?: string[]
 ): Promise<void> {
   const likelyWinner = judgment.side === 'home' ? game.homeTeam : judgment.side === 'away' ? game.awayTeam : null;
   await postJudgmentRow(cfg, {
@@ -288,7 +289,8 @@ export async function upsertGameJudgmentV2(
     side: judgment.side,
     confidence: judgment.confidence,
     reasons: judgment.reasons,
-    validation_flag: null
+    validation_flag: null,
+    tools_called: Array.isArray(toolsCalled) ? toolsCalled : []
   }, fetchFn);
 }
 

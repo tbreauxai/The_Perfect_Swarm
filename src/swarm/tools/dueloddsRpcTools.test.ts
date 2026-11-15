@@ -114,6 +114,19 @@ describe('DuelOdds Database RPC Tools', () => {
       expect(res.error).toBe('invalid_window');
     });
 
+    it('returns empty:true and labeled summary when canonical or hex ID yields empty RPC result', async () => {
+      const mockFetch = vi.fn(async () =>
+        new Response(JSON.stringify({ status: 'no_rows', source: 'empty' }), { status: 200 })
+      );
+      const res = await (getMatchupFundamentalsTool as any).execute(
+        { game_id: '0123456789abcdef0123456789abcdef' },
+        { fetchFn: mockFetch as any, env: mockEnv }
+      );
+      expect(res.success).toBe(true);
+      expect(res.empty).toBe(true);
+      expect(res.summary).toContain('no canonical game for 0123456789abcdef0123456789abcdef');
+    });
+
     it('successfully calls get_matchup_fundamentals_v1 and formats dense summary <= 250 tokens', async () => {
       const mockFetch = vi.fn(async (url: string, init: any) => {
         expect(url).toContain('/rest/v1/rpc/get_matchup_fundamentals_v1');
@@ -122,14 +135,36 @@ describe('DuelOdds Database RPC Tools', () => {
         expect(body.p_window).toBe('L5');
         return new Response(
           JSON.stringify({
-            home_team: 'KC',
-            away_team: 'BUF',
-            home_pace: 68.4,
-            away_pace: 65.2,
-            net_off_margin: 4.8,
-            net_def_margin: -2.1,
-            home_ats_split: '4-1-0',
-            away_ats_split: '3-2-0'
+            home: {
+              team: 'KC',
+              games_played: 5,
+              wins: 4,
+              losses: 1,
+              points_for_avg: 27.4,
+              points_against_avg: 19.2,
+              net_margin: 8.2,
+              recent_results: ['W', 'W', 'W', 'L', 'W']
+            },
+            away: {
+              team: 'BUF',
+              games_played: 5,
+              wins: 3,
+              losses: 2,
+              points_for_avg: 28.1,
+              points_against_avg: 24.5,
+              net_margin: 3.6,
+              recent_results: ['L', 'W', 'W', 'L', 'W']
+            },
+            h2h: [
+              {
+                game_date: '2025-11-17',
+                team_abbr: 'KC',
+                opponent_abbr: 'BUF',
+                team_score: 21,
+                opponent_score: 30,
+                result: 'L'
+              }
+            ]
           }),
           { status: 200 }
         );
@@ -142,9 +177,11 @@ describe('DuelOdds Database RPC Tools', () => {
 
       expect(res.success).toBe(true);
       expect(res.summary).toContain('[MATCHUP FUNDAMENTALS: game-kc-buf-2026 (L5)]');
-      expect(res.summary).toContain('Pace: Home 68.4 | Away 65.2');
-      expect(res.summary).toContain('Net Margins: Off 4.8 | Def -2.1');
-      expect(res.summary).toContain('ATS Splits: Home 4-1-0 | Away 3-2-0');
+      expect(res.summary).toContain('Home (KC): W-L 4-1 | PF/PA 27.4 / 19.2 | Net Margin 8.2 | Recent W,W,W,L,W');
+      expect(res.summary).toContain('Away (BUF): W-L 3-2 | PF/PA 28.1 / 24.5 | Net Margin 3.6 | Recent L,W,W,L,W');
+      expect(res.summary).toContain('H2H: 2025-11-17: KC vs BUF 21-30 (L)');
+      expect(res.summary).not.toContain('Pace:');
+      expect(res.summary).not.toContain('ATS Splits:');
       expect(estimateTokens(res.summary)).toBeLessThanOrEqual(250);
     });
   });
@@ -465,6 +502,30 @@ describe('DuelOdds Database RPC Tools', () => {
       expect(res.success).toBe(true);
       expect(res.empty).toBe(true);
       expect(res.summary).toContain('no FanDuel snapshots');
+    });
+
+    it('distinguishes 1 snapshot with "1 snapshot, no history" without emitting flat delta or steam', async () => {
+      const mockFetch = vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            snapshots_tracked: 1,
+            opening: { spread: -3.5, price: -110 },
+            latest: { spread: -3.5, price: -110 }
+          }),
+          { status: 200 }
+        )
+      );
+
+      const res = await (getMarketMovementTool as any).execute(
+        { game_id: 'game-12345', market_type: 'spread' },
+        { fetchFn: mockFetch as any, env: mockEnv }
+      );
+
+      expect(res.success).toBe(true);
+      expect(res.summary).toMatch(/1 snapshot/);
+      expect(res.summary).toContain('no history');
+      expect(res.summary).not.toContain('Delta: 0');
+      expect(res.summary).not.toContain('Steam: neutral');
     });
   });
 

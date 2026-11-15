@@ -199,28 +199,91 @@ export const getMatchupFundamentalsTool: SwarmTool = {
     }
 
     const d = rpcRes.data || {};
-    if (isRpcEmptyResult(d) && !isCanonicalOrHexId(gameId)) {
+    const displayWindow = windowVal || 'season';
+
+    if (isRpcEmptyResult(d)) {
+      if (!isCanonicalOrHexId(gameId)) {
+        return {
+          success: false,
+          error: 'unresolved_game_id',
+          message: `Game ID '${gameId}' could not be resolved to a canonical event.`,
+          summary: `Error: Game ID '${gameId}' could not be resolved to canonical event.`
+        };
+      }
       return {
-        success: false,
-        error: 'unresolved_game_id',
-        message: `Game ID '${gameId}' could not be resolved to a canonical event.`,
-        summary: `Error: Game ID '${gameId}' could not be resolved to canonical event.`
+        success: true,
+        empty: true,
+        game_id: gameId,
+        window: displayWindow,
+        data: d,
+        summary: `[MATCHUP FUNDAMENTALS: ${gameId} (${displayWindow})] no canonical game for ${gameId}`
       };
     }
-    const homePace = d.home_pace ?? d.pace?.home ?? 'N/A';
-    const awayPace = d.away_pace ?? d.pace?.away ?? 'N/A';
-    const netOff = d.net_off_margin ?? d.off_margin ?? 'N/A';
-    const netDef = d.net_def_margin ?? d.def_margin ?? 'N/A';
-    const homeAts = d.home_ats_split ?? d.home_ats ?? 'N/A';
-    const awayAts = d.away_ats_split ?? d.away_ats ?? 'N/A';
 
-    const displayWindow = windowVal || 'season';
-    const summary = [
+    const homeObj = typeof d.home === 'object' && d.home !== null ? d.home : (typeof d.home_team_stats === 'object' && d.home_team_stats !== null ? d.home_team_stats : {});
+    const awayObj = typeof d.away === 'object' && d.away !== null ? d.away : (typeof d.away_team_stats === 'object' && d.away_team_stats !== null ? d.away_team_stats : {});
+
+    const formatH2h = (h2h: any): string => {
+      if (!Array.isArray(h2h) || h2h.length === 0) return '';
+      return h2h.map((g: any) => {
+        const date = g.game_date ? `${g.game_date}: ` : '';
+        const score = (g.team_score !== undefined && g.opponent_score !== undefined)
+          ? ` ${g.team_score}-${g.opponent_score}`
+          : '';
+        const res = g.result ? ` (${g.result})` : '';
+        const match = g.team_abbr && g.opponent_abbr ? `${g.team_abbr} vs ${g.opponent_abbr}` : '';
+        return `${date}${match}${score}${res}`.trim();
+      }).join('; ');
+    };
+
+    if (d.source === 'snapshot') {
+      const formText = d.form
+        ? (typeof d.form === 'object' ? JSON.stringify(d.form) : String(d.form))
+        : `Home: ${d.home_form ?? homeObj.form ?? 'N/A'} | Away: ${d.away_form ?? awayObj.form ?? 'N/A'}`;
+      const h2hText = formatH2h(d.h2h);
+      const summary = [
+        `[MATCHUP FUNDAMENTALS: ${gameId} (${displayWindow}) | source: snapshot]`,
+        `Form: ${formText}`,
+        h2hText ? `H2H: ${h2hText}` : 'H2H: None'
+      ].join('\n');
+      return {
+        success: true,
+        game_id: gameId,
+        window: displayWindow,
+        data: d,
+        summary
+      };
+    }
+
+    const homeTeam = homeObj.team || d.home_team || 'Home';
+    const awayTeam = awayObj.team || d.away_team || 'Away';
+    const homeWl = (homeObj.wins !== undefined && homeObj.losses !== undefined) ? `${homeObj.wins}-${homeObj.losses}` : 'N/A';
+    const awayWl = (awayObj.wins !== undefined && awayObj.losses !== undefined) ? `${awayObj.wins}-${awayObj.losses}` : 'N/A';
+    const homePfPa = (homeObj.points_for_avg !== undefined || homeObj.points_against_avg !== undefined)
+      ? `${homeObj.points_for_avg ?? 'N/A'} / ${homeObj.points_against_avg ?? 'N/A'}`
+      : 'N/A';
+    const awayPfPa = (awayObj.points_for_avg !== undefined || awayObj.points_against_avg !== undefined)
+      ? `${awayObj.points_for_avg ?? 'N/A'} / ${awayObj.points_against_avg ?? 'N/A'}`
+      : 'N/A';
+    const homeNet = homeObj.net_margin !== undefined ? String(homeObj.net_margin) : 'N/A';
+    const awayNet = awayObj.net_margin !== undefined ? String(awayObj.net_margin) : 'N/A';
+    const homeRecent = Array.isArray(homeObj.recent_results)
+      ? homeObj.recent_results.join(',')
+      : (homeObj.recent_results ?? 'N/A');
+    const awayRecent = Array.isArray(awayObj.recent_results)
+      ? awayObj.recent_results.join(',')
+      : (awayObj.recent_results ?? 'N/A');
+
+    const h2hText = formatH2h(d.h2h);
+    const summaryLines = [
       `[MATCHUP FUNDAMENTALS: ${gameId} (${displayWindow})]`,
-      `Pace: Home ${homePace} | Away ${awayPace}`,
-      `Net Margins: Off ${netOff} | Def ${netDef}`,
-      `ATS Splits: Home ${homeAts} | Away ${awayAts}`
-    ].join('\n');
+      `Home (${homeTeam}): W-L ${homeWl} | PF/PA ${homePfPa} | Net Margin ${homeNet} | Recent ${homeRecent}`,
+      `Away (${awayTeam}): W-L ${awayWl} | PF/PA ${awayPfPa} | Net Margin ${awayNet} | Recent ${awayRecent}`
+    ];
+    if (h2hText) {
+      summaryLines.push(`H2H: ${h2hText}`);
+    }
+    const summary = summaryLines.join('\n');
 
     return {
       success: true,
@@ -677,6 +740,25 @@ export const getMarketMovementTool: SwarmTool = {
     const openPrice = opening.price ?? d.open_price ?? d.opening_price ?? 'N/A';
     const currLine = latest.spread ?? latest.total ?? latest.ml_home ?? latest.line ?? d.current_line ?? d.current_spread ?? d.current_total ?? 'N/A';
     const currPrice = latest.price ?? d.current_price ?? 'N/A';
+
+    if (snapshotsTracked === 1 || snapshotsTracked < 2) {
+      const lineDisplay = currLine !== 'N/A' || currPrice !== 'N/A'
+        ? `Current: ${currLine} (${currPrice})`
+        : `Line: ${openLine} (${openPrice})`;
+      const summary = [
+        `[MARKET MOVEMENT: ${gameId} | ${marketType}] 1 snapshot, no history.`,
+        lineDisplay
+      ].join('\n');
+
+      return {
+        success: true,
+        game_id: gameId,
+        market_type: marketType,
+        data: d,
+        summary
+      };
+    }
+
     const delta = d.line_delta ?? (
       typeof openLine === 'number' && typeof currLine === 'number'
         ? Number((currLine - openLine).toFixed(2))
