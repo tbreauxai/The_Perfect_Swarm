@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { Agent } from "./agent.ts";
 import { SwarmContext } from "./context.ts";
 import { ProviderRegistry } from "./providers/registry.ts";
@@ -7,6 +7,7 @@ import { MistralAdapter } from "./providers/mistral.ts";
 import { GroqAdapter } from "./providers/groq.ts";
 import { globalProviderLimiter } from "./providers/limiter.ts";
 import { globalPayloadCache, PayloadCache } from "./cache.ts";
+import { globalTokenBudgetManager } from "./loadBalancer.ts";
 
 const calls: string[] = [];
 
@@ -185,5 +186,37 @@ describe("Agent fallback order (PS3 preserveFallbackOrder)", () => {
     });
     expect(result.source).toBe("groq");
     expect(calls).toEqual(["order-dead-mock", "groq"]);
+  });
+
+  it("when canAllocate fails, awaits budget window and retries primary instead of shifting seat", async () => {
+    let callCount = 0;
+    ProviderRegistry.register({
+      providerName: "retry-rate-limit-primary",
+      async call() {
+        callCount++;
+        return JSON.stringify({ source: "primary" });
+      },
+    } as any);
+
+    let allocateAttempts = 0;
+    const canAllocateSpy = vi.spyOn(globalTokenBudgetManager, "canAllocate").mockImplementation(() => {
+      allocateAttempts++;
+      return allocateAttempts > 1;
+    });
+
+    const waitSpy = vi.spyOn(globalProviderLimiter, "budgetWaitMs").mockReturnValue(10);
+
+    const agent = new Agent("Test Agent", "m", "retry-rate-limit-primary" as any, "k");
+    const result = await agent.run("test prompt", new SwarmContext(), {
+      responseMimeType: "application/json",
+      bypassCache: true,
+    });
+
+    expect(allocateAttempts).toBe(2);
+    expect(callCount).toBe(1);
+    expect(result.source).toBe("primary");
+
+    canAllocateSpy.mockRestore();
+    waitSpy.mockRestore();
   });
 });

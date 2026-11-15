@@ -142,10 +142,16 @@ export class Agent {
 
             const estimatedTokens = estimateTokens(payloadToEstimate);
             if (!globalTokenBudgetManager.canAllocate(currentTarget.provider, estimatedTokens)) {
-                lastFailedProvider = String(currentTarget.provider);
-                lastFailedModel = targetModel;
-                lastError = new Error(`token budget remaining ${globalTokenBudgetManager.getRemainingBudget(currentTarget.provider)} < ${estimatedTokens}; shifting seat`);
-                continue;
+                const waitMs = Math.min(60000, globalProviderLimiter.budgetWaitMs(String(currentTarget.provider), estimatedTokens));
+                if (Number.isFinite(waitMs) && waitMs > 0) {
+                    await new Promise(resolve => setTimeout(resolve, waitMs));
+                }
+                if (!globalTokenBudgetManager.canAllocate(currentTarget.provider, estimatedTokens)) {
+                    lastFailedProvider = String(currentTarget.provider);
+                    lastFailedModel = targetModel;
+                    lastError = new Error(`token budget remaining ${globalTokenBudgetManager.getRemainingBudget(currentTarget.provider)} < ${estimatedTokens}; shifting seat`);
+                    continue;
+                }
             }
             // Two attempts max: fail fast on free-tier stalls. Fatal (4xx) errors
             // never recover by retrying; transient (429/5xx/timeout) errors either
