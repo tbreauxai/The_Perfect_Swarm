@@ -1,7 +1,38 @@
+import crypto from 'node:crypto';
 import { QdrantClient } from '@qdrant/js-client-rest';
 import type { StoredMemoryPoint, SparseVector } from '../types.ts';
 import { normalizeDomain } from '../types.ts';
 import { matchesScopedMemoryFilter, type StorageBackend, type StorageFilterOptions, type StorageQueryOptions, type StorageQueryResult } from './types.ts';
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UINT_REGEX = /^\d+$/;
+
+export function toValidQdrantId(id: string): string {
+    if (!id) return crypto.randomUUID();
+    const str = String(id);
+    if (UUID_REGEX.test(str) || UINT_REGEX.test(str)) {
+        return str;
+    }
+    const hash = crypto.createHash('sha256').update(str).digest('hex');
+    return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(12, 15)}-a${hash.slice(15, 18)}-${hash.slice(18, 30)}`;
+}
+
+export function formatQdrantError(err: any): string {
+    const status = err?.status || err?.response?.status || 'unknown';
+    let detail = '';
+    if (err?.data) {
+        detail = typeof err.data === 'string' ? err.data : JSON.stringify(err.data);
+    } else if (err?.response?.data) {
+        detail = typeof err.response.data === 'string' ? err.response.data : JSON.stringify(err.response.data);
+    } else {
+        detail = err?.message || String(err);
+    }
+    const sanitized = detail
+        .replace(/api[_-]?key=[^&\s]+/gi, 'api_key=***')
+        .replace(/bearer\s+[a-zA-Z0-9_\-\.]+/gi, 'Bearer ***');
+    const truncated = sanitized.length > 300 ? sanitized.slice(0, 297) + '...' : sanitized;
+    return `status=${status} detail=${truncated}`;
+}
 
 export interface QdrantStorageConfig {
     url?: string;
@@ -199,7 +230,7 @@ export class QdrantStorageAdapter implements StorageBackend {
             this.initializedCollections.add(targetCollection);
             return true;
         } catch (err: any) {
-            console.warn(`[QdrantStorageAdapter] Initialization failed for ${targetCollection}: ${err.message || err}`);
+            console.warn(`[QdrantStorageAdapter] Initialization failed for ${targetCollection}: ${formatQdrantError(err)}`);
             this.available = false;
             return false;
         }
@@ -285,7 +316,7 @@ export class QdrantStorageAdapter implements StorageBackend {
 
             return storedId;
         } catch (err: any) {
-            console.warn(`[QdrantStorageAdapter] Store error: ${err.message || err}`);
+            console.warn(`[QdrantStorageAdapter] Store error: ${formatQdrantError(err)}`);
             return null;
         }
     }
@@ -324,7 +355,7 @@ export class QdrantStorageAdapter implements StorageBackend {
 
             return qdrantPoints.map(p => p.id);
         } catch (err: any) {
-            console.warn(`[QdrantStorageAdapter] StoreBatch error: ${err.message || err}`);
+            console.warn(`[QdrantStorageAdapter] StoreBatch error: ${formatQdrantError(err)}`);
             return [];
         }
     }
@@ -353,11 +384,14 @@ export class QdrantStorageAdapter implements StorageBackend {
         }
     }
 
-    async setPayload(id: string, payload: Partial<Record<string, any>>): Promise<boolean> {
+    async setPayload(id: string, payload: Partial<Record<string, any>>, originApp?: string): Promise<boolean> {
         if (!this.client || !this.available) return false;
+        const app = originApp || payload?.originApp || payload?.appId;
+        const targetCollection = this.getTargetCollection(app);
+        await this.initialize(app);
         try {
             await this.withTimeout(
-                this.client.setPayload(this.collectionName, {
+                this.client.setPayload(targetCollection, {
                     wait: true,
                     points: [id],
                     payload
@@ -365,7 +399,7 @@ export class QdrantStorageAdapter implements StorageBackend {
             );
             return true;
         } catch (err: any) {
-            console.warn(`[QdrantStorageAdapter] SetPayload error: ${err.message || err}`);
+            console.warn(`[QdrantStorageAdapter] SetPayload error: ${formatQdrantError(err)}`);
             return false;
         }
     }
@@ -398,12 +432,7 @@ export class QdrantStorageAdapter implements StorageBackend {
                 });
             }
             if (options.sport) {
-                filterMust.push({
-                    should: [
-                        { key: 'sport', match: { value: options.sport } },
-                        { key: 'sportKey', match: { value: options.sport } }
-                    ]
-                });
+                filterMust.push({ key: 'sport', match: { value: options.sport } });
             }
             if (Array.isArray(options.entityIds) && options.entityIds.length > 0) {
                 filterMust.push({
@@ -411,15 +440,6 @@ export class QdrantStorageAdapter implements StorageBackend {
                         key: 'entityIds',
                         match: { value: entityId }
                     }))
-                });
-            }
-            if (Array.isArray(options.eventIds) && options.eventIds.length > 0) {
-                filterMust.push({
-                    should: options.eventIds.flatMap((evId) => [
-                        { key: 'eventId', match: { value: evId } },
-                        { key: 'event_id', match: { value: evId } },
-                        { key: 'eventIds', match: { value: evId } }
-                    ])
                 });
             }
             if (options.targetApps) {
@@ -460,30 +480,57 @@ export class QdrantStorageAdapter implements StorageBackend {
 
             let qdrantRes: any;
             if (querySparse && querySparse.indices.length > 0) {
-                qdrantRes = await this.withTimeout(
-                    this.client.query(targetCollection, {
-                        prefetch: [
-                            {
-                                query: queryDense,
-                                using: 'dense',
-                                limit: prefetchLimit,
-                                filter,
-                                params: { hnsw_ef: hnswEf }
+                try {
+                    qdrantRes = await this.withTimeout(
+                        this.client.query(targetCollection, {
+                            prefetch: [
+                                {
+                                    query: queryDense,
+                                    using: 'dense',
+                                    limit: prefetchLimit,
+                                    filter,
+                                    params: { hnsw_ef: hnswEf }
+                                },
+                                {
+                                    query: querySparse,
+                                    using: 'sparse',
+                                    limit: prefetchLimit,
+                                    filter
+                                }
+                            ],
+                            query: {
+                                rrf: { k: rrfK }
                             },
-                            {
-                                query: querySparse,
-                                using: 'sparse',
-                                limit: prefetchLimit,
-                                filter
-                            }
-                        ],
-                        query: {
-                            rrf: { k: rrfK }
-                        },
-                        limit: searchLimit,
-                        with_payload: true
-                    })
-                );
+                            limit: searchLimit,
+                            with_payload: true
+                        })
+                    );
+                } catch (hybridErr: any) {
+                    qdrantRes = await this.withTimeout(
+                        this.client.query(targetCollection, {
+                            prefetch: [
+                                {
+                                    query: queryDense,
+                                    using: 'dense',
+                                    limit: prefetchLimit,
+                                    filter,
+                                    params: { hnsw_ef: hnswEf }
+                                },
+                                {
+                                    query: querySparse,
+                                    using: 'sparse',
+                                    limit: prefetchLimit,
+                                    filter
+                                }
+                            ],
+                            query: {
+                                fusion: 'rrf'
+                            } as any,
+                            limit: searchLimit,
+                            with_payload: true
+                        })
+                    );
+                }
             } else {
                 qdrantRes = await this.withTimeout(
                     this.client.query(targetCollection, {
@@ -505,7 +552,7 @@ export class QdrantStorageAdapter implements StorageBackend {
                     vectorScore: r.score ?? 1.0
                 }));
         } catch (err: any) {
-            console.warn(`[QdrantStorageAdapter] Search error: ${err.message || err}`);
+            console.warn(`[QdrantStorageAdapter] Search error: ${formatQdrantError(err)}`);
             return [];
         }
     }
@@ -521,7 +568,7 @@ export class QdrantStorageAdapter implements StorageBackend {
             );
             return true;
         } catch (err: any) {
-            console.warn(`[QdrantStorageAdapter] Delete error: ${err.message || err}`);
+            console.warn(`[QdrantStorageAdapter] Delete error: ${formatQdrantError(err)}`);
             return false;
         }
     }
