@@ -267,6 +267,11 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
 
       if (v2) {
         const rawFa = workflowResult?.finalAnalysis ?? workflowResult;
+        const toolsCalled: string[] = Array.isArray(rawFa?.tools_called)
+          ? rawFa.tools_called
+          : Array.isArray(workflowResult?.tools_called)
+            ? workflowResult.tools_called
+            : [];
         const fa = rawFa && typeof rawFa === 'object' && !Array.isArray(rawFa)
           ? (({ tools_called: _toolsCalled, ...rest }: any) => rest)(rawFa)
           : rawFa;
@@ -285,7 +290,7 @@ export async function runMorningSlate(options: MorningSlateOptions = {}): Promis
         }
         const j = (v2Result as { judgment: any }).judgment;
         if (cfg) {
-          await upsertGameJudgmentV2(cfg, game, j, computeModelSnapshotV2(j, participatingSeatRoles), workflowResult?.workflowId, fetchFn);
+          await upsertGameJudgmentV2(cfg, game, j, computeModelSnapshotV2(j, participatingSeatRoles), workflowResult?.workflowId, fetchFn, toolsCalled);
         }
         if (isReplace) {
           replacedCount++;
