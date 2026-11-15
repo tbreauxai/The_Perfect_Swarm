@@ -160,6 +160,8 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     if (nativeTools.length > 0) {
       r1Config.tools = nativeTools;
       r1Config.toolChoice = 'auto';
+      delete r1Config.responseMimeType;
+      delete r1Config.responseSchema;
     }
     round1Output = await runAgent(prompt, r1Config);
   } catch (err: any) {

@@ -23,6 +23,7 @@ export class GitHubAdapter implements ProviderAdapter {
 
         const isJson = options.config?.responseMimeType === 'application/json';
         const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 30000; // 30s default: fail fast on free-tier stalls instead of hanging for 2 minutes
+        const resolvedTools = options.config?.tools ?? [];
 
         const bodyParams: any = {
             model: options.modelName,
@@ -30,8 +31,12 @@ export class GitHubAdapter implements ProviderAdapter {
             temperature: options.config?.temperature || 0.7,
             max_tokens: options.config?.maxTokens || 8192
         };
-        if (isJson) {
+        if (isJson && !resolvedTools.length) {
             bodyParams.response_format = { type: 'json_object' };
+        }
+        if (resolvedTools.length > 0) {
+            bodyParams.tools = resolvedTools;
+            bodyParams.tool_choice = options.config?.toolChoice ?? 'auto';
         }
 
         const startTime = Date.now();
