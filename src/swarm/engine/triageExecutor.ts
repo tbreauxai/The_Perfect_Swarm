@@ -40,12 +40,12 @@ export interface TriageExecutorOptions {
 /**
  * Executes a single tool with single-flight cache and 1500ms hard timeout.
  */
-async function executeToolWithCacheAndTimeout(
+export async function executeToolWithCacheAndTimeout(
   toolCall: TriageToolCall,
-  manifest: SeedManifest,
+  manifest: { game_id: string; [key: string]: any },
   registry: ToolRegistry,
   cache: GameQueryCache,
-  timeoutMs: number,
+  timeoutMs: number = 1500,
   options?: { env?: Record<string, string | undefined>; fetchFn?: typeof fetch; qdrantClient?: any }
 ): Promise<DossierSection> {
   const toolName = toolCall.tool;
