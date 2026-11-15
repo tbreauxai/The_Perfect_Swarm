@@ -740,6 +740,25 @@ export const getMarketMovementTool: SwarmTool = {
     const openPrice = opening.price ?? d.open_price ?? d.opening_price ?? 'N/A';
     const currLine = latest.spread ?? latest.total ?? latest.ml_home ?? latest.line ?? d.current_line ?? d.current_spread ?? d.current_total ?? 'N/A';
     const currPrice = latest.price ?? d.current_price ?? 'N/A';
+
+    if (snapshotsTracked === 1 || snapshotsTracked < 2) {
+      const lineDisplay = currLine !== 'N/A' || currPrice !== 'N/A'
+        ? `Current: ${currLine} (${currPrice})`
+        : `Line: ${openLine} (${openPrice})`;
+      const summary = [
+        `[MARKET MOVEMENT: ${gameId} | ${marketType}] 1 snapshot, no history.`,
+        lineDisplay
+      ].join('\n');
+
+      return {
+        success: true,
+        game_id: gameId,
+        market_type: marketType,
+        data: d,
+        summary
+      };
+    }
+
     const delta = d.line_delta ?? (
       typeof openLine === 'number' && typeof currLine === 'number'
         ? Number((currLine - openLine).toFixed(2))

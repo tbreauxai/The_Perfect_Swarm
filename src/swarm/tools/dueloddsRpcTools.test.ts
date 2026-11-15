@@ -503,6 +503,30 @@ describe('DuelOdds Database RPC Tools', () => {
       expect(res.empty).toBe(true);
       expect(res.summary).toContain('no FanDuel snapshots');
     });
+
+    it('distinguishes 1 snapshot with "1 snapshot, no history" without emitting flat delta or steam', async () => {
+      const mockFetch = vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            snapshots_tracked: 1,
+            opening: { spread: -3.5, price: -110 },
+            latest: { spread: -3.5, price: -110 }
+          }),
+          { status: 200 }
+        )
+      );
+
+      const res = await (getMarketMovementTool as any).execute(
+        { game_id: 'game-12345', market_type: 'spread' },
+        { fetchFn: mockFetch as any, env: mockEnv }
+      );
+
+      expect(res.success).toBe(true);
+      expect(res.summary).toMatch(/1 snapshot/);
+      expect(res.summary).toContain('no history');
+      expect(res.summary).not.toContain('Delta: 0');
+      expect(res.summary).not.toContain('Steam: neutral');
+    });
   });
 
   describe('Tool 6: get_historical_lessons', () => {
