@@ -8,7 +8,7 @@ import { GeminiEmbeddingProvider, DeterministicLocalEmbeddingProvider } from './
 import { collectCortexDiagnostics } from './diagnostics.ts';
 import { globalTelemetryCollector } from '../telemetry.ts';
 import { InMemoryStorageAdapter } from './storage/inMemoryStorage.ts';
-import { QdrantStorageAdapter } from './storage/qdrantStorage.ts';
+import { QdrantStorageAdapter, toValidQdrantId } from './storage/qdrantStorage.ts';
 import { matchesScopedMemoryFilter, type StorageBackend } from './storage/types.ts';
 import { RrfRanker } from './ranking/rrfRanker.ts';
 import { CortexPersistenceManager } from './persistence/cortexPersistence.ts';
@@ -346,9 +346,11 @@ export class MemoryCortex {
         const now = payload.date || new Date().toISOString();
         const memoryType: MemoryType = 'graded_lesson';
         const content = payload.reason || payload.rule || JSON.stringify(payload);
+        const validId = toValidQdrantId(lessonId);
 
         const pointPayload = {
-            id: lessonId,
+            id: validId,
+            lessonId,
             betId: payload.betId || payload.pickId || lessonId,
             sportKey: payload.sportKey,
             rule: payload.rule,
@@ -396,7 +398,12 @@ export class MemoryCortex {
 
         let storedId: string | null = null;
         if (this.qdrantStorage && this.qdrantStorage.isAvailable) {
-            storedId = await this.qdrantStorage.store(point, false);
+            const qdrantPoint: StoredMemoryPoint = {
+                ...point,
+                id: validId
+            };
+            const qdrantStored = await this.qdrantStorage.store(qdrantPoint, false);
+            if (qdrantStored) storedId = lessonId;
         }
 
         if (!storedId) {

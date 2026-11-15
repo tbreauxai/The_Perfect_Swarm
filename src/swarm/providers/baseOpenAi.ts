@@ -48,7 +48,7 @@ export async function executeOpenAiCompatibleChat(
             messages: config.messages,
             max_tokens: config.maxTokens,
             ...(config.temperature !== undefined ? { temperature: config.temperature } : {}),
-            ...(useJson ? { response_format: { type: 'json_object' } } : {}),
+            ...(useJson && !resolvedTools.length ? { response_format: { type: 'json_object' } } : {}),
             ...(resolvedTools.length > 0 ? { tools: resolvedTools } : {}),
             ...(resolvedTools.length > 0 ? { tool_choice: resolvedToolChoice } : {}),
             ...(config.extraBody || {})

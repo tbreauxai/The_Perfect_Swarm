@@ -15,6 +15,18 @@ import { executeToolWithCacheAndTimeout } from './triageExecutor.ts';
 import { GameQueryCache } from '../cache/gameQueryCache.ts';
 import type { SwarmContext } from '../context.ts';
 
+export const PROVIDER_CALL_DEADLINES: Record<string, number> = {
+  groq: 20000,
+  gemini: 30000,
+  others: 30000
+};
+
+export const SEAT_DEADLINE_MS = 75000;
+
+export function getProviderCallDeadlineMs(provider: string): number {
+  return PROVIDER_CALL_DEADLINES[provider] ?? PROVIDER_CALL_DEADLINES.others ?? 30000;
+}
+
 export interface RunSeatWithToolsParams {
   agent: Agent;
   seat: string;
@@ -100,11 +112,74 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     prompt
   });
 
+  const seatStartAt = Date.now();
+  const seatDeadlineAt = seatStartAt + SEAT_DEADLINE_MS;
+
+  const logFailure = (startTime: number, err: any) => {
+    const durationMs = Date.now() - startTime;
+    const msg = String(err?.message || err || '');
+    let reason = 'unknown_error';
+    if (msg.includes('timeout') || msg.includes('timed out') || msg.includes('TIMEOUT') || msg.includes('AbortError')) {
+      reason = 'timeout';
+    } else {
+      const httpMatch = msg.match(/\b(4\d\d|5\d\d)\b/) || (err?.status ? [String(err.status), String(err.status)] : null);
+      if (httpMatch) {
+        reason = `http_${httpMatch[1]}`;
+      } else if (msg.includes('tool') || msg.includes('PGRST')) {
+        reason = 'tool_error';
+      } else {
+        reason = msg.toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, 30) || 'error';
+      }
+    }
+    const model = agent.modelName || 'default';
+    console.warn(`[seat] ${seat} ${agent.provider}/${model} failed reason=${reason} ms=${durationMs}`);
+  };
+
   const runAgent = async (p: string, cfg: any) => {
     if (typeof agent.run === 'function' && agent.run.length === 2) {
       return agent.run(p, cfg);
     }
     return agent.run(p, context, cfg);
+  };
+
+  const runAgentWithDeadline = async (p: string, cfg: any) => {
+    const callStartTime = Date.now();
+    const remainingSeatMs = seatDeadlineAt - callStartTime;
+    if (remainingSeatMs <= 0) {
+      const err = new Error('seat_deadline_timeout');
+      logFailure(callStartTime, err);
+      throw err;
+    }
+
+    const providerDeadlineMs = getProviderCallDeadlineMs(agent.provider);
+    const callTimeoutMs = Math.min(providerDeadlineMs, remainingSeatMs);
+    const controller = new AbortController();
+    const configWithSignal = {
+      ...cfg,
+      signal: controller.signal,
+      timeoutMs: Math.max(1000, callTimeoutMs - 2000)
+    };
+
+    let timer: any;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        const reason = remainingSeatMs <= callTimeoutMs ? 'seat_timeout' : 'call_timeout';
+        reject(new Error(reason));
+      }, callTimeoutMs);
+    });
+
+    try {
+      return await Promise.race([
+        runAgent(p, configWithSignal),
+        timeoutPromise
+      ]);
+    } catch (err: any) {
+      logFailure(callStartTime, err);
+      throw err;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   };
 
   const executedTools: string[] = [];
@@ -160,8 +235,10 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     if (nativeTools.length > 0) {
       r1Config.tools = nativeTools;
       r1Config.toolChoice = 'auto';
+      delete r1Config.responseMimeType;
+      delete r1Config.responseSchema;
     }
-    round1Output = await runAgent(prompt, r1Config);
+    round1Output = await runAgentWithDeadline(prompt, r1Config);
   } catch (err: any) {
     const msg = String(err?.message || err);
     const isToolError =
@@ -184,7 +261,7 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
         toolResults: `Tool results:\n${toolResultsSummary}\n\n${finalInstruction}`
       });
 
-      const fallbackOutput = await runAgent(fallbackPrompt, {
+      const fallbackOutput = await runAgentWithDeadline(fallbackPrompt, {
         groqMode: 'chat',
         systemInstruction,
         ...params.runConfig
@@ -221,7 +298,7 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     toolResults: `Tool results:\n${toolResultsSummary}\n\n${finalInstruction}`
   });
 
-  const round2Output = await runAgent(round2Prompt, {
+  const round2Output = await runAgentWithDeadline(round2Prompt, {
     groqMode: 'chat',
     systemInstruction,
     ...params.runConfig

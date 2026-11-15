@@ -288,11 +288,25 @@ export class ProviderLimiter {
     return Infinity;
   }
 
-  private async acquireSlot(provider: string): Promise<void> {
+  private async acquireSlot(provider: string, model: string = "default", maxWaitMs: number = 60_000): Promise<void> {
     const s = this.state(provider);
     const cfg = this.limits[provider];
     while (s.active >= cfg.concurrency) {
-      await new Promise<void>((resolve) => s.waiters.push(resolve));
+      let timer: any;
+      let waiterResolve: (() => void) | null = null;
+      try {
+        await new Promise<void>((resolve, reject) => {
+          waiterResolve = resolve;
+          s.waiters.push(resolve);
+          timer = setTimeout(() => {
+            const idx = s.waiters.indexOf(waiterResolve!);
+            if (idx !== -1) s.waiters.splice(idx, 1);
+            reject(new LimiterSkipError(provider, model, 'slot_wait_timeout'));
+          }, maxWaitMs);
+        });
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
     }
     s.active += 1;
     const isTest = typeof process !== "undefined" && !!process.env.VITEST;
@@ -318,7 +332,7 @@ export class ProviderLimiter {
     const skip = this.getSkipReason(provider, model);
     if (skip) throw new LimiterSkipError(provider, model, skip);
 
-    await this.acquireSlot(provider);
+    await this.acquireSlot(provider, model, req.maxBudgetWaitMs ?? 60_000);
     try {
       const maxBudgetWait = this.getMaxBudgetWaitMs(provider, req.maxBudgetWaitMs);
       const wait = this.budgetWaitMs(provider, estTokens);

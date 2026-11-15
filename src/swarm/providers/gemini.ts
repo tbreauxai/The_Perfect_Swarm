@@ -34,7 +34,15 @@ export class GeminiAdapter implements ProviderAdapter {
             reqConfig.systemInstruction = options.systemInstruction;
         }
 
-        const isJson = options.config?.responseMimeType === 'application/json';
+        const toolsPresent = Boolean(reqConfig.tools && (Array.isArray(reqConfig.tools) ? reqConfig.tools.length > 0 : true));
+        if (toolsPresent) {
+            delete reqConfig.responseMimeType;
+            delete reqConfig.responseSchema;
+            delete reqConfig.tools;
+            delete reqConfig.toolChoice;
+        }
+
+        const isJson = reqConfig.responseMimeType === 'application/json';
         const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 30000; // 30s default: fail fast on free-tier stalls instead of hanging for 2 minutes
 
         const executeGeneration = async (cfg: any): Promise<any> => {

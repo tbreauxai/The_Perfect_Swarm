@@ -42,8 +42,22 @@ export async function handleSwarmSse(
             }
         };
 
+        const defaultRunDeadline = 240000;
+        const runDeadlineMs = (typeof process !== 'undefined' && process.env?.SWARM_RUN_DEADLINE_MS)
+            ? Number(process.env.SWARM_RUN_DEADLINE_MS) || defaultRunDeadline
+            : defaultRunDeadline;
+
+        let lastStageSeen: string = 'init';
+        let deadlineTimer: any;
+        const deadlinePromise = new Promise<never>((_, reject) => {
+            deadlineTimer = setTimeout(() => {
+                reject(new Error('run_timeout'));
+            }, runDeadlineMs);
+        });
+
         try {
-            const result = await executeSwarmWorkflow({
+            const executor = (params as any).workflowExecutor || executeSwarmWorkflow;
+            const workflowPromise = executor({
                 ...params,
                 onEvent: async (event: SwarmEvent) => {
                     await sendEvent('swarm_event', event);
@@ -52,6 +66,11 @@ export async function handleSwarmSse(
                     }
                 },
                 onStage: async (stagePayload) => {
+                    if (typeof stagePayload === 'string') {
+                        lastStageSeen = stagePayload;
+                    } else if (stagePayload && typeof (stagePayload as any).stage === 'string') {
+                        lastStageSeen = (stagePayload as any).stage;
+                    }
                     await sendEvent('swarm_stage', stagePayload);
                     if (params.onStage) {
                         params.onStage(stagePayload);
@@ -64,6 +83,8 @@ export async function handleSwarmSse(
                     }
                 }
             });
+
+            const result = await Promise.race([workflowPromise, deadlinePromise]);
 
             const payload: any = { ...result };
             if (result.workflowId) {
@@ -84,8 +105,16 @@ export async function handleSwarmSse(
 
             await sendEvent('swarm_complete', payload);
         } catch (err: any) {
-            await sendEvent('swarm_error', { error: err.message || String(err) });
+            clearInterval(heartbeatInterval);
+            const errMsg = String(err?.message || err || '');
+            const errorReason = errMsg === 'run_timeout' ? 'run_timeout' : errMsg;
+            await sendEvent('swarm_error', {
+                error: errorReason,
+                stage: lastStageSeen
+            });
+            isClosed = true;
         } finally {
+            if (deadlineTimer) clearTimeout(deadlineTimer);
             clearInterval(heartbeatInterval);
         }
     });

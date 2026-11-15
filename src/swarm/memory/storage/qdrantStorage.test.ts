@@ -67,7 +67,10 @@ describe('QdrantStorageAdapter', () => {
                 targetApps: { data_type: 'keyword' },
                 agentRole: { data_type: 'keyword' },
                 qualityRating: { data_type: 'float' },
-                verified: { data_type: 'bool' }
+                verified: { data_type: 'bool' },
+                rule_type: { data_type: 'keyword' },
+                sport: { data_type: 'keyword' },
+                market_type: { data_type: 'keyword' }
                 // Notice outcome, gradedAt, and feedbackProcessed are missing!
             }
         });

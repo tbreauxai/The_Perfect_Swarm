@@ -1,7 +1,10 @@
 import { cleanToken, buildStandardMessages, parseStandardResponse, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
 
 /** GitHub Models was retired on 2026-07-30 (inference API, catalog and BYOK removed for everyone). */
-export const GITHUB_MODELS_RETIRED = true;
+export let GITHUB_MODELS_RETIRED = true;
+export function setGithubModelsRetiredForTest(val: boolean): void {
+    GITHUB_MODELS_RETIRED = val;
+}
 export const GITHUB_MODELS_RETIRED_MESSAGE =
     'GitHub Models was retired on 2026-07-30: the provider is disabled and its inference endpoint does not exist anymore. Pick another provider.';
 
@@ -23,6 +26,7 @@ export class GitHubAdapter implements ProviderAdapter {
 
         const isJson = options.config?.responseMimeType === 'application/json';
         const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 30000; // 30s default: fail fast on free-tier stalls instead of hanging for 2 minutes
+        const resolvedTools = options.config?.tools ?? [];
 
         const bodyParams: any = {
             model: options.modelName,
@@ -30,8 +34,12 @@ export class GitHubAdapter implements ProviderAdapter {
             temperature: options.config?.temperature || 0.7,
             max_tokens: options.config?.maxTokens || 8192
         };
-        if (isJson) {
+        if (isJson && !resolvedTools.length) {
             bodyParams.response_format = { type: 'json_object' };
+        }
+        if (resolvedTools.length > 0) {
+            bodyParams.tools = resolvedTools;
+            bodyParams.tool_choice = options.config?.toolChoice ?? 'auto';
         }
 
         const startTime = Date.now();
