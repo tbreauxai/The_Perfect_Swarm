@@ -39,6 +39,7 @@ import {
   executeScorecardSynthesis,
   emptySynthesisResult,
 } from "./scorecardManager.ts";
+import { isDataRequest } from "../parser/responseGuards.ts";
 import { planTriage, type TriagePlan } from "./triagePlanner.ts";
 import { executeTriage, type CuratedDossier } from "./triageExecutor.ts";
 import { globalGameQueryCache } from "../cache/gameQueryCache.ts";
@@ -382,66 +383,77 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 workflowDeduplicatedCount += synthesisResult.workflowDeduplicatedCount;
 
                 // Step 5 & 6: Verification vs Standard Synthesis Execution
-                try {
-                    if (blackboard) {
-                        // R2-S4/S5: critic + manager see the brief, the scorecards and citedRows only (never the full data).
-                        // The critic runs when deep analysis is on (same gate as the verification critic).
-                        finalAnalysis = await executeScorecardSynthesis({
-                            blackboard,
-                            managerAgent,
-                            analysts,
-                            dedicatedCriticAgent,
-                            runCritic: deepAnalysisRequested,
-                            context,
-                            activeVariant,
-                            bypassCache,
-                            settings,
-                            onStage: params.onStage
+                const flatReports = clusterResult.allAnalystReports.flat().filter(Boolean);
+                const allPlaceholderOrDataRequest = flatReports.length > 0 && flatReports.every(r => (r as any)._placeholder === true || isDataRequest(r));
+
+                if (allPlaceholderOrDataRequest) {
+                    finalAnalysis = {
+                        ui_title: 'Insufficient data',
+                        picks: [],
+                        reason: 'all seats requested data without actionable insights'
+                    };
+                } else {
+                    try {
+                        if (blackboard) {
+                            // R2-S4/S5: critic + manager see the brief, the scorecards and citedRows only (never the full data).
+                            // The critic runs when deep analysis is on (same gate as the verification critic).
+                            finalAnalysis = await executeScorecardSynthesis({
+                                blackboard,
+                                managerAgent,
+                                analysts,
+                                dedicatedCriticAgent,
+                                runCritic: deepAnalysisRequested,
+                                context,
+                                activeVariant,
+                                bypassCache,
+                                settings,
+                                onStage: params.onStage
+                            });
+                        } else if (deepAnalysisRequested && (analysts.length > 0 || dedicatedCriticAgent)) {
+                            const verificationResult = await runDeepAnalysisVerification({
+                                task,
+                                rawInput: profilingResult.rawInput,
+                                effectiveDynamicPrompt: synthesisResult.effectiveDynamicPrompt,
+                                effectiveCompiledReports: synthesisResult.effectiveCompiledReports,
+                                effectiveHistoricalContext: synthesisResult.effectiveHistoricalContext,
+                                managerAgent,
+                                analysts,
+                                dedicatedCriticAgent,
+                                context,
+                                settings
+                            });
+                            finalAnalysis = verificationResult.finalAnalysis;
+                            workflowLifecycleResult = verificationResult.lifecycleResult;
+                        } else {
+                            finalAnalysis = await executeManagerSynthesis(
+                                managerAgent,
+                                synthesisResult.effectiveDynamicPrompt,
+                                context,
+                                activeVariant,
+                                bypassCache,
+                                settings
+                            );
+                        }
+                    } catch (managerErr: any) {
+                        // PS1: the whole manager chain failed. Return the best analyst output as a partial answer.
+                        // Applies to chat AND morning runs (Architect decision 2026-10-16).
+                        const best = pickBestAnalystOutput(clusterResult.allAnalystReports, analysts);
+                        if (!best) {
+                            throw managerErr;
+                        }
+                        managerFailed = true;
+                        recordDegraded(context, managerAgent.id || 'manager');
+                        finalAnalysis = buildPartialFinalAnalysis(best, getDegraded(context));
+                        context.addEvent({
+                            agentRole: 'Partial Result Fallback',
+                            action: 'Manager Chain Exhausted',
+                            modelName: 'Local/PartialResult',
+                            prompt: `Manager chain failed; returning best analyst output from ${best.role} (${best.provider}) as a partial result.`,
+                            error: managerErr?.message || String(managerErr),
+                            output: { degraded: getDegraded(context) },
+                            durationMs: 0
                         });
-                    } else if (deepAnalysisRequested && (analysts.length > 0 || dedicatedCriticAgent)) {
-                        const verificationResult = await runDeepAnalysisVerification({
-                            task,
-                            rawInput: profilingResult.rawInput,
-                            effectiveDynamicPrompt: synthesisResult.effectiveDynamicPrompt,
-                            effectiveCompiledReports: synthesisResult.effectiveCompiledReports,
-                            effectiveHistoricalContext: synthesisResult.effectiveHistoricalContext,
-                            managerAgent,
-                            analysts,
-                            dedicatedCriticAgent,
-                            context,
-                            settings
-                        });
-                        finalAnalysis = verificationResult.finalAnalysis;
-                        workflowLifecycleResult = verificationResult.lifecycleResult;
-                    } else {
-                        finalAnalysis = await executeManagerSynthesis(
-                            managerAgent,
-                            synthesisResult.effectiveDynamicPrompt,
-                            context,
-                            activeVariant,
-                            bypassCache,
-                            settings
-                        );
                     }
-                } catch (managerErr: any) {
-                    // PS1: the whole manager chain failed. Return the best analyst output as a partial answer.
-                    // Applies to chat AND morning runs (Architect decision 2026-10-16).
-                    const best = pickBestAnalystOutput(clusterResult.allAnalystReports, analysts);
-                    if (!best) {
-                        throw managerErr;
-                    }
-                    managerFailed = true;
-                    recordDegraded(context, managerAgent.id || 'manager');
-                    finalAnalysis = buildPartialFinalAnalysis(best, getDegraded(context));
-                    context.addEvent({
-                        agentRole: 'Partial Result Fallback',
-                        action: 'Manager Chain Exhausted',
-                        modelName: 'Local/PartialResult',
-                        prompt: `Manager chain failed; returning best analyst output from ${best.role} (${best.provider}) as a partial result.`,
-                        error: managerErr?.message || String(managerErr),
-                        output: { degraded: getDegraded(context) },
-                        durationMs: 0
-                    });
                 }
             }
 
