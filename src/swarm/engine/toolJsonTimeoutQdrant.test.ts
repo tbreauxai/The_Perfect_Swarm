@@ -25,11 +25,11 @@ describe('Tool & JSON Mode Guards (Clause a)', () => {
 
     await executeOpenAiCompatibleChat(
       {
-        provider: 'groq',
         modelName: 'llama-3.3-70b-versatile',
+        apiKey: 'gsk_test',
         prompt: 'test',
         config: {
-          tools: [{ type: 'function', function: { name: 'get_matchup' } }]
+          tools: [{ type: 'function', function: { name: 'get_matchup', parameters: {} } }]
         }
       },
       {
@@ -58,8 +58,8 @@ describe('Tool & JSON Mode Guards (Clause a)', () => {
 
     await executeOpenAiCompatibleChat(
       {
-        provider: 'groq',
         modelName: 'llama-3.3-70b-versatile',
+        apiKey: 'gsk_test',
         prompt: 'test',
         config: { tools: [] }
       },
@@ -92,13 +92,12 @@ describe('Tool & JSON Mode Guards (Clause a)', () => {
     try {
       const adapter = new GitHubAdapter();
       await adapter.call({
-        provider: 'github',
         modelName: 'gpt-4o',
         apiKey: 'ghp_mock_token_12345',
         prompt: 'test',
         config: {
           responseMimeType: 'application/json',
-          tools: [{ type: 'function', function: { name: 'calc' } }]
+          tools: [{ type: 'function', function: { name: 'calc', parameters: {} } }]
         }
       });
 
@@ -125,14 +124,13 @@ describe('Tool & JSON Mode Guards (Clause a)', () => {
 
     const adapter = new GeminiAdapter();
     await adapter.call({
-      provider: 'gemini',
       modelName: 'gemini-2.5-flash',
       apiKey: 'AIzaSy_mock_key',
       aiClient: mockAiClient as any,
       prompt: 'test',
       config: {
         responseMimeType: 'application/json',
-        tools: [{ type: 'function', function: { name: 'tool1' } }]
+        tools: [{ type: 'function', function: { name: 'tool1', parameters: {} } }]
       }
     });
 
@@ -301,7 +299,7 @@ describe('Search/Upsert Payload Snapshots & UUIDs (Clause d)', () => {
           memoryType: 'graded_lesson',
           sport: 'football_nfl',
           qualityRating: 0.95
-        }
+        } as any
       },
       false
     );
