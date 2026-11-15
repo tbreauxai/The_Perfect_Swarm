@@ -54,6 +54,8 @@ function rowNumber(row: string): number {
     return Number(row.slice(1)) || 0;
 }
 
+import { parseGameHeaders } from '../context/gameHeaders.ts';
+
 /** Row ids cited by structured scorecards (picks + parlay legs), de-duplicated. */
 export function collectCitedRowIds(scorecards: BlackboardScorecard[]): string[] {
     const ids = new Set<string>();
@@ -66,13 +68,25 @@ export function collectCitedRowIds(scorecards: BlackboardScorecard[]): string[] 
     return Array.from(ids).sort((a, b) => rowNumber(a) - rowNumber(b));
 }
 
-/** citedRows = union of the cited row ids, each with its original table line from `data`. */
+/** citedRows = union of the cited row ids, each with its option text or table line from `data`. */
 export function buildCitedRows(data: string, rowIds: string[]): { citedRows: CitedRow[]; header?: string; unknownRows: string[] } {
+    const gameHeaders = parseGameHeaders(data);
+    const optionMap = new Map<string, string>();
+    for (const gh of gameHeaders) {
+        for (const opt of gh.options) {
+            optionMap.set(opt.id, opt.text);
+        }
+    }
+
     const { lines, headers } = indexTableRows(data);
     const citedRows: CitedRow[] = [];
     const unknownRows: string[] = [];
     let header: string | undefined;
     for (const row of rowIds) {
+        if (optionMap.has(row)) {
+            citedRows.push({ row, line: optionMap.get(row)! });
+            continue;
+        }
         const line = lines.get(row);
         if (line === undefined) {
             unknownRows.push(row);
