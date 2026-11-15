@@ -82,6 +82,29 @@ describe('DuelOdds Database RPC Tools', () => {
       expect(res2.error).toBe('invalid_game_id');
     });
 
+    it('rejects option citation IDs matching ^R\\d+$ with unresolved_game_id before RPC', async () => {
+      const mockFetch = vi.fn();
+      const res = await (getMatchupFundamentalsTool as any).execute(
+        { game_id: 'R169' },
+        { fetchFn: mockFetch as any, env: mockEnv }
+      );
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(res.success).toBe(false);
+      expect(res.error).toBe('unresolved_game_id');
+    });
+
+    it('returns unresolved_game_id when empty result returned for non-canonical ID', async () => {
+      const mockFetch = vi.fn(async () =>
+        new Response(JSON.stringify({ status: 'no_rows', source: 'empty' }), { status: 200 })
+      );
+      const res = await (getMatchupFundamentalsTool as any).execute(
+        { game_id: 'arbitrary-non-canonical-id' },
+        { fetchFn: mockFetch as any, env: mockEnv }
+      );
+      expect(res.success).toBe(false);
+      expect(res.error).toBe('unresolved_game_id');
+    });
+
     it('validates window parameter', async () => {
       const res = await (getMatchupFundamentalsTool as any).execute({
         game_id: 'g-1',
@@ -318,6 +341,57 @@ describe('DuelOdds Database RPC Tools', () => {
       expect(res.summary).toContain('Conditions: Snow | Temp: 28°F (-2°C)');
       expect(res.summary).toContain('Wind: 16 mph NW | Precip: 65%');
       expect(estimateTokens(res.summary)).toBeLessThanOrEqual(250);
+    });
+    it('rejects option citation IDs matching ^R\\d+$ with unresolved_game_id before RPC', async () => {
+      const mockFetch = vi.fn();
+      const res = await (getEnvironmentAndWeatherTool as any).execute(
+        { game_id: 'R169' },
+        { fetchFn: mockFetch as any, env: mockEnv }
+      );
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(res.success).toBe(false);
+      expect(res.error).toBe('unresolved_game_id');
+    });
+
+    it('parses nested weather object and missing fields as N/A without 0% or Clear fallbacks', async () => {
+      const mockFetch = vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            weather: {
+              temp_f: 55
+              // condition, temp_c, wind_mph, precip_prob omitted
+            }
+          }),
+          { status: 200 }
+        )
+      );
+
+      const res = await (getEnvironmentAndWeatherTool as any).execute(
+        { game_id: 'nfl-401547632' },
+        { fetchFn: mockFetch as any, env: mockEnv }
+      );
+
+      expect(res.success).toBe(true);
+      expect(res.is_dome).toBe(false);
+      expect(res.summary).toContain('Conditions: N/A | Temp: 55°F (13°C)');
+      expect(res.summary).toContain('Wind: N/A | Precip: N/A');
+      expect(res.summary).not.toContain('Clear');
+      expect(res.summary).not.toContain('0%');
+    });
+
+    it('treats indoor: true and status: dome_short_circuit as dome', async () => {
+      const mockFetch = vi.fn(async () =>
+        new Response(JSON.stringify({ status: 'dome_short_circuit' }), { status: 200 })
+      );
+
+      const res = await (getEnvironmentAndWeatherTool as any).execute(
+        { game_id: 'nfl-401547632' },
+        { fetchFn: mockFetch as any, env: mockEnv }
+      );
+
+      expect(res.success).toBe(true);
+      expect(res.is_dome).toBe(true);
+      expect(res.summary).toContain('Indoor / Dome (climate-controlled)');
     });
   });
 
