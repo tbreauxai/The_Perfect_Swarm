@@ -1,7 +1,10 @@
 import { cleanToken, buildStandardMessages, parseStandardResponse, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
 
 /** GitHub Models was retired on 2026-07-30 (inference API, catalog and BYOK removed for everyone). */
-export const GITHUB_MODELS_RETIRED = true;
+export let GITHUB_MODELS_RETIRED = true;
+export function setGithubModelsRetiredForTest(val: boolean): void {
+    GITHUB_MODELS_RETIRED = val;
+}
 export const GITHUB_MODELS_RETIRED_MESSAGE =
     'GitHub Models was retired on 2026-07-30: the provider is disabled and its inference endpoint does not exist anymore. Pick another provider.';
 

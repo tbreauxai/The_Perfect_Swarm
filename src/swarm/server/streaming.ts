@@ -56,7 +56,8 @@ export async function handleSwarmSse(
         });
 
         try {
-            const workflowPromise = executeSwarmWorkflow({
+            const executor = (params as any).workflowExecutor || executeSwarmWorkflow;
+            const workflowPromise = executor({
                 ...params,
                 onEvent: async (event: SwarmEvent) => {
                     await sendEvent('swarm_event', event);
