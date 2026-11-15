@@ -4,6 +4,7 @@ import type { SwarmWorkflowParams } from './types.ts';
 import type { SwarmEngineSettings } from '../types.ts';
 import type { AgentVariantConfig } from '../experiment.ts';
 import { ToolRegistry } from '../tools/index.ts';
+import { parseGameHeaders, renderHeaders } from '../context/gameHeaders.ts';
 import {
     globalHierarchicalMessageBus,
     type ClusterDigest,
@@ -613,12 +614,13 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
             }
         } else {
             const usePool = optimizationEnabled && (optSettings?.workerPoolConcurrency ?? 4) > 1;
+            const headersPayload = renderHeaders(parseGameHeaders(chunks[0] || task, (params as any)?.eventIds), 1600);
             const chunkReports = usePool
                 ? await globalPredictionWorkerPool.submitBatch(
-                    analysts.map((analyst) => () => executeAnalyst(analyst, chunks[0], 0))
+                    analysts.map((analyst) => () => executeAnalyst(analyst, headersPayload, 0))
                 )
                 : await Promise.all(
-                    analysts.map((analyst) => executeAnalyst(analyst, chunks[0], 0))
+                    analysts.map((analyst) => executeAnalyst(analyst, headersPayload, 0))
                 );
             for (let a = 0; a < analysts.length; a++) {
                 const rep = chunkReports[a];

@@ -3,6 +3,8 @@ import { SwarmContext } from './context.ts';
 import { parseJsonSafe, guardVerificationResult } from './parser.ts';
 import { redactForLog } from './parser/responseGuards.ts';
 import { groqPromptCharCap } from './providers/groq.ts';
+import { seatBudget } from './context/promptBudget.ts';
+import { parseGameHeaders, renderHeaders } from './context/gameHeaders.ts';
 
 import type { VerificationResult } from './types.ts';
 export type { VerificationResult };
@@ -76,15 +78,9 @@ export class AnalysisLifecycle {
             let executePrompt: string;
             if (feedback) {
                 const feedbackSummary = feedback.length > 2000 ? `${feedback.slice(0, 2000)}...` : feedback;
-                const rawDataSnippet = proposerPrompt.includes('[Raw Data]') || proposerPrompt.includes('Analyst Reports')
-                    ? ''
-                    : `\n\n[Raw Data Context]:\n${typeof rawData === 'string' ? rawData.slice(0, 2500) : JSON.stringify(rawData).slice(0, 2500)}`;
-                executePrompt = `${proposerPrompt}\n\n[Previous Verification Critique & Corrections Required (Attempt ${attempt - 1})]:\n${feedbackSummary}${rawDataSnippet}\n\nPlease revise your proposal to address the critic's feedback while preserving valid insights.`;
+                executePrompt = `${proposerPrompt}\n\n[Previous Verification Critique & Corrections Required (Attempt ${attempt - 1})]:\n${feedbackSummary}\n\nPlease revise your proposal to address the critic's feedback while preserving valid insights.`;
             } else {
-                const rawDataSection = proposerPrompt.includes('[Raw Data]') || proposerPrompt.includes('Analyst Reports')
-                    ? ''
-                    : `\n\n[Raw Data]:\n${typeof rawData === 'string' ? rawData.slice(0, 4000) : JSON.stringify(rawData).slice(0, 4000)}`;
-                executePrompt = `${proposerPrompt}${rawDataSection}`;
+                executePrompt = proposerPrompt;
             }
 
             context.addEvent({
@@ -96,7 +92,8 @@ export class AnalysisLifecycle {
             
             const proposalRaw = await this.proposer.run(executePrompt, context, {
                 responseMimeType: 'application/json',
-                bypassCache: attempt > 1
+                bypassCache: attempt > 1,
+                groqMode: 'chat'
             });
             
             currentProposal = parseJsonSafe(proposalRaw, { rawText: proposalRaw, error: "Failed to parse JSON" });
@@ -109,7 +106,7 @@ export class AnalysisLifecycle {
                 prompt: "[Internal Verification]"
             });
             
-            const CAP = groqPromptCharCap(undefined);
+            const CAP = seatBudget(this.critic.provider).maxPromptChars;
             const PROPOSAL_MAX = 3000;
             const REMINDER = 'Reply only {"pass":boolean,"feedback":string}.';
 
@@ -147,16 +144,15 @@ export class AnalysisLifecycle {
 
             const promptHeader = `${VERIFICATION_OUTPUT_CONTRACT}\n\n${criticPrompt}\n\nEvaluate the [Proposal] below against the [Analyst Reports Sample].`;
             const proposalSection = `\n\n[Proposal]:\n${proposalSample}`;
-            const reportSection = `\n\n[Analyst Reports Sample]:\n`;
             const trailer = `\n\n${REMINDER}`;
-            const maxReportBudget = CAP - (promptHeader.length + proposalSection.length + reportSection.length + trailer.length);
+            const maxReportBudget = CAP - (promptHeader.length + proposalSection.length + trailer.length + 2);
             const limitedReportSample = reportSample.length > maxReportBudget
                 ? `${reportSample.slice(0, Math.max(0, maxReportBudget - 1)).trimEnd().replace(/\s+\S*$/, '')}…`
                 : reportSample;
 
-            const verifyPrompt = `${promptHeader}${proposalSection}${reportSection}${limitedReportSample}${trailer}`;
+            const verifyPrompt = `${promptHeader}${proposalSection}\n\n${limitedReportSample}${trailer}`;
             if (verifyPrompt.length > CAP) {
-                throw new Error(`Verification prompt exceeded Groq cap (${verifyPrompt.length} > ${CAP}).`);
+                throw new Error(`Verification prompt exceeded budget cap (${verifyPrompt.length} > ${CAP}).`);
             }
 
             const verificationRaw = await this.critic.run(verifyPrompt, context, {
@@ -169,31 +165,37 @@ export class AnalysisLifecycle {
                 console.warn(`[Critic] unparsed verification output (attempt ${attempt}): ${redactForLog(String(verificationRaw)).slice(0, 300)}`);
             }
 
-            // A claim that cites no field in the raw board is a veto
+            // A claim that cites no field in the game slate or tool results is a veto
             if (verification.pass && currentProposal) {
-                const rawBoardText = typeof rawData === 'string'
+                const slateHeaders = renderHeaders(parseGameHeaders(rawData));
+                const toolResultsSummary = typeof rawData === 'object' && rawData && 'toolResults' in rawData
+                    ? String((rawData as any).toolResults)
+                    : '';
+                const allowedSourceText = `${slateHeaders}\n${toolResultsSummary}`.trim();
+                const fallbackBoardText = typeof rawData === 'string'
                     ? rawData
-                    : (rawData?.rawBoard || rawData?.dataSample || JSON.stringify(rawData));
+                    : (rawData?.rawBoard || rawData?.dataSample || JSON.stringify(rawData || ''));
+                const verificationSource = (allowedSourceText || fallbackBoardText).toLowerCase();
+
                 const candidateClaims = Array.isArray(currentProposal.arguments)
                     ? currentProposal.arguments
                     : (Array.isArray(currentProposal.claims) ? currentProposal.claims : []);
 
-                if (candidateClaims.length > 0 && rawBoardText) {
-                    const rawLower = String(rawBoardText).toLowerCase();
+                if (candidateClaims.length > 0 && verificationSource) {
                     for (const arg of candidateClaims) {
                         const claimSupporting = typeof arg === 'object' && arg !== null
                             ? (arg.supportingData || arg.field || arg.claim || '')
                             : String(arg);
                         if (!claimSupporting || !claimSupporting.trim()) {
                             verification.pass = false;
-                            verification.feedback = 'Veto: Claim cites no field in the raw board.';
+                            verification.feedback = 'Veto: Claim cites no field in the source data.';
                             break;
                         }
                         const tokens = String(claimSupporting).toLowerCase().match(/[a-z0-9_]{3,}/g) || [];
-                        const citesField = tokens.some(tok => rawLower.includes(tok));
+                        const citesField = tokens.some(tok => verificationSource.includes(tok));
                         if (!citesField && tokens.length > 0) {
                             verification.pass = false;
-                            verification.feedback = `Veto: Claim "${String(claimSupporting).slice(0, 80)}" cites no field in the raw board.`;
+                            verification.feedback = `Veto: Claim "${String(claimSupporting).slice(0, 80)}" cites no field in the source data.`;
                             break;
                         }
                     }

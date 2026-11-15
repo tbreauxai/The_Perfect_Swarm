@@ -43,10 +43,15 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
         wasRepaired = true;
     }
 
+    let isPlaceholder = raw?._placeholder === true;
     if (insights.length === 0) {
         const fallbackText = typeof input === 'string' ? input.slice(0, 300) : JSON.stringify(raw).slice(0, 300);
         insights = [`[${role}] ${fallbackText || 'Completed analysis'}`];
         wasRepaired = true;
+        isPlaceholder = true;
+    }
+    if (insights.some(i => /fabricated insights for|placeholder insight/i.test(i))) {
+        isPlaceholder = true;
     }
 
     let anomalies: string[] = [];
@@ -63,6 +68,9 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
     } else {
         summary = `${role} analytical assessment completed (${insights.length} insight${insights.length === 1 ? '' : 's'}).`;
         wasRepaired = true;
+    }
+    if (/fabricated insights for/i.test(summary)) {
+        isPlaceholder = true;
     }
 
     const primaryHypothesis = typeof raw?.primaryHypothesis === 'string' && raw.primaryHypothesis.trim().length > 0
@@ -86,8 +94,29 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
         ...(primaryHypothesis ? { primaryHypothesis } : {}),
         ...(counterHypothesis ? { counterHypothesis } : {}),
         ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
-        ...(wasRepaired ? { _repaired: true } : {})
+        ...(wasRepaired ? { _repaired: true } : {}),
+        ...(isPlaceholder ? { _placeholder: true } : {})
     };
+}
+
+/**
+ * Checks if an analyst report is purely requesting more data without actionable insights.
+ */
+export function isDataRequest(report: any): boolean {
+    if (!report || typeof report !== 'object') return false;
+    const textToScan = [
+        typeof report.summary === 'string' ? report.summary : '',
+        Array.isArray(report.insights) ? report.insights.join(' ') : '',
+        typeof report.unstructured === 'string' ? report.unstructured : '',
+        typeof report.text === 'string' ? report.text : ''
+    ].join(' ');
+
+    const isRequestPattern = /data gathering|need (more )?data|requesting .*context|insufficient/i.test(textToScan);
+    if (!isRequestPattern) return false;
+
+    // Check if it contains tool-sourced numbers
+    const hasToolNumbers = /[-+]?\d+(\.\d+)?%|[-+]\d{3,}|\b\d+\.\d+\b/.test(textToScan);
+    return !hasToolNumbers;
 }
 
 /**

@@ -44,6 +44,25 @@ export function resolveSupabaseRpcConfig(
   return { supabaseUrl: url, key: publishableKey };
 }
 
+export function isCanonicalOrHexId(id: string): boolean {
+  return /^[a-z]+-\d+$/i.test(id) || /^[a-f0-9]{32}$/i.test(id);
+}
+
+export function isOptionCitationId(id: string): boolean {
+  return /^R\d+$/i.test(id);
+}
+
+export function isRpcEmptyResult(d: unknown): boolean {
+  if (d === null || d === undefined) return true;
+  if (Array.isArray(d)) return d.length === 0;
+  if (typeof d === 'object') {
+    const obj = d as Record<string, unknown>;
+    if (obj.source === 'empty' || obj.status === 'no_rows' || obj.empty === true) return true;
+    return Object.keys(obj).length === 0;
+  }
+  return false;
+}
+
 export type SupabaseRpcCallResult<T = any> =
   | { ok: true; data: T; error?: undefined; message?: undefined }
   | { ok: false; error: string; message: string; data?: undefined };
@@ -71,6 +90,7 @@ export async function callSupabaseRpc<T = any>(
     };
   }
 
+  const startMs = Date.now();
   try {
     const res = await fetchFn(`${cfg.supabaseUrl}/rest/v1/rpc/${rpcName}`, {
       method: 'POST',
@@ -83,8 +103,10 @@ export async function callSupabaseRpc<T = any>(
       body: JSON.stringify(params)
     });
 
+    const ms = Date.now() - startMs;
     if (!res.ok) {
       const errText = await res.text().catch(() => '');
+      console.log(`[RPC] fn=${rpcName} status=${res.status} empty=true ms=${ms}`);
       return {
         ok: false,
         error: `rpc_failed_${res.status}`,
@@ -93,8 +115,12 @@ export async function callSupabaseRpc<T = any>(
     }
 
     const data = (await res.json().catch(() => null)) as T;
+    const empty = isRpcEmptyResult(data);
+    console.log(`[RPC] fn=${rpcName} status=${res.status} empty=${empty} ms=${ms}`);
     return { ok: true, data };
   } catch (err: any) {
+    const ms = Date.now() - startMs;
+    console.log(`[RPC] fn=${rpcName} status=network empty=true ms=${ms}`);
     return {
       ok: false,
       error: 'rpc_network_error',
@@ -133,6 +159,15 @@ export const getMatchupFundamentalsTool: SwarmTool = {
     }
     const gameId = args.game_id.trim();
 
+    if (isOptionCitationId(gameId)) {
+      return {
+        success: false,
+        error: 'unresolved_game_id',
+        message: `Game ID '${gameId}' is an option citation ID, not a canonical event ID.`,
+        summary: `Error: Game ID '${gameId}' is an option citation ID, not a canonical event ID.`
+      };
+    }
+
     let windowVal: string | undefined = undefined;
     if (args.window !== undefined) {
       const norm = String(args.window).trim();
@@ -164,6 +199,14 @@ export const getMatchupFundamentalsTool: SwarmTool = {
     }
 
     const d = rpcRes.data || {};
+    if (isRpcEmptyResult(d) && !isCanonicalOrHexId(gameId)) {
+      return {
+        success: false,
+        error: 'unresolved_game_id',
+        message: `Game ID '${gameId}' could not be resolved to a canonical event.`,
+        summary: `Error: Game ID '${gameId}' could not be resolved to canonical event.`
+      };
+    }
     const homePace = d.home_pace ?? d.pace?.home ?? 'N/A';
     const awayPace = d.away_pace ?? d.pace?.away ?? 'N/A';
     const netOff = d.net_off_margin ?? d.off_margin ?? 'N/A';
@@ -217,6 +260,16 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
       };
     }
     const gameId = args.game_id.trim();
+
+    if (isOptionCitationId(gameId)) {
+      return {
+        success: false,
+        error: 'unresolved_game_id',
+        message: `Game ID '${gameId}' is an option citation ID, not a canonical event ID.`,
+        summary: `Error: Game ID '${gameId}' is an option citation ID, not a canonical event ID.`
+      };
+    }
+
     const positionGroup = typeof args.position_group === 'string' && args.position_group.trim()
       ? args.position_group.trim()
       : undefined;
@@ -237,6 +290,14 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
     }
 
     const d = rpcRes.data || {};
+    if (isRpcEmptyResult(d) && !isCanonicalOrHexId(gameId)) {
+      return {
+        success: false,
+        error: 'unresolved_game_id',
+        message: `Game ID '${gameId}' could not be resolved to a canonical event.`,
+        summary: `Error: Game ID '${gameId}' could not be resolved to canonical event.`
+      };
+    }
     const injuries = Array.isArray(d.injuries)
       ? d.injuries
       : Array.isArray(d.players)
@@ -427,6 +488,15 @@ export const getEnvironmentAndWeatherTool: SwarmTool = {
     }
     const gameId = args.game_id.trim();
 
+    if (isOptionCitationId(gameId)) {
+      return {
+        success: false,
+        error: 'unresolved_game_id',
+        message: `Game ID '${gameId}' is an option citation ID, not a canonical event ID.`,
+        summary: `Error: Game ID '${gameId}' is an option citation ID, not a canonical event ID.`
+      };
+    }
+
     // Short-circuit: if caller already provided is_dome === true, bypass RPC network call
     if (args.is_dome === true) {
       return {
@@ -455,7 +525,17 @@ export const getEnvironmentAndWeatherTool: SwarmTool = {
     }
 
     const d = rpcRes.data || {};
-    const isDome = Boolean(d.is_dome || d.dome_closed || d.indoor);
+    if (isRpcEmptyResult(d) && !isCanonicalOrHexId(gameId)) {
+      return {
+        success: false,
+        error: 'unresolved_game_id',
+        message: `Game ID '${gameId}' could not be resolved to a canonical event.`,
+        summary: `Error: Game ID '${gameId}' could not be resolved to canonical event.`
+      };
+    }
+
+    const w = (typeof d.weather === 'object' && d.weather !== null ? d.weather : d) || {};
+    const isDome = Boolean(d.indoor || d.status === 'dome_short_circuit' || d.is_dome || d.dome_closed || w.indoor || w.is_dome);
 
     if (isDome) {
       return {
@@ -468,17 +548,31 @@ export const getEnvironmentAndWeatherTool: SwarmTool = {
       };
     }
 
-    const tempF = d.temp_f ?? (d.temp_c !== undefined ? Math.round((d.temp_c * 9) / 5 + 32) : 'N/A');
-    const tempC = d.temp_c ?? (d.temp_f !== undefined ? Math.round(((d.temp_f - 32) * 5) / 9) : 'N/A');
-    const windMph = d.wind_mph ?? (d.wind_kph !== undefined ? Math.round(d.wind_kph * 0.621371) : 'N/A');
-    const windDir = d.wind_dir || d.wind_direction || '';
-    const precipProb = d.precip_prob !== undefined ? `${Math.round(d.precip_prob <= 1 ? d.precip_prob * 100 : d.precip_prob)}%` : '0%';
-    const condition = d.condition || 'Clear';
+    const tempF = w.temp_f ?? (w.temp_c !== undefined && w.temp_c !== null ? Math.round((Number(w.temp_c) * 9) / 5 + 32) : 'N/A');
+    const tempC = w.temp_c ?? (w.temp_f !== undefined && w.temp_f !== null ? Math.round(((Number(w.temp_f) - 32) * 5) / 9) : 'N/A');
+    const windMph = w.wind_mph ?? (w.wind_kph !== undefined && w.wind_kph !== null ? Math.round(Number(w.wind_kph) * 0.621371) : 'N/A');
+    const windDir = w.wind_dir || w.wind_direction || '';
+    const precipProb = w.precip_prob !== undefined && w.precip_prob !== null
+      ? `${Math.round(Number(w.precip_prob) <= 1 ? Number(w.precip_prob) * 100 : Number(w.precip_prob))}%`
+      : 'N/A';
+    const condition = w.condition || 'N/A';
+
+    const tempStr = tempF !== 'N/A' && tempC !== 'N/A'
+      ? `${tempF}°F (${tempC}°C)`
+      : tempF !== 'N/A'
+        ? `${tempF}°F`
+        : tempC !== 'N/A'
+          ? `${tempC}°C`
+          : 'N/A';
+
+    const windStr = windMph !== 'N/A'
+      ? `${windMph} mph${windDir ? ` ${windDir}` : ''}`
+      : 'N/A';
 
     const summary = [
       `[ENVIRONMENT & WEATHER: ${gameId}]`,
-      `Conditions: ${condition} | Temp: ${tempF}°F (${tempC}°C)`,
-      `Wind: ${windMph} mph ${windDir} | Precip: ${precipProb}`
+      `Conditions: ${condition} | Temp: ${tempStr}`,
+      `Wind: ${windStr} | Precip: ${precipProb}`
     ].join('\n');
 
     return {
@@ -519,6 +613,17 @@ export const getMarketMovementTool: SwarmTool = {
         summary: 'Error: Missing or empty game_id parameter.'
       };
     }
+    const gameId = args.game_id.trim();
+
+    if (isOptionCitationId(gameId)) {
+      return {
+        success: false,
+        error: 'unresolved_game_id',
+        message: `Game ID '${gameId}' is an option citation ID, not a canonical event ID.`,
+        summary: `Error: Game ID '${gameId}' is an option citation ID, not a canonical event ID.`
+      };
+    }
+
     if (typeof args.market_type !== 'string' || !args.market_type.trim()) {
       return {
         success: false,
@@ -527,7 +632,6 @@ export const getMarketMovementTool: SwarmTool = {
         summary: 'Error: Missing or empty market_type parameter.'
       };
     }
-    const gameId = args.game_id.trim();
     const marketType = args.market_type.trim();
 
     const rpcRes = await callSupabaseRpc(
@@ -546,6 +650,14 @@ export const getMarketMovementTool: SwarmTool = {
     }
 
     const d = rpcRes.data || {};
+    if (isRpcEmptyResult(d) && !isCanonicalOrHexId(gameId)) {
+      return {
+        success: false,
+        error: 'unresolved_game_id',
+        message: `Game ID '${gameId}' could not be resolved to a canonical event.`,
+        summary: `Error: Game ID '${gameId}' could not be resolved to canonical event.`
+      };
+    }
     const snapshotsTracked = typeof d.snapshots_tracked === 'number' ? d.snapshots_tracked : Number(d.snapshots_tracked) || 0;
     if (!snapshotsTracked || snapshotsTracked === 0) {
       return {

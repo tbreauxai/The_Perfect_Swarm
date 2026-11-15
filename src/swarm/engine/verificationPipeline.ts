@@ -4,6 +4,7 @@ import { AnalysisLifecycle } from '../lifecycle.ts';
 import { guardManagerResponse } from '../parser.ts';
 import { globalSpecialistProfiler } from '../loadBalancer.ts';
 import { getManagerContextTokenCeiling } from './synthesisPipeline.ts';
+import { parseGameHeaders, renderHeaders } from '../context/gameHeaders.ts';
 
 import type { SwarmEngineSettings } from '../types.ts';
 
@@ -62,17 +63,14 @@ export async function runDeepAnalysisVerification(
         prompt: `Auditing synthesized proposal against raw findings with cross-provider verification (max 2 attempts)`
     });
 
-    const ceilingTokens = getManagerContextTokenCeiling(managerAgent.provider);
-    const maxChars = ceilingTokens * 4;
-    const rawBoardSlice = typeof rawInput === 'string'
-        ? (rawInput.length > maxChars ? rawInput.slice(0, maxChars) : rawInput)
-        : JSON.stringify(rawInput || '').slice(0, maxChars);
+    const parsedHeaders = parseGameHeaders(rawInput || task, (p as any)?.params?.eventIds);
+    const headersText = renderHeaders(parsedHeaders, 1600);
 
     const lifecycleResult = await lifecycle.executeAndVerify(
         {
             task,
-            dataSample: rawBoardSlice,
-            rawBoard: rawBoardSlice,
+            dataSample: headersText,
+            rawBoard: headersText,
             analystReports: effectiveCompiledReports,
             historicalBaselines: effectiveHistoricalContext
         },

@@ -13,7 +13,7 @@ describe("provider-specific tool handling", () => {
   ])("%s normal analyst preserves game data and applies its tool policy", async (provider, usesTools) => {
     let systemInstruction = "";
     let prompt = "";
-    let runConfig: any;
+    const configs: any[] = [];
     const analyst = {
       id: `${provider}-seat`,
       role: "Test Analyst",
@@ -22,7 +22,7 @@ describe("provider-specific tool handling", () => {
       setSystemInstruction: vi.fn((value: string) => { systemInstruction = value; }),
       async run(value: string, _context: unknown, config: any) {
         prompt = value;
-        runConfig = config;
+        configs.push(config);
         return '[TOOL_CALL:{"tool":"test_tool","parameters":{"value":7}}]';
       },
     };
@@ -47,15 +47,12 @@ describe("provider-specific tool handling", () => {
 
     await executeAnalyst(analyst as any, gameData, 0);
 
-    expect(prompt).toContain(`Data Chunk [1/1]:\n${gameData}`);
-    if (provider === "groq") {
-      expect(systemInstruction.includes(toolRegistry.renderPromptSchema())).toBe(false);
-      expect(runConfig.tools).toHaveLength(1);
-      expect(runConfig.tools[0].function.name).toBe("test_tool");
-      expect(runConfig.toolChoice).toBe("auto");
-    } else {
-      expect(systemInstruction.includes(toolRegistry.renderPromptSchema())).toBe(usesTools);
-    }
+    expect(prompt).toContain("Game Slate:");
+    expect(prompt).not.toContain("Data Chunk [1/1]:");
+    expect(systemInstruction.includes(toolRegistry.renderPromptSchema())).toBe(false);
+    expect(configs[0].tools).toHaveLength(1);
+    expect(configs[0].tools[0].function.name).toBe("test_tool");
+    expect(configs[0].toolChoice).toBe("auto");
     expect(context.events.some((event) => event.action === "Executed Tool: test_tool")).toBe(true);
     expect(context.events.find((event) => event.action === "Executed Tool: test_tool")?.output).toEqual({ value: 7 });
   });

@@ -10,7 +10,8 @@ export const AnalystResponseSchema = z.object({
   primaryHypothesis: z.string().optional().describe("Primary predictive or causal hypothesis derived from observations"),
   counterHypothesis: z.string().optional().describe("Counter-hypothesis or alternative explanation that could falsify the primary hypothesis"),
   metadata: z.record(z.string(), z.any()).optional().describe("Contextual analytical metadata including reasoningTraces"),
-  _repaired: z.boolean().optional().describe("Flag indicating local format repair occurred without secondary LLM retry")
+  _repaired: z.boolean().optional().describe("Flag indicating local format repair occurred without secondary LLM retry"),
+  _placeholder: z.boolean().optional().describe("Flag indicating synthesized or placeholder output without actionable insight")
 });
 
 /**
