@@ -4,8 +4,8 @@ import {
   getMarketMovementTool
 } from '../swarm/tools/dueloddsRpcTools.ts';
 import { upsertGameJudgmentV2 } from '../swarm/morning/supabase.ts';
-import type { SlateGame, SupabaseConfig } from '../swarm/types.ts';
-import type { JudgmentV2 } from '../swarm/morning/types.ts';
+import type { SlateGame, SupabaseConfig } from '../swarm/morning/index.ts';
+import type { JudgmentV2 } from '../swarm/morning/judgment.ts';
 
 const mockEnv = {
   SUPABASE_URL: 'https://mock.supabase.co',
@@ -33,8 +33,11 @@ const mockGame: SlateGame = {
 };
 
 const mockJudgmentV2: JudgmentV2 = {
+  schemaVersion: 2,
+  eventId: 'nba-bos-dal-2026',
+  sport: 'basketball_nba',
   side: 'home',
-  confidence: 'medium',
+  confidence: 0.75,
   projMargin: 5.5,
   projTotal: 228.0,
   totalLean: 'over',
