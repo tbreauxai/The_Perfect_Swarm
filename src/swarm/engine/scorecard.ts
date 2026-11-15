@@ -12,6 +12,8 @@ import {
 import { isJudgmentSchemaV2, sideEvColumn } from "../morning/judgment.ts";
 import { parseJsonSafe } from "../parser.ts";
 import { recordDegraded } from "./partialResult.ts";
+import type { ToolRegistry } from "../tools/index.ts";
+import { runSeatWithTools } from "./seatToolLoop.ts";
 
 /** R2-S1: analyst max output tokens in scorecard mode (a scorecard is ~150 tokens). */
 export const SCORECARD_ANALYST_MAX_TOKENS = 800;
@@ -243,11 +245,26 @@ export async function runScorecardSeat<T = AnalystScorecard>(opts: {
     context: SwarmContext;
     runConfig: AgentRunConfig;
     schema?: { safeParse: (data: unknown) => any };
+    registry?: ToolRegistry;
+    finalInstruction?: string;
+    gameId?: string;
 }): Promise<ScorecardSeatResult<T>> {
     const { agent, seat, prompt, context, runConfig } = opts;
     const schema = opts.schema || AnalystScorecardSchema;
 
-    const first = await agent.run(prompt, context, runConfig);
+    const first = opts.registry
+        ? (await runSeatWithTools({
+            agent,
+            seat,
+            prompt,
+            systemInstruction: (runConfig as any)?.systemInstruction,
+            registry: opts.registry,
+            context,
+            finalInstruction: opts.finalInstruction || 'Answer now, no tool calls.',
+            gameId: opts.gameId,
+            runConfig
+        })).report
+        : await agent.run(prompt, context, runConfig);
     const v1 = validateScorecard<T>(first, seat, schema);
     if (v1.ok) {
         return {

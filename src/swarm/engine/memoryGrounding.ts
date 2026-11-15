@@ -388,7 +388,6 @@ export async function resolveMemoryGrounding(
                             console.warn(
                                 `[MemoryGrounding] on-demand pull ${onDemand.error}: ${onDemand.detail || ''}`
                             );
-                            historicalContext += `\n\n[DUELODDS SUPABASE ON-DEMAND] ${onDemand.error}${onDemand.detail ? ': ' + onDemand.detail : ''}`;
                         }
                     }
                 }

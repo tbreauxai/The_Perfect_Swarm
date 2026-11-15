@@ -26,6 +26,7 @@ export interface RunSeatWithToolsParams {
   finalInstruction?: string;
   gameId?: string;
   cache?: GameQueryCache;
+  runConfig?: any;
   options?: {
     env?: Record<string, string | undefined>;
     fetchFn?: typeof fetch;
@@ -69,10 +70,11 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
 
   const budget = params.budget || seatBudget(agent.provider);
   const baseTools = getRoleToolNames(seat);
+  const hasBaseTools = baseTools.some(t => registry.has(t));
+  const candidateNames = hasBaseTools ? [...baseTools] : registry.list().map(t => t.name);
 
   // Check if get_historical_lessons fits in the prompt budget
-  const candidateNames = [...baseTools];
-  if (registry.has('get_historical_lessons')) {
+  if (hasBaseTools && registry.has('get_historical_lessons')) {
     const testScoped = registry.scoped([...candidateNames, 'get_historical_lessons']);
     const testSchemas = JSON.stringify(testScoped.toOpenAiTools());
     try {
@@ -87,7 +89,7 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     }
   }
 
-  const scopedRegistry = registry.scoped(candidateNames);
+  const scopedRegistry = hasBaseTools ? registry.scoped(candidateNames) : registry;
   const nativeTools = scopedRegistry.toOpenAiTools();
   const toolSchemasStr = JSON.stringify(nativeTools);
 
@@ -98,6 +100,13 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     prompt
   });
 
+  const runAgent = async (p: string, cfg: any) => {
+    if (typeof agent.run === 'function' && agent.run.length === 2) {
+      return agent.run(p, cfg);
+    }
+    return agent.run(p, context, cfg);
+  };
+
   const executedTools: string[] = [];
 
   const executeCalls = async (calls: { tool: string; parameters: Record<string, unknown> }[]) => {
@@ -105,8 +114,8 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     const results = await Promise.all(
       callsToRun.map(async (c) => {
         executedTools.push(c.tool);
-        context?.addEvent?.(`Executed Tool: ${c.tool}`);
-        return executeToolWithCacheAndTimeout(
+        const startTime = Date.now();
+        const res = await executeToolWithCacheAndTimeout(
           { tool: c.tool, parameters: c.parameters },
           { game_id: (c.parameters.game_id as string) || (c.parameters.p_game_id as string) || gameId },
           registry,
@@ -114,6 +123,23 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
           1500,
           options
         );
+        if (context?.addEvent) {
+          const actionStr = `Executed Tool: ${c.tool}`;
+          if ((context as any).events && Array.isArray((context as any).events)) {
+            context.addEvent({
+              agentRole: seat,
+              action: actionStr,
+              modelName: `${agent.provider} / ${agent.modelName || 'analyst'}`,
+              prompt: JSON.stringify(c.parameters),
+              tool: c.tool,
+              output: res.success ? (res.data ?? res.summary) : { error: res.error },
+              durationMs: Date.now() - startTime
+            });
+          } else {
+            (context.addEvent as any)(actionStr);
+          }
+        }
+        return res;
       })
     );
 
@@ -126,12 +152,16 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
 
   let round1Output = '';
   try {
-    round1Output = await agent.run(prompt, {
-      tools: nativeTools,
-      toolChoice: 'auto',
+    const r1Config: any = {
       groqMode: 'chat',
-      systemInstruction
-    });
+      systemInstruction,
+      ...params.runConfig
+    };
+    if (nativeTools.length > 0) {
+      r1Config.tools = nativeTools;
+      r1Config.toolChoice = 'auto';
+    }
+    round1Output = await runAgent(prompt, r1Config);
   } catch (err: any) {
     const msg = String(err?.message || err);
     const isToolError =
@@ -154,9 +184,10 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
         toolResults: `Tool results:\n${toolResultsSummary}\n\n${finalInstruction}`
       });
 
-      const fallbackOutput = await agent.run(fallbackPrompt, {
+      const fallbackOutput = await runAgent(fallbackPrompt, {
         groqMode: 'chat',
-        systemInstruction
+        systemInstruction,
+        ...params.runConfig
       });
 
       return {
@@ -190,9 +221,10 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     toolResults: `Tool results:\n${toolResultsSummary}\n\n${finalInstruction}`
   });
 
-  const round2Output = await agent.run(round2Prompt, {
+  const round2Output = await runAgent(round2Prompt, {
     groqMode: 'chat',
-    systemInstruction
+    systemInstruction,
+    ...params.runConfig
   });
 
   return {
