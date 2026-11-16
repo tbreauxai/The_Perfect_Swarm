@@ -27,6 +27,7 @@ export interface SwarmStagePayload {
 
 export interface SwarmWorkflowParams {
     task: string;
+    userQuestion?: string;
     data?: string;
     originApp?: string;
     callerAppId?: string;

@@ -6,6 +6,7 @@ import { ToolRegistry } from '../swarm/tools/registry.ts';
 import { countVerifiedCitations } from '../swarm/engine/predictionEnsemble.ts';
 import { stripApproximateOdds, guardAnalystResponse } from '../swarm/parser/responseGuards.ts';
 import { adaptContextEnvelope } from '../swarm/morning/gameContext.ts';
+import { ModelRouter } from '../swarm/router.ts';
 
 // Repro for wf-1794851496795 (Nov 16 2026, 11:51 AM CST) pinned at c77ac57.
 describe('chatRunNov16b repro', () => {
@@ -85,8 +86,10 @@ describe('chatRunNov16b repro', () => {
     expect(o.spread_price_away).toBeNull();
   });
 
-  it('(6) router format regex matches the DuelOdds JSON role header', () => {
-    const FORMAT_KEYWORDS_REGEX = /\b(format|table|csv|clean|structure|json|reformat)\b/i; // router.ts:25
-    expect(FORMAT_KEYWORDS_REGEX.test('Reply ONLY with a single top-level JSON object')).toBe(true);
+  it('(6) router does not return formatting tier for "best nba bets today" with DuelOdds JSON header', () => {
+    const duelOddsTask = 'Reply ONLY with a single top-level JSON object\nUser Question: best nba bets today';
+    expect(ModelRouter.inferComplexity(duelOddsTask, 500, 1, false, { userQuestion: 'best nba bets today' })).not.toBe('formatting');
+    expect(ModelRouter.inferComplexity('format as json', 500, 1, false, { deepAnalysis: true })).not.toBe('formatting');
+    expect(ModelRouter.inferComplexity('format as json', 500, 1, true)).not.toBe('formatting');
   });
 });

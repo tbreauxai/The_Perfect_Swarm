@@ -121,16 +121,20 @@ export class ModelRouter {
         task: string,
         dataLength: number = 0,
         chunkCount: number = 1,
-        forceFullSwarm: boolean = false
+        forceFullSwarm: boolean = false,
+        options?: { userQuestion?: string; deepAnalysis?: boolean }
     ): TaskComplexity {
-        if (!forceFullSwarm && this.isFastPathEligible(task, dataLength, false, forceFullSwarm)) {
+        const deepAnalysis = Boolean(options?.deepAnalysis);
+        if (!forceFullSwarm && !deepAnalysis && this.isFastPathEligible(task, dataLength, false, forceFullSwarm)) {
             return 'instant';
         }
         const taskClean = (task || '').trim();
         if (DEEP_KEYWORDS_REGEX.test(taskClean) || chunkCount > 2 || dataLength > 15000) {
             return 'complex';
         }
-        if (FORMAT_KEYWORDS_REGEX.test(taskClean)) {
+        const skipFormatCheck = forceFullSwarm || deepAnalysis;
+        const formatTarget = (options?.userQuestion ?? taskClean).trim();
+        if (!skipFormatCheck && FORMAT_KEYWORDS_REGEX.test(formatTarget)) {
             return 'formatting';
         }
         return 'simple';
