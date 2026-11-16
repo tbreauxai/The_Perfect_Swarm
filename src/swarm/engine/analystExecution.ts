@@ -340,6 +340,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
             (resData as any)._chunkIndex = chunkIdx;
             (resData as any).coveredEventIds = scorecardReport?.coveredEventIds ?? seatLoopRes?.coveredEventIds ?? [];
             (resData as any).toolEvidence = scorecardReport?.toolEvidence ?? seatLoopRes?.toolEvidence ?? '';
+            (resData as any).toolEvidenceItems = (scorecardReport as any)?.toolEvidenceItems ?? seatLoopRes?.toolEvidenceItems ?? [];
             if (!(resData as any).seat) (resData as any).seat = seat;
             if (!(resData as any).role) (resData as any).role = analyst.role;
             if (scorecardReport) {

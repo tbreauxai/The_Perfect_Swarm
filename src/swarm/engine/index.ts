@@ -40,6 +40,7 @@ import {
   emptySynthesisResult,
 } from "./scorecardManager.ts";
 import { parseGameHeaders, filterPicksByCoverage } from "../context/gameHeaders.ts";
+import { buildVerifierEvidence } from "./verifierEvidence.ts";
 import { isDataRequest } from "../parser/responseGuards.ts";
 import { planTriage, type TriagePlan } from "./triagePlanner.ts";
 import { executeTriage, type CuratedDossier } from "./triageExecutor.ts";
@@ -430,6 +431,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     })
                     .filter(Boolean)
                     .join('\n\n');
+                const verifierEvidence = buildVerifierEvidence(flatReports as any, profilingResult.rawInput ?? data ?? task);
+                const verifierToolResults = verifierEvidence || joinedToolEvidence;
 
                 if (allPlaceholderOrDataRequest) {
                     const criticParts: string[] = [];
@@ -482,7 +485,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                 context,
                                 settings,
                                 coveredEventIds: coveredEventIdsList,
-                                ...(joinedToolEvidence ? { toolResults: joinedToolEvidence } : {})
+                                ...(verifierToolResults ? { toolResults: verifierToolResults } : {})
                             });
                             finalAnalysis = verificationResult.finalAnalysis;
                             workflowLifecycleResult = verificationResult.lifecycleResult;

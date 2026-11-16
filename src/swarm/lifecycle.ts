@@ -120,15 +120,8 @@ export class AnalysisLifecycle {
             }
 
             // 2. Critic verifies
-            context.addEvent({
-                agentRole: this.critic.role,
-                action: `Verifying proposal from attempt ${attempt}`,
-                modelName: this.critic.modelName,
-                prompt: "[Internal Verification]"
-            });
-            
             const CAP = seatBudget(this.critic.provider).maxPromptChars;
-            const PROPOSAL_MAX = 3000;
+            const PROPOSAL_MAX = Math.min(3000, Math.floor(CAP * 0.35));
             const REMINDER = 'Reply only {"pass":boolean,"feedback":string}.';
 
             const toSampleText = (value: unknown): string => {
@@ -171,26 +164,63 @@ export class AnalysisLifecycle {
                 ? toSampleText((rawData as any).rawBoard)
                 : (typeof rawData === 'string' ? rawData : '');
 
-            const reportSampleParts = [
-                toolResults ? `[Tool Evidence]:\n${toolResults}` : '',
+            const promptHeader = `${VERIFICATION_OUTPUT_CONTRACT}\n\n${criticPrompt}\n\nEvaluate the [Proposal] below against the [Tool Evidence] and [Analyst Reports Sample].`;
+            const proposalSection = `\n\n[Proposal]:\n${proposalSample}`;
+            const trailer = `\n\n${REMINDER}`;
+            const maxReportBudget = Math.max(0, CAP - (promptHeader.length + proposalSection.length + trailer.length + 2));
+
+            let evidenceSection = '';
+            if (toolResults) {
+                const evPrefix = '[Tool Evidence]:\n';
+                const fullEv = `${evPrefix}${toolResults}`;
+                if (fullEv.length <= maxReportBudget) {
+                    evidenceSection = fullEv;
+                } else {
+                    const groups = toolResults.split(/\n\n+/).filter(Boolean);
+                    let keptGroups = [...groups];
+                    let droppedCount = 0;
+                    while (keptGroups.length > 0) {
+                        const suffix = droppedCount > 0 ? `\n\n[evidence truncated: ${droppedCount} games]` : '';
+                        const candidate = `${evPrefix}${keptGroups.join('\n\n')}${suffix}`;
+                        if (candidate.length <= maxReportBudget) {
+                            evidenceSection = candidate;
+                            break;
+                        }
+                        keptGroups.pop();
+                        droppedCount++;
+                    }
+                    if (!evidenceSection) {
+                        const fallbackMsg = `${evPrefix}[evidence truncated: ${groups.length} games]`;
+                        evidenceSection = fallbackMsg.length <= maxReportBudget ? fallbackMsg : '';
+                    }
+                }
+            }
+
+            const secondaryParts = [
                 analystReports ? `[Analyst Reports Sample]:\n${analystReports}` : '',
                 historicalBaselines ? `[Historical Baselines & Past Lessons]:\n${historicalBaselines}` : '',
                 rawBoard ? `[Raw Board Sample]:\n${rawBoard}` : ''
             ].filter(Boolean);
-            const reportSample = reportSampleParts.join('\n\n');
+            const secondaryText = secondaryParts.join('\n\n');
+            const remainingForSecondary = Math.max(0, maxReportBudget - evidenceSection.length - (evidenceSection ? 2 : 0));
+            const limitedSecondary = secondaryText && remainingForSecondary > 20
+                ? (secondaryText.length > remainingForSecondary
+                    ? `${secondaryText.slice(0, Math.max(0, remainingForSecondary - 1)).trimEnd().replace(/\s+\S*$/, '')}…`
+                    : secondaryText)
+                : '';
 
-            const promptHeader = `${VERIFICATION_OUTPUT_CONTRACT}\n\n${criticPrompt}\n\nEvaluate the [Proposal] below against the [Tool Evidence] and [Analyst Reports Sample].`;
-            const proposalSection = `\n\n[Proposal]:\n${proposalSample}`;
-            const trailer = `\n\n${REMINDER}`;
-            const maxReportBudget = CAP - (promptHeader.length + proposalSection.length + trailer.length + 2);
-            const limitedReportSample = reportSample.length > maxReportBudget
-                ? `${reportSample.slice(0, Math.max(0, maxReportBudget - 1)).trimEnd().replace(/\s+\S*$/, '')}…`
-                : reportSample;
-
+            const limitedReportSample = [evidenceSection, limitedSecondary].filter(Boolean).join('\n\n');
             const verifyPrompt = `${promptHeader}${proposalSection}\n\n${limitedReportSample}${trailer}`;
             if (verifyPrompt.length > CAP) {
                 throw new Error(`Verification prompt exceeded budget cap (${verifyPrompt.length} > ${CAP}).`);
             }
+
+            context.addEvent({
+                agentRole: this.critic.role,
+                action: `Verifying proposal from attempt ${attempt}`,
+                modelName: this.critic.modelName,
+                prompt: `verifyPromptChars=${verifyPrompt.length}, evidenceChars=${evidenceSection.length}`
+            });
 
             const verificationRaw = await this.critic.run(verifyPrompt, context, {
                 responseMimeType: 'application/json',

@@ -14,6 +14,7 @@ import { seatBudget, assertPromptFits, type SeatBudget } from '../context/prompt
 import { executeToolWithCacheAndTimeout } from './triageExecutor.ts';
 import { GameQueryCache } from '../cache/gameQueryCache.ts';
 import type { SwarmContext } from '../context.ts';
+import { parseGameHeaders, type GameHeader } from '../context/gameHeaders.ts';
 
 export const PROVIDER_CALL_DEADLINES: Record<string, number> = {
   groq: 20000,
@@ -58,12 +59,19 @@ export function resolvePrefetchMarketType(marketHint?: string): 'all' | 'spread'
   return 'all';
 }
 
+export interface ToolEvidenceItem {
+  tool: string;
+  eventId: string;
+  summary: string;
+}
+
 export interface SeatToolLoopResult {
   report: string;
   rounds: number;
   toolCallsExecuted: string[];
   coveredEventIds: string[];
   toolEvidence: string;
+  toolEvidenceItems: ToolEvidenceItem[];
 }
 
 export function getRoleToolNames(seat: string): string[] {
@@ -182,6 +190,13 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
 
   const executedTools: string[] = [];
   const coveredEventIds = new Set<string>();
+  const toolEvidenceItems: ToolEvidenceItem[] = [];
+  const gameHeaderMap = new Map<string, GameHeader>();
+  for (const h of parseGameHeaders(prompt)) {
+    if (h.eventId && !gameHeaderMap.has(h.eventId)) {
+      gameHeaderMap.set(h.eventId, h);
+    }
+  }
 
   const gameIds: string[] = (params.gameIds && params.gameIds.length > 0)
     ? params.gameIds
@@ -242,6 +257,19 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
       callsToRun.map(async (c) => {
         executedTools.push(c.tool);
         const targetGameId = (c.parameters.game_id as string) || (c.parameters.p_game_id as string) || (c.parameters.id as string) || gameId;
+        const hdr = gameHeaderMap.get(targetGameId);
+        const toolOptions = hdr
+          ? {
+              ...options,
+              game: {
+                event_id: hdr.eventId,
+                home_team: hdr.home,
+                away_team: hdr.away,
+                home_team_abbr: hdr.home,
+                away_team_abbr: hdr.away
+              }
+            }
+          : options;
         const startTime = Date.now();
         const res = await executeToolWithCacheAndTimeout(
           { tool: c.tool, parameters: c.parameters },
@@ -249,7 +277,7 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
           registry,
           cache,
           1500,
-          options
+          toolOptions
         );
         if (context?.addEvent) {
           const actionStr = `Executed Tool: ${c.tool}`;
@@ -266,6 +294,13 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
           } else {
             (context.addEvent as any)(actionStr);
           }
+        }
+        if (res?.success === true && typeof res.summary === 'string' && res.summary.trim().length > 0) {
+          toolEvidenceItems.push({
+            tool: c.tool,
+            eventId: targetGameId,
+            summary: res.summary.trim()
+          });
         }
         return { res, targetGameId, summary: res.summary };
       })
@@ -317,11 +352,11 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
   const getPrefetchToolsForSeat = (): string[] => {
     const norm = seat.toLowerCase().trim();
     if (norm === 'a1' || norm === 'quant') {
-      return ['get_matchup_fundamentals', 'get_player_prop_splits', 'get_injury_and_roster_delta']
+      return ['get_matchup_fundamentals', 'get_player_prop_splits']
         .filter(t => registry.has(t));
     }
     if (norm === 'a2' || norm === 'market') {
-      return ['get_market_movement', 'get_injury_and_roster_delta']
+      return ['get_market_movement']
         .filter(t => registry.has(t));
     }
     return baseTools.filter(t => registry.has(t));
@@ -353,7 +388,8 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
       rounds: 1,
       toolCallsExecuted: executedTools,
       coveredEventIds: Array.from(coveredEventIds),
-      toolEvidence: toolResultsSummary
+      toolEvidence: toolResultsSummary,
+      toolEvidenceItems
     };
   }
 
@@ -405,7 +441,8 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
         rounds: 1,
         toolCallsExecuted: executedTools,
         coveredEventIds: Array.from(coveredEventIds),
-        toolEvidence: toolResultsSummary
+        toolEvidence: toolResultsSummary,
+        toolEvidenceItems
       };
     }
     throw err;
@@ -421,7 +458,8 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
       rounds: 1,
       toolCallsExecuted: [],
       coveredEventIds: [],
-      toolEvidence: ''
+      toolEvidence: '',
+      toolEvidenceItems: []
     };
   }
 
@@ -446,6 +484,7 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     rounds: 2,
     toolCallsExecuted: executedTools,
     coveredEventIds: Array.from(coveredEventIds),
-    toolEvidence: toolResultsSummary
+    toolEvidence: toolResultsSummary,
+    toolEvidenceItems
   };
 }

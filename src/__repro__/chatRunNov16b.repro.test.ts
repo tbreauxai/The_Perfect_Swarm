@@ -26,16 +26,16 @@ describe('chatRunNov16b repro', () => {
     expect(verifyPrompt).toContain('Evan Mobley (Out)');
   });
 
-  it('(2) game-major prefetch on 6 games / cap 8 => injuries + fundamentals for first 4 games', async () => {
+  it('(2) critic prefetch on 6 games / cap 6 => injuries for all 6 games', async () => {
     const inj: string[] = [];
     const mk = (name: string, push?: string[]) => ({ name, description: name,
       parameters: { game_id: { type: 'string' as const, description: 'id', required: true } },
       execute: vi.fn(async ({ game_id }: any) => { push?.push(game_id); return { success: true, summary: `${name}:${game_id}` }; }) });
     const registry = new ToolRegistry([mk('get_matchup_fundamentals'), mk('get_injury_and_roster_delta', inj)]);
     const games = ['nba-401909998','nba-401909997','nba-401909994','nba-401909996','nba-401909995','nba-401910000'];
-    const agent: any = { id: 'a1', role: 'a1', provider: 'openrouter', run: vi.fn(async () => JSON.stringify({ insights: [], summary: 'x' })) };
-    await runSeatWithTools({ agent, seat: 'a1', prompt: 'p', gameIds: games, registry });
-    expect(inj).toEqual(games.slice(0, 4));
+    const agent: any = { id: 'critic', role: 'critic', provider: 'groq', run: vi.fn(async () => JSON.stringify({ pass: true, verdict: 'ok', flags: [] })) };
+    await runSeatWithTools({ agent, seat: 'critic', prompt: 'p', gameIds: games, registry });
+    expect(inj).toEqual(games);
   });
 
   it('(3) countVerifiedCitations > 0 for real seat tool-summary headers', () => {

@@ -101,4 +101,40 @@ describe('Seat Tool Loop (PS2 Role-Scoped 2-Round Execution)', () => {
     const fallbackPrompt = mockAgent.run.mock.calls[1][0];
     expect(fallbackPrompt).toContain('Prefetched movement: -2.5');
   });
+
+  it('returns toolEvidenceItems for successful calls only and omits errors', async () => {
+    const registry = new ToolRegistry([
+      {
+        name: 'get_injury_and_roster_delta',
+        description: 'inj',
+        parameters: { game_id: { type: 'string', description: 'id', required: true } },
+        execute: vi.fn(async ({ game_id }: any) => ({ success: true, summary: `inj:${game_id}` }))
+      },
+      {
+        name: 'get_matchup_fundamentals',
+        description: 'fund',
+        parameters: { game_id: { type: 'string', description: 'id', required: true } },
+        execute: vi.fn(async () => ({ success: false, error: 'timeout', summary: 'Error: timeout' }))
+      }
+    ]);
+    const mockAgent: any = {
+      id: 'a1',
+      role: 'a1',
+      provider: 'openrouter',
+      run: vi.fn(async () => JSON.stringify({ insights: ['ok'], summary: 'ok' }))
+    };
+
+    const res = await runSeatWithTools({
+      agent: mockAgent,
+      seat: 'critic',
+      prompt: 'Analyze',
+      gameIds: ['nba-1', 'nba-2'],
+      registry
+    });
+
+    expect(res.toolEvidenceItems).toEqual([
+      { tool: 'get_injury_and_roster_delta', eventId: 'nba-1', summary: 'inj:nba-1' },
+      { tool: 'get_injury_and_roster_delta', eventId: 'nba-2', summary: 'inj:nba-2' }
+    ]);
+  });
 });
