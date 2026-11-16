@@ -91,6 +91,30 @@ export async function runDeepAnalysisVerification(
         ? finalProposal
         : guardManagerResponse(finalProposal, "Executive Swarm Synthesis");
 
+    if (finalAnalysis && typeof finalAnalysis === 'object') {
+        if (lifecycleResult.success === false) {
+            finalAnalysis.verified = false;
+            finalAnalysis.verification = {
+                success: false,
+                attempts: lifecycleResult.attempts,
+                rating: lifecycleResult.computedRating
+            };
+            finalAnalysis.picks = [];
+            finalAnalysis.components = [];
+            const rawSummary = typeof finalAnalysis.summary === 'string' && finalAnalysis.summary.trim()
+                ? finalAnalysis.summary.trim()
+                : (typeof finalAnalysis.reason === 'string' && finalAnalysis.reason.trim() ? finalAnalysis.reason.trim() : 'Verification failed.');
+            finalAnalysis.summary = /^\[unverified\]/i.test(rawSummary) ? rawSummary : `[UNVERIFIED] ${rawSummary}`;
+        } else {
+            finalAnalysis.verified = true;
+            finalAnalysis.verification = {
+                success: true,
+                attempts: lifecycleResult.attempts,
+                rating: lifecycleResult.computedRating
+            };
+        }
+    }
+
     if (p.coveredEventIds && Array.isArray(finalAnalysis?.picks)) {
         const originalCount = finalAnalysis.picks.length;
         finalAnalysis.picks = filterPicksByCoverage(finalAnalysis.picks, p.coveredEventIds, parsedHeaders);
