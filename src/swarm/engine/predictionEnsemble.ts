@@ -41,8 +41,15 @@ export function countVerifiedCitations(reportObj: any): number {
     const rowMatches = text.match(/\bR\d+\b/g) || [];
     const uniqueRows = new Set(rowMatches).size;
     const toolResultMatches = (text.match(/\[Tool Result:/g) || []).length;
+    const rawEvidence = typeof reportObj === 'string'
+        ? reportObj
+        : (typeof reportObj?.toolEvidence === 'string' ? reportObj.toolEvidence : text);
+    const toolHeaderMatches = rawEvidence.match(/^\[[A-Z &/]+: (?:nba|nfl|nhl|ncaaf)-\d+/gm)
+        || text.match(/\[[A-Z &/]+: (?:nba|nfl|nhl|ncaaf)-\d+/g)
+        || [];
+    const uniqueToolHeaders = new Set(toolHeaderMatches).size;
     const pctOrZMatches = (text.match(/\b(?:z\s*=\s*[-+]?\d+\.\d+|r\s*=\s*[-+]?\d+\.\d+|CI\s*=\s*\[|\d+(?:\.\d+)?%)/gi) || []).length;
-    return uniqueRows + toolResultMatches * 2 + Math.min(4, pctOrZMatches);
+    return uniqueRows + toolResultMatches * 2 + uniqueToolHeaders * 2 + Math.min(4, pctOrZMatches);
 }
 
 /**

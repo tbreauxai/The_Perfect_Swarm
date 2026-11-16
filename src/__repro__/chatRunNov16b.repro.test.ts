@@ -37,9 +37,9 @@ describe('chatRunNov16b repro', () => {
     expect(inj).toEqual(games);
   });
 
-  it('(3) countVerifiedCitations is 0 for real seat tool-summary headers', () => {
+  it('(3) countVerifiedCitations > 0 for real seat tool-summary headers', () => {
     const seat = { summary: 'GSW -3.5', toolEvidence: '[MATCHUP FUNDAMENTALS: nba-401910000 (GSW @ NOP)] L10 ...\n[INJURY & ROSTER DELTA: nba-401910000] GSW: Stephen Curry (Out)' };
-    expect(countVerifiedCitations(seat)).toBe(0);
+    expect(countVerifiedCitations(seat)).toBeGreaterThan(0);
   });
 
   it('(2b) guard strips exact odds / stake / payout and sets seat_emitted_pricing', () => {
