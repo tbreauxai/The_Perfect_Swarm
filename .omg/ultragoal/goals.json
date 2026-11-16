@@ -1,45 +1,38 @@
 {
-  "activeGoalId": "goal-6-tests-verify-pr",
+  "activeGoalId": "goal-5-tests-verify-pr",
   "goals": [
     {
-      "id": "goal-1-seat-tool-evidence",
-      "title": "Step 1 (S1): Return seat toolEvidence to manager and verifier",
-      "description": "Return compact toolEvidence from all 4 return sites in seatToolLoop.ts, attach on report in analystExecution.ts, include Tool evidence block in synthesisPipeline.ts buildBettingPrompt inside cap, pass joined toolResults on rawData in verificationPipeline.ts, and remove SANITIZE: Discard raw values from ANALYST_SYSTEM_INSTRUCTION.",
+      "id": "goal-1-market-type-prefetch",
+      "title": "Step 1: Pass market_type on get_market_movement prefetch",
+      "description": "In src/swarm/engine/seatToolLoop.ts buildPrefetchCalls, always pass market_type for get_market_movement (all|spread|total|ml mapped from spreads/totals/moneyline/h2h, default 'all').",
       "status": "completed",
-      "verificationCriteria": "Manager prompt and verifier toolResults contain seat tool summaries, and betting seats are not told to discard raw values."
+      "verificationCriteria": "A 6-game Market prefetch sends market_type on every call and never returns invalid_market_type."
     },
     {
-      "id": "goal-2-failed-verification-flag",
-      "title": "Step 2 (S5): Mark failed verification verified:false and clear picks",
-      "description": "In verificationPipeline.ts, when lifecycleResult.success is false, set verified:false, verification:{success:false, attempts, rating}, clear picks and components, and mark summary unverified. On success, set verified:true and verification.success:true.",
+      "id": "goal-2-skip-unkeyed-prop-splits",
+      "title": "Step 2: Skip unkeyed prop splits and cover all games with primary tool first",
+      "description": "Do not prefetch get_player_prop_splits unless real player_id and stat_category are known from slate prop rows. Quant prefetches get_matchup_fundamentals for all slate games first, then get_injury_and_roster_delta with remaining maxToolCalls. Market prefetches get_market_movement for all games first, then injury with leftover calls.",
       "status": "completed",
-      "verificationCriteria": "Failed verification returns verified:false, empty picks/components, and unverified summary."
+      "verificationCriteria": "6-game game-line Quant prefetch has 0 prop-split calls, 6 fundamentals, and no invented player_id."
     },
     {
-      "id": "goal-3-critic-verdict-only",
-      "title": "Step 3 (S3): Critic emits a verdict only",
-      "description": "Give critic a verdict instruction and finalInstruction ({pass, verdict, flags}, never propose picks). In guardAnalystResponse, when role is critic/Risk Critic, do not wrap bare arrays into picks, strip any picks, and treat missing pass as contract violation.",
+      "id": "goal-3-shared-injury-evidence",
+      "title": "Step 3: Share short per-game injury evidence with Quant and Market",
+      "description": "In analystExecution.ts / shared pre-seat prefetch (using GameQueryCache), share a short Injury evidence block on betting-seat prompts within existing maxPromptChars/maxToolResultChars caps without raw board.",
       "status": "completed",
-      "verificationCriteria": "Critic parlay array has no picks and is not a betting report; {pass, verdict, flags} is accepted."
+      "verificationCriteria": "Quant/Market prompt contains short injury summary (e.g. Lamar Jackson OUT) without raw board."
     },
     {
-      "id": "goal-4-prefetch-and-tool-cleanup",
-      "title": "Step 4 (S2): Stop offering get_historical_lessons/get_game_context and prefetch a1/a2 per game",
-      "description": "Stop appending get_historical_lessons to betting-seat candidateNames in seatToolLoop.ts, remove get_game_context wording from constants.ts, and prefetch per-game role tools for Quant/Market (a1/a2) with buildPrefetchCalls bounded by existing caps.",
+      "id": "goal-4-strip-approximate-odds",
+      "title": "Step 4: Strip approximate odds, percents, and payouts from analysis text",
+      "description": "In responseGuards.ts guardAnalystResponse and guardManagerResponse, strip ~65%, ~+650, ~=, 'about +650' from insights/summary/analysis/verdict without replacing with defaults or altering toolEvidence/slate prices.",
       "status": "completed",
-      "verificationCriteria": "a1/a2 are not offered get_historical_lessons or get_game_context; prefetch covers each slate game until cap."
+      "verificationCriteria": "~65% and ~+650 stripped from guarded Quant/manager text while real prices in toolEvidence remain."
     },
     {
-      "id": "goal-5-authoritative-slate-names",
-      "title": "Step 5 (S4): Authoritative slate team names instruction",
-      "description": "Add 'Team names in Game Slate are authoritative; never rename or flag them.' to analyst and verifier instructions.",
-      "status": "completed",
-      "verificationCriteria": "Line present in betting-seat and verifier instructions."
-    },
-    {
-      "id": "goal-6-tests-verify-pr",
-      "title": "Step 6: Repro tests, full verification, push branch, and open PR",
-      "description": "Create/run src/__repro__/chatRunNov16.repro.test.ts, run touched and full vitest, tsc --noEmit, smoke-start, push fix/seat-evidence-verdicts, and open PR.",
+      "id": "goal-5-tests-verify-pr",
+      "title": "Step 5: Tests, verification, push branch, and open PR",
+      "description": "Add tests (A-D) under src/__repro__/ or seat/guard tests, verify with tsc/vitest/smoke-start, push fix/prefetch-args-evidence, and open PR.",
       "status": "completed",
       "verificationCriteria": "All new/touched tests pass; tsc & smoke pass; PR opened on GitHub."
     }

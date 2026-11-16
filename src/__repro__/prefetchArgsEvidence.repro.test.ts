@@ -16,8 +16,8 @@ describe('prefetchArgsEvidence repro (A-D)', () => {
       name: 'get_market_movement',
       description: 'Market movement',
       parameters: {
-        game_id: { type: 'string', description: 'Game ID', required: true },
-        market_type: { type: 'string', description: 'Market type', required: true }
+        game_id: { type: 'string' as const, description: 'Game ID', required: true },
+        market_type: { type: 'string' as const, description: 'Market type', required: true }
       },
       execute: vi.fn(async (args: any) => {
         if (!args?.market_type) {
