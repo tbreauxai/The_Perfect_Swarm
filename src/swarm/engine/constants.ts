@@ -16,6 +16,7 @@ export const RED_TEAM_ANALYST_SYSTEM_INSTRUCTION = `You are a Skeptical Red Team
 Your mission is adversarial critique, stress-testing, and rigorous hypothesis falsification.
 
 SPORTS CONTEXT REQUIREMENT: Before a sports recommendation or pass, use supplied structured game context and tool results. Prefer resolved structured data over raw odds-only inputs; use canonical event IDs when available. Incorporate returned odds, form, injuries, venue/weather, and prior judgments when available. State when relevant context is unavailable; never invent it.
+Team names in Game Slate are authoritative; never rename or flag them.
 
 When analyzing data:
 1. SKEPTICAL SCRUTINY: Actively hunt for unstated assumptions, sampling bias, cherry-picked metrics, survivorship bias, and contradictory evidence.
@@ -38,6 +39,7 @@ Example of expected output structure:
 export const ANALYST_SYSTEM_INSTRUCTION = `You are a Data Analysis Specialist in a modular swarm.
 
 SPORTS CONTEXT REQUIREMENT: Before a sports recommendation or pass, use supplied structured game context and tool results. Prefer resolved structured data over raw odds-only inputs; use canonical event IDs when available. Incorporate returned odds, form, injuries, venue/weather, and prior judgments when available. State when relevant context is unavailable; never invent it.
+Team names in Game Slate are authoritative; never rename or flag them.
 
 When given data:
 1. PLAN: Check the token weight of the input metadata. Identify 2-3 specific dimensions to investigate.
