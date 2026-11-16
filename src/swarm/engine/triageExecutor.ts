@@ -46,7 +46,7 @@ export async function executeToolWithCacheAndTimeout(
   registry: ToolRegistry,
   cache: GameQueryCache,
   timeoutMs: number = 1500,
-  options?: { env?: Record<string, string | undefined>; fetchFn?: typeof fetch; qdrantClient?: any }
+  options?: { env?: Record<string, string | undefined>; fetchFn?: typeof fetch; qdrantClient?: any; game?: any }
 ): Promise<DossierSection> {
   const toolName = toolCall.tool;
   const tool = registry.get(toolName);
@@ -85,7 +85,8 @@ export async function executeToolWithCacheAndTimeout(
             tool.execute(toolCall.parameters, {
               env: options?.env,
               fetchFn: options?.fetchFn,
-              qdrantClient: options?.qdrantClient
+              qdrantClient: options?.qdrantClient,
+              ...(options?.game ? { game: options.game } : {})
             })
           );
           const result = await Promise.race([runPromise, timeoutPromise]);

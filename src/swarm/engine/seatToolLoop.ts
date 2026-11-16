@@ -14,6 +14,7 @@ import { seatBudget, assertPromptFits, type SeatBudget } from '../context/prompt
 import { executeToolWithCacheAndTimeout } from './triageExecutor.ts';
 import { GameQueryCache } from '../cache/gameQueryCache.ts';
 import type { SwarmContext } from '../context.ts';
+import { parseGameHeaders, type GameHeader } from '../context/gameHeaders.ts';
 
 export const PROVIDER_CALL_DEADLINES: Record<string, number> = {
   groq: 20000,
@@ -190,6 +191,12 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
   const executedTools: string[] = [];
   const coveredEventIds = new Set<string>();
   const toolEvidenceItems: ToolEvidenceItem[] = [];
+  const gameHeaderMap = new Map<string, GameHeader>();
+  for (const h of parseGameHeaders(prompt)) {
+    if (h.eventId && !gameHeaderMap.has(h.eventId)) {
+      gameHeaderMap.set(h.eventId, h);
+    }
+  }
 
   const gameIds: string[] = (params.gameIds && params.gameIds.length > 0)
     ? params.gameIds
@@ -250,6 +257,19 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
       callsToRun.map(async (c) => {
         executedTools.push(c.tool);
         const targetGameId = (c.parameters.game_id as string) || (c.parameters.p_game_id as string) || (c.parameters.id as string) || gameId;
+        const hdr = gameHeaderMap.get(targetGameId);
+        const toolOptions = hdr
+          ? {
+              ...options,
+              game: {
+                event_id: hdr.eventId,
+                home_team: hdr.home,
+                away_team: hdr.away,
+                home_team_abbr: hdr.home,
+                away_team_abbr: hdr.away
+              }
+            }
+          : options;
         const startTime = Date.now();
         const res = await executeToolWithCacheAndTimeout(
           { tool: c.tool, parameters: c.parameters },
@@ -257,7 +277,7 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
           registry,
           cache,
           1500,
-          options
+          toolOptions
         );
         if (context?.addEvent) {
           const actionStr = `Executed Tool: ${c.tool}`;

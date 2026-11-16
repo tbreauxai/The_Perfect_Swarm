@@ -412,8 +412,8 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
       }
     }
     if (ctxAny?.game) {
-      addTeamMapping(ctxAny.game.home_team_id, ctxAny.game.home_team_abbr ?? ctxAny.game.home_team);
-      addTeamMapping(ctxAny.game.away_team_id, ctxAny.game.away_team_abbr ?? ctxAny.game.away_team);
+      addTeamMapping(ctxAny.game.home_team_id ?? d.home_team_id ?? d.home?.team_id ?? d.home?.id, ctxAny.game.home_team_abbr ?? ctxAny.game.home_team);
+      addTeamMapping(ctxAny.game.away_team_id ?? d.away_team_id ?? d.away?.team_id ?? d.away?.id, ctxAny.game.away_team_abbr ?? ctxAny.game.away_team);
     }
 
     const statusRank = (statusRaw: unknown): number => {
