@@ -173,18 +173,30 @@ export class Agent {
                         ...config,
                         maxTokens: config?.maxTokens ?? this.maxTokens ?? defaultRoleTokens
                     };
-                    const nativeTools = Array.isArray(effectiveConfig.tools)
-                        ? effectiveConfig.tools
-                        : (effectiveConfig.toolRegistry && typeof (effectiveConfig.toolRegistry as any).toOpenAiTools === 'function'
-                            ? (effectiveConfig.toolRegistry as any).toOpenAiTools()
-                            : undefined);
-                    const effectiveRuntimeConfig: AgentRunConfig = nativeTools && nativeTools.length > 0
-                        ? {
-                            ...effectiveConfig,
-                            tools: nativeTools,
-                            toolChoice: effectiveConfig.toolChoice ?? 'auto'
-                        }
-                        : effectiveConfig;
+                    const isStrictJsonSeat =
+                        roleLower.includes('critic') ||
+                        roleLower.includes('risk') ||
+                        effectiveConfig.responseMimeType === 'application/json' ||
+                        Boolean(effectiveConfig.zodSchema || (effectiveConfig as any)?.responseSchema || (effectiveConfig as any)?.schema);
+
+                    let effectiveRuntimeConfig: AgentRunConfig;
+                    if (isStrictJsonSeat) {
+                        const { tools: _discardTools, toolChoice: _discardToolChoice, toolRegistry: _discardRegistry, ...restConfig } = effectiveConfig as any;
+                        effectiveRuntimeConfig = restConfig;
+                    } else {
+                        const nativeTools = Array.isArray(effectiveConfig.tools)
+                            ? effectiveConfig.tools
+                            : (effectiveConfig.toolRegistry && typeof (effectiveConfig.toolRegistry as any).toOpenAiTools === 'function'
+                                ? (effectiveConfig.toolRegistry as any).toOpenAiTools()
+                                : undefined);
+                        effectiveRuntimeConfig = nativeTools && nativeTools.length > 0
+                            ? {
+                                ...effectiveConfig,
+                                tools: nativeTools,
+                                toolChoice: effectiveConfig.toolChoice ?? 'auto'
+                            }
+                            : effectiveConfig;
+                    }
 
                     const cacheFingerprint = PayloadCache.computeFingerprint(
                         `agent_run:${this.role}`,

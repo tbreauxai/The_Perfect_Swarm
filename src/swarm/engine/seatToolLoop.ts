@@ -225,6 +225,44 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     return summaryText;
   };
 
+  const isCriticSeat = (s: string) => {
+    const norm = s.toLowerCase().trim();
+    return norm === 'critic' || norm === 'risk' || norm === 'risk_critic' || norm.includes('critic') || norm.includes('risk');
+  };
+
+  if (isCriticSeat(seat)) {
+    // Critic must return strict JSON: prefetch role tools server-side into maxToolResultChars budget,
+    // then run one JSON round with no tools.
+    const prefetchCalls = baseTools
+      .filter(t => registry.has(t))
+      .map(t => ({
+        tool: t,
+        parameters: { game_id: gameId }
+      }));
+    const toolResultsSummary = prefetchCalls.length > 0 ? await executeCalls(prefetchCalls) : '';
+
+    const criticPrompt = assertPromptFits(agent.provider, {
+      systemInstruction,
+      prompt,
+      toolResults: toolResultsSummary ? `Tool results:\n${toolResultsSummary}\n\n${finalInstruction}` : finalInstruction
+    });
+
+    const criticConfig: any = {
+      groqMode: 'chat',
+      systemInstruction,
+      ...params.runConfig
+    };
+    delete criticConfig.tools;
+    delete criticConfig.toolChoice;
+
+    const output = await runAgentWithDeadline(criticPrompt, criticConfig);
+    return {
+      report: output,
+      rounds: 1,
+      toolCallsExecuted: executedTools
+    };
+  }
+
   let round1Output = '';
   try {
     const r1Config: any = {
@@ -232,11 +270,15 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
       systemInstruction,
       ...params.runConfig
     };
-    if (nativeTools.length > 0) {
+    const isStrict = Boolean(params.runConfig?.zodSchema || (params.runConfig as any)?.schema);
+    if (nativeTools.length > 0 && !isStrict) {
       r1Config.tools = nativeTools;
       r1Config.toolChoice = 'auto';
       delete r1Config.responseMimeType;
       delete r1Config.responseSchema;
+    } else {
+      delete r1Config.tools;
+      delete r1Config.toolChoice;
     }
     round1Output = await runAgentWithDeadline(prompt, r1Config);
   } catch (err: any) {
