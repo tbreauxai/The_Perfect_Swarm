@@ -408,7 +408,10 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 };
                 const criticReports = flatReports.filter(isCriticSeat);
                 const nonCriticReports = flatReports.filter(r => !isCriticSeat(r));
-                const allPlaceholderOrDataRequest = flatReports.length > 0 && nonCriticReports.every(r => (r as any)._placeholder === true || isDataRequest(r));
+                const allPlaceholderOrDataRequest = flatReports.length > 0 && nonCriticReports.every(r =>
+                    ((r as any)._placeholder === true && !(Array.isArray((r as any).picks) && (r as any).picks.length > 0))
+                    || isDataRequest(r)
+                );
 
                 const coveredEventIds = new Set<string>();
                 for (const r of flatReports) {

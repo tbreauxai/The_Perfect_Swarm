@@ -35,18 +35,23 @@ describe('parlayRunNov16c repro', () => {
     expect(JSON.stringify(res.data)).not.toContain('source_ref');
   });
 
-  it('(2+3) object without insights -> placeholder carrying unstripped raw JSON odds; isDataRequest irrelevant', () => {
+  it('(2+3) object with picks and no insights -> stripped insights, keeps picks, _placeholder false', () => {
     const quant = JSON.stringify({ picks: [{ pick: 'BAL -4.5', odds: '-110/-106', edge: '~+260' }, { pick: 'BOS -340 ML' }], summary: 'BAL -4.5 at -110' });
     const g: any = guardAnalystResponse(quant, 'Quant Proposer');
-    expect(g.summary).not.toContain('-110');          // summary IS stripped
-    expect(g._placeholder).toBe(true);                // but seat becomes a placeholder
-    expect(g.insights[0]).toContain('-110/-106');     // and fallback insight carries raw odds verbatim
-    expect(g.picks).toBeUndefined();                  // picks dropped on the object path
+    expect(g.summary).not.toContain('-110');
+    expect(g._placeholder).toBeUndefined();
+    expect(g.insights.join(' ')).not.toContain('-110');
+    expect(g.insights.join(' ')).not.toContain('~+260');
+    expect(g.insights.join(' ')).not.toContain('-340');
+    expect(g.insights).toContain('BAL -4.5');
+    expect(g.picks).toHaveLength(2);
     expect(g.flags).toContain('seat_emitted_pricing');
-    // index.ts:411 => every non-critic seat placeholder => critic-only early exit
+
     const market: any = guardAnalystResponse(JSON.stringify({ recommendation: { pick: 'X +190' }, lines: ['-162'] }), 'Market Proposer');
     expect(market._placeholder).toBe(true);
-    expect([g, market].every(r => r._placeholder === true || isDataRequest(r))).toBe(true);
+    expect(market.insights[0]).not.toContain('+190');
+    expect(market.insights[0]).not.toContain('-162');
+    expect([g, market].every(r => r._placeholder === true || isDataRequest(r))).toBe(false);
   });
 
   it('(6) injury-first tool-major prefetch: 6 games / cap 8 -> fundamentals only for first 2 games', async () => {
