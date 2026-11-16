@@ -832,15 +832,30 @@ export const getMarketMovementTool: SwarmTool = {
     const opening = typeof d.opening === 'object' && d.opening !== null ? d.opening : {};
     const latest = typeof d.latest === 'object' && d.latest !== null ? d.latest : {};
 
-    const openLine = opening.spread ?? opening.total ?? opening.ml_home ?? opening.line ?? d.open_line ?? d.opening_spread ?? d.opening_total ?? d.opening_line ?? 'N/A';
+    const openLine = opening.spread_home ?? opening.spread ?? opening.total ?? opening.ml_home ?? opening.line ?? d.open_line ?? d.opening_spread ?? d.opening_total ?? d.opening_line ?? 'N/A';
     const openPrice = opening.price ?? d.open_price ?? d.opening_price ?? 'N/A';
-    const currLine = latest.spread ?? latest.total ?? latest.ml_home ?? latest.line ?? d.current_line ?? d.current_spread ?? d.current_total ?? 'N/A';
+    const currLine = latest.spread_home ?? latest.spread ?? latest.total ?? latest.ml_home ?? latest.line ?? d.current_line ?? d.current_spread ?? d.current_total ?? 'N/A';
     const currPrice = latest.price ?? d.current_price ?? 'N/A';
+
+    const homeLabel = d.home_team_abbr ?? d.home_team ?? (context as any)?.game?.home_team_abbr ?? (context as any)?.game?.home_team ?? 'HOME';
+    const awayLabel = d.away_team_abbr ?? d.away_team ?? (context as any)?.game?.away_team_abbr ?? (context as any)?.game?.away_team ?? 'AWAY';
+    const isSpreadMarket = marketType === 'spread' || opening.spread_home !== undefined || latest.spread_home !== undefined || opening.spread !== undefined || latest.spread !== undefined || d.opening_spread !== undefined || d.current_spread !== undefined;
+    const fmtSigned = (n: number): string => (n > 0 ? `+${n}` : `${n}`);
+    const formatLineValue = (homeVal: unknown, awayVal: unknown): string => {
+      if (isSpreadMarket && typeof homeVal === 'number' && Number.isFinite(homeVal)) {
+        const awayNum = typeof awayVal === 'number' && Number.isFinite(awayVal) ? awayVal : (homeVal === 0 ? 0 : -homeVal);
+        return `home ${homeLabel} ${fmtSigned(homeVal)} / away ${awayLabel} ${fmtSigned(awayNum)}`;
+      }
+      return String(homeVal);
+    };
+
+    const openDisplay = formatLineValue(openLine, opening.spread_away ?? d.opening_spread_away);
+    const currDisplay = formatLineValue(currLine, latest.spread_away ?? d.current_spread_away);
 
     if (snapshotsTracked === 1 || snapshotsTracked < 2) {
       const lineDisplay = currLine !== 'N/A' || currPrice !== 'N/A'
-        ? `Current: ${currLine} (${currPrice})`
-        : `Line: ${openLine} (${openPrice})`;
+        ? `Current: ${currDisplay} (${currPrice})`
+        : `Line: ${openDisplay} (${openPrice})`;
       const summary = [
         `[MARKET MOVEMENT: ${gameId} | ${marketType}] 1 snapshot, no history.`,
         lineDisplay
@@ -866,7 +881,7 @@ export const getMarketMovementTool: SwarmTool = {
 
     const summary = [
       `[MARKET MOVEMENT: ${gameId} | ${marketType}]`,
-      `Open: ${openLine} (${openPrice}) -> Current: ${currLine} (${currPrice}) | Delta: ${delta}`,
+      `Open: ${openDisplay} (${openPrice}) -> Current: ${currDisplay} (${currPrice}) | Delta: ${delta}`,
       `Steam: ${steamDir} (${steamMag} pts) | Divergence: ${divergence}`
     ].join('\n');
 

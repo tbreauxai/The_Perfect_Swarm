@@ -476,7 +476,7 @@ describe('DuelOdds Database RPC Tools', () => {
 
       expect(res.success).toBe(true);
       expect(res.summary).toContain('[MARKET MOVEMENT: game-kc-buf-2026 | spread]');
-      expect(res.summary).toContain('Open: -2.5 (-110) -> Current: -3.5 (-115) | Delta: -1');
+      expect(res.summary).toContain('Open: home HOME -2.5 / away AWAY +2.5 (-110) -> Current: home HOME -3.5 / away AWAY +3.5 (-115) | Delta: -1');
       expect(res.summary).toContain('Steam: home_steam (1 pts) | Divergence: DraftKings -3.5 vs FanDuel -3.0');
       expect(estimateTokens(res.summary)).toBeLessThanOrEqual(250);
     });
