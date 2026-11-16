@@ -38,6 +38,9 @@ export interface RunSeatWithToolsParams {
   finalInstruction?: string;
   gameId?: string;
   gameIds?: string[];
+  marketType?: string;
+  marketTypesByGame?: Record<string, string>;
+  propParamsByGame?: Record<string, Array<{ player_id: string; stat_category: string }>>;
   cache?: GameQueryCache;
   runConfig?: any;
   options?: {
@@ -45,6 +48,14 @@ export interface RunSeatWithToolsParams {
     fetchFn?: typeof fetch;
     qdrantClient?: any;
   };
+}
+
+export function resolvePrefetchMarketType(marketHint?: string): 'all' | 'spread' | 'total' | 'ml' {
+  const norm = String(marketHint || '').trim().toLowerCase();
+  if (norm === 'spread' || norm === 'spreads') return 'spread';
+  if (norm === 'total' || norm === 'totals') return 'total';
+  if (norm === 'ml' || norm === 'moneyline' || norm === 'h2h') return 'ml';
+  return 'all';
 }
 
 export interface SeatToolLoopResult {
@@ -182,7 +193,12 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     for (const gId of targetGames) {
       for (const t of tools) {
         if (calls.length < budget.maxToolCalls) {
-          calls.push({ tool: t, parameters: { game_id: gId } });
+          if (t === 'get_market_movement') {
+            const mType = resolvePrefetchMarketType(params.marketTypesByGame?.[gId] ?? params.marketType);
+            calls.push({ tool: t, parameters: { game_id: gId, market_type: mType } });
+          } else {
+            calls.push({ tool: t, parameters: { game_id: gId } });
+          }
         }
       }
     }
