@@ -122,8 +122,8 @@ describe('prefetchArgsEvidence repro (A-D)', () => {
     });
 
     expect(propCalls).toHaveLength(0);
-    expect(fundCalls).toEqual(games);
-    expect(injuryCalls).toEqual(['G1', 'G2']); // remaining 2 of 8 calls
+    expect(injuryCalls).toEqual(games); // injuries for all 6 games first
+    expect(fundCalls).toEqual(['G1', 'G2']); // remaining 2 of 8 calls
     expect(res.coveredEventIds).toEqual(games);
 
     // When real player_id + stat_category are known from slate prop rows, prop splits may be prefetched
@@ -142,9 +142,9 @@ describe('prefetchArgsEvidence repro (A-D)', () => {
       registry
     });
 
+    expect(injuryCalls).toEqual(['G1']);
     expect(fundCalls).toEqual(['G1']);
     expect(propCalls).toEqual([{ game_id: 'G1', player_id: 'lamar-jackson-8', stat_category: 'passing_yards' }]);
-    expect(injuryCalls).toEqual(['G1']);
   });
 
   it('(C) Betting-seat prompt includes shared short injury line without raw board', async () => {

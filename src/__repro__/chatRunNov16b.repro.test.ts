@@ -25,7 +25,7 @@ describe('chatRunNov16b repro', () => {
     expect(verifyPrompt).toContain('Evan Mobley (Out)');
   });
 
-  it('(2) tool-major prefetch on 6 games / cap 8 => injuries only for first 2 games', async () => {
+  it('(2) injury-first prefetch on 6 games / cap 8 => injuries for all 6 games', async () => {
     const inj: string[] = [];
     const mk = (name: string, push?: string[]) => ({ name, description: name,
       parameters: { game_id: { type: 'string' as const, description: 'id', required: true } },
@@ -34,7 +34,7 @@ describe('chatRunNov16b repro', () => {
     const games = ['nba-401909998','nba-401909997','nba-401909994','nba-401909996','nba-401909995','nba-401910000'];
     const agent: any = { id: 'a1', role: 'a1', provider: 'openrouter', run: vi.fn(async () => JSON.stringify({ insights: [], summary: 'x' })) };
     await runSeatWithTools({ agent, seat: 'a1', prompt: 'p', gameIds: games, registry });
-    expect(inj).toEqual(['nba-401909998', 'nba-401909997']); // GSW (nba-401910000) never gets injuries
+    expect(inj).toEqual(games);
   });
 
   it('(3) countVerifiedCitations is 0 for real seat tool-summary headers', () => {
