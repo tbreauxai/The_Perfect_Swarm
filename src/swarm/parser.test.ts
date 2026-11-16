@@ -106,8 +106,8 @@ anomalies: none
 
     it('returns fallback when everything fails', () => {
         const input = `This is just a random string with no recognizable json or key value pairs`;
-        expect(parseJsonSafe(input)).toEqual({ anomalies: [] }); // extractFuzzyFields returns { anomalies: [] } when nothing matches
-        expect(parseJsonSafe(input, { failed: true })).toEqual({ anomalies: [] });
+        expect(parseJsonSafe(input)).toEqual({});
+        expect(parseJsonSafe(input, { failed: true })).toEqual({ failed: true });
     });
 });
 

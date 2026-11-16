@@ -157,7 +157,7 @@ describe('extractFuzzyFields', () => {
 
   it('should return null if no fields match', () => {
       const input = 'Just some random text with no matching headers.';
-      expect(extractFuzzyFields(input)).toEqual({ anomalies: [] });
+      expect(extractFuzzyFields(input)).toBeNull();
   });
   it('should extract reasoning traces and populate sink', () => {
     const raw = '<think>Deductive hypothesis test</think><thought>Secondary reflection</thought>{"insights": ["A"]}';

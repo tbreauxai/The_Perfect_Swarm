@@ -281,7 +281,27 @@ export class Agent {
                         if (textOutput.includes('```tool_call') || textOutput.includes('[TOOL_CALL') || textOutput.includes('[TOOL_EXECUTION')) {
                             parsedOutput = textOutput;
                         } else {
-                            parsedOutput = parseJsonSafe(textOutput);
+                            const candidate = parseJsonSafe(textOutput);
+                            const hasStructured = candidate && typeof candidate === 'object' && (
+                                Array.isArray(candidate) ? candidate.length > 0 : Boolean(
+                                    (Array.isArray((candidate as any).insights) && (candidate as any).insights.length > 0) ||
+                                    (typeof (candidate as any).insights === 'string' && (candidate as any).insights.trim()) ||
+                                    (typeof (candidate as any).summary === 'string' && (candidate as any).summary.trim()) ||
+                                    (Array.isArray((candidate as any).picks) && (candidate as any).picks.length > 0) ||
+                                    (candidate as any).components ||
+                                    (candidate as any).ui_title ||
+                                    typeof (candidate as any).pass === 'boolean' ||
+                                    typeof (candidate as any).verdict === 'string' ||
+                                    Array.isArray((candidate as any).findings) ||
+                                    (candidate as any).recommendation ||
+                                    (candidate as any).winProbHome !== undefined ||
+                                    (candidate as any).win_prob_home !== undefined ||
+                                    typeof (candidate as any).pick === 'string' ||
+                                    typeof (candidate as any).selection === 'string' ||
+                                    typeof (candidate as any).event_id === 'string'
+                                )
+                            );
+                            parsedOutput = hasStructured ? candidate : textOutput;
                             
                             if (config?.zodSchema) {
                                 let parsed = config.zodSchema.safeParse(parsedOutput);

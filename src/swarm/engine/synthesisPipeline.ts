@@ -119,7 +119,7 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
         workflowCompressedPromptTokens += reducedTokens;
     } else {
         const formatSeatDigest = (role: string, r: any): string => {
-            if (typeof r === 'string') return `[${role}] ${r}`;
+            if (typeof r === 'string') return `[${role}] prose: ${r.trim().slice(0, 300)}`;
             if (!r || typeof r !== 'object') return `[${role}] ${String(r ?? '')}`;
             const summary = typeof r.summary === 'string' && r.summary.trim() ? r.summary.trim() : '';
             const insights = Array.isArray(r.insights) && r.insights.length > 0
