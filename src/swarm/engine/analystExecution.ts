@@ -142,7 +142,8 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                             1500
                         );
                         if (res && res.success && typeof res.summary === 'string' && res.summary.trim()) {
-                            return res.summary.trim();
+                            const singleLine = res.summary.replace(/\s*\r?\n\s*/g, '; ').trim();
+                            return singleLine.includes(gId) ? singleLine : `${gId}: ${singleLine}`;
                         }
                         return '';
                     } catch {
@@ -264,9 +265,17 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                         const blockPrefix = '\n\nInjury evidence:\n';
                         const bodyBudget = maxAllowed - blockPrefix.length;
                         if (bodyBudget >= 30) {
-                            const trimmedBody = rawInjurySummary.length > bodyBudget
-                                ? rawInjurySummary.slice(0, bodyBudget - 15) + '\n…[truncated]'
-                                : rawInjurySummary;
+                            let trimmedBody = rawInjurySummary;
+                            if (rawInjurySummary.length > bodyBudget) {
+                                const lines = rawInjurySummary.split('\n').map(l => l.trim()).filter(Boolean);
+                                const perLineMax = Math.max(20, Math.floor((bodyBudget - Math.max(0, lines.length - 1)) / Math.max(1, lines.length)));
+                                trimmedBody = lines
+                                    .map(l => (l.length > perLineMax ? `${l.slice(0, perLineMax - 1)}…` : l))
+                                    .join('\n');
+                                if (trimmedBody.length > bodyBudget) {
+                                    trimmedBody = trimmedBody.slice(0, bodyBudget);
+                                }
+                            }
                             seatPrompt += `${blockPrefix}${trimmedBody}`;
                         }
                     }
