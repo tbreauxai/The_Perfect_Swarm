@@ -9,7 +9,7 @@ import { adaptContextEnvelope } from '../swarm/morning/gameContext.ts';
 
 // Repro for wf-1794851496795 (Nov 16 2026, 11:51 AM CST) pinned at c77ac57.
 describe('chatRunNov16b repro', () => {
-  it('(1) verifier prompt never includes rawData.toolResults', async () => {
+  it('(1) verifier prompt includes rawData.toolResults within CAP', async () => {
     let verifyPrompt = '';
     const proposer: any = { role: 'Manager', modelName: 'm', provider: 'openrouter',
       run: vi.fn(async () => JSON.stringify({ summary: 'Fade PHI: Joel Embiid out', picks: [] })) };
@@ -20,7 +20,9 @@ describe('chatRunNov16b repro', () => {
         toolResults: '[INJURY: nba-401909997] PHI: Joel Embiid (Out); CLE: Evan Mobley (Out)' },
       new SwarmContext(), 'Compile', 'Verify');
     expect(verifyPrompt.length).toBeGreaterThan(0);
-    expect(verifyPrompt).not.toContain('Joel Embiid (Out)'); // BUG: tool evidence never reaches the verifier LLM
+    expect(verifyPrompt.length).toBeLessThanOrEqual(5600);
+    expect(verifyPrompt).toContain('Joel Embiid (Out)');
+    expect(verifyPrompt).toContain('Evan Mobley (Out)');
   });
 
   it('(2) tool-major prefetch on 6 games / cap 8 => injuries only for first 2 games', async () => {

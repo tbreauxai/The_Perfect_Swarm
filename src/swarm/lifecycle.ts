@@ -146,9 +146,24 @@ export class AnalysisLifecycle {
                 ? `${proposalText.slice(0, PROPOSAL_MAX).trimEnd().replace(/\s+\S*$/, '')}…[truncated]`
                 : proposalText;
 
-            const analystReports = typeof rawData === 'object' && rawData && 'analystReports' in rawData
-                ? toSampleText((rawData as any).analystReports)
+            const toolResults = typeof rawData === 'object' && rawData && 'toolResults' in rawData
+                ? toSampleText((rawData as any).toolResults)
                 : '';
+            const rawAnalystReports = typeof rawData === 'object' && rawData && 'analystReports' in rawData
+                ? (rawData as any).analystReports
+                : undefined;
+            const analystReports = Array.isArray(rawAnalystReports)
+                ? rawAnalystReports
+                    .map((r: any) => {
+                        if (typeof r === 'string') return r;
+                        if (!r || typeof r !== 'object') return String(r ?? '');
+                        const label = r.agent ?? r.seat ?? r.role ?? 'seat';
+                        const text = r.summary ?? r.analysis ?? (Array.isArray(r.insights) ? r.insights.join('; ') : undefined);
+                        return text ? `[${label}]: ${typeof text === 'string' ? text : toSampleText(text)}` : toSampleText(r);
+                    })
+                    .filter(Boolean)
+                    .join('\n')
+                : toSampleText(rawAnalystReports);
             const historicalBaselines = typeof rawData === 'object' && rawData && 'historicalBaselines' in rawData
                 ? toSampleText((rawData as any).historicalBaselines)
                 : '';
@@ -157,13 +172,14 @@ export class AnalysisLifecycle {
                 : (typeof rawData === 'string' ? rawData : '');
 
             const reportSampleParts = [
+                toolResults ? `[Tool Evidence]:\n${toolResults}` : '',
                 analystReports ? `[Analyst Reports Sample]:\n${analystReports}` : '',
                 historicalBaselines ? `[Historical Baselines & Past Lessons]:\n${historicalBaselines}` : '',
                 rawBoard ? `[Raw Board Sample]:\n${rawBoard}` : ''
             ].filter(Boolean);
             const reportSample = reportSampleParts.join('\n\n');
 
-            const promptHeader = `${VERIFICATION_OUTPUT_CONTRACT}\n\n${criticPrompt}\n\nEvaluate the [Proposal] below against the [Analyst Reports Sample].`;
+            const promptHeader = `${VERIFICATION_OUTPUT_CONTRACT}\n\n${criticPrompt}\n\nEvaluate the [Proposal] below against the [Tool Evidence] and [Analyst Reports Sample].`;
             const proposalSection = `\n\n[Proposal]:\n${proposalSample}`;
             const trailer = `\n\n${REMINDER}`;
             const maxReportBudget = CAP - (promptHeader.length + proposalSection.length + trailer.length + 2);
