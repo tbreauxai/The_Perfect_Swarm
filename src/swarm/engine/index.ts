@@ -120,8 +120,15 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
         // 0. Infer Task Complexity via ModelRouter
         // R2: scorecard mode always runs the full swarm (the fast path has no scorecards or blackboard).
         const forceFullSwarm = scorecardMode || (params.forceFullSwarm ?? settings?.forceFullSwarm ?? settings?.disableFastPath ?? false);
+        const deepAnalysisFlag = enableDeepAnalysis ?? settings?.enableDeepAnalysis ?? false;
         const bypassCache = Boolean(params.preloadedGameContext) || (params.bypassCache ?? false);
-        const complexity: TaskComplexity = complexityOverride || ModelRouter.inferComplexity(task, (data || '').length, 1, forceFullSwarm);
+        const complexity: TaskComplexity = complexityOverride || ModelRouter.inferComplexity(
+            task,
+            (data || '').length,
+            1,
+            forceFullSwarm,
+            { userQuestion: params.userQuestion, deepAnalysis: deepAnalysisFlag }
+        );
         const deepAnalysisRequested = enableDeepAnalysis ?? settings?.enableDeepAnalysis ?? (complexity === 'complex');
 
         const agentConfigVersion = PayloadCache.hashString(

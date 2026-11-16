@@ -347,7 +347,7 @@ describe('guardVerificationResult', () => {
     it('extracts from valid objects directly', () => {
         expect(guardVerificationResult({ pass: true, feedback: 'ok' })).toEqual({ pass: true, feedback: 'ok' });
         expect(guardVerificationResult({ passed: false, feedback: 'bad' })).toEqual({ pass: false, feedback: 'bad' });
-        expect(guardVerificationResult({ approved: true })).toEqual({ pass: true, feedback: 'Approval status evaluated.' });
+        expect(guardVerificationResult({ approved: true })).toEqual({ pass: true, feedback: '' });
     });
 
     it('parses JSON strings', () => {
@@ -356,7 +356,7 @@ describe('guardVerificationResult', () => {
 
     it('uses text heuristics', () => {
         expect(guardVerificationResult('The test VERIFICATION PASSED easily.')).toEqual({ pass: true, feedback: 'The test VERIFICATION PASSED easily.' });
-        expect(guardVerificationResult('This CRITIQUE FAILED miserably.')).toEqual({ pass: false, feedback: 'This CRITIQUE FAILED miserably.' });
+        expect(guardVerificationResult('This CRITIQUE FAILED miserably.')).toEqual({ pass: false, feedback: 'This CRITIQUE FAILED miserably.', parseFailed: false });
     });
 
     it('falls back to false for ambiguous strings', () => {

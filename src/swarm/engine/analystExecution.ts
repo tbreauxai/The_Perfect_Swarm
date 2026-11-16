@@ -142,7 +142,8 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                             1500
                         );
                         if (res && res.success && typeof res.summary === 'string' && res.summary.trim()) {
-                            return res.summary.trim();
+                            const singleLine = res.summary.replace(/\s*\r?\n\s*/g, '; ').trim();
+                            return singleLine.includes(gId) ? singleLine : `${gId}: ${singleLine}`;
                         }
                         return '';
                     } catch {
@@ -200,7 +201,10 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
 
         const cappedTask = task.length > 800 ? task.slice(0, 797) + '...' : task;
         const parsedHeaders = parseGameHeaders(chunk || (config as any)?.rawBoard, (config as any)?.eventIds);
-        const renderedHeadersText = renderHeaders(parsedHeaders, 1600);
+        const cappedFallbackChunk = chunk && chunk.length > 1600 ? chunk.slice(0, 1600) : chunk;
+        const renderedHeadersText = parsedHeaders.length > 0
+            ? renderHeaders(parsedHeaders, 1600)
+            : (cappedFallbackChunk || renderHeaders(parsedHeaders, 1600));
         const chunkLabel = chunks.length > 1 ? `\nChunk ${chunkIdx + 1}/${chunks.length}` : '';
         const cappedLessons = historicalContext
             ? (historicalContext.length > 300 ? historicalContext.slice(0, 297) + '...' : historicalContext)
@@ -264,9 +268,17 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                         const blockPrefix = '\n\nInjury evidence:\n';
                         const bodyBudget = maxAllowed - blockPrefix.length;
                         if (bodyBudget >= 30) {
-                            const trimmedBody = rawInjurySummary.length > bodyBudget
-                                ? rawInjurySummary.slice(0, bodyBudget - 15) + '\n…[truncated]'
-                                : rawInjurySummary;
+                            let trimmedBody = rawInjurySummary;
+                            if (rawInjurySummary.length > bodyBudget) {
+                                const lines = rawInjurySummary.split('\n').map(l => l.trim()).filter(Boolean);
+                                const perLineMax = Math.max(20, Math.floor((bodyBudget - Math.max(0, lines.length - 1)) / Math.max(1, lines.length)));
+                                trimmedBody = lines
+                                    .map(l => (l.length > perLineMax ? `${l.slice(0, perLineMax - 1)}…` : l))
+                                    .join('\n');
+                                if (trimmedBody.length > bodyBudget) {
+                                    trimmedBody = trimmedBody.slice(0, bodyBudget);
+                                }
+                            }
                             seatPrompt += `${blockPrefix}${trimmedBody}`;
                         }
                     }

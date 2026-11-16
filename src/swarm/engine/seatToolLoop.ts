@@ -190,7 +190,13 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
   const buildPrefetchCalls = (tools: string[]) => {
     const calls: { tool: string; parameters: Record<string, unknown> }[] = [];
     const targetGames = gameIds.length > 0 ? gameIds : [gameId];
-    for (const t of tools) {
+    const availableTools = tools.filter(t => registry.has(t));
+    const orderedTools = [
+      ...availableTools.filter(t => t === 'get_injury_and_roster_delta'),
+      ...availableTools.filter(t => t === 'get_matchup_fundamentals'),
+      ...availableTools.filter(t => t !== 'get_injury_and_roster_delta' && t !== 'get_matchup_fundamentals')
+    ];
+    for (const t of orderedTools) {
       for (const gId of targetGames) {
         if (calls.length >= budget.maxToolCalls) break;
         if (t === 'get_player_prop_splits') {

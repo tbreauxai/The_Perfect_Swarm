@@ -890,19 +890,21 @@ export function adaptContextEnvelope(rawRow: unknown): Record<string, unknown> |
                     }
                     const mkt = item.market;
                     const sel = item.selection;
+                    const isHome = sel === gameItem?.home_team || sel === gameItem?.home_team_id || sel === 'home';
+                    const isAway = sel === gameItem?.away_team || sel === gameItem?.away_team_id || sel === 'away';
                     const price = typeof item.american_price === 'number' ? item.american_price : null;
                     const line = typeof item.line === 'number' ? item.line : null;
                     if (mkt === 'h2h') {
-                        if (sel === gameItem?.home_team || sel === gameItem?.home_team_id) {
+                        if (isHome) {
                             entry.ml_home = price;
-                        } else if (sel === gameItem?.away_team || sel === gameItem?.away_team_id) {
+                        } else if (isAway) {
                             entry.ml_away = price;
                         }
                     } else if (mkt === 'spreads') {
-                        if (sel === gameItem?.home_team || sel === gameItem?.home_team_id) {
+                        if (isHome) {
                             entry.spread_home = line;
                             entry.spread_price_home = price;
-                        } else if (sel === gameItem?.away_team || sel === gameItem?.away_team_id) {
+                        } else if (isAway) {
                             entry.spread_away = line;
                             entry.spread_price_away = price;
                         }
@@ -913,6 +915,11 @@ export function adaptContextEnvelope(rawRow: unknown): Record<string, unknown> |
                         } else if (typeof sel === 'string' && sel.toLowerCase().includes('under')) {
                             entry.under_price = price;
                         }
+                    }
+                }
+                for (const entry of byBook.values()) {
+                    if (entry.spread_home !== null && entry.spread_away === null) {
+                        entry.spread_away = entry.spread_home === 0 ? 0 : -entry.spread_home;
                     }
                 }
                 adaptedSections.odds = Array.from(byBook.values());

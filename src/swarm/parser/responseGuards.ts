@@ -13,12 +13,21 @@ import { parseJsonSafe, parseJsonSafeWithStatus } from './parseJsonSafe.ts';
  * Strips approximate odds, percents, and payouts (e.g. ~65%, ~+650, ~=, "about +650")
  * from model-generated analysis/summary text without replacing them with defaults.
  */
-export function stripApproximateOdds(text: string): string {
+export function stripApproximateOdds(text: string, options?: { allowExactOdds?: boolean }): string {
     if (!text || typeof text !== 'string') return text;
-    return text
+    let out = text
         .replace(/(?:~=|~|≈)\s*[+-]?\d+(?:\.\d+)?%?/g, '')
         .replace(/~=/g, '')
-        .replace(/\b(?:about|approx\.?|approximately|around|roughly)\s*(?:[+-]\d{3,4}|\d+(?:\.\d+)?%|\$\d+(?:\.\d+)?)/gi, '')
+        .replace(/\b(?:about|approx\.?|approximately|around|roughly)\s*(?:[+-]\d{3,4}|\d+(?:\.\d+)?%|\$\d+(?:\.\d+)?)/gi, '');
+    if (!options?.allowExactOdds) {
+        out = out
+            .replace(/(?:\b(?:at|@)\s*)?[+-]\d{3,4}\b/gi, '')
+            .replace(/\b(?:stake|risk|wager)\s*(?:of\s*)?(?:\d+(?:\.\d+)?\s*u(?:nits?)?|\$\d+(?:\.\d+)?)\b/gi, '')
+            .replace(/\b\d+(?:\.\d+)?\s*u(?:nits?)?\b/gi, '')
+            .replace(/\bstake\b/gi, '')
+            .replace(/\bpayout(?:\s*(?:of|:|=)?\s*\$?\d+(?:\.\d+)?)?\b/gi, '');
+    }
+    return out
         .replace(/\(\s*\)/g, '')
         .replace(/,\s*,+/g, ',')
         .replace(/\s+([,.;:!?])/g, '$1')
@@ -33,6 +42,14 @@ export function stripApproximateOdds(text: string): string {
 export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): AnalystResponse & { analysis?: string; picks?: any[]; scorecards?: any[]; pass?: boolean; verdict?: string; flags?: string[] } {
     const { data: raw, repaired: parseRepaired, reasoningTraces } = parseJsonSafeWithStatus<any>(input, {});
     let wasRepaired = parseRepaired || raw?._repaired === true;
+    let seatEmittedPricing = false;
+    const stripSeatText = (value: string): string => {
+        const cleaned = stripApproximateOdds(value);
+        if (cleaned !== value.trim()) {
+            seatEmittedPricing = true;
+        }
+        return cleaned;
+    };
     const isCriticRole = /critic|\brisk\b/i.test(role || '');
 
     if (isCriticRole) {
@@ -44,10 +61,13 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
             const rawVerdict = typeof raw.verdict === 'string' && raw.verdict.trim()
                 ? raw.verdict.trim()
                 : (typeof raw.summary === 'string' && raw.summary.trim() ? raw.summary.trim() : (raw.pass ? 'pass' : 'fail'));
-            const verdictStr = stripApproximateOdds(rawVerdict);
+            const verdictStr = stripSeatText(rawVerdict);
             const flagsList = Array.isArray(raw.flags)
-                ? raw.flags.map((f: any) => stripApproximateOdds(String(f))).filter((s: string) => s.length > 0)
+                ? raw.flags.map((f: any) => stripSeatText(String(f))).filter((s: string) => s.length > 0)
                 : [];
+            if (seatEmittedPricing && !flagsList.includes('seat_emitted_pricing')) {
+                flagsList.push('seat_emitted_pricing');
+            }
             return {
                 insights: verdictStr ? [verdictStr] : [],
                 anomalies: flagsList,
@@ -88,6 +108,9 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
         )
     );
     const sanitizePick = (item: any) => {
+        if (item && typeof item === 'object' && (item.odds !== undefined || item.stake !== undefined)) {
+            seatEmittedPricing = true;
+        }
         const { odds: _odds, stake: _stake, ...rest } = item;
         return rest;
     };
@@ -98,9 +121,9 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
             const label = p.pick || p.selection || p.team || p.row || '';
             const game = p.game || p.match || p.event_id || p.eventId || '';
             const rawLabel = game && label ? `${game}: ${label}` : String(label || game || JSON.stringify(p));
-            return stripApproximateOdds(rawLabel);
+            return stripSeatText(rawLabel);
         }).filter(Boolean);
-        const analysisText = stripApproximateOdds(pickLabels.join('; '));
+        const analysisText = stripSeatText(pickLabels.join('; '));
         const metadata: Record<string, any> = {};
         if (reasoningTraces && reasoningTraces.length > 0) {
             metadata.reasoningTraces = reasoningTraces;
@@ -112,6 +135,7 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
             analysis: analysisText,
             picks: sanitizedPicks,
             scorecards: [],
+            ...(seatEmittedPricing ? { flags: ['seat_emitted_pricing'] } : {}),
             ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
             _repaired: true
         };
@@ -135,13 +159,13 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
 
     let insights: string[] = [];
     if (Array.isArray(raw.insights)) {
-        insights = raw.insights.map((s: any) => stripApproximateOdds(String(s))).filter((s: string) => s.length > 0);
+        insights = raw.insights.map((s: any) => stripSeatText(String(s))).filter((s: string) => s.length > 0);
     } else if (typeof raw.insights === 'string' && raw.insights.trim().length > 0) {
-        const cleaned = stripApproximateOdds(raw.insights.trim());
+        const cleaned = stripSeatText(raw.insights.trim());
         if (cleaned) insights = [cleaned];
         wasRepaired = true;
     } else if (Array.isArray(raw.findings)) {
-        insights = raw.findings.map((s: any) => stripApproximateOdds(String(s))).filter((s: string) => s.length > 0);
+        insights = raw.findings.map((s: any) => stripSeatText(String(s))).filter((s: string) => s.length > 0);
         wasRepaired = true;
     }
 
@@ -158,16 +182,16 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
 
     let anomalies: string[] = [];
     if (Array.isArray(raw.anomalies)) {
-        anomalies = raw.anomalies.map((s: any) => stripApproximateOdds(String(s))).filter((s: string) => s.length > 0);
+        anomalies = raw.anomalies.map((s: any) => stripSeatText(String(s))).filter((s: string) => s.length > 0);
     } else if (typeof raw.anomalies === 'string' && raw.anomalies.trim().length > 0 && !/^none$/i.test(raw.anomalies.trim())) {
-        const cleaned = stripApproximateOdds(raw.anomalies.trim());
+        const cleaned = stripSeatText(raw.anomalies.trim());
         if (cleaned) anomalies = [cleaned];
         wasRepaired = true;
     }
 
     let summary = '';
     if (typeof raw.summary === 'string' && raw.summary.trim().length > 0) {
-        summary = stripApproximateOdds(raw.summary.trim());
+        summary = stripSeatText(raw.summary.trim());
     } else {
         summary = `${role} analytical assessment completed (${insights.length} insight${insights.length === 1 ? '' : 's'}).`;
         wasRepaired = true;
@@ -183,6 +207,20 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
         ? raw.counterHypothesis.trim()
         : undefined;
 
+    let sanitizedRecommendation = raw?.recommendation;
+    if (sanitizedRecommendation && typeof sanitizedRecommendation === 'object' && !Array.isArray(sanitizedRecommendation)) {
+        if (sanitizedRecommendation.odds !== undefined || sanitizedRecommendation.stake !== undefined) {
+            seatEmittedPricing = true;
+        }
+        const { odds: _recOdds, stake: _recStake, ...recRest } = sanitizedRecommendation;
+        sanitizedRecommendation = recRest;
+    }
+
+    const existingFlags = Array.isArray(raw?.flags) ? raw.flags.map((f: any) => String(f)).filter(Boolean) : [];
+    const flags = seatEmittedPricing
+        ? Array.from(new Set([...existingFlags, 'seat_emitted_pricing']))
+        : existingFlags;
+
     const metadata: Record<string, any> = {
         ...(raw?.metadata && typeof raw.metadata === 'object' ? raw.metadata : {})
     };
@@ -197,7 +235,8 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
         ...(primaryHypothesis ? { primaryHypothesis } : {}),
         ...(counterHypothesis ? { counterHypothesis } : {}),
         ...(raw?.verdict !== undefined ? { verdict: raw.verdict } : {}),
-        ...(raw?.recommendation !== undefined ? { recommendation: raw.recommendation } : {}),
+        ...(sanitizedRecommendation !== undefined ? { recommendation: sanitizedRecommendation } : {}),
+        ...(flags.length > 0 ? { flags } : {}),
         ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
         ...(wasRepaired ? { _repaired: true } : {}),
         ...(isPlaceholder ? { _placeholder: true } : {})
@@ -270,7 +309,7 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
     if (parsed.success) {
         const cleanedData: ManagerResponse = {
             ...parsed.data,
-            ...(parsed.data.summary ? { summary: stripApproximateOdds(parsed.data.summary) } : {}),
+            ...(parsed.data.summary ? { summary: stripApproximateOdds(parsed.data.summary, { allowExactOdds: true }) } : {}),
             components: parsed.data.components.map((comp) => {
                 if (comp.type === 'InsightList') {
                     return {
@@ -279,7 +318,7 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
                             ...comp.props,
                             insights: comp.props.insights.map((ins) => ({
                                 ...ins,
-                                message: stripApproximateOdds(ins.message)
+                                message: stripApproximateOdds(ins.message, { allowExactOdds: true })
                             }))
                         }
                     };
@@ -302,7 +341,7 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
         : defaultTitle;
 
     const summary = typeof raw.summary === 'string' && raw.summary.trim().length > 0
-        ? stripApproximateOdds(raw.summary.trim())
+        ? stripApproximateOdds(raw.summary.trim(), { allowExactOdds: true })
         : undefined;
 
     const components: ManagerResponse['components'] = [];
@@ -582,14 +621,16 @@ export function guardVerificationResult(input: unknown): VerificationResult {
         }
     }
 
-    const parsed = parseJsonSafe<any>(text, null);
-    if (parsed && typeof parsed === 'object') {
-        const verdict = readVerdict(parsed);
-        return {
-            pass: verdict.pass === true,
-            feedback: verdict.feedback || '',
-            ...(verdict.parseFailed ? { parseFailed: true } : {})
-        };
+    if (text.includes('{')) {
+        const parsed = parseJsonSafe<any>(text, null);
+        if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
+            const verdict = readVerdict(parsed);
+            return {
+                pass: verdict.pass === true,
+                feedback: verdict.feedback || '',
+                ...(verdict.parseFailed ? { parseFailed: true } : {})
+            };
+        }
     }
 
     const upper = text.toUpperCase();

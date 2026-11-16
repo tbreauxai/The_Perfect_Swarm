@@ -614,7 +614,12 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
             }
         } else {
             const usePool = optimizationEnabled && (optSettings?.workerPoolConcurrency ?? 4) > 1;
-            const headersPayload = renderHeaders(parseGameHeaders(chunks[0] || task, (params as any)?.eventIds), 1600);
+            const parsedChunkHeaders = parseGameHeaders(chunks[0] || task, (params as any)?.eventIds);
+            const rawChunk = chunks[0];
+            const cappedChunk = rawChunk && rawChunk.length > 1600 ? rawChunk.slice(0, 1600) : rawChunk;
+            const headersPayload = parsedChunkHeaders.length > 0
+                ? renderHeaders(parsedChunkHeaders, 1600)
+                : (cappedChunk || renderHeaders(parsedChunkHeaders, 1600));
             const chunkReports = usePool
                 ? await globalPredictionWorkerPool.submitBatch(
                     analysts.map((analyst) => () => executeAnalyst(analyst, headersPayload, 0))
