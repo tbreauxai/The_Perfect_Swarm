@@ -37,6 +37,7 @@ export interface RunSeatWithToolsParams {
   context?: SwarmContext;
   finalInstruction?: string;
   gameId?: string;
+  gameIds?: string[];
   cache?: GameQueryCache;
   runConfig?: any;
   options?: {
@@ -50,6 +51,7 @@ export interface SeatToolLoopResult {
   report: string;
   rounds: number;
   toolCallsExecuted: string[];
+  coveredEventIds: string[];
 }
 
 export function getRoleToolNames(seat: string): string[] {
@@ -183,16 +185,35 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
   };
 
   const executedTools: string[] = [];
+  const coveredEventIds = new Set<string>();
+
+  const gameIds: string[] = (params.gameIds && params.gameIds.length > 0)
+    ? params.gameIds
+    : (gameId && gameId !== 'unknown-game' ? [gameId] : []);
+
+  const buildPrefetchCalls = (tools: string[]) => {
+    const calls: { tool: string; parameters: Record<string, unknown> }[] = [];
+    const targetGames = gameIds.length > 0 ? gameIds : [gameId];
+    for (const gId of targetGames) {
+      for (const t of tools) {
+        if (calls.length < budget.maxToolCalls) {
+          calls.push({ tool: t, parameters: { game_id: gId } });
+        }
+      }
+    }
+    return calls;
+  };
 
   const executeCalls = async (calls: { tool: string; parameters: Record<string, unknown> }[]) => {
     const callsToRun = calls.slice(0, budget.maxToolCalls);
     const results = await Promise.all(
       callsToRun.map(async (c) => {
         executedTools.push(c.tool);
+        const targetGameId = (c.parameters.game_id as string) || (c.parameters.p_game_id as string) || (c.parameters.id as string) || gameId;
         const startTime = Date.now();
         const res = await executeToolWithCacheAndTimeout(
           { tool: c.tool, parameters: c.parameters },
-          { game_id: (c.parameters.game_id as string) || (c.parameters.p_game_id as string) || gameId },
+          { game_id: targetGameId },
           registry,
           cache,
           1500,
@@ -214,16 +235,66 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
             (context.addEvent as any)(actionStr);
           }
         }
-        return res;
+        return { res, targetGameId, summary: res.summary };
       })
     );
 
-    let summaryText = results.map(r => r.summary).filter(Boolean).join('\n\n');
-    if (summaryText.length > budget.maxToolResultChars) {
-      summaryText = summaryText.slice(0, budget.maxToolResultChars - 15) + '\n…[truncated]';
+    let summaryText = '';
+    for (const item of results) {
+      if (!item.summary) continue;
+      const piece = summaryText ? `\n\n${item.summary}` : item.summary;
+      if (summaryText.length + piece.length <= budget.maxToolResultChars) {
+        summaryText += piece;
+        if (item.targetGameId && item.targetGameId !== 'unknown-game') {
+          coveredEventIds.add(item.targetGameId);
+        }
+      } else {
+        const remainingChars = budget.maxToolResultChars - summaryText.length;
+        if (remainingChars > 30) {
+          summaryText += (summaryText ? '\n\n' : '') + item.summary.slice(0, remainingChars - 15) + '\n…[truncated]';
+          if (item.targetGameId && item.targetGameId !== 'unknown-game') {
+            coveredEventIds.add(item.targetGameId);
+          }
+        }
+        break;
+      }
     }
     return summaryText;
   };
+
+  const isCriticSeat = (s: string) => {
+    const norm = s.toLowerCase().trim();
+    return norm === 'critic' || norm === 'risk' || norm === 'risk_critic' || norm.includes('critic') || norm.includes('risk');
+  };
+
+  if (isCriticSeat(seat)) {
+    // Critic must return strict JSON: prefetch role tools server-side into maxToolResultChars budget,
+    // then run one JSON round with no tools.
+    const prefetchCalls = buildPrefetchCalls(baseTools.filter(t => registry.has(t)));
+    const toolResultsSummary = prefetchCalls.length > 0 ? await executeCalls(prefetchCalls) : '';
+
+    const criticPrompt = assertPromptFits(agent.provider, {
+      systemInstruction,
+      prompt,
+      toolResults: toolResultsSummary ? `Tool results:\n${toolResultsSummary}\n\n${finalInstruction}` : finalInstruction
+    });
+
+    const criticConfig: any = {
+      groqMode: 'chat',
+      systemInstruction,
+      ...params.runConfig
+    };
+    delete criticConfig.tools;
+    delete criticConfig.toolChoice;
+
+    const output = await runAgentWithDeadline(criticPrompt, criticConfig);
+    return {
+      report: output,
+      rounds: 1,
+      toolCallsExecuted: executedTools,
+      coveredEventIds: Array.from(coveredEventIds)
+    };
+  }
 
   let round1Output = '';
   try {
@@ -232,11 +303,15 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
       systemInstruction,
       ...params.runConfig
     };
-    if (nativeTools.length > 0) {
+    const isStrict = Boolean(params.runConfig?.zodSchema || (params.runConfig as any)?.schema);
+    if (nativeTools.length > 0 && !isStrict) {
       r1Config.tools = nativeTools;
       r1Config.toolChoice = 'auto';
       delete r1Config.responseMimeType;
       delete r1Config.responseSchema;
+    } else {
+      delete r1Config.tools;
+      delete r1Config.toolChoice;
     }
     round1Output = await runAgentWithDeadline(prompt, r1Config);
   } catch (err: any) {
@@ -249,10 +324,7 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
 
     if (agent.provider === 'groq' && isToolError) {
       // Groq native tool rejection fallback: prefetch role tools and run 1 round
-      const prefetchCalls = baseTools.map(t => ({
-        tool: t,
-        parameters: { game_id: gameId }
-      }));
+      const prefetchCalls = buildPrefetchCalls(baseTools);
       const toolResultsSummary = await executeCalls(prefetchCalls);
 
       const fallbackPrompt = assertPromptFits(agent.provider, {
@@ -270,7 +342,8 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
       return {
         report: fallbackOutput,
         rounds: 1,
-        toolCallsExecuted: executedTools
+        toolCallsExecuted: executedTools,
+        coveredEventIds: Array.from(coveredEventIds)
       };
     }
     throw err;
@@ -284,7 +357,8 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     return {
       report: round1Output,
       rounds: 1,
-      toolCallsExecuted: []
+      toolCallsExecuted: [],
+      coveredEventIds: []
     };
   }
 
@@ -307,6 +381,7 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
   return {
     report: round2Output,
     rounds: 2,
-    toolCallsExecuted: executedTools
+    toolCallsExecuted: executedTools,
+    coveredEventIds: Array.from(coveredEventIds)
   };
 }

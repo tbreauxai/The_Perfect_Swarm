@@ -4,7 +4,7 @@ import { parseJsonSafe, guardVerificationResult } from './parser.ts';
 import { redactForLog } from './parser/responseGuards.ts';
 import { groqPromptCharCap } from './providers/groq.ts';
 import { seatBudget } from './context/promptBudget.ts';
-import { parseGameHeaders, renderHeaders } from './context/gameHeaders.ts';
+import { parseGameHeaders, renderHeaders, filterPicksByCoverage } from './context/gameHeaders.ts';
 
 import type { VerificationResult } from './types.ts';
 export type { VerificationResult };
@@ -65,11 +65,22 @@ export class AnalysisLifecycle {
         rawData: any,
         context: SwarmContext,
         proposerPrompt: string,
-        criticPrompt: string
+        criticPrompt: string,
+        coveredEventIds?: string[]
     ): Promise<LifecycleExecutionResult> {
         let attempt = 0;
         let currentProposal: any = null;
         let feedback = "";
+
+        const effectiveCoveredEventIds: string[] | undefined =
+            coveredEventIds || (Array.isArray(rawData?.coveredEventIds) ? rawData.coveredEventIds : undefined);
+
+        if (effectiveCoveredEventIds && effectiveCoveredEventIds.length > 0) {
+            const coverageDirective = `\n[Specialist Coverage]: Analyst tools only covered the following event ID(s): ${effectiveCoveredEventIds.join(', ')}. Only recommend picks from covered games.`;
+            if (!proposerPrompt.includes('[Specialist Coverage]')) {
+                proposerPrompt = `${proposerPrompt}\n${coverageDirective}`;
+            }
+        }
 
         while (attempt < this.maxRetries) {
             attempt++;
@@ -97,6 +108,16 @@ export class AnalysisLifecycle {
             });
             
             currentProposal = parseJsonSafe(proposalRaw, { rawText: proposalRaw, error: "Failed to parse JSON" });
+
+            if (effectiveCoveredEventIds && currentProposal && Array.isArray(currentProposal.picks)) {
+                const headers = parseGameHeaders(rawData);
+                const originalCount = currentProposal.picks.length;
+                currentProposal.picks = filterPicksByCoverage(currentProposal.picks, effectiveCoveredEventIds, headers);
+                if (currentProposal.picks.length === 0 && originalCount > 0) {
+                    currentProposal.ui_title = 'Insufficient data';
+                    currentProposal.reason = 'no picks with specialist coverage';
+                }
+            }
 
             // 2. Critic verifies
             context.addEvent({

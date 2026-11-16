@@ -1,5 +1,6 @@
-{"timestamp":"2026-11-14T11:39:00-06:00","goalId":"goal-1-rpc-params-and-key","action":"started","summary":"Initialized ultragoal session on branch fix/tool-rpc-params and activated Goal 1: Send p*-prefixed RPC args & enforce publishable key"}
-{"timestamp":"2026-11-14T11:42:00-06:00","goalId":"goal-1-rpc-params-and-key","action":"completed","note":"Committed 6b0b6bc: p*-prefixed RPC args and publishable key enforcement"}
-{"timestamp":"2026-11-14T11:42:30-06:00","goalId":"goal-2-player-prop-splits-empty","action":"completed","note":"Committed f7fe34f: prop splits empty-valid on 0 logs, no fabricated sample"}
-{"timestamp":"2026-11-14T11:43:10-06:00","goalId":"goal-3-market-movement-fan-duel","action":"completed","note":"Committed 5d46817: market movement reads real FanDuel fields, no default prices"}
-{"timestamp":"2026-11-14T11:46:00-06:00","goalId":"goal-4-contract-tests-and-verify","action":"completed","note":"Committed 9e8c155: RPC arg contract tests and fixtures vs DuelOdds migration signatures; build and smoke pass"}
+{"timestamp":"2026-11-15T19:49:40Z","action":"session_initialized","goalId":"goal-1-no-tools-on-json-seats","branch":"fix/critic-analyst-scope","base":"2878b9e8"}
+{"timestamp":"2026-11-15T19:55:00Z","action":"goal_completed","goalId":"goal-1-no-tools-on-json-seats","commit":"7380133"}
+{"timestamp":"2026-11-15T20:00:00Z","action":"goal_completed","goalId":"goal-2-per-game-analyst-tools","commit":"1e45120"}
+{"timestamp":"2026-11-15T20:05:30Z","action":"goal_completed","goalId":"goal-3-drop-uncovered-proposer-picks","commit":"e817437"}
+{"timestamp":"2026-11-15T20:09:00Z","action":"goal_completed","goalId":"goal-4-tests","commit":"ccbc6f4"}
+{"timestamp":"2026-11-15T20:11:30Z","action":"tests_verified","goalId":"goal-5-verify-and-pr","commit":"ede1b71"}

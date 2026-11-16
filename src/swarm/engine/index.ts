@@ -39,6 +39,7 @@ import {
   executeScorecardSynthesis,
   emptySynthesisResult,
 } from "./scorecardManager.ts";
+import { parseGameHeaders, filterPicksByCoverage } from "../context/gameHeaders.ts";
 import { isDataRequest } from "../parser/responseGuards.ts";
 import { planTriage, type TriagePlan } from "./triagePlanner.ts";
 import { executeTriage, type CuratedDossier } from "./triageExecutor.ts";
@@ -386,6 +387,14 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 const flatReports = clusterResult.allAnalystReports.flat().filter(Boolean);
                 const allPlaceholderOrDataRequest = flatReports.length > 0 && flatReports.every(r => (r as any)._placeholder === true || isDataRequest(r));
 
+                const coveredEventIds = new Set<string>();
+                for (const r of flatReports) {
+                    if (Array.isArray((r as any).coveredEventIds)) {
+                        for (const id of (r as any).coveredEventIds) coveredEventIds.add(id);
+                    }
+                }
+                const coveredEventIdsList = Array.from(coveredEventIds);
+
                 if (allPlaceholderOrDataRequest) {
                     finalAnalysis = {
                         ui_title: 'Insufficient data',
@@ -420,7 +429,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                 analysts,
                                 dedicatedCriticAgent,
                                 context,
-                                settings
+                                settings,
+                                coveredEventIds: coveredEventIdsList
                             });
                             finalAnalysis = verificationResult.finalAnalysis;
                             workflowLifecycleResult = verificationResult.lifecycleResult;
@@ -431,8 +441,19 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                 context,
                                 activeVariant,
                                 bypassCache,
-                                settings
+                                settings,
+                                coveredEventIdsList
                             );
+                        }
+
+                        if (coveredEventIdsList.length > 0 && finalAnalysis && Array.isArray(finalAnalysis.picks)) {
+                            const slateHeaders = parseGameHeaders(data || profilingResult.rawInput);
+                            const originalCount = finalAnalysis.picks.length;
+                            finalAnalysis.picks = filterPicksByCoverage(finalAnalysis.picks, coveredEventIdsList, slateHeaders);
+                            if (finalAnalysis.picks.length === 0 && originalCount > 0) {
+                                finalAnalysis.ui_title = 'Insufficient data';
+                                finalAnalysis.reason = 'no picks with specialist coverage';
+                            }
                         }
                     } catch (managerErr: any) {
                         // PS1: the whole manager chain failed. Return the best analyst output as a partial answer.
