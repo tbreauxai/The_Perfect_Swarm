@@ -66,7 +66,7 @@ describe('chatRunNov16b repro', () => {
     expect((guarded as any).recommendation?.stake).toBeUndefined();
   });
 
-  it('(5) adapter drops ml/spread because writer selection is "home"/"away", not team name', () => {
+  it('(5) adapter maps "home"/"away" selections and derives spread_away', () => {
     const now = '2026-11-16T17:38:19.486Z';
     const row: any = { event_id: 'nba-401910000', status: 'partial', sections: {
       game: { status: 'ready', items: [{ event_id: 'nba-401910000', home_team: 'New Orleans Pelicans', home_team_id: '3', away_team: 'Golden State Warriors', away_team_id: '9' }] },
@@ -78,9 +78,11 @@ describe('chatRunNov16b repro', () => {
     const out: any = adaptContextEnvelope(row);
     const o = out.sections.odds[0];
     expect(o.total).toBe(228.5);
-    expect(o.ml_home).toBeNull();
-    expect(o.ml_away).toBeNull();
-    expect(o.spread_home).toBeNull();
+    expect(o.ml_home).toBe(140);
+    expect(o.ml_away).toBe(-165);
+    expect(o.spread_home).toBe(3.5);
+    expect(o.spread_away).toBe(-3.5);
+    expect(o.spread_price_away).toBeNull();
   });
 
   it('(6) router format regex matches the DuelOdds JSON role header', () => {
