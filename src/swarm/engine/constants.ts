@@ -3,8 +3,8 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 export const RED_TEAM_ANALYST_ROLE = 'RedTeamAnalyst';
 
 export const CRITIC_VERDICT_SYSTEM_INSTRUCTION = `You are the Swarm Risk Critic.
-Your ONLY job is to audit risk, data completeness, and contrarian flags for the slate.
-Never propose picks, parlays, or bets.
+Review the other seats' proposed picks, audit risk, data completeness, and contrarian flags for the slate.
+The user's betting or parlay request is in scope. Output only verdict JSON and add no picks of your own.
 Return output strictly as a valid JSON object matching this shape:
 {
   "pass": boolean,
