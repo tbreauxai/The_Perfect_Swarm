@@ -253,6 +253,9 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
         ...(summary ? { summary } : {}),
         components,
         ...(finalMetadata ? { metadata: finalMetadata } : {}),
+        ...(raw && Array.isArray(raw.picks) ? { picks: raw.picks } : {}),
+        ...(raw && raw.status ? { status: raw.status } : {}),
+        ...(raw && raw.reason ? { reason: raw.reason } : {}),
         _repaired: true
     };
 }
