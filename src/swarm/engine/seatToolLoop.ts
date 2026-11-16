@@ -191,13 +191,20 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     const calls: { tool: string; parameters: Record<string, unknown> }[] = [];
     const targetGames = gameIds.length > 0 ? gameIds : [gameId];
     const availableTools = tools.filter(t => registry.has(t));
-    const orderedTools = [
-      ...availableTools.filter(t => t === 'get_injury_and_roster_delta'),
-      ...availableTools.filter(t => t === 'get_matchup_fundamentals'),
-      ...availableTools.filter(t => t !== 'get_injury_and_roster_delta' && t !== 'get_matchup_fundamentals')
-    ];
-    for (const t of orderedTools) {
-      for (const gId of targetGames) {
+    const coreTools = ['get_injury_and_roster_delta', 'get_matchup_fundamentals'].filter(t => availableTools.includes(t));
+    const extraTools = availableTools.filter(t => t !== 'get_injury_and_roster_delta' && t !== 'get_matchup_fundamentals');
+
+    for (const gId of targetGames) {
+      for (const t of coreTools) {
+        if (calls.length >= budget.maxToolCalls) break;
+        calls.push({ tool: t, parameters: { game_id: gId } });
+      }
+      if (calls.length >= budget.maxToolCalls) break;
+    }
+
+    for (const gId of targetGames) {
+      if (calls.length >= budget.maxToolCalls) break;
+      for (const t of extraTools) {
         if (calls.length >= budget.maxToolCalls) break;
         if (t === 'get_player_prop_splits') {
           const propsForGame = params.propParamsByGame?.[gId];
@@ -225,7 +232,6 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
           calls.push({ tool: t, parameters: { game_id: gId } });
         }
       }
-      if (calls.length >= budget.maxToolCalls) break;
     }
     return calls;
   };
@@ -283,6 +289,17 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
           }
         }
         break;
+      }
+    }
+    const unfetchedGames = gameIds.filter(gId => !coveredEventIds.has(gId));
+    if (unfetchedGames.length > 0) {
+      const notFetchedLine = `[Not Fetched]: ${unfetchedGames.map(g => `${g}: not fetched`).join(', ')}`;
+      const sep = summaryText ? '\n\n' : '';
+      if (summaryText.length + sep.length + notFetchedLine.length <= budget.maxToolResultChars) {
+        summaryText += sep + notFetchedLine;
+      } else if (notFetchedLine.length <= budget.maxToolResultChars) {
+        const keep = Math.max(0, budget.maxToolResultChars - sep.length - notFetchedLine.length);
+        summaryText = (keep > 0 ? summaryText.slice(0, keep) + sep : '') + notFetchedLine;
       }
     }
     return summaryText;

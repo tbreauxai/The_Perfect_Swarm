@@ -122,9 +122,11 @@ describe('prefetchArgsEvidence repro (A-D)', () => {
     });
 
     expect(propCalls).toHaveLength(0);
-    expect(injuryCalls).toEqual(games); // injuries for all 6 games first
-    expect(fundCalls).toEqual(['G1', 'G2']); // remaining 2 of 8 calls
-    expect(res.coveredEventIds).toEqual(games);
+    expect(injuryCalls).toEqual(['G1', 'G2', 'G3', 'G4']); // game-major: injury + fundamentals for G1..G4
+    expect(fundCalls).toEqual(['G1', 'G2', 'G3', 'G4']);
+    expect(res.coveredEventIds).toEqual(['G1', 'G2', 'G3', 'G4']);
+    expect(res.toolEvidence).toContain('G5: not fetched');
+    expect(res.toolEvidence).toContain('G6: not fetched');
 
     // When real player_id + stat_category are known from slate prop rows, prop splits may be prefetched
     fundCalls.length = 0;
