@@ -371,6 +371,19 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 }
 
                 // Step 5: Synthesis Pipeline
+                const flatReports = clusterResult.allAnalystReports.flatMap((reps, idx) => {
+                    const analystRole = analysts[idx]?.role;
+                    const analystId = (analysts[idx] as any)?.id;
+                    return (reps || []).filter(Boolean).map((r: any) => {
+                        if (r && typeof r === 'object') {
+                            if (!r.role && analystRole) r.role = analystRole;
+                            if (!r.seat && analystId) r.seat = analystId;
+                        }
+                        return r;
+                    });
+                });
+                const verifierEvidence = buildVerifierEvidence(flatReports as any, profilingResult.rawInput ?? data ?? task);
+
                 const synthesisResult = blackboard ? emptySynthesisResult() : compileSynthesisPrompt({
                     task,
                     rawInput: profilingResult.rawInput,
@@ -384,7 +397,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     activeVariant,
                     context,
                     params,
-                    bypassCache
+                    bypassCache,
+                    verifierEvidence
                 });
 
                 workflowOriginalPromptTokens += synthesisResult.workflowOriginalPromptTokens;
@@ -393,17 +407,6 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 workflowDeduplicatedCount += synthesisResult.workflowDeduplicatedCount;
 
                 // Step 5 & 6: Verification vs Standard Synthesis Execution
-                const flatReports = clusterResult.allAnalystReports.flatMap((reps, idx) => {
-                    const analystRole = analysts[idx]?.role;
-                    const analystId = (analysts[idx] as any)?.id;
-                    return (reps || []).filter(Boolean).map((r: any) => {
-                        if (r && typeof r === 'object') {
-                            if (!r.role && analystRole) r.role = analystRole;
-                            if (!r.seat && analystId) r.seat = analystId;
-                        }
-                        return r;
-                    });
-                });
                 const isCriticSeat = (r: any): boolean => {
                     const label = String(r?.seat || r?.role || '').toLowerCase();
                     return label === 'critic' || label === 'risk' || label === 'risk_critic' || label.includes('critic') || label.includes('risk');
@@ -431,7 +434,6 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     })
                     .filter(Boolean)
                     .join('\n\n');
-                const verifierEvidence = buildVerifierEvidence(flatReports as any, profilingResult.rawInput ?? data ?? task);
                 const verifierToolResults = verifierEvidence || joinedToolEvidence;
 
                 if (allPlaceholderOrDataRequest) {
