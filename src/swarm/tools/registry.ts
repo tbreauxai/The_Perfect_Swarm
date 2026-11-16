@@ -219,15 +219,36 @@ export class ToolRegistry {
         const addCandidate = (body: string) => {
             try {
                 const parsed = JSON.parse(body.trim());
-                if (parsed && typeof parsed.tool === 'string' && this.has(parsed.tool)) {
-                    const key = `${parsed.tool}:${JSON.stringify(parsed.parameters || {})}`;
-                    if (!seen.has(key)) {
-                        seen.add(key);
-                        calls.push({
-                            tool: parsed.tool,
-                            parameters: parsed.parameters || {}
-                        });
+                if (!parsed || typeof parsed !== 'object') return;
+                const rawName = parsed.tool ?? parsed.name ?? parsed.function?.name;
+                if (typeof rawName !== 'string') return;
+                const trimmedName = rawName.trim();
+                if (!trimmedName || trimmedName.toLowerCase() === 'json') return;
+                const resolvedName = this.has(trimmedName)
+                    ? trimmedName
+                    : (trimmedName.endsWith('_v1') && this.has(trimmedName.slice(0, -3))
+                        ? trimmedName.slice(0, -3)
+                        : null);
+                if (!resolvedName) return;
+
+                let rawArgs = parsed.parameters ?? parsed.arguments ?? parsed.function?.parameters ?? parsed.function?.arguments ?? {};
+                if (typeof rawArgs === 'string') {
+                    try {
+                        rawArgs = JSON.parse(rawArgs);
+                    } catch {
+                        rawArgs = {};
                     }
+                }
+                if (!rawArgs || typeof rawArgs !== 'object' || Array.isArray(rawArgs)) {
+                    rawArgs = {};
+                }
+                const key = `${resolvedName}:${JSON.stringify(rawArgs)}`;
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    calls.push({
+                        tool: resolvedName,
+                        parameters: rawArgs
+                    });
                 }
             } catch {
                 // Not valid JSON, ignore

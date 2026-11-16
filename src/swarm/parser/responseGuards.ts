@@ -12,9 +12,53 @@ import { parseJsonSafe, parseJsonSafeWithStatus } from './parseJsonSafe.ts';
 /**
  * Domain guard for AnalystResponseSchema: guaranteed zero crashes on worker agent outputs.
  */
-export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): AnalystResponse {
+export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): AnalystResponse & { analysis?: string; picks?: any[]; scorecards?: any[] } {
     const { data: raw, repaired: parseRepaired, reasoningTraces } = parseJsonSafeWithStatus<any>(input, {});
     let wasRepaired = parseRepaired || raw?._repaired === true;
+
+    const isPickLike = (item: any): boolean => Boolean(
+        item &&
+        typeof item === 'object' &&
+        !Array.isArray(item) &&
+        (
+            typeof item.pick === 'string' ||
+            typeof item.selection === 'string' ||
+            typeof item.team === 'string' ||
+            typeof item.game === 'string' ||
+            typeof item.match === 'string' ||
+            typeof item.event_id === 'string' ||
+            typeof item.eventId === 'string' ||
+            typeof item.row === 'string'
+        )
+    );
+    const sanitizePick = (item: any) => {
+        const { odds: _odds, stake: _stake, ...rest } = item;
+        return rest;
+    };
+
+    if (Array.isArray(raw) && raw.length > 0 && raw.some(isPickLike)) {
+        const sanitizedPicks = raw.filter(isPickLike).map(sanitizePick);
+        const pickLabels = sanitizedPicks.map((p: any) => {
+            const label = p.pick || p.selection || p.team || p.row || '';
+            const game = p.game || p.match || p.event_id || p.eventId || '';
+            return game && label ? `${game}: ${label}` : String(label || game || JSON.stringify(p));
+        }).filter(Boolean);
+        const analysisText = pickLabels.join('; ');
+        const metadata: Record<string, any> = {};
+        if (reasoningTraces && reasoningTraces.length > 0) {
+            metadata.reasoningTraces = reasoningTraces;
+        }
+        return {
+            insights: pickLabels,
+            anomalies: [],
+            summary: `${role} picks: ${analysisText}`,
+            analysis: analysisText,
+            picks: sanitizedPicks,
+            scorecards: [],
+            ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+            _repaired: true
+        };
+    }
 
     // Handle minified key compaction aliases if present (ins, ano, sum)
     if (raw && typeof raw === 'object') {
@@ -93,6 +137,8 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
         summary,
         ...(primaryHypothesis ? { primaryHypothesis } : {}),
         ...(counterHypothesis ? { counterHypothesis } : {}),
+        ...(raw?.verdict !== undefined ? { verdict: raw.verdict } : {}),
+        ...(raw?.recommendation !== undefined ? { recommendation: raw.recommendation } : {}),
         ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
         ...(wasRepaired ? { _repaired: true } : {}),
         ...(isPlaceholder ? { _placeholder: true } : {})

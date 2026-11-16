@@ -2,39 +2,39 @@
   "activeGoalId": "goal-5-verify-and-pr",
   "goals": [
     {
-      "id": "goal-1-no-tools-on-json-seats",
-      "title": "Step 1: Omit tools on JSON-required seats (fixes critic Groq 400)",
-      "description": "In src/swarm/agent.ts Agent.run and src/swarm/engine/seatToolLoop.ts runSeatWithTools, if seat must return strict JSON (critic / risk / risk_critic, or runConfig has responseMimeType application/json or zodSchema), do not attach tools or expand toolRegistry, and do not default toolChoice to auto.",
+      "id": "goal-1-critic-early-exit-summary",
+      "title": "Step 1: Surface critic 'no parlay' + why on early-exit",
+      "description": "In src/swarm/engine/index.ts, exclude the critic seat from the all-placeholder / isDataRequest test (stamp role or seat on reports if needed). If remaining seats are empty, still early-exit, but put critic's summary/insights into summary (and analysis if used) while keeping picks: [] and critic verdict.",
       "status": "completed",
-      "verificationCriteria": "A critic/JSON seat request body has no tools array and cannot call a tool named 'json'."
+      "verificationCriteria": "Critic-only actionable 'no parlay' is visible on the early-exit result."
     },
     {
-      "id": "goal-2-per-game-analyst-tools",
-      "title": "Step 2: Run analyst tools per slate game within existing caps",
-      "description": "In src/swarm/engine/analystExecution.ts and seatToolLoop, iterate parsedHeaders games in header order, bounded by existing seatBudget(provider) caps (maxToolCalls 6/8, maxToolResultChars 2000/6000, maxPromptChars 5600, renderHeaders 1600). Record coveredEventIds.",
+      "id": "goal-2-parse-llama-function-call",
+      "title": "Step 2: Parse Llama {type,name,parameters} function-call JSON",
+      "description": "In src/swarm/tools/registry.ts parseToolCalls addCandidate, accept tool name from parsed.tool ?? parsed.name ?? parsed.function?.name, and args from parsed.parameters ?? parsed.arguments ?? {}. Strip trailing _v1 to resolve to registered short name. Do not treat 'json' as a tool.",
       "status": "completed",
-      "verificationCriteria": "A multi-game slate invokes tools for each game until budget cap, recording coveredEventIds."
+      "verificationCriteria": "Llama {type:'function', name:'get_market_movement', parameters:{game_id}} parses as that tool call."
     },
     {
-      "id": "goal-3-drop-uncovered-proposer-picks",
-      "title": "Step 3: Tell proposer covered event ids and drop uncovered picks",
-      "description": "In lifecycle executeAndVerify, executeManagerSynthesis, executeScorecardSynthesis, pass coveredEventIds to proposer, and drop any pick whose event_id or mapped R-id is not in coveredEventIds.",
+      "id": "goal-3-wrap-bare-pick-arrays",
+      "title": "Step 3: Wrap bare pick arrays instead of placeholdering",
+      "description": "In src/swarm/parser/responseGuards.ts guardAnalystResponse, if raw (or parsed input) is an array of pick-like objects, wrap into {analysis, picks, scorecards} keeping pick/game identity, stripping odds and stake, and filling insights/summary from pick labels.",
       "status": "completed",
-      "verificationCriteria": "Picks for uncovered event IDs or R-ids are dropped; uncovered-only results in no picks."
+      "verificationCriteria": "A bare HOU ML array is a real report with picks and no odds/stake, not a placeholder."
     },
     {
       "id": "goal-4-tests",
-      "title": "Step 4: Tests for JSON seats, per-game tools, and uncovered pick dropping",
-      "description": "Add tests asserting: (a) critic/JSON seat outbound request has no tools; (b) 3-game parsedHeaders calls tools per game until maxToolCalls; (c) proposer/manager/scorecard picks on uncovered games are dropped; update getRoleToolNames tests if needed.",
+      "title": "Step 4: Repro and unit tests",
+      "description": "Create src/__repro__/chatEmptyOutput.repro.test.ts covering inverted A/B, C critic isDataRequest + early-exit summary containing 'no parlay'.",
       "status": "completed",
-      "verificationCriteria": "All new and touched tests pass cleanly."
+      "verificationCriteria": "All repro and early-exit tests pass."
     },
     {
       "id": "goal-5-verify-and-pr",
-      "title": "Step 5: Full verification, push branch, and open PR",
-      "description": "Node 22 strip-only check, vitest on touched and full suite, tsc --noEmit, smoke-start, push fix/critic-analyst-scope to origin, open PR on GitHub with mandatory text.",
-      "status": "in-progress",
-      "verificationCriteria": "Full test and build verification clean; PR opened on GitHub with required body."
+      "title": "Step 5: Verify, push fix/chat-empty-output, and open PR",
+      "description": "Node 22 strip-only check, vitest on touched and full suite, tsc --noEmit, smoke-start, push fix/chat-empty-output to origin, open PR on GitHub with required body.",
+      "status": "completed",
+      "verificationCriteria": "Verification passes; PR opened on GitHub."
     }
   ]
 }

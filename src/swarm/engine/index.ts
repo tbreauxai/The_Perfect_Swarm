@@ -384,8 +384,24 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 workflowDeduplicatedCount += synthesisResult.workflowDeduplicatedCount;
 
                 // Step 5 & 6: Verification vs Standard Synthesis Execution
-                const flatReports = clusterResult.allAnalystReports.flat().filter(Boolean);
-                const allPlaceholderOrDataRequest = flatReports.length > 0 && flatReports.every(r => (r as any)._placeholder === true || isDataRequest(r));
+                const flatReports = clusterResult.allAnalystReports.flatMap((reps, idx) => {
+                    const analystRole = analysts[idx]?.role;
+                    const analystId = (analysts[idx] as any)?.id;
+                    return (reps || []).filter(Boolean).map((r: any) => {
+                        if (r && typeof r === 'object') {
+                            if (!r.role && analystRole) r.role = analystRole;
+                            if (!r.seat && analystId) r.seat = analystId;
+                        }
+                        return r;
+                    });
+                });
+                const isCriticSeat = (r: any): boolean => {
+                    const label = String(r?.seat || r?.role || '').toLowerCase();
+                    return label === 'critic' || label === 'risk' || label === 'risk_critic' || label.includes('critic') || label.includes('risk');
+                };
+                const criticReports = flatReports.filter(isCriticSeat);
+                const nonCriticReports = flatReports.filter(r => !isCriticSeat(r));
+                const allPlaceholderOrDataRequest = flatReports.length > 0 && nonCriticReports.every(r => (r as any)._placeholder === true || isDataRequest(r));
 
                 const coveredEventIds = new Set<string>();
                 for (const r of flatReports) {
@@ -396,10 +412,25 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 const coveredEventIdsList = Array.from(coveredEventIds);
 
                 if (allPlaceholderOrDataRequest) {
+                    const criticParts: string[] = [];
+                    for (const cr of criticReports) {
+                        const s = typeof cr?.summary === 'string' ? cr.summary.trim() : '';
+                        const insList = Array.isArray(cr?.insights)
+                            ? cr.insights.map((x: any) => (typeof x === 'string' ? x.trim() : '')).filter(Boolean)
+                            : [];
+                        const uniqueIns = insList.filter((line: string) => !s || !s.includes(line));
+                        const combined = [s, ...uniqueIns].filter(Boolean).join(' ').trim();
+                        if (combined) criticParts.push(combined);
+                    }
+                    const criticSummary = criticParts.join('\n').trim();
+                    const firstCritic: any = criticReports[0];
+                    const criticVerdict = firstCritic?.scorecard ?? firstCritic?.verdict ?? (firstCritic?.recommendation ? { recommendation: firstCritic.recommendation, summary: firstCritic.summary } : undefined);
                     finalAnalysis = {
                         ui_title: 'Insufficient data',
                         picks: [],
-                        reason: 'all seats requested data without actionable insights'
+                        reason: criticSummary || 'all seats requested data without actionable insights',
+                        ...(criticSummary ? { summary: criticSummary, analysis: criticSummary } : {}),
+                        ...(criticVerdict !== undefined ? { critic: criticVerdict } : {})
                     };
                 } else {
                     try {
