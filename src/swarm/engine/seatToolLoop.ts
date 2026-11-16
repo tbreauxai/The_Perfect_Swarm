@@ -58,12 +58,19 @@ export function resolvePrefetchMarketType(marketHint?: string): 'all' | 'spread'
   return 'all';
 }
 
+export interface ToolEvidenceItem {
+  tool: string;
+  eventId: string;
+  summary: string;
+}
+
 export interface SeatToolLoopResult {
   report: string;
   rounds: number;
   toolCallsExecuted: string[];
   coveredEventIds: string[];
   toolEvidence: string;
+  toolEvidenceItems: ToolEvidenceItem[];
 }
 
 export function getRoleToolNames(seat: string): string[] {
@@ -182,6 +189,7 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
 
   const executedTools: string[] = [];
   const coveredEventIds = new Set<string>();
+  const toolEvidenceItems: ToolEvidenceItem[] = [];
 
   const gameIds: string[] = (params.gameIds && params.gameIds.length > 0)
     ? params.gameIds
@@ -266,6 +274,13 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
           } else {
             (context.addEvent as any)(actionStr);
           }
+        }
+        if (res?.success === true && typeof res.summary === 'string' && res.summary.trim().length > 0) {
+          toolEvidenceItems.push({
+            tool: c.tool,
+            eventId: targetGameId,
+            summary: res.summary.trim()
+          });
         }
         return { res, targetGameId, summary: res.summary };
       })
@@ -353,7 +368,8 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
       rounds: 1,
       toolCallsExecuted: executedTools,
       coveredEventIds: Array.from(coveredEventIds),
-      toolEvidence: toolResultsSummary
+      toolEvidence: toolResultsSummary,
+      toolEvidenceItems
     };
   }
 
@@ -405,7 +421,8 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
         rounds: 1,
         toolCallsExecuted: executedTools,
         coveredEventIds: Array.from(coveredEventIds),
-        toolEvidence: toolResultsSummary
+        toolEvidence: toolResultsSummary,
+        toolEvidenceItems
       };
     }
     throw err;
@@ -421,7 +438,8 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
       rounds: 1,
       toolCallsExecuted: [],
       coveredEventIds: [],
-      toolEvidence: ''
+      toolEvidence: '',
+      toolEvidenceItems: []
     };
   }
 
@@ -446,6 +464,7 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     rounds: 2,
     toolCallsExecuted: executedTools,
     coveredEventIds: Array.from(coveredEventIds),
-    toolEvidence: toolResultsSummary
+    toolEvidence: toolResultsSummary,
+    toolEvidenceItems
   };
 }
