@@ -10,6 +10,24 @@ import type { VerificationResult } from '../types.ts';
 import { parseJsonSafe, parseJsonSafeWithStatus } from './parseJsonSafe.ts';
 
 /**
+ * Strips approximate odds, percents, and payouts (e.g. ~65%, ~+650, ~=, "about +650")
+ * from model-generated analysis/summary text without replacing them with defaults.
+ */
+export function stripApproximateOdds(text: string): string {
+    if (!text || typeof text !== 'string') return text;
+    return text
+        .replace(/(?:~=|~|≈)\s*[+-]?\d+(?:\.\d+)?%?/g, '')
+        .replace(/~=/g, '')
+        .replace(/\b(?:about|approx\.?|approximately|around|roughly)\s*(?:[+-]\d{3,4}|\d+(?:\.\d+)?%|\$\d+(?:\.\d+)?)/gi, '')
+        .replace(/\(\s*\)/g, '')
+        .replace(/,\s*,+/g, ',')
+        .replace(/\s+([,.;:!?])/g, '$1')
+        .replace(/[ \t]{2,}/g, ' ')
+        .replace(/^[,;\s]+|[,;\s]+$/g, '')
+        .trim();
+}
+
+/**
  * Domain guard for AnalystResponseSchema: guaranteed zero crashes on worker agent outputs.
  */
 export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): AnalystResponse & { analysis?: string; picks?: any[]; scorecards?: any[]; pass?: boolean; verdict?: string; flags?: string[] } {
@@ -23,11 +41,12 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
             metadata.reasoningTraces = reasoningTraces;
         }
         if (raw && typeof raw === 'object' && !Array.isArray(raw) && typeof raw.pass === 'boolean') {
-            const verdictStr = typeof raw.verdict === 'string' && raw.verdict.trim()
+            const rawVerdict = typeof raw.verdict === 'string' && raw.verdict.trim()
                 ? raw.verdict.trim()
                 : (typeof raw.summary === 'string' && raw.summary.trim() ? raw.summary.trim() : (raw.pass ? 'pass' : 'fail'));
+            const verdictStr = stripApproximateOdds(rawVerdict);
             const flagsList = Array.isArray(raw.flags)
-                ? raw.flags.map((f: any) => String(f)).filter((s: string) => s.length > 0)
+                ? raw.flags.map((f: any) => stripApproximateOdds(String(f))).filter((s: string) => s.length > 0)
                 : [];
             return {
                 insights: verdictStr ? [verdictStr] : [],
@@ -78,9 +97,10 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
         const pickLabels = sanitizedPicks.map((p: any) => {
             const label = p.pick || p.selection || p.team || p.row || '';
             const game = p.game || p.match || p.event_id || p.eventId || '';
-            return game && label ? `${game}: ${label}` : String(label || game || JSON.stringify(p));
+            const rawLabel = game && label ? `${game}: ${label}` : String(label || game || JSON.stringify(p));
+            return stripApproximateOdds(rawLabel);
         }).filter(Boolean);
-        const analysisText = pickLabels.join('; ');
+        const analysisText = stripApproximateOdds(pickLabels.join('; '));
         const metadata: Record<string, any> = {};
         if (reasoningTraces && reasoningTraces.length > 0) {
             metadata.reasoningTraces = reasoningTraces;
@@ -115,12 +135,13 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
 
     let insights: string[] = [];
     if (Array.isArray(raw.insights)) {
-        insights = raw.insights.map((s: any) => String(s)).filter((s: string) => s.length > 0);
+        insights = raw.insights.map((s: any) => stripApproximateOdds(String(s))).filter((s: string) => s.length > 0);
     } else if (typeof raw.insights === 'string' && raw.insights.trim().length > 0) {
-        insights = [raw.insights.trim()];
+        const cleaned = stripApproximateOdds(raw.insights.trim());
+        if (cleaned) insights = [cleaned];
         wasRepaired = true;
     } else if (Array.isArray(raw.findings)) {
-        insights = raw.findings.map((s: any) => String(s)).filter((s: string) => s.length > 0);
+        insights = raw.findings.map((s: any) => stripApproximateOdds(String(s))).filter((s: string) => s.length > 0);
         wasRepaired = true;
     }
 
@@ -137,15 +158,16 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
 
     let anomalies: string[] = [];
     if (Array.isArray(raw.anomalies)) {
-        anomalies = raw.anomalies.map((s: any) => String(s)).filter((s: string) => s.length > 0);
+        anomalies = raw.anomalies.map((s: any) => stripApproximateOdds(String(s))).filter((s: string) => s.length > 0);
     } else if (typeof raw.anomalies === 'string' && raw.anomalies.trim().length > 0 && !/^none$/i.test(raw.anomalies.trim())) {
-        anomalies = [raw.anomalies.trim()];
+        const cleaned = stripApproximateOdds(raw.anomalies.trim());
+        if (cleaned) anomalies = [cleaned];
         wasRepaired = true;
     }
 
     let summary = '';
     if (typeof raw.summary === 'string' && raw.summary.trim().length > 0) {
-        summary = raw.summary.trim();
+        summary = stripApproximateOdds(raw.summary.trim());
     } else {
         summary = `${role} analytical assessment completed (${insights.length} insight${insights.length === 1 ? '' : 's'}).`;
         wasRepaired = true;
@@ -245,12 +267,29 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
     }
 
     const parsed = ManagerResponseSchema.safeParse(raw);
-    if (parsed.success && !wasRepaired) {
-        return parsed.data;
-    }
-    if (parsed.success && wasRepaired) {
-        return {
+    if (parsed.success) {
+        const cleanedData: ManagerResponse = {
             ...parsed.data,
+            ...(parsed.data.summary ? { summary: stripApproximateOdds(parsed.data.summary) } : {}),
+            components: parsed.data.components.map((comp) => {
+                if (comp.type === 'InsightList') {
+                    return {
+                        ...comp,
+                        props: {
+                            ...comp.props,
+                            insights: comp.props.insights.map((ins) => ({
+                                ...ins,
+                                message: stripApproximateOdds(ins.message)
+                            }))
+                        }
+                    };
+                }
+                return comp;
+            })
+        };
+        if (!wasRepaired) return cleanedData;
+        return {
+            ...cleanedData,
             _repaired: true
         };
     }
@@ -263,7 +302,7 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
         : defaultTitle;
 
     const summary = typeof raw.summary === 'string' && raw.summary.trim().length > 0
-        ? raw.summary.trim()
+        ? stripApproximateOdds(raw.summary.trim())
         : undefined;
 
     const components: ManagerResponse['components'] = [];
