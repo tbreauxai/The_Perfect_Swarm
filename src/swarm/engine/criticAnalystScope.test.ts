@@ -233,7 +233,8 @@ describe('Step 4 Tests: Critic JSON Seat, Per-Game Tools, and Coverage Pruning',
         brief: 'Test slate',
         board: rawSlate,
         scorecards: [],
-        citedRows: ['R101', 'R201'],
+        degraded: [],
+        citedRows: [{ row: 'R101', line: 'R101|DAL@BOS|BOS -3.5' }, { row: 'R201', line: 'R201|NYK@TOR|TOR +4.5' }],
         unknownRows: [],
         coveredEventIds: ['DAL@BOS']
       };
@@ -259,6 +260,7 @@ describe('Step 4 Tests: Critic JSON Seat, Per-Game Tools, and Coverage Pruning',
         analysts: [],
         dedicatedCriticAgent: null,
         runCritic: false,
+        bypassCache: true,
         context
       });
 
