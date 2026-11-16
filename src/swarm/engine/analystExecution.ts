@@ -257,6 +257,8 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
             const resData = scorecardReport || guardAnalystResponse(rawOutput, analyst.role);
             (resData as any)._chunkIndex = chunkIdx;
             (resData as any).coveredEventIds = scorecardReport?.coveredEventIds ?? seatLoopRes?.coveredEventIds ?? [];
+            if (!(resData as any).seat) (resData as any).seat = seat;
+            if (!(resData as any).role) (resData as any).role = analyst.role;
             if (scorecardReport) {
                 // R2-S3: stream each scorecard as soon as the seat finishes.
                 try {
