@@ -290,10 +290,11 @@ export function extractFuzzyFields(text: string): Record<string, any> | null {
             .split('\n')
             .map(l => l.replace(/^[-*•\d.]+\s*/, '').trim())
             .filter(l => l.length > 0 && !/^none$/i.test(l));
-        result.anomalies = lines;
-    } else {
-        result.anomalies = [];
+        if (lines.length > 0) {
+            result.anomalies = lines;
+        }
     }
-
-    return Object.keys(result).length > 0 ? result : null;
+    if (Object.keys(result).length === 0) return null;
+    if (!result.anomalies) result.anomalies = [];
+    return result;
 }

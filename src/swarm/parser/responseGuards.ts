@@ -194,10 +194,14 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
             ? stripSeatText(raw.summary.trim())
             : '';
         const plainTextFallback = !rawSummaryFallback && typeof input === 'string' && !/^\s*[\[{]/.test(input)
-            ? stripSeatText(input.slice(0, 300))
+            ? stripSeatText(input.trim().slice(0, 300))
             : '';
-        const fallbackText = rawSummaryFallback || plainTextFallback || 'unparsed output';
-        insights = [`[${role}] ${fallbackText}`];
+        if (plainTextFallback) {
+            insights = [`[${role}] prose: ${plainTextFallback}`];
+        } else {
+            const fallbackText = rawSummaryFallback || 'unparsed output';
+            insights = [`[${role}] ${fallbackText}`];
+        }
         wasRepaired = true;
         isPlaceholder = true;
     }

@@ -164,7 +164,12 @@ export class AnalysisLifecycle {
                 ? toSampleText((rawData as any).rawBoard)
                 : (typeof rawData === 'string' ? rawData : '');
 
-            const promptHeader = `${VERIFICATION_OUTPUT_CONTRACT}\n\n${criticPrompt}\n\nEvaluate the [Proposal] below against the [Tool Evidence] and [Analyst Reports Sample].`;
+            const appComputedCounts = typeof rawData === 'object' && rawData && 'appComputedCounts' in rawData
+                ? toSampleText((rawData as any).appComputedCounts)
+                : '';
+
+            const countsLine = appComputedCounts ? `\n${appComputedCounts}` : '';
+            const promptHeader = `${VERIFICATION_OUTPUT_CONTRACT}\n\n${criticPrompt}${countsLine}\n\nEvaluate the [Proposal] below against the [Tool Evidence] and [Analyst Reports Sample].`;
             const proposalSection = `\n\n[Proposal]:\n${proposalSample}`;
             const trailer = `\n\n${REMINDER}`;
             const maxReportBudget = Math.max(0, CAP - (promptHeader.length + proposalSection.length + trailer.length + 2));

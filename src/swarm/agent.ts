@@ -167,6 +167,7 @@ export class Agent {
                     const defaultRoleTokens = roleLower.includes('grader') ? 60
                         : roleLower.includes('prompt generator') ? 300
                         : roleLower.includes('manager') ? 2000
+                        : roleLower.includes('quant') ? 4096 // backstop; reasoning capped in nvidia.ts
                         : 1500;
 
                     const effectiveConfig: AgentRunConfig = {
@@ -280,7 +281,11 @@ export class Agent {
                         if (textOutput.includes('```tool_call') || textOutput.includes('[TOOL_CALL') || textOutput.includes('[TOOL_EXECUTION')) {
                             parsedOutput = textOutput;
                         } else {
-                            parsedOutput = parseJsonSafe(textOutput);
+                            const candidate = parseJsonSafe(textOutput);
+                            const hasParsedKeys = candidate && typeof candidate === 'object' && (
+                                Array.isArray(candidate) ? candidate.length > 0 : Object.keys(candidate).length > 0
+                            );
+                            parsedOutput = hasParsedKeys ? candidate : textOutput;
                             
                             if (config?.zodSchema) {
                                 let parsed = config.zodSchema.safeParse(parsedOutput);

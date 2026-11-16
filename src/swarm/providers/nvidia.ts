@@ -9,7 +9,8 @@ export class NvidiaAdapter implements ProviderAdapter {
         if (!key) throw new Error('Missing NVIDIA API Key.');
 
         const messages = buildStandardMessages(options);
-        const isJson = options.config?.responseMimeType === 'application/json' && !isKnownReasoningModel(options.modelName);
+        const isJson = options.config?.responseMimeType === 'application/json';
+        const isReasoning = isKnownReasoningModel(options.modelName) || /nemotron.*ultra/i.test(options.modelName || '');
         const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 25000;
 
         return executeOpenAiCompatibleChat(options, {
@@ -23,6 +24,7 @@ export class NvidiaAdapter implements ProviderAdapter {
             temperature: 0.2,
             isJson,
             timeoutMs,
+            extraBody: isJson && isReasoning ? { reasoning_effort: 'none' } : undefined,
             retryOnTimeout: true,
             format429Error: (_status, errorText) => `[RATE_LIMIT_429] NVIDIA rate limit: ${errorText}`,
             format500Error: (status, errorText) => `[SERVER_ERROR_${status}] NVIDIA: ${errorText}`

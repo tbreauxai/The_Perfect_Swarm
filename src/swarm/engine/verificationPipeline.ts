@@ -76,7 +76,8 @@ export async function runDeepAnalysisVerification(
             analystReports: effectiveCompiledReports,
             historicalBaselines: effectiveHistoricalContext,
             coveredEventIds: p.coveredEventIds,
-            ...(p.toolResults ? { toolResults: p.toolResults } : {})
+            ...(p.toolResults ? { toolResults: p.toolResults } : {}),
+            ...((p as any).appComputedCounts ? { appComputedCounts: (p as any).appComputedCounts } : {})
         },
         context,
         effectiveDynamicPrompt,

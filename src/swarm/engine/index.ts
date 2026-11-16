@@ -487,7 +487,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                 context,
                                 settings,
                                 coveredEventIds: coveredEventIdsList,
-                                ...(verifierToolResults ? { toolResults: verifierToolResults } : {})
+                                ...(verifierToolResults ? { toolResults: verifierToolResults } : {}),
+                                ...(synthesisResult.appComputedCounts ? { appComputedCounts: synthesisResult.appComputedCounts } : {})
                             });
                             finalAnalysis = verificationResult.finalAnalysis;
                             workflowLifecycleResult = verificationResult.lifecycleResult;
