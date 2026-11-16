@@ -132,11 +132,25 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
             return `[${role}] ${parts.join(' | ') || 'Completed'}`;
         };
 
-        compiledReports = analysts.map((a, i) => {
+        const verifierDigest = analysts.map((a, i) => {
             const reports = allAnalystReports[i];
             if (!reports || reports.length === 0) return null;
             return reports.map((r) => formatSeatDigest(a.role, r)).join('\n');
         }).filter(Boolean).join('\n\n');
+
+        compiledReports = analysts.map((a, i) => {
+            const reports = allAnalystReports[i];
+            if (!reports || reports.length === 0) return null;
+            const combinedStr = reports
+                .map((r) => {
+                    const chunkLabel = r._chunkIndex !== undefined ? `--- Chunk ${r._chunkIndex + 1} ---` : '--- Report ---';
+                    const content = typeof r === 'string' ? r : JSON.stringify(r, null, 2);
+                    return `${chunkLabel}\n${content}`;
+                })
+                .join('\n\n');
+            return `[${a.role} Report]:\n${combinedStr}`;
+        }).filter(Boolean).join('\n\n');
+        var verifierCompiledDigest = verifierDigest;
 
         clusterDigestText = Object.values(clusterDigests).length > 0
             ? `Cluster Digests:\n` + Object.values(clusterDigests).map(d =>
@@ -263,7 +277,7 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
     }
 
     let effectiveDynamicPrompt = dynamicPrompt;
-    let effectiveCompiledReports = compiledReports;
+    let effectiveCompiledReports = typeof verifierCompiledDigest === 'string' ? verifierCompiledDigest : compiledReports;
     let effectiveHistoricalContext = historicalContext;
 
     const estimatedPromptTokens = TokenEstimator.estimatePayloadTokens(dynamicPrompt);
