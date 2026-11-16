@@ -14,14 +14,25 @@ const NFL_INJ = [
 ].map(([team_id, player_name, status]) => ({ team_id, player_name, status }));
 
 describe('parlayRunNov16c repro', () => {
-  it('(1) injury summary keeps only the first 6 rows and no team label: Lamar/Huntley never reach Quant', async () => {
-    const fetchFn: any = vi.fn(async () => new Response(JSON.stringify({ source: 'snapshot', game_id: 'nfl-401873065', injuries: NFL_INJ }), { status: 200 }));
+  it('(1) injury summary groups by team with out/doubtful first and includes Lamar/Huntley', async () => {
+    const injuriesWithPos = NFL_INJ.map((p: any) => p.player_name === 'Lamar Jackson' ? { ...p, position: 'QB', source_ref: 'espn' } : { ...p, source_ref: 'espn' });
+    const fetchFn: any = vi.fn(async () => new Response(JSON.stringify({
+      source: 'snapshot',
+      game_id: 'nfl-401873065',
+      home_team_id: '33',
+      home_team: 'BAL',
+      away_team_id: '24',
+      away_team: 'LAC',
+      injuries: injuriesWithPos
+    }), { status: 200 }));
     const res: any = await getInjuryAndRosterDeltaTool.execute({ game_id: 'nfl-401873065' }, { fetchFn, env });
     expect(res.success).toBe(true);
-    expect(res.summary).not.toContain('Lamar Jackson');
-    expect(res.summary).not.toContain('Tyler Huntley');
-    expect(res.summary).not.toMatch(/BAL|Ravens|33/);
-    expect(JSON.stringify(res.data)).toContain('Lamar Jackson'); // only the raw data (UI trace) has it
+    expect(res.summary).toContain('BAL: ');
+    expect(res.summary).toContain('Lamar Jackson (QB): OUT');
+    expect(res.summary).toContain('Tyler Huntley: OUT');
+    expect(res.summary).toContain('LAC: ');
+    expect(res.summary.length).toBeLessThanOrEqual(2000);
+    expect(JSON.stringify(res.data)).not.toContain('source_ref');
   });
 
   it('(2+3) object without insights -> placeholder carrying unstripped raw JSON odds; isDataRequest irrelevant', () => {
