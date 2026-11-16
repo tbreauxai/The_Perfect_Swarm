@@ -4,6 +4,7 @@ import { ToolRegistry } from '../swarm/tools/registry.ts';
 import { getInjuryAndRosterDeltaTool } from '../swarm/tools/dueloddsRpcTools.ts';
 import { AnalysisLifecycle } from '../swarm/lifecycle.ts';
 import { SwarmContext } from '../swarm/context.ts';
+import { buildVerifierEvidence } from '../swarm/engine/verifierEvidence.ts';
 
 // Repro for wf-1794867719290 (Nov 16 2026, 4:21:59 PM CST), Swarm 9669da4 (#161).
 const env = { SUPABASE_URL: 'https://mock.supabase.co', SUPABASE_ANON_KEY: 'mock-anon-key' };
@@ -31,21 +32,22 @@ const registry = new ToolRegistry([injuryTool as any,
 const seat = (id: string, provider: string) => ({ id, role: id, provider, run: vi.fn(async () => JSON.stringify({ insights: ['x'], summary: 'x' })) }) as any;
 
 describe('verifierEvidenceUnion repro', () => {
-  it('verifier [Tool Evidence] is the a1-first concat cut to CAP; a2/critic-only Banchero (nba-401909994) never reaches it', async () => {
+  it('verifier [Tool Evidence] unions and dedupes all seats so Banchero, Embiid, and Lamar all fit within groq CAP', async () => {
     const seats = [['a1', 'openrouter'], ['a2', 'openrouter'], ['critic', 'groq']] as const;
     const reports: any[] = [];
     for (const [id, prov] of seats) {
       const r = await runSeatWithTools({ agent: seat(id, prov), seat: id, prompt: 'p', gameIds: GAMES, registry });
-      reports.push({ role: id, toolEvidence: r.toolEvidence, covered: r.coveredEventIds });
+      reports.push({ role: id, toolEvidence: r.toolEvidence, toolEvidenceItems: r.toolEvidenceItems, covered: r.coveredEventIds });
     }
-    // a1 = game-major injury+fundamentals, cap 8 -> 4 games; 994 is not one of them
-    expect(reports[0].covered).not.toContain('nba-401909994');
-    expect(reports[0].toolEvidence).toContain('nba-401909994: not fetched');
     expect(reports[1].toolEvidence).toContain('Paolo Banchero');
     expect(reports[2].toolEvidence).toContain('Paolo Banchero');
-    // engine/index.ts:424-432 joins per seat in seat order, no dedupe
-    const joined = reports.map(r => `[${r.role}]\n${r.toolEvidence.trim()}`).join('\n\n');
-    expect(joined).toContain('Paolo Banchero');
+
+    const verifierEvidence = buildVerifierEvidence(reports, GAMES.map(id => `event_id=${id} | sport=nba | AWAY @ HOME`).join('\n'));
+    expect(verifierEvidence).toContain('Paolo Banchero');
+    expect(verifierEvidence).toContain('Joel Embiid');
+    expect(verifierEvidence).toContain('Lamar Jackson');
+    // Each event appears once per tool
+    expect(verifierEvidence.match(/EVENT nba-401909994/g)).toHaveLength(1);
 
     let verifyPrompt = '';
     const proposer: any = { role: 'Manager', modelName: 'm', provider: 'openrouter',
@@ -53,14 +55,12 @@ describe('verifierEvidenceUnion repro', () => {
     const critic: any = { role: 'Risk Critic', modelName: 'c', provider: 'groq',
       run: vi.fn(async (p: string) => { verifyPrompt = p; return JSON.stringify({ pass: false, feedback: 'x' }); }) };
     await new AnalysisLifecycle(proposer, critic, 1).executeAndVerify(
-      { analystReports: [{ agent: 'a1', summary: 'BOS -8.5' }], rawBoard: GAMES.join('\n'), toolResults: joined },
+      { analystReports: [{ agent: 'a1', summary: 'BOS -8.5' }], rawBoard: GAMES.join('\n'), toolResults: verifierEvidence },
       new SwarmContext(), 'Compile', 'Verify');
     const ev = verifyPrompt.slice(verifyPrompt.indexOf('[Tool Evidence]:\n'));
     expect(verifyPrompt.length).toBeLessThanOrEqual(5600);       // lifecycle.ts:130 CAP for groq
-    console.log("EVLEN", joined.length, ev.length, verifyPrompt.length);
-    expect(joined.length).toBeGreaterThan(ev.length);            // union bigger than what fits
-    expect(ev).toContain('Lamar Jackson');                       // early a1 game survives
-    expect(ev).not.toContain('Paolo Banchero');                  // BUG: a2/critic-only evidence cut
-    console.log('BANCHERO_AT', joined.indexOf('Paolo Banchero'), 'EMBIID_AT', joined.indexOf('Joel Embiid'), 'EV_BUDGET', ev.length);
+    expect(ev).toContain('Lamar Jackson');
+    expect(ev).toContain('Joel Embiid');
+    expect(ev).toContain('Paolo Banchero');
   });
 });
