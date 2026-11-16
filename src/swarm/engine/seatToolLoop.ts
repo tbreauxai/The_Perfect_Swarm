@@ -190,17 +190,36 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
   const buildPrefetchCalls = (tools: string[]) => {
     const calls: { tool: string; parameters: Record<string, unknown> }[] = [];
     const targetGames = gameIds.length > 0 ? gameIds : [gameId];
-    for (const gId of targetGames) {
-      for (const t of tools) {
-        if (calls.length < budget.maxToolCalls) {
-          if (t === 'get_market_movement') {
-            const mType = resolvePrefetchMarketType(params.marketTypesByGame?.[gId] ?? params.marketType);
-            calls.push({ tool: t, parameters: { game_id: gId, market_type: mType } });
-          } else {
-            calls.push({ tool: t, parameters: { game_id: gId } });
+    for (const t of tools) {
+      for (const gId of targetGames) {
+        if (calls.length >= budget.maxToolCalls) break;
+        if (t === 'get_player_prop_splits') {
+          const propsForGame = params.propParamsByGame?.[gId];
+          if (Array.isArray(propsForGame) && propsForGame.length > 0) {
+            for (const prop of propsForGame) {
+              if (calls.length >= budget.maxToolCalls) break;
+              if (prop?.player_id && prop?.stat_category) {
+                calls.push({
+                  tool: t,
+                  parameters: {
+                    game_id: gId,
+                    player_id: prop.player_id,
+                    stat_category: prop.stat_category
+                  }
+                });
+              }
+            }
           }
+          continue;
+        }
+        if (t === 'get_market_movement') {
+          const mType = resolvePrefetchMarketType(params.marketTypesByGame?.[gId] ?? params.marketType);
+          calls.push({ tool: t, parameters: { game_id: gId, market_type: mType } });
+        } else {
+          calls.push({ tool: t, parameters: { game_id: gId } });
         }
       }
+      if (calls.length >= budget.maxToolCalls) break;
     }
     return calls;
   };
@@ -272,10 +291,23 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     return norm === 'a1' || norm === 'quant' || norm === 'a2' || norm === 'market';
   };
 
+  const getPrefetchToolsForSeat = (): string[] => {
+    const norm = seat.toLowerCase().trim();
+    if (norm === 'a1' || norm === 'quant') {
+      return ['get_matchup_fundamentals', 'get_player_prop_splits', 'get_injury_and_roster_delta']
+        .filter(t => registry.has(t));
+    }
+    if (norm === 'a2' || norm === 'market') {
+      return ['get_market_movement', 'get_injury_and_roster_delta']
+        .filter(t => registry.has(t));
+    }
+    return baseTools.filter(t => registry.has(t));
+  };
+
   if (isCriticSeat(seat) || (isBettingRoleSeat(seat) && gameIds.length > 0 && hasBaseTools)) {
     // Prefetch role tools server-side into maxToolResultChars budget,
     // then run one JSON round with no tools.
-    const prefetchCalls = buildPrefetchCalls(baseTools.filter(t => registry.has(t)));
+    const prefetchCalls = buildPrefetchCalls(getPrefetchToolsForSeat());
     const toolResultsSummary = prefetchCalls.length > 0 ? await executeCalls(prefetchCalls) : '';
 
     const prefetchedPrompt = assertPromptFits(agent.provider, {

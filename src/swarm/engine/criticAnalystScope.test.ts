@@ -128,10 +128,10 @@ describe('Step 4 Tests: Critic JSON Seat, Per-Game Tools, and Coverage Pruning',
         registry
       });
 
-      // a1 has 2 tools. 3 games * 2 tools = 6 calls => exactly hits Groq maxToolCalls (6)
+      // a1 skips unkeyed prop splits and covers all 3 games with fundamentals
       expect(fundTool.execute).toHaveBeenCalledTimes(3);
-      expect(propTool.execute).toHaveBeenCalledTimes(3);
-      expect(res.toolCallsExecuted).toHaveLength(6);
+      expect(propTool.execute).toHaveBeenCalledTimes(0);
+      expect(res.toolCallsExecuted).toHaveLength(3);
       expect(res.coveredEventIds).toEqual(['DAL@BOS', 'NYK@TOR', 'HOU@WAS']);
       expect(capturedPrompt).toContain('Fundamentals for DAL@BOS');
       expect(capturedPrompt).toContain('Fundamentals for NYK@TOR');
