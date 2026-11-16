@@ -4,7 +4,7 @@ import { SwarmContext } from '../swarm/context.ts';
 import { runSeatWithTools } from '../swarm/engine/seatToolLoop.ts';
 import { ToolRegistry } from '../swarm/tools/registry.ts';
 import { countVerifiedCitations } from '../swarm/engine/predictionEnsemble.ts';
-import { stripApproximateOdds } from '../swarm/parser/responseGuards.ts';
+import { stripApproximateOdds, guardAnalystResponse } from '../swarm/parser/responseGuards.ts';
 import { adaptContextEnvelope } from '../swarm/morning/gameContext.ts';
 
 // Repro for wf-1794851496795 (Nov 16 2026, 11:51 AM CST) pinned at c77ac57.
@@ -42,9 +42,28 @@ describe('chatRunNov16b repro', () => {
     expect(countVerifiedCitations(seat)).toBe(0);
   });
 
-  it('(2b) guard keeps exact odds / stake text', () => {
-    const t = 'GSW -3.5 at -110, stake 2u, Curry 28.4 PPG';
-    expect(stripApproximateOdds(t)).toBe(t);
+  it('(2b) guard strips exact odds / stake / payout and sets seat_emitted_pricing', () => {
+    const t = 'GSW -3.5 at -110, stake 2u, payout $220, Curry 28.4 PPG';
+    const cleaned = stripApproximateOdds(t);
+    expect(cleaned).not.toContain('-110');
+    expect(cleaned).not.toContain('2u');
+    expect(cleaned).not.toContain('stake');
+    expect(cleaned).not.toContain('payout');
+    expect(cleaned).toContain('GSW -3.5');
+    expect(cleaned).toContain('Curry 28.4 PPG');
+
+    const guarded = guardAnalystResponse(
+      JSON.stringify({
+        insights: [t],
+        anomalies: [],
+        summary: 'GSW -3.5',
+        recommendation: { pick: 'GSW -3.5', odds: -110, stake: 2 }
+      }),
+      'Quant'
+    );
+    expect(guarded.flags).toContain('seat_emitted_pricing');
+    expect((guarded as any).recommendation?.odds).toBeUndefined();
+    expect((guarded as any).recommendation?.stake).toBeUndefined();
   });
 
   it('(5) adapter drops ml/spread because writer selection is "home"/"away", not team name', () => {
