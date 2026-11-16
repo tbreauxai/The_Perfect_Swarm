@@ -63,6 +63,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     if (!(context as any).id) {
         (context as any).id = `wf-${Date.now()}`;
     }
+    console.log(`[Swarm] workflow ${(context as any).id} start`);
     const unsubscribe = onEvent ? context.subscribe(onEvent) : undefined;
     // R2: opt-in scorecard + blackboard flow (request or settings); never for morning_judge.
     const scorecardMode = isScorecardMode(params, settings);
