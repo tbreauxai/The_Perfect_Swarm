@@ -172,11 +172,14 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
         wasRepaired = true;
     }
 
-    const sanitizedObjectPicks = Array.isArray(raw?.picks)
+    let sanitizedObjectPicks = Array.isArray(raw?.picks)
         ? raw.picks.filter((p: any) => p && typeof p === 'object' && !Array.isArray(p)).map(sanitizePick)
         : undefined;
 
     let isPlaceholder = raw?._placeholder === true;
+    if (insights.length === 0 && (!sanitizedObjectPicks || sanitizedObjectPicks.length === 0) && isPickLike(raw)) {
+        sanitizedObjectPicks = [sanitizePick(raw)];
+    }
     if (insights.length === 0 && sanitizedObjectPicks && sanitizedObjectPicks.length > 0) {
         insights = sanitizedObjectPicks.map((p: any) => {
             const label = p.pick || p.selection || p.team || p.row || '';
@@ -187,9 +190,14 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
         wasRepaired = true;
     }
     if (insights.length === 0) {
-        const rawFallback = typeof input === 'string' ? input.slice(0, 300) : JSON.stringify(raw).slice(0, 300);
-        const fallbackText = stripSeatText(rawFallback);
-        insights = [`[${role}] ${fallbackText || 'Completed analysis'}`];
+        const rawSummaryFallback = typeof raw?.summary === 'string' && raw.summary.trim()
+            ? stripSeatText(raw.summary.trim())
+            : '';
+        const plainTextFallback = !rawSummaryFallback && typeof input === 'string' && !/^\s*[\[{]/.test(input)
+            ? stripSeatText(input.slice(0, 300))
+            : '';
+        const fallbackText = rawSummaryFallback || plainTextFallback || 'unparsed output';
+        insights = [`[${role}] ${fallbackText}`];
         wasRepaired = true;
         isPlaceholder = true;
     }
