@@ -20,6 +20,7 @@ export interface VerificationPipelineParams {
     context: SwarmContext;
     settings?: SwarmEngineSettings;
     coveredEventIds?: string[];
+    toolResults?: string;
 }
 
 export interface VerificationPipelineResult {
@@ -51,9 +52,9 @@ export async function runDeepAnalysisVerification(
 
     const isMorningJudge = (settings as any)?.responseSchema === 'morning_judge';
     if (isMorningJudge) {
-        criticAgent.setSystemInstruction("You are the Swarm Verification Critic for Sports Betting Pre-game Judgment. Audit the proposed prediction strictly against the raw data, odds, injuries, and specialist reports. Ensure winProbHome (0.01-0.99), fairSpread, and likelyWinner are logically sound and formatted properly.");
+        criticAgent.setSystemInstruction("You are the Swarm Verification Critic for Sports Betting Pre-game Judgment. Audit the proposed prediction strictly against the raw data, odds, injuries, and specialist reports. Ensure winProbHome (0.01-0.99), fairSpread, and likelyWinner are logically sound and formatted properly. Team names in Game Slate are authoritative; never rename or flag them.");
     } else {
-        criticAgent.setSystemInstruction("You are the Swarm Verification Critic. Audit proposed analyses strictly against the raw data, historical baselines, and analyst reports. Systematically evaluate and attempt to refute hypotheses formulated by specialists. Flag discrepancies, missed anomalies, ungrounded assumptions, or schema violations.");
+        criticAgent.setSystemInstruction("You are the Swarm Verification Critic. Audit proposed analyses strictly against the raw data, historical baselines, and analyst reports. Systematically evaluate and attempt to refute hypotheses formulated by specialists. Flag discrepancies, missed anomalies, ungrounded assumptions, or schema violations. Team names in Game Slate are authoritative; never rename or flag them.");
     }
 
     const lifecycle = new AnalysisLifecycle(managerAgent, criticAgent, 2);
@@ -74,7 +75,8 @@ export async function runDeepAnalysisVerification(
             rawBoard: headersText,
             analystReports: effectiveCompiledReports,
             historicalBaselines: effectiveHistoricalContext,
-            coveredEventIds: p.coveredEventIds
+            coveredEventIds: p.coveredEventIds,
+            ...(p.toolResults ? { toolResults: p.toolResults } : {})
         },
         context,
         effectiveDynamicPrompt,
@@ -88,6 +90,30 @@ export async function runDeepAnalysisVerification(
     const finalAnalysis = isMorningJudge || (finalProposal && typeof finalProposal === 'object' && ('winProbHome' in finalProposal || 'win_prob_home' in finalProposal))
         ? finalProposal
         : guardManagerResponse(finalProposal, "Executive Swarm Synthesis");
+
+    if (finalAnalysis && typeof finalAnalysis === 'object') {
+        if (lifecycleResult.success === false) {
+            finalAnalysis.verified = false;
+            finalAnalysis.verification = {
+                success: false,
+                attempts: lifecycleResult.attempts,
+                rating: lifecycleResult.computedRating
+            };
+            finalAnalysis.picks = [];
+            finalAnalysis.components = [];
+            const rawSummary = typeof finalAnalysis.summary === 'string' && finalAnalysis.summary.trim()
+                ? finalAnalysis.summary.trim()
+                : (typeof finalAnalysis.reason === 'string' && finalAnalysis.reason.trim() ? finalAnalysis.reason.trim() : 'Verification failed.');
+            finalAnalysis.summary = /^\[unverified\]/i.test(rawSummary) ? rawSummary : `[UNVERIFIED] ${rawSummary}`;
+        } else {
+            finalAnalysis.verified = true;
+            finalAnalysis.verification = {
+                success: true,
+                attempts: lifecycleResult.attempts,
+                rating: lifecycleResult.computedRating
+            };
+        }
+    }
 
     if (p.coveredEventIds && Array.isArray(finalAnalysis?.picks)) {
         const originalCount = finalAnalysis.picks.length;

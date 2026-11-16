@@ -88,7 +88,7 @@ describe('Seat Tool Loop (PS2 Role-Scoped 2-Round Execution)', () => {
 
     const res = await runSeatWithTools({
       agent: mockAgent,
-      seat: 'a2',
+      seat: 'custom_analyst',
       prompt: 'Check market movement for nfl-123',
       gameId: 'nfl-123',
       registry
