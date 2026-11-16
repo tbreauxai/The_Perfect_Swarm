@@ -137,6 +137,8 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
         summary,
         ...(primaryHypothesis ? { primaryHypothesis } : {}),
         ...(counterHypothesis ? { counterHypothesis } : {}),
+        ...(raw?.verdict !== undefined ? { verdict: raw.verdict } : {}),
+        ...(raw?.recommendation !== undefined ? { recommendation: raw.recommendation } : {}),
         ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
         ...(wasRepaired ? { _repaired: true } : {}),
         ...(isPlaceholder ? { _placeholder: true } : {})

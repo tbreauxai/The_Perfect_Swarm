@@ -231,7 +231,7 @@ export class ToolRegistry {
                         : null);
                 if (!resolvedName) return;
 
-                let rawArgs = parsed.parameters ?? parsed.arguments ?? {};
+                let rawArgs = parsed.parameters ?? parsed.arguments ?? parsed.function?.parameters ?? parsed.function?.arguments ?? {};
                 if (typeof rawArgs === 'string') {
                     try {
                         rawArgs = JSON.parse(rawArgs);
