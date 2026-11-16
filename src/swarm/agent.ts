@@ -167,6 +167,7 @@ export class Agent {
                     const defaultRoleTokens = roleLower.includes('grader') ? 60
                         : roleLower.includes('prompt generator') ? 300
                         : roleLower.includes('manager') ? 2000
+                        : roleLower.includes('quant') ? 4096 // backstop; reasoning capped in nvidia.ts
                         : 1500;
 
                     const effectiveConfig: AgentRunConfig = {
