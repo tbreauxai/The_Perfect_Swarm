@@ -61,6 +61,7 @@ export interface SeatShardAllocation {
     provider: string;
     providerMaxInputTokens: number;
     effectiveTokenBudget: number;
+    budgetTelemetryLabel?: string;
     shardMode: 'sketch_plus_anomalies' | 'adaptive_partition' | 'full_context';
     assignedShardIndices: number[];
     estimatedShardTokens: number;
@@ -550,6 +551,7 @@ export function planAdaptiveProviderShards(params: {
                 provider: a.provider,
                 providerMaxInputTokens: PROVIDER_LIMITS[a.provider?.toLowerCase()]?.maxInputTokens || 8000,
                 effectiveTokenBudget: PROVIDER_LIMITS[a.provider?.toLowerCase()]?.maxInputTokens || 8000,
+                budgetTelemetryLabel: 'estimatedTokenBudget (telemetry only)',
                 shardMode: 'full_context',
                 assignedShardIndices: [idx % Math.max(1, chunks.length)],
                 estimatedShardTokens: Math.ceil((chunks[0] || '').length / 4),
@@ -614,6 +616,7 @@ export function planAdaptiveProviderShards(params: {
             provider: analyst.provider,
             providerMaxInputTokens,
             effectiveTokenBudget,
+            budgetTelemetryLabel: 'estimatedTokenBudget (telemetry only)',
             shardMode,
             assignedShardIndices: [primaryShardIdx],
             estimatedShardTokens,

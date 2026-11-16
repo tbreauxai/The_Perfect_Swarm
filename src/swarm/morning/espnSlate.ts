@@ -124,13 +124,18 @@ export async function fetchLeagueScoreboard(
       let oddsSnapshot: SlateGame['oddsSnapshot'] = null;
       const primaryOdds = competition.odds?.[0];
       if (primaryOdds) {
+        const parseFiniteOdds = (val: unknown): number | null => {
+          if (val === null || val === undefined || val === '') return null;
+          const n = Number(val);
+          return Number.isFinite(n) ? n : null;
+        };
         oddsSnapshot = {
           provider: primaryOdds.provider?.name || 'ESPN/DraftKings',
           details: primaryOdds.details || null,
           overUnder: primaryOdds.overUnder != null ? Number(primaryOdds.overUnder) : null,
           spread: primaryOdds.spread != null ? Number(primaryOdds.spread) : null,
-          awayMoneyLine: primaryOdds.awayMoneyLine != null ? Number(primaryOdds.awayMoneyLine) : null,
-          homeMoneyLine: primaryOdds.homeMoneyLine != null ? Number(primaryOdds.homeMoneyLine) : null
+          awayMoneyLine: parseFiniteOdds(primaryOdds.moneyline?.away?.close?.odds ?? primaryOdds.awayMoneyLine),
+          homeMoneyLine: parseFiniteOdds(primaryOdds.moneyline?.home?.close?.odds ?? primaryOdds.homeMoneyLine)
         };
       }
 

@@ -63,6 +63,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
     if (!(context as any).id) {
         (context as any).id = `wf-${Date.now()}`;
     }
+    console.log(`[Swarm] workflow ${(context as any).id} start`);
     const unsubscribe = onEvent ? context.subscribe(onEvent) : undefined;
     // R2: opt-in scorecard + blackboard flow (request or settings); never for morning_judge.
     const scorecardMode = isScorecardMode(params, settings);
@@ -408,7 +409,10 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 };
                 const criticReports = flatReports.filter(isCriticSeat);
                 const nonCriticReports = flatReports.filter(r => !isCriticSeat(r));
-                const allPlaceholderOrDataRequest = flatReports.length > 0 && nonCriticReports.every(r => (r as any)._placeholder === true || isDataRequest(r));
+                const allPlaceholderOrDataRequest = flatReports.length > 0 && nonCriticReports.every(r =>
+                    ((r as any)._placeholder === true && !(Array.isArray((r as any).picks) && (r as any).picks.length > 0))
+                    || isDataRequest(r)
+                );
 
                 const coveredEventIds = new Set<string>();
                 for (const r of flatReports) {

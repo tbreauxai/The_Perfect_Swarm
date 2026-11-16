@@ -237,8 +237,31 @@ export const getMatchupFundamentalsTool: SwarmTool = {
     };
 
     if (d.source === 'snapshot') {
+      const idToLabel = new Map<string, string>();
+      const homeId = d.home_team_id ?? homeObj.team_id ?? homeObj.id;
+      const awayId = d.away_team_id ?? awayObj.team_id ?? awayObj.id;
+      const homeLbl = d.home_team_abbr ?? d.home_team ?? homeObj.abbr ?? homeObj.team;
+      const awayLbl = d.away_team_abbr ?? d.away_team ?? awayObj.abbr ?? awayObj.team;
+      if (homeId !== undefined && homeId !== null && homeLbl) idToLabel.set(String(homeId), String(homeLbl));
+      if (awayId !== undefined && awayId !== null && awayLbl) idToLabel.set(String(awayId), String(awayLbl));
+      const mapFormValue = (val: any): any => {
+        if (Array.isArray(val)) return val.map(mapFormValue);
+        if (val && typeof val === 'object') {
+          const out: Record<string, any> = {};
+          for (const [k, v] of Object.entries(val)) {
+            if (k === 'team_id' && (typeof v === 'string' || typeof v === 'number') && idToLabel.has(String(v))) {
+              out.team = idToLabel.get(String(v));
+            } else {
+              const mappedKey = idToLabel.get(k) ?? k;
+              out[mappedKey] = mapFormValue(v);
+            }
+          }
+          return out;
+        }
+        return val;
+      };
       const formText = d.form
-        ? (typeof d.form === 'object' ? JSON.stringify(d.form) : String(d.form))
+        ? (typeof d.form === 'object' ? JSON.stringify(mapFormValue(d.form)) : String(d.form))
         : `Home: ${d.home_form ?? homeObj.form ?? 'N/A'} | Away: ${d.away_form ?? awayObj.form ?? 'N/A'}`;
       const h2hText = formatH2h(d.h2h);
       const summary = [
@@ -369,14 +392,87 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
           ? d
           : [];
 
-    const injuryLines = injuries.slice(0, 6).map((p: any) => {
-      const name = p.player_name || p.name || p.player_id || 'Unknown';
-      const pos = p.position || p.pos || '';
-      const status = p.status || p.injury_status || 'OUT';
-      const shift = p.minute_shift ?? p.usage_shift ?? p.delta ?? '';
-      const shiftStr = shift !== '' ? ` (shift: ${shift > 0 ? '+' : ''}${shift})` : '';
-      return `- ${name}${pos ? ` (${pos})` : ''}: ${status}${shiftStr}`;
-    });
+    const teamLabelMap = new Map<string, string>();
+    const addTeamMapping = (id: unknown, label: unknown) => {
+      if (id !== undefined && id !== null && String(id).trim() && typeof label === 'string' && label.trim()) {
+        teamLabelMap.set(String(id).trim(), label.trim());
+      }
+    };
+    addTeamMapping(d.home_team_id ?? d.home?.team_id ?? d.home?.id, d.home_team_abbr ?? d.home_abbr ?? d.home_team ?? d.home?.abbr ?? d.home?.name);
+    addTeamMapping(d.away_team_id ?? d.away?.team_id ?? d.away?.id, d.away_team_abbr ?? d.away_abbr ?? d.away_team ?? d.away?.abbr ?? d.away?.name);
+    if (Array.isArray(d.teams)) {
+      for (const t of d.teams) {
+        addTeamMapping(t?.team_id ?? t?.id, t?.abbr ?? t?.team_abbr ?? t?.name ?? t?.team_name);
+      }
+    }
+    const ctxAny = context as any;
+    if (ctxAny?.teamMap && typeof ctxAny.teamMap === 'object') {
+      for (const [k, v] of Object.entries(ctxAny.teamMap)) {
+        addTeamMapping(k, v);
+      }
+    }
+    if (ctxAny?.game) {
+      addTeamMapping(ctxAny.game.home_team_id, ctxAny.game.home_team_abbr ?? ctxAny.game.home_team);
+      addTeamMapping(ctxAny.game.away_team_id, ctxAny.game.away_team_abbr ?? ctxAny.game.away_team);
+    }
+
+    const statusRank = (statusRaw: unknown): number => {
+      const s = String(statusRaw || '').toLowerCase().trim();
+      if (s === 'out' || s === 'ir' || s === 'injured reserve' || s === 'suspended') return 0;
+      if (s === 'doubtful') return 1;
+      if (s === 'questionable') return 2;
+      return 3;
+    };
+
+    const grouped = new Map<string, { label: string; items: any[] }>();
+    for (const p of injuries) {
+      if (!p || typeof p !== 'object') continue;
+      const rawTeamId = p.team_id !== undefined && p.team_id !== null ? String(p.team_id).trim() : '';
+      const directLabel = p.team_abbr || p.team_name || p.team || '';
+      const teamLabel = (typeof directLabel === 'string' && directLabel.trim())
+        ? directLabel.trim()
+        : (rawTeamId ? (teamLabelMap.get(rawTeamId) ?? rawTeamId) : 'Unknown');
+      const groupKey = rawTeamId || teamLabel;
+      if (!grouped.has(groupKey)) {
+        grouped.set(groupKey, { label: teamLabel, items: [] });
+      }
+      grouped.get(groupKey)!.items.push(p);
+    }
+
+    const injuryLines: string[] = [];
+    for (const { label, items } of grouped.values()) {
+      const sorted = items
+        .map((p, idx) => ({ p, idx, rank: statusRank(p.status || p.injury_status || 'OUT') }))
+        .sort((a, b) => a.rank - b.rank || a.idx - b.idx)
+        .slice(0, 5)
+        .map(({ p }) => {
+          const name = p.player_name || p.name || p.player_id || 'Unknown';
+          const pos = p.position || p.pos || '';
+          const status = String(p.status || p.injury_status || 'OUT').toUpperCase();
+          const shift = p.minute_shift ?? p.usage_shift ?? p.delta ?? '';
+          const shiftStr = shift !== '' ? ` (shift: ${shift > 0 ? '+' : ''}${shift})` : '';
+          return `${name}${pos ? ` (${pos})` : ''}: ${status}${shiftStr}`;
+        });
+      if (sorted.length > 0) {
+        injuryLines.push(`- ${label}: ${sorted.join('; ')}`);
+      }
+    }
+
+    const stripSourceRef = (val: any): any => {
+      if (Array.isArray(val)) return val.map(stripSourceRef);
+      if (val && typeof val === 'object') {
+        const { source_ref: _sr, ...rest } = val;
+        return rest;
+      }
+      return val;
+    };
+    const cleanedData = Array.isArray(d)
+      ? stripSourceRef(d)
+      : {
+          ...d,
+          ...(Array.isArray(d.injuries) ? { injuries: stripSourceRef(d.injuries) } : {}),
+          ...(Array.isArray(d.players) ? { players: stripSourceRef(d.players) } : {})
+        };
 
     const summary = [
       `[INJURY & ROSTER DELTA: ${gameId}${positionGroup ? ` | ${positionGroup}` : ''}]`,
@@ -387,7 +483,7 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
       success: true,
       game_id: gameId,
       position_group: positionGroup,
-      data: d,
+      data: cleanedData,
       summary
     };
   }

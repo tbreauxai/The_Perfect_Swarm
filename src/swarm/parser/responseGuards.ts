@@ -112,6 +112,9 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
             seatEmittedPricing = true;
         }
         const { odds: _odds, stake: _stake, ...rest } = item;
+        if (typeof rest.pick === 'string') rest.pick = stripSeatText(rest.pick);
+        if (typeof rest.selection === 'string') rest.selection = stripSeatText(rest.selection);
+        if (typeof rest.edge === 'string') rest.edge = stripSeatText(rest.edge);
         return rest;
     };
 
@@ -169,9 +172,23 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
         wasRepaired = true;
     }
 
+    const sanitizedObjectPicks = Array.isArray(raw?.picks)
+        ? raw.picks.filter((p: any) => p && typeof p === 'object' && !Array.isArray(p)).map(sanitizePick)
+        : undefined;
+
     let isPlaceholder = raw?._placeholder === true;
+    if (insights.length === 0 && sanitizedObjectPicks && sanitizedObjectPicks.length > 0) {
+        insights = sanitizedObjectPicks.map((p: any) => {
+            const label = p.pick || p.selection || p.team || p.row || '';
+            const game = p.game || p.match || p.event_id || p.eventId || '';
+            const rawLabel = game && label ? `${game}: ${label}` : String(label || game || '');
+            return stripSeatText(rawLabel);
+        }).filter(Boolean);
+        wasRepaired = true;
+    }
     if (insights.length === 0) {
-        const fallbackText = typeof input === 'string' ? input.slice(0, 300) : JSON.stringify(raw).slice(0, 300);
+        const rawFallback = typeof input === 'string' ? input.slice(0, 300) : JSON.stringify(raw).slice(0, 300);
+        const fallbackText = stripSeatText(rawFallback);
         insights = [`[${role}] ${fallbackText || 'Completed analysis'}`];
         wasRepaired = true;
         isPlaceholder = true;
@@ -236,6 +253,7 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
         ...(counterHypothesis ? { counterHypothesis } : {}),
         ...(raw?.verdict !== undefined ? { verdict: raw.verdict } : {}),
         ...(sanitizedRecommendation !== undefined ? { recommendation: sanitizedRecommendation } : {}),
+        ...(sanitizedObjectPicks !== undefined ? { picks: sanitizedObjectPicks } : {}),
         ...(flags.length > 0 ? { flags } : {}),
         ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
         ...(wasRepaired ? { _repaired: true } : {}),
