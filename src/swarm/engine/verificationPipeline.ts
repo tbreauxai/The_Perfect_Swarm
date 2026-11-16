@@ -20,6 +20,7 @@ export interface VerificationPipelineParams {
     context: SwarmContext;
     settings?: SwarmEngineSettings;
     coveredEventIds?: string[];
+    toolResults?: string;
 }
 
 export interface VerificationPipelineResult {
@@ -74,7 +75,8 @@ export async function runDeepAnalysisVerification(
             rawBoard: headersText,
             analystReports: effectiveCompiledReports,
             historicalBaselines: effectiveHistoricalContext,
-            coveredEventIds: p.coveredEventIds
+            coveredEventIds: p.coveredEventIds,
+            ...(p.toolResults ? { toolResults: p.toolResults } : {})
         },
         context,
         effectiveDynamicPrompt,

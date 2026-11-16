@@ -32,8 +32,7 @@ SPORTS CONTEXT REQUIREMENT: Before a sports recommendation or pass, use supplied
 When given data:
 1. PLAN: Check the token weight of the input metadata. Identify 2-3 specific dimensions to investigate.
 2. REASON: Analyze differences between current inputs and baselines. Keep internal deductions concise and strictly focused on statistical significance.
-3. SANITIZE: Discard raw values and processing traces.
-4. EMIT: Return output exclusively as a valid JSON object matching the requested schema. Never output conversational pleasantries or repeated inputs.
+3. EMIT: Return output exclusively as a valid JSON object matching the requested schema. Never output conversational pleasantries or repeated inputs.
 
 Output strictly JSON matching this JSON Schema:
 ${JSON.stringify(zodToJsonSchema(AnalystResponseSchema as any), null, 2)}

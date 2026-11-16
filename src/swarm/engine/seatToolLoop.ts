@@ -52,6 +52,7 @@ export interface SeatToolLoopResult {
   rounds: number;
   toolCallsExecuted: string[];
   coveredEventIds: string[];
+  toolEvidence: string;
 }
 
 export function getRoleToolNames(seat: string): string[] {
@@ -292,7 +293,8 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
       report: output,
       rounds: 1,
       toolCallsExecuted: executedTools,
-      coveredEventIds: Array.from(coveredEventIds)
+      coveredEventIds: Array.from(coveredEventIds),
+      toolEvidence: toolResultsSummary
     };
   }
 
@@ -343,7 +345,8 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
         report: fallbackOutput,
         rounds: 1,
         toolCallsExecuted: executedTools,
-        coveredEventIds: Array.from(coveredEventIds)
+        coveredEventIds: Array.from(coveredEventIds),
+        toolEvidence: toolResultsSummary
       };
     }
     throw err;
@@ -358,7 +361,8 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
       report: round1Output,
       rounds: 1,
       toolCallsExecuted: [],
-      coveredEventIds: []
+      coveredEventIds: [],
+      toolEvidence: ''
     };
   }
 
@@ -382,6 +386,7 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     report: round2Output,
     rounds: 2,
     toolCallsExecuted: executedTools,
-    coveredEventIds: Array.from(coveredEventIds)
+    coveredEventIds: Array.from(coveredEventIds),
+    toolEvidence: toolResultsSummary
   };
 }

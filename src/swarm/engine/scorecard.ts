@@ -231,6 +231,7 @@ export interface ScorecardSeatResult<T = AnalystScorecard> {
     unstructured?: string;
     repaired: boolean;
     coveredEventIds?: string[];
+    toolEvidence?: string;
 }
 
 /**
@@ -270,6 +271,7 @@ export async function runScorecardSeat<T = AnalystScorecard>(opts: {
         })).report
         : await agent.run(prompt, context, runConfig);
     const coveredEventIds: string[] | undefined = seatToolRes?.coveredEventIds;
+    const toolEvidence: string = seatToolRes?.toolEvidence || '';
     const v1 = validateScorecard<T>(first, seat, schema);
     if (v1.ok) {
         return {
@@ -277,7 +279,8 @@ export async function runScorecardSeat<T = AnalystScorecard>(opts: {
             scorecard: v1.scorecard,
             unstructured: v1.synthesized ? v1.text.slice(0, SCORECARD_UNSTRUCTURED_MAX_CHARS) : undefined,
             repaired: false,
-            coveredEventIds
+            coveredEventIds,
+            toolEvidence
         };
     }
 
@@ -301,7 +304,8 @@ export async function runScorecardSeat<T = AnalystScorecard>(opts: {
                 scorecard: v2.scorecard,
                 unstructured: v2.synthesized ? v2.text.slice(0, SCORECARD_UNSTRUCTURED_MAX_CHARS) : undefined,
                 repaired: true,
-                coveredEventIds
+                coveredEventIds,
+                toolEvidence
             };
         }
         lastText = v2.text || lastText;
@@ -324,7 +328,8 @@ export async function runScorecardSeat<T = AnalystScorecard>(opts: {
             scorecard: vFallback.scorecard,
             unstructured: lastText.slice(0, SCORECARD_UNSTRUCTURED_MAX_CHARS),
             repaired: true,
-            coveredEventIds
+            coveredEventIds,
+            toolEvidence
         };
     }
 
@@ -338,7 +343,7 @@ export async function runScorecardSeat<T = AnalystScorecard>(opts: {
         output: { seat, unstructured: true },
         durationMs: 0
     });
-    return { seat, unstructured, repaired: false, coveredEventIds };
+    return { seat, unstructured, repaired: false, coveredEventIds, toolEvidence };
 }
 
 /**
@@ -373,6 +378,7 @@ export function scorecardToAnalystReport(
             scorecard: sc,
             scorecardRepaired: result.repaired,
             coveredEventIds: result.coveredEventIds || [],
+            toolEvidence: result.toolEvidence || '',
             ...(result.unstructured ? { unstructured: result.unstructured } : {})
         };
     }
@@ -383,6 +389,7 @@ export function scorecardToAnalystReport(
         seat: result.seat,
         role,
         unstructured: true,
-        coveredEventIds: result.coveredEventIds || []
+        coveredEventIds: result.coveredEventIds || [],
+        toolEvidence: result.toolEvidence || ''
     };
 }

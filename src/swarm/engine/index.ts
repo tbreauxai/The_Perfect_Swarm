@@ -410,6 +410,15 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     }
                 }
                 const coveredEventIdsList = Array.from(coveredEventIds);
+                const joinedToolEvidence = flatReports
+                    .map((r: any) => {
+                        const ev = typeof r?.toolEvidence === 'string' ? r.toolEvidence.trim() : '';
+                        if (!ev) return '';
+                        const label = r?.role || r?.seat || 'Analyst';
+                        return `[${label}]\n${ev}`;
+                    })
+                    .filter(Boolean)
+                    .join('\n\n');
 
                 if (allPlaceholderOrDataRequest) {
                     const criticParts: string[] = [];
@@ -461,7 +470,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                 dedicatedCriticAgent,
                                 context,
                                 settings,
-                                coveredEventIds: coveredEventIdsList
+                                coveredEventIds: coveredEventIdsList,
+                                ...(joinedToolEvidence ? { toolResults: joinedToolEvidence } : {})
                             });
                             finalAnalysis = verificationResult.finalAnalysis;
                             workflowLifecycleResult = verificationResult.lifecycleResult;
