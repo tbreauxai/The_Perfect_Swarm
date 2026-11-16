@@ -73,12 +73,13 @@ SYNTHESIS QUALITY BAR — the "summary" field is the most important part of your
 - State what would change the call: the one or two facts that would flip your conclusion.
 - Forbid filler: no "the analysts provided valuable insights", no restating the task, no unquantified
   hedging ("may", "could", "potentially" without numbers attached).
+- Do not invent percentages or counts; use only App-computed counts.
 - 4-8 sentences. Dense beats long.
 
 Example of expected output structure:
 {
   "ui_title": "Dashboard Title",
-  "summary": "Bottom-line call: proceed with Option B at 4.2x edge over baseline. Quant Specialist and Market Specialist disagreed on volatility risk (0.18 vs 0.35 variance); Quant's historical backtest of 1,420 trades provided the deciding empirical evidence. Key metrics: 64.2% win rate, 1.48 Sharpe ratio, and -3.2% max drawdown threshold. The call flips if 30-day implied volatility crosses 28% or daily trading volume drops below $1.2M.",
+  "summary": "Bottom-line call: proceed with Option B (<from Tool evidence>). Quant Specialist and Market Specialist disagreed on <from seat summaries>; <deciding evidence from Tool evidence> provided the deciding empirical evidence. Key counts: <from App-computed counts>. The call flips if <concrete threshold from Tool evidence>.",
   "components": [
     {
       "id": "c1",
