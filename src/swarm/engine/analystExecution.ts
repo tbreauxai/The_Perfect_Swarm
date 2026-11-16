@@ -195,6 +195,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
         try {
             let rawOutput: any;
             let scorecardReport: any = null;
+            let seatLoopRes: any = null;
             const seat = (analyst as any).id || analyst.role;
             const activeRegistry = (config.disableAdHocTools || !toolRegistry) ? new ToolRegistry([]) : toolRegistry;
             const analystRunConfig = {
@@ -203,6 +204,8 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                 groqMode: (settings as any)?.responseSchema === 'morning_judge' ? 'morning' : 'chat',
                 ...activeVariant?.parameters
             };
+
+            const allGameIds = parsedHeaders.map(h => h.eventId).filter(Boolean);
 
             try {
                 if (scorecardMode) {
@@ -222,12 +225,13 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                         schema: AnalystScorecardSchema,
                         registry: activeRegistry,
                         finalInstruction: scorecardInstruction,
-                        gameId: parsedHeaders[0]?.eventId
+                        gameId: allGameIds[0] || parsedHeaders[0]?.eventId,
+                        gameIds: allGameIds
                     });
                     scorecardReport = scorecardToAnalystReport(seatResult, analyst.role);
                     rawOutput = scorecardReport;
                 } else {
-                    const seatLoopRes = await runSeatWithTools({
+                    seatLoopRes = await runSeatWithTools({
                         agent: analyst,
                         seat,
                         prompt: effectiveAnalystPrompt,
@@ -235,7 +239,8 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                         registry: activeRegistry,
                         context,
                         finalInstruction: 'Provide your specialist analysis now in JSON format.',
-                        gameId: parsedHeaders[0]?.eventId,
+                        gameId: allGameIds[0] || parsedHeaders[0]?.eventId,
+                        gameIds: allGameIds,
                         runConfig: analystRunConfig
                     });
                     rawOutput = seatLoopRes.report;
@@ -251,6 +256,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
 
             const resData = scorecardReport || guardAnalystResponse(rawOutput, analyst.role);
             (resData as any)._chunkIndex = chunkIdx;
+            (resData as any).coveredEventIds = scorecardReport?.coveredEventIds ?? seatLoopRes?.coveredEventIds ?? [];
             if (scorecardReport) {
                 // R2-S3: stream each scorecard as soon as the seat finishes.
                 try {

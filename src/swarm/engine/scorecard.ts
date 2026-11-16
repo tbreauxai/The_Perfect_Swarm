@@ -230,6 +230,7 @@ export interface ScorecardSeatResult<T = AnalystScorecard> {
     scorecard?: T;
     unstructured?: string;
     repaired: boolean;
+    coveredEventIds?: string[];
 }
 
 /**
@@ -248,12 +249,14 @@ export async function runScorecardSeat<T = AnalystScorecard>(opts: {
     registry?: ToolRegistry;
     finalInstruction?: string;
     gameId?: string;
+    gameIds?: string[];
 }): Promise<ScorecardSeatResult<T>> {
     const { agent, seat, prompt, context, runConfig } = opts;
     const schema = opts.schema || AnalystScorecardSchema;
 
+    let seatToolRes: any;
     const first = opts.registry
-        ? (await runSeatWithTools({
+        ? (seatToolRes = await runSeatWithTools({
             agent,
             seat,
             prompt,
@@ -262,16 +265,19 @@ export async function runScorecardSeat<T = AnalystScorecard>(opts: {
             context,
             finalInstruction: opts.finalInstruction || 'Answer now, no tool calls.',
             gameId: opts.gameId,
+            gameIds: opts.gameIds,
             runConfig
         })).report
         : await agent.run(prompt, context, runConfig);
+    const coveredEventIds: string[] | undefined = seatToolRes?.coveredEventIds;
     const v1 = validateScorecard<T>(first, seat, schema);
     if (v1.ok) {
         return {
             seat,
             scorecard: v1.scorecard,
             unstructured: v1.synthesized ? v1.text.slice(0, SCORECARD_UNSTRUCTURED_MAX_CHARS) : undefined,
-            repaired: false
+            repaired: false,
+            coveredEventIds
         };
     }
 
@@ -294,7 +300,8 @@ export async function runScorecardSeat<T = AnalystScorecard>(opts: {
                 seat,
                 scorecard: v2.scorecard,
                 unstructured: v2.synthesized ? v2.text.slice(0, SCORECARD_UNSTRUCTURED_MAX_CHARS) : undefined,
-                repaired: true
+                repaired: true,
+                coveredEventIds
             };
         }
         lastText = v2.text || lastText;
@@ -316,7 +323,8 @@ export async function runScorecardSeat<T = AnalystScorecard>(opts: {
             seat,
             scorecard: vFallback.scorecard,
             unstructured: lastText.slice(0, SCORECARD_UNSTRUCTURED_MAX_CHARS),
-            repaired: true
+            repaired: true,
+            coveredEventIds
         };
     }
 
@@ -330,7 +338,7 @@ export async function runScorecardSeat<T = AnalystScorecard>(opts: {
         output: { seat, unstructured: true },
         durationMs: 0
     });
-    return { seat, unstructured, repaired: false };
+    return { seat, unstructured, repaired: false, coveredEventIds };
 }
 
 /**
@@ -364,6 +372,7 @@ export function scorecardToAnalystReport(
             role,
             scorecard: sc,
             scorecardRepaired: result.repaired,
+            coveredEventIds: result.coveredEventIds || [],
             ...(result.unstructured ? { unstructured: result.unstructured } : {})
         };
     }
@@ -373,6 +382,7 @@ export function scorecardToAnalystReport(
         summary: result.unstructured || '',
         seat: result.seat,
         role,
-        unstructured: true
+        unstructured: true,
+        coveredEventIds: result.coveredEventIds || []
     };
 }
