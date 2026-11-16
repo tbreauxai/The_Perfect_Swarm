@@ -117,17 +117,24 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
         workflowOriginalPromptTokens += originalRawTokens;
         workflowCompressedPromptTokens += reducedTokens;
     } else {
+        const formatSeatDigest = (role: string, r: any): string => {
+            if (typeof r === 'string') return `[${role}] ${r}`;
+            if (!r || typeof r !== 'object') return `[${role}] ${String(r ?? '')}`;
+            const summary = typeof r.summary === 'string' && r.summary.trim() ? r.summary.trim() : '';
+            const insights = Array.isArray(r.insights) && r.insights.length > 0
+                ? r.insights.map((x: any) => String(x).trim()).filter(Boolean).join('; ')
+                : '';
+            const anomalies = Array.isArray(r.anomalies) && r.anomalies.length > 0
+                ? r.anomalies.map((x: any) => String(x).trim()).filter(Boolean).join('; ')
+                : '';
+            const parts = [summary, insights, anomalies].filter(Boolean);
+            return `[${role}] ${parts.join(' | ') || 'Completed'}`;
+        };
+
         compiledReports = analysts.map((a, i) => {
             const reports = allAnalystReports[i];
             if (!reports || reports.length === 0) return null;
-            const combinedStr = reports
-                .map((r) => {
-                    const chunkLabel = r._chunkIndex !== undefined ? `--- Chunk ${r._chunkIndex + 1} ---` : '--- Report ---';
-                    const content = typeof r === 'string' ? r : JSON.stringify(r, null, 2);
-                    return `${chunkLabel}\n${content}`;
-                })
-                .join('\n\n');
-            return `[${a.role} Report]:\n${combinedStr}`;
+            return reports.map((r) => formatSeatDigest(a.role, r)).join('\n');
         }).filter(Boolean).join('\n\n');
 
         clusterDigestText = Object.values(clusterDigests).length > 0

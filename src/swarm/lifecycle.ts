@@ -168,12 +168,14 @@ export class AnalysisLifecycle {
             const proposalSection = `\n\n[Proposal]:\n${proposalSample}`;
             const trailer = `\n\n${REMINDER}`;
             const maxReportBudget = Math.max(0, CAP - (promptHeader.length + proposalSection.length + trailer.length + 2));
+            const digestReserve = analystReports ? Math.min(900, Math.floor(maxReportBudget * 0.2)) : 0;
+            const evidenceBudget = Math.max(0, maxReportBudget - digestReserve);
 
             let evidenceSection = '';
             if (toolResults) {
                 const evPrefix = '[Tool Evidence]:\n';
                 const fullEv = `${evPrefix}${toolResults}`;
-                if (fullEv.length <= maxReportBudget) {
+                if (fullEv.length <= evidenceBudget) {
                     evidenceSection = fullEv;
                 } else {
                     const groups = toolResults.split(/\n\n+/).filter(Boolean);
@@ -182,7 +184,7 @@ export class AnalysisLifecycle {
                     while (keptGroups.length > 0) {
                         const suffix = droppedCount > 0 ? `\n\n[evidence truncated: ${droppedCount} games]` : '';
                         const candidate = `${evPrefix}${keptGroups.join('\n\n')}${suffix}`;
-                        if (candidate.length <= maxReportBudget) {
+                        if (candidate.length <= evidenceBudget) {
                             evidenceSection = candidate;
                             break;
                         }
@@ -191,7 +193,7 @@ export class AnalysisLifecycle {
                     }
                     if (!evidenceSection) {
                         const fallbackMsg = `${evPrefix}[evidence truncated: ${groups.length} games]`;
-                        evidenceSection = fallbackMsg.length <= maxReportBudget ? fallbackMsg : '';
+                        evidenceSection = fallbackMsg.length <= evidenceBudget ? fallbackMsg : '';
                     }
                 }
             }
