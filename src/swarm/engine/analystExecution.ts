@@ -201,7 +201,10 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
 
         const cappedTask = task.length > 800 ? task.slice(0, 797) + '...' : task;
         const parsedHeaders = parseGameHeaders(chunk || (config as any)?.rawBoard, (config as any)?.eventIds);
-        const renderedHeadersText = renderHeaders(parsedHeaders, 1600);
+        const cappedFallbackChunk = chunk && chunk.length > 1600 ? chunk.slice(0, 1600) : chunk;
+        const renderedHeadersText = parsedHeaders.length > 0
+            ? renderHeaders(parsedHeaders, 1600)
+            : (cappedFallbackChunk || renderHeaders(parsedHeaders, 1600));
         const chunkLabel = chunks.length > 1 ? `\nChunk ${chunkIdx + 1}/${chunks.length}` : '';
         const cappedLessons = historicalContext
             ? (historicalContext.length > 300 ? historicalContext.slice(0, 297) + '...' : historicalContext)

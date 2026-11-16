@@ -621,14 +621,16 @@ export function guardVerificationResult(input: unknown): VerificationResult {
         }
     }
 
-    const parsed = parseJsonSafe<any>(text, null);
-    if (parsed && typeof parsed === 'object') {
-        const verdict = readVerdict(parsed);
-        return {
-            pass: verdict.pass === true,
-            feedback: verdict.feedback || '',
-            ...(verdict.parseFailed ? { parseFailed: true } : {})
-        };
+    if (text.includes('{')) {
+        const parsed = parseJsonSafe<any>(text, null);
+        if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
+            const verdict = readVerdict(parsed);
+            return {
+                pass: verdict.pass === true,
+                feedback: verdict.feedback || '',
+                ...(verdict.parseFailed ? { parseFailed: true } : {})
+            };
+        }
     }
 
     const upper = text.toUpperCase();
