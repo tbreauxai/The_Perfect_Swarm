@@ -207,7 +207,7 @@ describe('NvidiaAdapter', () => {
         expect(attempts).toBe(2);
     });
 
-    it('omits response_format for known reasoning models even when responseMimeType is json', async () => {
+    it('sends reasoning_effort and keeps response_format for reasoning models when responseMimeType is json', async () => {
         const adapter = new NvidiaAdapter();
         let capturedBody: any = null;
 
@@ -231,7 +231,8 @@ describe('NvidiaAdapter', () => {
         });
 
         expect(capturedBody).not.toBeNull();
-        expect(capturedBody.response_format).toBeUndefined();
+        expect(capturedBody.response_format).toEqual({ type: 'json_object' });
+        expect(capturedBody.reasoning_effort).toBe('none');
         expect(result).toBe('{"reasoning_output":"valid"}');
     });
 });
