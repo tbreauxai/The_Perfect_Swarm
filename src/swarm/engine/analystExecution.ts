@@ -318,7 +318,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                         registry: activeRegistry,
                         context,
                         finalInstruction: isCritic
-                            ? 'Emit your risk verdict now as JSON {"pass": boolean, "verdict": string, "flags": string[]}. Never propose picks.'
+                            ? 'Review the other seats\' proposed picks and emit only verdict JSON {"pass": boolean, "verdict": string, "flags": string[]}, adding no picks of your own.'
                             : 'Provide your specialist analysis now in JSON format.',
                         gameId: allGameIds[0] || parsedHeaders[0]?.eventId,
                         gameIds: allGameIds,
