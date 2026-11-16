@@ -237,8 +237,31 @@ export const getMatchupFundamentalsTool: SwarmTool = {
     };
 
     if (d.source === 'snapshot') {
+      const idToLabel = new Map<string, string>();
+      const homeId = d.home_team_id ?? homeObj.team_id ?? homeObj.id;
+      const awayId = d.away_team_id ?? awayObj.team_id ?? awayObj.id;
+      const homeLbl = d.home_team_abbr ?? d.home_team ?? homeObj.abbr ?? homeObj.team;
+      const awayLbl = d.away_team_abbr ?? d.away_team ?? awayObj.abbr ?? awayObj.team;
+      if (homeId !== undefined && homeId !== null && homeLbl) idToLabel.set(String(homeId), String(homeLbl));
+      if (awayId !== undefined && awayId !== null && awayLbl) idToLabel.set(String(awayId), String(awayLbl));
+      const mapFormValue = (val: any): any => {
+        if (Array.isArray(val)) return val.map(mapFormValue);
+        if (val && typeof val === 'object') {
+          const out: Record<string, any> = {};
+          for (const [k, v] of Object.entries(val)) {
+            if (k === 'team_id' && (typeof v === 'string' || typeof v === 'number') && idToLabel.has(String(v))) {
+              out.team = idToLabel.get(String(v));
+            } else {
+              const mappedKey = idToLabel.get(k) ?? k;
+              out[mappedKey] = mapFormValue(v);
+            }
+          }
+          return out;
+        }
+        return val;
+      };
       const formText = d.form
-        ? (typeof d.form === 'object' ? JSON.stringify(d.form) : String(d.form))
+        ? (typeof d.form === 'object' ? JSON.stringify(mapFormValue(d.form)) : String(d.form))
         : `Home: ${d.home_form ?? homeObj.form ?? 'N/A'} | Away: ${d.away_form ?? awayObj.form ?? 'N/A'}`;
       const h2hText = formatH2h(d.h2h);
       const summary = [

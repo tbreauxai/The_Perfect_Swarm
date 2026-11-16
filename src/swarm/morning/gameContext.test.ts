@@ -429,4 +429,39 @@ describe('readGameContextFromStore & gameContext validation', () => {
             expect(res.reason).toBe('required_context_budget_exceeded');
         }
     });
+
+    it('maps raw ESPN team_id to team name/abbr in EVENT, Form, H2H, and Injuries (S5)', () => {
+        const row = buildValidRpcRow();
+        row.event_id = 'nhl-401892727';
+        row.sections.game = {
+            ...row.sections.game,
+            event_id: 'nhl-401892727',
+            sport: 'icehockey_nhl',
+            home_team_id: '129764',
+            home_team: 'Utah Mammoth',
+            away_team_id: '2',
+            away_team: 'Buffalo Sabres'
+        };
+        row.sections.form = [
+            { ...row.sections.form[0], team_id: '129764', result: 'W', points_for: 4, points_against: 2 },
+            { ...row.sections.form[1], team_id: '2', result: 'L', points_for: 2, points_against: 4 }
+        ];
+        row.sections.h2h = [
+            { ...row.sections.h2h[0], home_team_id: '129764', away_team_id: '2', winner_team_id: '129764' }
+        ];
+        row.sections.injuries = [
+            { ...row.sections.injuries[0], team_id: '129764', player_name: 'Clayton Keller', status: 'Questionable' }
+        ];
+        const res = formatGameContextForPrompt({
+            rows: [row as any],
+            requiredContext: ['game', 'odds'],
+            asOf: '2026-11-06T18:00:00.000Z'
+        });
+        expect(res.ok).toBe(true);
+        if (res.ok) {
+            expect(res.formattedBlock).toContain('Utah Mammoth');
+            expect(res.formattedBlock).toContain('Utah Mammoth:Clayton Keller(Questionable)');
+            expect(res.formattedBlock).not.toContain('129764');
+        }
+    });
 });

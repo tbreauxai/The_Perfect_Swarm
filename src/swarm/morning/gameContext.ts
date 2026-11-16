@@ -1206,9 +1206,15 @@ export function formatGameContextForPrompt(
         const g = sec.game;
         const lines: string[] = [];
 
+        const mapTeamLabel = (id: string): string => {
+            if (id === g.home_team_id) return g.home_team || id;
+            if (id === g.away_team_id) return g.away_team || id;
+            return id;
+        };
+
         const statusPart = g.status_at_capture ? ` | status=${g.status_at_capture}` : '';
         lines.push(
-            `EVENT ${sanitizePromptValue(g.event_id)} (${sanitizePromptValue(g.sport)} | ${sanitizePromptValue(g.game_date)} | start=${sanitizePromptValue(g.scheduled_start)}${statusPart}): ${sanitizePromptValue(g.away_team)} (${sanitizePromptValue(g.away_team_id)}) @ ${sanitizePromptValue(g.home_team)} (${sanitizePromptValue(g.home_team_id)}) [snapshot_id=${row.snapshot_id}, content_hash=${row.content_hash}]`
+            `EVENT ${sanitizePromptValue(g.event_id)} (${sanitizePromptValue(g.sport)} | ${sanitizePromptValue(g.game_date)} | start=${sanitizePromptValue(g.scheduled_start)}${statusPart}): ${sanitizePromptValue(g.away_team)} @ ${sanitizePromptValue(g.home_team)} [snapshot_id=${row.snapshot_id}, content_hash=${row.content_hash}]`
         );
 
         if (sec.venue) {
@@ -1238,20 +1244,20 @@ export function formatGameContextForPrompt(
                 .map((f) => `${f.result}(${f.points_for}-${f.points_against})`)
                 .join(',');
             lines.push(
-                `  Form(<=5): ${sanitizePromptValue(g.home_team_id)}=[${homeForm || 'none'}] | ${sanitizePromptValue(g.away_team_id)}=[${awayForm || 'none'}]`
+                `  Form(<=5): ${sanitizePromptValue(g.home_team || g.home_team_id)}=[${homeForm || 'none'}] | ${sanitizePromptValue(g.away_team || g.away_team_id)}=[${awayForm || 'none'}]`
             );
         }
 
         if (sec.h2h.length > 0) {
             const h2hSummaries = sec.h2h.slice(0, 5).map((h) => {
-                return `${sanitizePromptValue(h.completed_at.slice(0, 10))}:${sanitizePromptValue(h.home_team_id)} ${h.home_score}-${h.away_score} ${sanitizePromptValue(h.away_team_id)}`;
+                return `${sanitizePromptValue(h.completed_at.slice(0, 10))}:${sanitizePromptValue(mapTeamLabel(h.home_team_id))} ${h.home_score}-${h.away_score} ${sanitizePromptValue(mapTeamLabel(h.away_team_id))}`;
             });
             lines.push(`  H2H(<=5): ${h2hSummaries.join(', ')}`);
         }
 
         if (sec.injuries.length > 0) {
             const injSummaries = sec.injuries.slice(0, 8).map((inj) => {
-                return `${sanitizePromptValue(inj.team_id)}:${sanitizePromptValue(inj.player_name)}(${inj.status})`;
+                return `${sanitizePromptValue(mapTeamLabel(inj.team_id))}:${sanitizePromptValue(inj.player_name)}(${inj.status})`;
             });
             lines.push(`  Injuries: ${injSummaries.join(', ')}`);
         }
