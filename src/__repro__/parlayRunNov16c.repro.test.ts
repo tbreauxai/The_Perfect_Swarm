@@ -54,7 +54,7 @@ describe('parlayRunNov16c repro', () => {
     expect([g, market].every(r => r._placeholder === true || isDataRequest(r))).toBe(false);
   });
 
-  it('(6) game-major prefetch: 6 games / cap 8 -> injury+fundamentals for games 1-4 (BOS included), games 5-6 not fetched', async () => {
+  it('(6) a1 prefetch without injury covers fundamentals for all 6 games within cap 8 (BOS included)', async () => {
     const fund: string[] = [];
     const inj: string[] = [];
     const mk = (name: string, push?: string[]) => ({ name, description: name,
@@ -63,10 +63,8 @@ describe('parlayRunNov16c repro', () => {
     const registry = new ToolRegistry([mk('get_matchup_fundamentals', fund), mk('get_injury_and_roster_delta', inj)]);
     const games = ['nba-401909998','nfl-401873065','nba-401909994','nhl-401892727','nba-401909995','nba-401910000'];
     const agent: any = { id: 'a1', role: 'a1', provider: 'openrouter', run: vi.fn(async () => JSON.stringify({ insights: ['x'], summary: 'x' })) };
-    const res = await runSeatWithTools({ agent, seat: 'a1', prompt: 'p', gameIds: games, registry });
-    expect(inj).toEqual(games.slice(0, 4));
-    expect(fund).toEqual(games.slice(0, 4)); // BOS nba-401909994 gets fundamentals
-    expect(res.toolEvidence).toContain('nba-401909995: not fetched');
-    expect(res.toolEvidence).toContain('nba-401910000: not fetched');
+    await runSeatWithTools({ agent, seat: 'a1', prompt: 'p', gameIds: games, registry });
+    expect(inj).toEqual([]);
+    expect(fund).toEqual(games); // all 6 games including BOS nba-401909994
   });
 });

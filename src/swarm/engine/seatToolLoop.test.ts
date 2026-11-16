@@ -126,7 +126,7 @@ describe('Seat Tool Loop (PS2 Role-Scoped 2-Round Execution)', () => {
 
     const res = await runSeatWithTools({
       agent: mockAgent,
-      seat: 'a1',
+      seat: 'critic',
       prompt: 'Analyze',
       gameIds: ['nba-1', 'nba-2'],
       registry

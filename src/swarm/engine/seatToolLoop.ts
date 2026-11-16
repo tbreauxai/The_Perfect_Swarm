@@ -352,11 +352,11 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
   const getPrefetchToolsForSeat = (): string[] => {
     const norm = seat.toLowerCase().trim();
     if (norm === 'a1' || norm === 'quant') {
-      return ['get_matchup_fundamentals', 'get_player_prop_splits', 'get_injury_and_roster_delta']
+      return ['get_matchup_fundamentals', 'get_player_prop_splits']
         .filter(t => registry.has(t));
     }
     if (norm === 'a2' || norm === 'market') {
-      return ['get_market_movement', 'get_injury_and_roster_delta']
+      return ['get_market_movement']
         .filter(t => registry.has(t));
     }
     return baseTools.filter(t => registry.has(t));

@@ -39,7 +39,7 @@ describe('verifierEvidenceUnion repro', () => {
       const r = await runSeatWithTools({ agent: seat(id, prov), seat: id, prompt: 'p', gameIds: GAMES, registry });
       reports.push({ role: id, toolEvidence: r.toolEvidence, toolEvidenceItems: r.toolEvidenceItems, covered: r.coveredEventIds });
     }
-    expect(reports[1].toolEvidence).toContain('Paolo Banchero');
+    expect(reports[1].toolEvidence).toContain('nba-401909994');
     expect(reports[2].toolEvidence).toContain('Paolo Banchero');
 
     const verifierEvidence = buildVerifierEvidence(reports, GAMES.map(id => `event_id=${id} | sport=nba | AWAY @ HOME`).join('\n'));
