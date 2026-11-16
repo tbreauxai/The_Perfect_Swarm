@@ -26,6 +26,8 @@ export interface Blackboard {
     board?: string;
     /** R2-S4: the critic's scorecard (or its unstructured text), when a critic ran. */
     critic?: (CriticScorecard & { unstructured?: false }) | { seat: string; unstructured: true; text: string };
+    /** Event IDs whose tool results actually made it into the prompt */
+    coveredEventIds?: string[];
 }
 
 const ROW_LINE = /^\s*(R\d+)\s*\|/;
@@ -107,9 +109,13 @@ export function buildBlackboard(p: {
     degraded: string[];
 }): Blackboard {
     const scorecards: BlackboardScorecard[] = [];
+    const coveredEventIds = new Set<string>();
     p.analysts.forEach((a, i) => {
         for (const r of p.allAnalystReports[i] || []) {
             if (!r || typeof r !== 'object') continue;
+            if (Array.isArray(r.coveredEventIds)) {
+                for (const id of r.coveredEventIds) coveredEventIds.add(id);
+            }
             const seat = r.seat || (a as any).id || a.role;
             const chunk = typeof r._chunkIndex === 'number' ? r._chunkIndex : undefined;
             if (r.scorecard) {
@@ -139,7 +145,8 @@ export function buildBlackboard(p: {
         citedRows,
         ...(header ? { header } : {}),
         unknownRows,
-        ...(board ? { board } : {})
+        ...(board ? { board } : {}),
+        coveredEventIds: Array.from(coveredEventIds)
     };
 }
 

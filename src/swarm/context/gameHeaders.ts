@@ -142,3 +142,63 @@ export function renderHeaders(headers: GameHeader[], maxChars: number = 1600): s
 
   return baseLines.join('\n').slice(0, maxChars);
 }
+
+/**
+ * Maps a pick object (or string) to its corresponding event ID using parsed game headers.
+ */
+export function getEventIdForPick(pick: any, headers: GameHeader[]): string | undefined {
+  if (!pick) return undefined;
+  if (typeof pick === 'string') {
+    const clean = pick.toUpperCase();
+    for (const h of headers) {
+      if (h.eventId && clean.includes(h.eventId.toUpperCase())) return h.eventId;
+      if (h.away && h.home && clean.includes(`${h.away.toUpperCase()}@${h.home.toUpperCase()}`)) return h.eventId;
+      if (h.away && clean.includes(h.away.toUpperCase())) return h.eventId;
+      if (h.home && clean.includes(h.home.toUpperCase())) return h.eventId;
+    }
+    return undefined;
+  }
+
+  if (pick.event_id) return String(pick.event_id);
+  if (pick.eventId) return String(pick.eventId);
+
+  const rowId = pick.row || pick.id;
+  if (typeof rowId === 'string') {
+    const matchingHeader = headers.find(h => (h.options || []).some(o => o.id === rowId));
+    if (matchingHeader) return matchingHeader.eventId;
+  }
+
+  const pickText = `${pick.match || ''} ${pick.game || ''} ${pick.team || ''} ${pick.description || ''} ${pick.selection || ''} ${pick.note || ''} ${pick.claim || ''}`.toUpperCase();
+  for (const h of headers) {
+    if (h.eventId && pickText.includes(h.eventId.toUpperCase())) {
+      return h.eventId;
+    }
+    if (h.away && h.home && pickText.includes(`${h.away.toUpperCase()}@${h.home.toUpperCase()}`)) {
+      return h.eventId;
+    }
+    if (h.away && h.home && (pickText.includes(h.away.toUpperCase()) || pickText.includes(h.home.toUpperCase()))) {
+      return h.eventId;
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Filters picks by covered event IDs.
+ * Drops any pick whose event_id (or scorecard R-id mapped through GameHeader.options) is not in coveredEventIds.
+ */
+export function filterPicksByCoverage<T = any>(
+  picks: T[],
+  coveredEventIds: string[] | Set<string>,
+  headers: GameHeader[]
+): T[] {
+  if (!Array.isArray(picks) || picks.length === 0) return [];
+  const coveredSet = coveredEventIds instanceof Set ? coveredEventIds : new Set(coveredEventIds);
+  if (coveredSet.size === 0) return [];
+
+  return picks.filter(pick => {
+    const eventId = getEventIdForPick(pick, headers);
+    return eventId ? coveredSet.has(eventId) : false;
+  });
+}

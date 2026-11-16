@@ -4,7 +4,7 @@ import { AnalysisLifecycle } from '../lifecycle.ts';
 import { guardManagerResponse } from '../parser.ts';
 import { globalSpecialistProfiler } from '../loadBalancer.ts';
 import { getManagerContextTokenCeiling } from './synthesisPipeline.ts';
-import { parseGameHeaders, renderHeaders } from '../context/gameHeaders.ts';
+import { parseGameHeaders, renderHeaders, filterPicksByCoverage } from '../context/gameHeaders.ts';
 
 import type { SwarmEngineSettings } from '../types.ts';
 
@@ -19,6 +19,7 @@ export interface VerificationPipelineParams {
     dedicatedCriticAgent: Agent | null;
     context: SwarmContext;
     settings?: SwarmEngineSettings;
+    coveredEventIds?: string[];
 }
 
 export interface VerificationPipelineResult {
@@ -72,19 +73,30 @@ export async function runDeepAnalysisVerification(
             dataSample: headersText,
             rawBoard: headersText,
             analystReports: effectiveCompiledReports,
-            historicalBaselines: effectiveHistoricalContext
+            historicalBaselines: effectiveHistoricalContext,
+            coveredEventIds: p.coveredEventIds
         },
         context,
         effectiveDynamicPrompt,
         isMorningJudge
             ? "Verify whether this judgment accurately reflects matchup statistics and odds, calculates realistic win probabilities and fair spreads, and outputs valid judge JSON without hallucinations."
-            : "Verify whether this analysis faithfully represents the analyst reports and data, strictly complies with all historical baselines and past lessons without hallucinations or omissions, and does the summary arbitrate analyst disagreements with deciding evidence rather than generic filler, and systematically test and refute ungrounded hypotheses."
+            : "Verify whether this analysis faithfully represents the analyst reports and data, strictly complies with all historical baselines and past lessons without hallucinations or omissions, and does the summary arbitrate analyst disagreements with deciding evidence rather than generic filler, and systematically test and refute ungrounded hypotheses.",
+        p.coveredEventIds
     );
 
     const finalProposal = lifecycleResult.finalProposal;
     const finalAnalysis = isMorningJudge || (finalProposal && typeof finalProposal === 'object' && ('winProbHome' in finalProposal || 'win_prob_home' in finalProposal))
         ? finalProposal
         : guardManagerResponse(finalProposal, "Executive Swarm Synthesis");
+
+    if (p.coveredEventIds && Array.isArray(finalAnalysis?.picks)) {
+        const originalCount = finalAnalysis.picks.length;
+        finalAnalysis.picks = filterPicksByCoverage(finalAnalysis.picks, p.coveredEventIds, parsedHeaders);
+        if (finalAnalysis.picks.length === 0 && originalCount > 0) {
+            finalAnalysis.ui_title = 'Insufficient data';
+            finalAnalysis.reason = 'no picks with specialist coverage';
+        }
+    }
 
     if (lifecycleResult?.computedRating && analysts.length > 0) {
         const isVerifiedSuccess = !finalAnalysis?.ui_title?.toLowerCase().includes("error");

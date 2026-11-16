@@ -12,7 +12,7 @@ import { renderPromptConsensusBlock, type AnalystConsensusDigest } from './conse
 import { compileDebateDigest } from './coordinationPipeline.ts';
 import { TokenEstimator } from '../compression/tokenEstimator.ts';
 import { seatBudget } from '../context/promptBudget.ts';
-import { parseGameHeaders, renderHeaders } from '../context/gameHeaders.ts';
+import { parseGameHeaders, renderHeaders, filterPicksByCoverage } from '../context/gameHeaders.ts';
 
 export interface SynthesisPipelineParams {
     task: string;
@@ -329,7 +329,8 @@ export async function executeManagerSynthesis(
     context: SwarmContext,
     activeVariant?: AgentVariantConfig,
     bypassCache: boolean = false,
-    settings?: SwarmEngineSettings
+    settings?: SwarmEngineSettings,
+    coveredEventIds?: string[]
 ): Promise<any> {
     const managerInstruction = (settings as any)?.managerInstruction
         || (settings as any)?.systemPrompts?.[managerAgent.id || managerAgent.role]
@@ -349,6 +350,10 @@ export async function executeManagerSynthesis(
     const ceilingTokens = getManagerContextTokenCeiling(managerAgent.provider);
     const maxChars = ceilingTokens * 4;
     let safeDynamicPrompt = effectiveDynamicPrompt;
+
+    if (coveredEventIds && coveredEventIds.length > 0) {
+        safeDynamicPrompt += `\n\nSpecialist Coverage: Analyst tools only covered event ID(s): ${coveredEventIds.join(', ')}. Only recommend picks from covered games.`;
+    }
 
     if (safeDynamicPrompt.length > maxChars) {
         if (safeDynamicPrompt.includes('Cluster Digests:')) {
@@ -375,9 +380,19 @@ export async function executeManagerSynthesis(
         ...activeVariant?.parameters
     });
 
-    if (isMorningJudge || (parsedManagerOutput && typeof parsedManagerOutput === 'object' && ('winProbHome' in parsedManagerOutput || 'win_prob_home' in parsedManagerOutput))) {
-        return parsedManagerOutput;
+    const finalResult = (isMorningJudge || (parsedManagerOutput && typeof parsedManagerOutput === 'object' && ('winProbHome' in parsedManagerOutput || 'win_prob_home' in parsedManagerOutput)))
+        ? parsedManagerOutput
+        : guardManagerResponse(parsedManagerOutput, "Executive Swarm Synthesis");
+
+    if (coveredEventIds && Array.isArray(finalResult?.picks)) {
+        const headers = parseGameHeaders(safeDynamicPrompt);
+        const originalCount = finalResult.picks.length;
+        finalResult.picks = filterPicksByCoverage(finalResult.picks, coveredEventIds, headers);
+        if (finalResult.picks.length === 0 && originalCount > 0) {
+            finalResult.ui_title = 'Insufficient data';
+            finalResult.reason = 'no picks with specialist coverage';
+        }
     }
 
-    return guardManagerResponse(parsedManagerOutput, "Executive Swarm Synthesis");
+    return finalResult;
 }
