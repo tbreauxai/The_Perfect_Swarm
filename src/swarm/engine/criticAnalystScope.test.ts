@@ -113,12 +113,10 @@ describe('Step 4 Tests: Critic JSON Seat, Per-Game Tools, and Coverage Pruning',
         id: 'a1-groq',
         role: 'a1',
         provider: 'groq', // Groq cap: maxToolCalls = 6
-        run: vi.fn()
-          .mockRejectedValueOnce(new Error('Groq 400 Bad Request: tool_use_failed'))
-          .mockImplementationOnce(async (prompt: string) => {
-            capturedPrompt = prompt;
-            return 'Analysis of all 3 games complete.';
-          })
+        run: vi.fn(async (prompt: string) => {
+          capturedPrompt = prompt;
+          return 'Analysis of all 3 games complete.';
+        })
       };
 
       const gameIds = ['DAL@BOS', 'NYK@TOR', 'HOU@WAS'];

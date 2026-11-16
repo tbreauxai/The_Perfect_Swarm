@@ -88,22 +88,6 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
   const hasBaseTools = baseTools.some(t => registry.has(t));
   const candidateNames = hasBaseTools ? [...baseTools] : registry.list().map(t => t.name);
 
-  // Check if get_historical_lessons fits in the prompt budget
-  if (hasBaseTools && registry.has('get_historical_lessons')) {
-    const testScoped = registry.scoped([...candidateNames, 'get_historical_lessons']);
-    const testSchemas = JSON.stringify(testScoped.toOpenAiTools());
-    try {
-      assertPromptFits(agent.provider, {
-        systemInstruction,
-        toolSchemas: testSchemas,
-        prompt
-      });
-      candidateNames.push('get_historical_lessons');
-    } catch {
-      // Omit historical lessons if adding it would exceed the prompt budget
-    }
-  }
-
   const scopedRegistry = hasBaseTools ? registry.scoped(candidateNames) : registry;
   const nativeTools = scopedRegistry.toOpenAiTools();
   const toolSchemasStr = JSON.stringify(nativeTools);
@@ -267,28 +251,32 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     const norm = s.toLowerCase().trim();
     return norm === 'critic' || norm === 'risk' || norm === 'risk_critic' || norm.includes('critic') || norm.includes('risk');
   };
+  const isBettingRoleSeat = (s: string) => {
+    const norm = s.toLowerCase().trim();
+    return norm === 'a1' || norm === 'quant' || norm === 'a2' || norm === 'market';
+  };
 
-  if (isCriticSeat(seat)) {
-    // Critic must return strict JSON: prefetch role tools server-side into maxToolResultChars budget,
+  if (isCriticSeat(seat) || (isBettingRoleSeat(seat) && gameIds.length > 0 && hasBaseTools)) {
+    // Prefetch role tools server-side into maxToolResultChars budget,
     // then run one JSON round with no tools.
     const prefetchCalls = buildPrefetchCalls(baseTools.filter(t => registry.has(t)));
     const toolResultsSummary = prefetchCalls.length > 0 ? await executeCalls(prefetchCalls) : '';
 
-    const criticPrompt = assertPromptFits(agent.provider, {
+    const prefetchedPrompt = assertPromptFits(agent.provider, {
       systemInstruction,
       prompt,
       toolResults: toolResultsSummary ? `Tool results:\n${toolResultsSummary}\n\n${finalInstruction}` : finalInstruction
     });
 
-    const criticConfig: any = {
+    const prefetchedConfig: any = {
       groqMode: 'chat',
       systemInstruction,
       ...params.runConfig
     };
-    delete criticConfig.tools;
-    delete criticConfig.toolChoice;
+    delete prefetchedConfig.tools;
+    delete prefetchedConfig.toolChoice;
 
-    const output = await runAgentWithDeadline(criticPrompt, criticConfig);
+    const output = await runAgentWithDeadline(prefetchedPrompt, prefetchedConfig);
     return {
       report: output,
       rounds: 1,
@@ -326,7 +314,7 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
 
     if (agent.provider === 'groq' && isToolError) {
       // Groq native tool rejection fallback: prefetch role tools and run 1 round
-      const prefetchCalls = buildPrefetchCalls(baseTools);
+      const prefetchCalls = buildPrefetchCalls(baseTools.filter(t => registry.has(t)));
       const toolResultsSummary = await executeCalls(prefetchCalls);
 
       const fallbackPrompt = assertPromptFits(agent.provider, {
