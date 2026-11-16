@@ -1,40 +1,47 @@
 {
-  "activeGoalId": "goal-5-verify-and-pr",
+  "activeGoalId": "goal-6-tests-verify-pr",
   "goals": [
     {
-      "id": "goal-1-critic-early-exit-summary",
-      "title": "Step 1: Surface critic 'no parlay' + why on early-exit",
-      "description": "In src/swarm/engine/index.ts, exclude the critic seat from the all-placeholder / isDataRequest test (stamp role or seat on reports if needed). If remaining seats are empty, still early-exit, but put critic's summary/insights into summary (and analysis if used) while keeping picks: [] and critic verdict.",
+      "id": "goal-1-seat-tool-evidence",
+      "title": "Step 1 (S1): Return seat toolEvidence to manager and verifier",
+      "description": "Return compact toolEvidence from all 4 return sites in seatToolLoop.ts, attach on report in analystExecution.ts, include Tool evidence block in synthesisPipeline.ts buildBettingPrompt inside cap, pass joined toolResults on rawData in verificationPipeline.ts, and remove SANITIZE: Discard raw values from ANALYST_SYSTEM_INSTRUCTION.",
       "status": "completed",
-      "verificationCriteria": "Critic-only actionable 'no parlay' is visible on the early-exit result."
+      "verificationCriteria": "Manager prompt and verifier toolResults contain seat tool summaries, and betting seats are not told to discard raw values."
     },
     {
-      "id": "goal-2-parse-llama-function-call",
-      "title": "Step 2: Parse Llama {type,name,parameters} function-call JSON",
-      "description": "In src/swarm/tools/registry.ts parseToolCalls addCandidate, accept tool name from parsed.tool ?? parsed.name ?? parsed.function?.name, and args from parsed.parameters ?? parsed.arguments ?? {}. Strip trailing _v1 to resolve to registered short name. Do not treat 'json' as a tool.",
+      "id": "goal-2-failed-verification-flag",
+      "title": "Step 2 (S5): Mark failed verification verified:false and clear picks",
+      "description": "In verificationPipeline.ts, when lifecycleResult.success is false, set verified:false, verification:{success:false, attempts, rating}, clear picks and components, and mark summary unverified. On success, set verified:true and verification.success:true.",
       "status": "completed",
-      "verificationCriteria": "Llama {type:'function', name:'get_market_movement', parameters:{game_id}} parses as that tool call."
+      "verificationCriteria": "Failed verification returns verified:false, empty picks/components, and unverified summary."
     },
     {
-      "id": "goal-3-wrap-bare-pick-arrays",
-      "title": "Step 3: Wrap bare pick arrays instead of placeholdering",
-      "description": "In src/swarm/parser/responseGuards.ts guardAnalystResponse, if raw (or parsed input) is an array of pick-like objects, wrap into {analysis, picks, scorecards} keeping pick/game identity, stripping odds and stake, and filling insights/summary from pick labels.",
+      "id": "goal-3-critic-verdict-only",
+      "title": "Step 3 (S3): Critic emits a verdict only",
+      "description": "Give critic a verdict instruction and finalInstruction ({pass, verdict, flags}, never propose picks). In guardAnalystResponse, when role is critic/Risk Critic, do not wrap bare arrays into picks, strip any picks, and treat missing pass as contract violation.",
       "status": "completed",
-      "verificationCriteria": "A bare HOU ML array is a real report with picks and no odds/stake, not a placeholder."
+      "verificationCriteria": "Critic parlay array has no picks and is not a betting report; {pass, verdict, flags} is accepted."
     },
     {
-      "id": "goal-4-tests",
-      "title": "Step 4: Repro and unit tests",
-      "description": "Create src/__repro__/chatEmptyOutput.repro.test.ts covering inverted A/B, C critic isDataRequest + early-exit summary containing 'no parlay'.",
+      "id": "goal-4-prefetch-and-tool-cleanup",
+      "title": "Step 4 (S2): Stop offering get_historical_lessons/get_game_context and prefetch a1/a2 per game",
+      "description": "Stop appending get_historical_lessons to betting-seat candidateNames in seatToolLoop.ts, remove get_game_context wording from constants.ts, and prefetch per-game role tools for Quant/Market (a1/a2) with buildPrefetchCalls bounded by existing caps.",
       "status": "completed",
-      "verificationCriteria": "All repro and early-exit tests pass."
+      "verificationCriteria": "a1/a2 are not offered get_historical_lessons or get_game_context; prefetch covers each slate game until cap."
     },
     {
-      "id": "goal-5-verify-and-pr",
-      "title": "Step 5: Verify, push fix/chat-empty-output, and open PR",
-      "description": "Node 22 strip-only check, vitest on touched and full suite, tsc --noEmit, smoke-start, push fix/chat-empty-output to origin, open PR on GitHub with required body.",
+      "id": "goal-5-authoritative-slate-names",
+      "title": "Step 5 (S4): Authoritative slate team names instruction",
+      "description": "Add 'Team names in Game Slate are authoritative; never rename or flag them.' to analyst and verifier instructions.",
       "status": "completed",
-      "verificationCriteria": "Verification passes; PR opened on GitHub."
+      "verificationCriteria": "Line present in betting-seat and verifier instructions."
+    },
+    {
+      "id": "goal-6-tests-verify-pr",
+      "title": "Step 6: Repro tests, full verification, push branch, and open PR",
+      "description": "Create/run src/__repro__/chatRunNov16.repro.test.ts, run touched and full vitest, tsc --noEmit, smoke-start, push fix/seat-evidence-verdicts, and open PR.",
+      "status": "completed",
+      "verificationCriteria": "All new/touched tests pass; tsc & smoke pass; PR opened on GitHub."
     }
   ]
 }
