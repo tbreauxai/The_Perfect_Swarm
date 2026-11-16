@@ -29,6 +29,9 @@ import { AnalystScorecardSchema } from '../types.ts';
 import { runScorecardSeat, renderScorecardInstruction, scorecardAnalystMaxTokens, scorecardToAnalystReport, validateScorecard } from './scorecard.ts';
 import { parseGameHeaders, renderHeaders } from '../context/gameHeaders.ts';
 import { runSeatWithTools } from './seatToolLoop.ts';
+import { GameQueryCache } from '../cache/gameQueryCache.ts';
+import { executeToolWithCacheAndTimeout } from './triageExecutor.ts';
+import { seatBudget } from '../context/promptBudget.ts';
 
 export interface AnalystExecutorConfig {
     task: string;
@@ -114,6 +117,44 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
         onEscalation,
         onStage
     } = config;
+
+    const sharedQueryCache = new GameQueryCache();
+    const sharedInjuryPrefetchMap = new Map<string, Promise<string>>();
+
+    const getSharedInjurySummary = (gameIds: string[], activeReg: ToolRegistry): Promise<string> => {
+        if (gameIds.length === 0 || !activeReg.has('get_injury_and_roster_delta')) {
+            return Promise.resolve('');
+        }
+        const key = gameIds.join('|');
+        const existing = sharedInjuryPrefetchMap.get(key);
+        if (existing) return existing;
+
+        const promise = (async () => {
+            const calls = gameIds.slice(0, 8);
+            const results = await Promise.all(
+                calls.map(async (gId) => {
+                    try {
+                        const res = await executeToolWithCacheAndTimeout(
+                            { tool: 'get_injury_and_roster_delta', parameters: { game_id: gId } },
+                            { game_id: gId },
+                            activeReg,
+                            sharedQueryCache,
+                            1500
+                        );
+                        if (res && res.success && typeof res.summary === 'string' && res.summary.trim()) {
+                            return res.summary.trim();
+                        }
+                        return '';
+                    } catch {
+                        return '';
+                    }
+                })
+            );
+            return results.filter(Boolean).join('\n');
+        })();
+        sharedInjuryPrefetchMap.set(key, promise);
+        return promise;
+    };
 
     // PS2: stagger analyst seat starts ~1.5s apart (first call per seat; later chunks of a seat are not re-delayed).
     // Override with settings.analystStaggerMs; 0 under vitest so existing tests stay fast.
@@ -209,6 +250,28 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
             };
 
             const allGameIds = parsedHeaders.map(h => h.eventId).filter(Boolean);
+            const isBettingSeat = /^(a1|quant|a2|market)$/i.test(seat.trim()) || /^(a1|quant|a2|market)$/i.test(analyst.role.trim());
+            let seatPrompt = effectiveAnalystPrompt;
+            if (isBettingSeat && allGameIds.length > 0 && activeRegistry.has('get_injury_and_roster_delta')) {
+                const rawInjurySummary = await getSharedInjurySummary(allGameIds, activeRegistry);
+                if (rawInjurySummary) {
+                    const pBudget = seatBudget(analyst.provider);
+                    const maxAllowed = Math.min(
+                        pBudget.maxToolResultChars,
+                        Math.max(0, pBudget.maxPromptChars - baseInstruction.length - seatPrompt.length - 400)
+                    );
+                    if (maxAllowed >= 60) {
+                        const blockPrefix = '\n\nInjury evidence:\n';
+                        const bodyBudget = maxAllowed - blockPrefix.length;
+                        if (bodyBudget >= 30) {
+                            const trimmedBody = rawInjurySummary.length > bodyBudget
+                                ? rawInjurySummary.slice(0, bodyBudget - 15) + '\n…[truncated]'
+                                : rawInjurySummary;
+                            seatPrompt += `${blockPrefix}${trimmedBody}`;
+                        }
+                    }
+                }
+            }
 
             try {
                 if (scorecardMode) {
@@ -217,7 +280,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                     const seatResult = await runScorecardSeat({
                         agent: analyst,
                         seat,
-                        prompt: effectiveAnalystPrompt + scorecardInstruction,
+                        prompt: seatPrompt + scorecardInstruction,
                         context,
                         runConfig: {
                             ...analystRunConfig,
@@ -229,7 +292,8 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                         registry: activeRegistry,
                         finalInstruction: scorecardInstruction,
                         gameId: allGameIds[0] || parsedHeaders[0]?.eventId,
-                        gameIds: allGameIds
+                        gameIds: allGameIds,
+                        cache: sharedQueryCache
                     });
                     scorecardReport = scorecardToAnalystReport(seatResult, analyst.role);
                     rawOutput = scorecardReport;
@@ -237,7 +301,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                     seatLoopRes = await runSeatWithTools({
                         agent: analyst,
                         seat,
-                        prompt: effectiveAnalystPrompt,
+                        prompt: seatPrompt,
                         systemInstruction: baseInstruction,
                         registry: activeRegistry,
                         context,
@@ -246,6 +310,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                             : 'Provide your specialist analysis now in JSON format.',
                         gameId: allGameIds[0] || parsedHeaders[0]?.eventId,
                         gameIds: allGameIds,
+                        cache: sharedQueryCache,
                         runConfig: analystRunConfig
                     });
                     rawOutput = seatLoopRes.report;

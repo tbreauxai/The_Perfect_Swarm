@@ -251,6 +251,7 @@ export async function runScorecardSeat<T = AnalystScorecard>(opts: {
     finalInstruction?: string;
     gameId?: string;
     gameIds?: string[];
+    cache?: any;
 }): Promise<ScorecardSeatResult<T>> {
     const { agent, seat, prompt, context, runConfig } = opts;
     const schema = opts.schema || AnalystScorecardSchema;
@@ -267,6 +268,7 @@ export async function runScorecardSeat<T = AnalystScorecard>(opts: {
             finalInstruction: opts.finalInstruction || 'Answer now, no tool calls.',
             gameId: opts.gameId,
             gameIds: opts.gameIds,
+            cache: opts.cache,
             runConfig
         })).report
         : await agent.run(prompt, context, runConfig);
