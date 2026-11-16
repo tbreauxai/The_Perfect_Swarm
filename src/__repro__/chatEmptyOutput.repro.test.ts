@@ -103,10 +103,12 @@ describe('chatEmptyOutput repro (inverted post-fix)', () => {
 
   it('(C) keeps critic "no parlay, insufficient data" as isDataRequest and surfaces it on early-exit', async () => {
     const criticPayload = {
+      pass: false,
+      verdict: 'No parlay — insufficient data due to missing injury confirmation.',
+      flags: ['insufficient_data'],
       insights: ['No parlay: insufficient data on starting lineups'],
       anomalies: [],
-      summary: 'No parlay — insufficient data due to missing injury confirmation.',
-      verdict: 'no_play'
+      summary: 'No parlay — insufficient data due to missing injury confirmation.'
     };
     expect(isDataRequest(criticPayload)).toBe(true);
 
@@ -147,6 +149,6 @@ describe('chatEmptyOutput repro (inverted post-fix)', () => {
     expect(result.finalAnalysis.picks).toEqual([]);
     expect(String(result.finalAnalysis.summary || '').toLowerCase()).toContain('no parlay');
     expect(String(result.finalAnalysis.analysis || '').toLowerCase()).toContain('no parlay');
-    expect(result.finalAnalysis.critic).toBe('no_play');
+    expect(String(result.finalAnalysis.critic || '').toLowerCase()).toContain('no parlay');
   });
 });

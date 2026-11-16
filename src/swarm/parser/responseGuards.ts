@@ -12,9 +12,46 @@ import { parseJsonSafe, parseJsonSafeWithStatus } from './parseJsonSafe.ts';
 /**
  * Domain guard for AnalystResponseSchema: guaranteed zero crashes on worker agent outputs.
  */
-export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): AnalystResponse & { analysis?: string; picks?: any[]; scorecards?: any[] } {
+export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): AnalystResponse & { analysis?: string; picks?: any[]; scorecards?: any[]; pass?: boolean; verdict?: string; flags?: string[] } {
     const { data: raw, repaired: parseRepaired, reasoningTraces } = parseJsonSafeWithStatus<any>(input, {});
     let wasRepaired = parseRepaired || raw?._repaired === true;
+    const isCriticRole = /critic|\brisk\b/i.test(role || '');
+
+    if (isCriticRole) {
+        const metadata: Record<string, any> = {};
+        if (reasoningTraces && reasoningTraces.length > 0) {
+            metadata.reasoningTraces = reasoningTraces;
+        }
+        if (raw && typeof raw === 'object' && !Array.isArray(raw) && typeof raw.pass === 'boolean') {
+            const verdictStr = typeof raw.verdict === 'string' && raw.verdict.trim()
+                ? raw.verdict.trim()
+                : (typeof raw.summary === 'string' && raw.summary.trim() ? raw.summary.trim() : (raw.pass ? 'pass' : 'fail'));
+            const flagsList = Array.isArray(raw.flags)
+                ? raw.flags.map((f: any) => String(f)).filter((s: string) => s.length > 0)
+                : [];
+            return {
+                insights: verdictStr ? [verdictStr] : [],
+                anomalies: flagsList,
+                summary: verdictStr,
+                pass: raw.pass,
+                verdict: verdictStr,
+                flags: flagsList,
+                ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+                ...(wasRepaired ? { _repaired: true } : {})
+            };
+        }
+        return {
+            insights: [],
+            anomalies: ['Critic contract violation: missing pass boolean'],
+            summary: 'Critic contract violation: missing pass boolean.',
+            pass: false,
+            verdict: 'contract_violation',
+            flags: ['missing_pass_field'],
+            ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+            _repaired: true,
+            _placeholder: true
+        };
+    }
 
     const isPickLike = (item: any): boolean => Boolean(
         item &&

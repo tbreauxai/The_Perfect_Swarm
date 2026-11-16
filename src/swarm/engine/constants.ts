@@ -2,6 +2,16 @@ import { AnalystResponseSchema, ManagerResponseSchema } from "../schemas.ts";
 import { zodToJsonSchema } from "zod-to-json-schema";
 export const RED_TEAM_ANALYST_ROLE = 'RedTeamAnalyst';
 
+export const CRITIC_VERDICT_SYSTEM_INSTRUCTION = `You are the Swarm Risk Critic.
+Your ONLY job is to audit risk, data completeness, and contrarian flags for the slate.
+Never propose picks, parlays, or bets.
+Return output strictly as a valid JSON object matching this shape:
+{
+  "pass": boolean,
+  "verdict": string,
+  "flags": string[]
+}`;
+
 export const RED_TEAM_ANALYST_SYSTEM_INSTRUCTION = `You are a Skeptical Red Team Analyst in a modular deductive swarm.
 Your mission is adversarial critique, stress-testing, and rigorous hypothesis falsification.
 

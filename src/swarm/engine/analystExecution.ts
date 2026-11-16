@@ -23,7 +23,7 @@ import {
 import { globalPromptCompressor } from '../compression.ts';
 import { guardAnalystResponse } from '../parser.ts';
 import { SwarmTracer } from '../profiler.ts';
-import { ANALYST_SYSTEM_INSTRUCTION, RED_TEAM_ANALYST_ROLE, RED_TEAM_ANALYST_SYSTEM_INSTRUCTION } from './constants.ts';
+import { ANALYST_SYSTEM_INSTRUCTION, RED_TEAM_ANALYST_ROLE, RED_TEAM_ANALYST_SYSTEM_INSTRUCTION, CRITIC_VERDICT_SYSTEM_INSTRUCTION } from './constants.ts';
 import { recordDegraded } from './partialResult.ts';
 import { AnalystScorecardSchema } from '../types.ts';
 import { runScorecardSeat, renderScorecardInstruction, scorecardAnalystMaxTokens, scorecardToAnalystReport, validateScorecard } from './scorecard.ts';
@@ -148,7 +148,10 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
         const isRedTeam = analyst.role === RED_TEAM_ANALYST_ROLE ||
             /red[-_]?team/i.test(analyst.role) ||
             /red[-_]?team/i.test((analyst as any).id || '');
-        const defaultInstruction = isRedTeam ? RED_TEAM_ANALYST_SYSTEM_INSTRUCTION : ANALYST_SYSTEM_INSTRUCTION;
+        const isCritic = /critic|\brisk\b/i.test(analyst.role) || /critic|\brisk\b/i.test((analyst as any).id || '');
+        const defaultInstruction = isCritic
+            ? CRITIC_VERDICT_SYSTEM_INSTRUCTION
+            : (isRedTeam ? RED_TEAM_ANALYST_SYSTEM_INSTRUCTION : ANALYST_SYSTEM_INSTRUCTION);
         const baseInstruction = activeVariant?.systemPrompts?.[(analyst as any).id || analyst.role]
             || activeVariant?.systemPrompts?.[analyst.role]
             || defaultInstruction;
@@ -238,7 +241,9 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                         systemInstruction: baseInstruction,
                         registry: activeRegistry,
                         context,
-                        finalInstruction: 'Provide your specialist analysis now in JSON format.',
+                        finalInstruction: isCritic
+                            ? 'Emit your risk verdict now as JSON {"pass": boolean, "verdict": string, "flags": string[]}. Never propose picks.'
+                            : 'Provide your specialist analysis now in JSON format.',
                         gameId: allGameIds[0] || parsedHeaders[0]?.eventId,
                         gameIds: allGameIds,
                         runConfig: analystRunConfig
