@@ -83,32 +83,65 @@ export async function collectCortexDiagnostics(
     const appIdCondition = buildAppIdCondition(appIdFilter);
 
     if (ctx.qdrant && ctx.isAvailable) {
+        const runScrollFallback = async (useServerFilter: boolean): Promise<boolean> => {
+            if (typeof (ctx.qdrant as any).scroll !== 'function') return false;
+            let nextOffset: string | number | undefined = undefined;
+            let hasMore = true;
+            let batchCount = 0;
+            const scrollFilter = useServerFilter ? combineFilter(appIdCondition) : undefined;
+
+            while (hasMore && batchCount < 20) {
+                const scrollResAll: any = await ctx.withTimeout((ctx.qdrant as any).scroll(ctx.collectionName, {
+                    limit: 1000,
+                    offset: nextOffset,
+                    ...(scrollFilter ? { filter: scrollFilter } : {}),
+                    with_payload: true,
+                    with_vector: false
+                }));
+
+                for (const pt of (scrollResAll?.points || [])) {
+                    const payload = (pt.payload || {}) as Record<string, any>;
+                    const itemAppId = payload.originApp || payload.appId || ctx.defaultAppId;
+                    apps.add(itemAppId);
+
+                    if (!appIdFilter || appIdFilter === 'global' || itemAppId === appIdFilter) {
+                        processPoint(payload);
+                    }
+                }
+
+                nextOffset = scrollResAll?.next_page_offset;
+                hasMore = nextOffset !== null && nextOffset !== undefined;
+                batchCount++;
+            }
+            return true;
+        };
+
         try {
             if (typeof (ctx.qdrant as any).count === 'function') {
                 const totalFilter = combineFilter(appIdCondition);
                 const gradedFilter = combineFilter(appIdCondition, {
                     should: [
-                        { key: 'gradedAt', is_empty: false },
+                        { must_not: [{ is_empty: { key: 'gradedAt' } }] },
                         { key: 'feedbackProcessed', match: { value: true } },
-                        { key: 'outcome', is_empty: false }
+                        { must_not: [{ is_empty: { key: 'outcome' } }] }
                     ]
                 });
                 const winsFilter = combineFilter(appIdCondition, {
                     should: [
                         { key: 'outcome', match: { value: 'win' } },
-                        { key: 'qualityRating', match: { value: 1.0 } }
+                        { key: 'qualityRating', range: { gte: 1.0, lte: 1.0 } }
                     ]
                 });
                 const lossesFilter = combineFilter(appIdCondition, {
                     should: [
                         { key: 'outcome', match: { value: 'loss' } },
-                        { key: 'qualityRating', match: { value: 0.0 } }
+                        { key: 'qualityRating', range: { gte: 0.0, lte: 0.0 } }
                     ]
                 });
                 const pushesFilter = combineFilter(appIdCondition, {
                     should: [
                         { key: 'outcome', match: { value: 'push' } },
-                        { key: 'qualityRating', match: { value: 0.5 } }
+                        { key: 'qualityRating', range: { gte: 0.5, lte: 0.5 } }
                     ]
                 });
 
@@ -163,36 +196,7 @@ export async function collectCortexDiagnostics(
 
                 qdrantSuccess = true;
             } else if (typeof (ctx.qdrant as any).scroll === 'function') {
-                let nextOffset: string | number | undefined = undefined;
-                let hasMore = true;
-                let batchCount = 0;
-                const scrollFilter = combineFilter(appIdCondition);
-
-                while (hasMore && batchCount < 20) {
-                    const scrollResAll: any = await ctx.withTimeout((ctx.qdrant as any).scroll(ctx.collectionName, {
-                        limit: 1000,
-                        offset: nextOffset,
-                        filter: scrollFilter,
-                        with_payload: true,
-                        with_vector: false
-                    }));
-
-                    for (const pt of (scrollResAll?.points || [])) {
-                        const payload = (pt.payload || {}) as Record<string, any>;
-                        const itemAppId = payload.originApp || payload.appId || ctx.defaultAppId;
-                        apps.add(itemAppId);
-
-                        if (!appIdFilter || appIdFilter === 'global' || itemAppId === appIdFilter) {
-                            processPoint(payload);
-                        }
-                    }
-
-                    nextOffset = scrollResAll?.next_page_offset;
-                    hasMore = nextOffset !== null && nextOffset !== undefined;
-                    batchCount++;
-                }
-
-                qdrantSuccess = true;
+                qdrantSuccess = await runScrollFallback(true);
             } else {
                 for (const pt of ctx.fallbackStore) {
                     const itemAppId = pt.payload.originApp || pt.payload.appId || ctx.defaultAppId;
@@ -205,7 +209,6 @@ export async function collectCortexDiagnostics(
                 qdrantSuccess = true;
             }
         } catch {
-            console.warn("[MemoryCortex] getDiagnostics qdrant error, falling back to in-memory stats.");
             pointCount = 0;
             gradedCount = 0;
             ungradedCount = 0;
@@ -213,6 +216,11 @@ export async function collectCortexDiagnostics(
             gradedLosses = 0;
             gradedPushes = 0;
             qdrantSuccess = false;
+            try {
+                qdrantSuccess = await runScrollFallback(false);
+            } catch {
+                qdrantSuccess = false;
+            }
         }
     }
 

@@ -98,6 +98,7 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
         !Array.isArray(item) &&
         (
             typeof item.pick === 'string' ||
+            typeof item.side === 'string' ||
             typeof item.selection === 'string' ||
             typeof item.team === 'string' ||
             typeof item.game === 'string' ||
@@ -113,19 +114,26 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
         }
         const { odds: _odds, stake: _stake, ...rest } = item;
         if (typeof rest.pick === 'string') rest.pick = stripSeatText(rest.pick);
+        if (typeof rest.side === 'string') rest.side = stripSeatText(rest.side);
         if (typeof rest.selection === 'string') rest.selection = stripSeatText(rest.selection);
         if (typeof rest.edge === 'string') rest.edge = stripSeatText(rest.edge);
+        if (typeof rest.reason === 'string') rest.reason = stripSeatText(rest.reason);
         return rest;
+    };
+
+    const formatPickInsight = (p: any): string => {
+        const label = p.pick || p.side || p.selection || p.team || p.row || '';
+        const game = p.game || p.match || p.event_id || p.eventId || (p.row && label !== p.row ? p.row : '');
+        const reasonSuffix = typeof p.reason === 'string' && p.reason.trim() && !String(label).includes(p.reason.trim())
+            ? ` — ${p.reason.trim()}`
+            : '';
+        const rawLabel = game && label ? `${game}: ${label}${reasonSuffix}` : `${String(label || game || JSON.stringify(p))}${reasonSuffix}`;
+        return stripSeatText(rawLabel);
     };
 
     if (Array.isArray(raw) && raw.length > 0 && raw.some(isPickLike)) {
         const sanitizedPicks = raw.filter(isPickLike).map(sanitizePick);
-        const pickLabels = sanitizedPicks.map((p: any) => {
-            const label = p.pick || p.selection || p.team || p.row || '';
-            const game = p.game || p.match || p.event_id || p.eventId || '';
-            const rawLabel = game && label ? `${game}: ${label}` : String(label || game || JSON.stringify(p));
-            return stripSeatText(rawLabel);
-        }).filter(Boolean);
+        const pickLabels = sanitizedPicks.map(formatPickInsight).filter(Boolean);
         const analysisText = stripSeatText(pickLabels.join('; '));
         const metadata: Record<string, any> = {};
         if (reasoningTraces && reasoningTraces.length > 0) {
@@ -176,8 +184,18 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
         ? raw.picks.filter((p: any) => p && typeof p === 'object' && !Array.isArray(p)).map(sanitizePick)
         : undefined;
 
-    const rawAnalysis = typeof raw?.analysis === 'string' && raw.analysis.trim().length > 0
-        ? stripSeatText(raw.analysis.trim())
+    const rawAnalysisCandidate = [
+        raw?.analysis,
+        raw?.reason,
+        raw?.rationale,
+        raw?.conclusion,
+        raw?.response,
+        raw?.explanation,
+        raw?.notes
+    ].find((v) => typeof v === 'string' && v.trim().length > 0);
+
+    const rawAnalysis = typeof rawAnalysisCandidate === 'string'
+        ? stripSeatText(rawAnalysisCandidate.trim())
         : '';
     const rawScorecards = Array.isArray(raw?.scorecards)
         ? raw.scorecards
@@ -188,12 +206,7 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
         sanitizedObjectPicks = [sanitizePick(raw)];
     }
     if (insights.length === 0 && sanitizedObjectPicks && sanitizedObjectPicks.length > 0) {
-        insights = sanitizedObjectPicks.map((p: any) => {
-            const label = p.pick || p.selection || p.team || p.row || '';
-            const game = p.game || p.match || p.event_id || p.eventId || '';
-            const rawLabel = game && label ? `${game}: ${label}` : String(label || game || '');
-            return stripSeatText(rawLabel);
-        }).filter(Boolean);
+        insights = sanitizedObjectPicks.map(formatPickInsight).filter(Boolean);
         if (rawAnalysis && !insights.includes(rawAnalysis)) {
             insights.unshift(rawAnalysis);
         }

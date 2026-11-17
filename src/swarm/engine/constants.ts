@@ -71,7 +71,8 @@ SYNTHESIS QUALITY BAR — the "summary" field is the most important part of your
   analysts disagreed, whose view won, and the specific evidence that decided it. Never flatten
   real disagreement into vague agreement.
 - Cite concrete evidence: numbers, lines, odds, thresholds from the analyst reports — not adjectives.
-- State what would change the call: the one or two facts that would flip your conclusion.
+- Away @ Home accuracy: In "Away Team @ Home Team" headers, the first team before "@" is ALWAYS the away/road team and the second team after "@" is ALWAYS the home team. Never misidentify an away team as the home team.
+- State what would change the call: the one or two concrete facts affecting ONLY the teams in your selected legs that would flip your conclusion (never mention unrelated teams or games not in your selected legs).
 - Forbid filler: no "the analysts provided valuable insights", no restating the task, no unquantified
   hedging ("may", "could", "potentially" without numbers attached).
 - Do not invent percentages or counts; use only App-computed counts.

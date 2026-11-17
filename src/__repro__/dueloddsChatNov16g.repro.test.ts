@@ -138,4 +138,88 @@ describe('DuelOdds Swarm Chat wf-1794874318827 fixes', () => {
         expect(CRITIC_VERDICT_SYSTEM_INSTRUCTION).toContain('VETO POLICY');
         expect(CRITIC_VERDICT_SYSTEM_INSTRUCTION).not.toContain('Never propose');
     });
+
+    it('6. wf-1794926689283: parses DuelOdds side/reason picks, Market Proposer reason field, and resolves Attempt 2 verification retry cleanly', async () => {
+        const { AnalysisLifecycle } = await import('../swarm/lifecycle.ts');
+
+        // Market Proposer returning { picks: [], reason: "..." }
+        const marketOutput = JSON.stringify({
+            picks: [],
+            reason: 'Given the provided game slate and tool results, the optimal parlay is uncertain due to minimal market movement.'
+        });
+        const guardedMarket = guardAnalystResponse(marketOutput, 'Market Proposer');
+        expect(guardedMarket._placeholder).toBeUndefined();
+        expect(guardedMarket.insights[0]).toContain('Given the provided game slate');
+        expect(guardedMarket.insights[0]).not.toContain('unparsed output');
+
+        // Quant Proposer returning DuelOdds contract { row, side, reason }
+        const quantOutput = JSON.stringify({
+            analysis: 'Analyzed 5 games for optimal 3-leg parlay.',
+            picks: [
+                { row: 'R1', side: 'Dallas Stars +1.5', confidence: 0.72, reason: 'Dallas 6-4 vs VGK 5-5' },
+                { row: 'R2', side: 'San Antonio Spurs -9.5', confidence: 0.75, reason: 'Detroit missing 5 rotation players' },
+                { row: 'R3', side: 'Ottawa Senators -1.5', confidence: 0.64, reason: 'Better net margin (+0.7 vs -0.2)' }
+            ],
+            scorecards: []
+        });
+        const guardedQuant = guardAnalystResponse(quantOutput, 'Quant Proposer');
+        expect(guardedQuant._placeholder).toBeUndefined();
+        expect(guardedQuant.insights.join(' | ')).toContain('Ottawa Senators -1.5');
+        expect(guardedQuant.insights.join(' | ')).toContain('Better net margin');
+
+        // AnalysisLifecycle retry loop: Attempt 1 fails on Away/Home wording, Attempt 2 passes with prior critique context
+        const proposerPrompts: string[] = [];
+        const criticPrompts: string[] = [];
+        const mockProposer: any = {
+            role: 'Manager Node',
+            modelName: 'gemini-3.1-flash-lite',
+            provider: 'gemini',
+            run: async (prompt: string) => {
+                proposerPrompts.push(prompt);
+                if (proposerPrompts.length === 1) {
+                    return JSON.stringify({
+                        summary: 'Proceed with Stars +1.5, Spurs -9.5, and Senators -1.5 leveraging home-form of Senators.',
+                        picks: [{ row: 'R3', side: 'Ottawa Senators -1.5' }]
+                    });
+                }
+                return JSON.stringify({
+                    summary: 'Proceed with Stars +1.5, Spurs -9.5, and road favorite Senators -1.5 at Winnipeg.',
+                    picks: [{ row: 'R3', side: 'Ottawa Senators -1.5' }]
+                });
+            }
+        };
+        const mockCritic: any = {
+            role: 'Risk Critic',
+            modelName: 'openai/gpt-oss-120b',
+            provider: 'groq',
+            run: async (prompt: string) => {
+                criticPrompts.push(prompt);
+                if (criticPrompts.length === 1) {
+                    return JSON.stringify({
+                        pass: false,
+                        feedback: 'Ottawa is the away team (Ottawa Senators @ Winnipeg Jets), not the home team.'
+                    });
+                }
+                return JSON.stringify({
+                    pass: true,
+                    feedback: 'Verified after revision.'
+                });
+            }
+        };
+
+        const lifecycle = new AnalysisLifecycle(mockProposer, mockCritic, 2);
+        const res = await lifecycle.executeAndVerify(
+            { rawBoard: 'R3 | NHL | event_id=nhl-401892736 | Ottawa Senators @ Winnipeg Jets' },
+            new SwarmContext(),
+            'Synthesize 3-leg parlay',
+            'Verify factual accuracy',
+            ['nhl-401892736']
+        );
+
+        expect(res.success).toBe(true);
+        expect(res.attempts).toBe(2);
+        expect(proposerPrompts[1]).toContain('CRITICAL RETRY RULES');
+        expect(proposerPrompts[1]).toContain('Do NOT flip an analyst\'s recommended pick side');
+        expect(criticPrompts[1]).toContain('[Prior Critique From Attempt 1]');
+    });
 });

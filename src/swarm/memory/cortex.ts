@@ -791,6 +791,9 @@ export class MemoryCortex {
     }
 
     async getDiagnostics(appIdFilter?: string, options?: DiagnosticsOptions): Promise<MemoryCortexDiagnostics> {
+        if (this.qdrantStorage && this.qdrantStorage.isAvailable && !this.initialized) {
+            await this.initialize(appIdFilter && appIdFilter !== 'global' ? appIdFilter : undefined).catch(() => false);
+        }
         return collectCortexDiagnostics({
             qdrant: this.qdrantStorage?.getRawClient() ?? null,
             isAvailable: this.isAvailable,
