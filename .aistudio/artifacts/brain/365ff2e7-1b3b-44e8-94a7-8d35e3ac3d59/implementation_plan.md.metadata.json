@@ -1,6 +1,0 @@
-{
-  "summary":  "Implementation plan for closed-loop Qdrant & DuelOdds (Supabase) hyper-intelligence learning upgrades: decoupling response cache bypass from Qdrant MemoryCortex retrieval, enriching Qdrant stored memory payloads with structured verdicts, contrastive win/loss post-mortem retrieval, live Supabase line-movement steam and team-specific residual bias enrichment, counterfactual per-seat Brier attribution, cold-start Supabase calibration hydration, and live Cortex Diagnostics UI telemetry.",
-  "updatedAt":  "2026-10-23T20:17:31.814162944Z",
-  "requestFeedback":  true,
-  "userFacing":  true
-}

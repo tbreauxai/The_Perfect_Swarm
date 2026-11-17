@@ -256,9 +256,13 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             });
 
             const mathBlock = profilingResult.mathGroundingReport?.promptBlock;
-            const historicalContext = mathBlock
-                ? `${rawHistoricalContext}\n\n${mathBlock}`
-                : rawHistoricalContext;
+            const calibrationBlock = profilingResult.extractedCalibrationBlock;
+            const contextParts = [
+                rawHistoricalContext,
+                calibrationBlock && !rawHistoricalContext.includes('=== SWARM EMPIRICAL WIN CALIBRATION ===') ? calibrationBlock : '',
+                mathBlock || ''
+            ].filter(Boolean);
+            const historicalContext = contextParts.join('\n\n');
 
             // Hop 1: Two-Hop Triage & Fetch (when SeedManifest is provided)
             let curatedDossier: CuratedDossier | undefined = params.curatedDossier;

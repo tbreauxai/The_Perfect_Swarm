@@ -176,6 +176,13 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
         ? raw.picks.filter((p: any) => p && typeof p === 'object' && !Array.isArray(p)).map(sanitizePick)
         : undefined;
 
+    const rawAnalysis = typeof raw?.analysis === 'string' && raw.analysis.trim().length > 0
+        ? stripSeatText(raw.analysis.trim())
+        : '';
+    const rawScorecards = Array.isArray(raw?.scorecards)
+        ? raw.scorecards
+        : undefined;
+
     let isPlaceholder = raw?._placeholder === true;
     if (insights.length === 0 && (!sanitizedObjectPicks || sanitizedObjectPicks.length === 0) && isPickLike(raw)) {
         sanitizedObjectPicks = [sanitizePick(raw)];
@@ -187,13 +194,24 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
             const rawLabel = game && label ? `${game}: ${label}` : String(label || game || '');
             return stripSeatText(rawLabel);
         }).filter(Boolean);
+        if (rawAnalysis && !insights.includes(rawAnalysis)) {
+            insights.unshift(rawAnalysis);
+        }
+        wasRepaired = true;
+    }
+    if (insights.length === 0 && rawAnalysis) {
+        insights = [rawAnalysis];
         wasRepaired = true;
     }
     if (insights.length === 0) {
         const rawSummaryFallback = typeof raw?.summary === 'string' && raw.summary.trim()
             ? stripSeatText(raw.summary.trim())
             : '';
-        const plainTextFallback = !rawSummaryFallback && typeof input === 'string' && !/^\s*[\[{]/.test(input)
+        const isEmptyParsedObject = raw && typeof raw === 'object' && !Array.isArray(raw) && Object.keys(raw).length === 0;
+        const isLiteralEmptyJson = typeof input === 'string' && /^\s*(?:\{\s*\}|\[\s*\])\s*$/.test(input);
+        const plainTextFallback = !rawSummaryFallback && typeof input === 'string' && (
+            !/^\s*[\[{]/.test(input) || (isEmptyParsedObject && !isLiteralEmptyJson)
+        )
             ? stripSeatText(input.trim().slice(0, 300))
             : '';
         if (plainTextFallback) {
@@ -221,6 +239,9 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
     let summary = '';
     if (typeof raw.summary === 'string' && raw.summary.trim().length > 0) {
         summary = stripSeatText(raw.summary.trim());
+    } else if (rawAnalysis) {
+        summary = rawAnalysis;
+        wasRepaired = true;
     } else {
         summary = `${role} analytical assessment completed (${insights.length} insight${insights.length === 1 ? '' : 's'}).`;
         wasRepaired = true;
@@ -261,6 +282,8 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
         insights,
         anomalies,
         summary,
+        ...(rawAnalysis ? { analysis: rawAnalysis } : {}),
+        ...(rawScorecards !== undefined ? { scorecards: rawScorecards } : {}),
         ...(primaryHypothesis ? { primaryHypothesis } : {}),
         ...(counterHypothesis ? { counterHypothesis } : {}),
         ...(raw?.verdict !== undefined ? { verdict: raw.verdict } : {}),
@@ -370,9 +393,13 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
         ? raw.ui_title.trim()
         : defaultTitle;
 
+    const rawAnalysis = typeof raw?.analysis === 'string' && raw.analysis.trim().length > 0
+        ? stripApproximateOdds(raw.analysis.trim(), { allowExactOdds: true })
+        : undefined;
+
     const summary = typeof raw.summary === 'string' && raw.summary.trim().length > 0
         ? stripApproximateOdds(raw.summary.trim(), { allowExactOdds: true })
-        : undefined;
+        : rawAnalysis;
 
     const components: ManagerResponse['components'] = [];
 
@@ -423,7 +450,7 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
     if (components.length === 0) {
         const insightsList = Array.isArray(raw.insights)
             ? raw.insights.map((i: any) => ({ type: 'info' as const, message: String(i) }))
-            : [{ type: 'info' as const, message: raw.summary || (typeof input === 'string' ? String(input).slice(0, 500) : (input && Object.keys(input).length > 0 ? JSON.stringify(input) : 'Swarm analysis completed successfully.')) }];
+            : [{ type: 'info' as const, message: summary || rawAnalysis || (typeof input === 'string' ? String(input).slice(0, 500) : (input && Object.keys(input).length > 0 ? JSON.stringify(input) : 'Swarm analysis completed successfully.')) }];
 
         components.push({
             id: 'default-insight-list',
@@ -442,13 +469,15 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
     return {
         ui_title: title,
         ...(summary ? { summary } : {}),
+        ...(rawAnalysis ? { analysis: rawAnalysis } : (summary ? { analysis: summary } : {})),
         components,
         ...(finalMetadata ? { metadata: finalMetadata } : {}),
         ...(raw && Array.isArray(raw.picks) ? { picks: raw.picks } : {}),
+        ...(raw && Array.isArray(raw.scorecards) ? { scorecards: raw.scorecards } : {}),
         ...(raw && raw.status ? { status: raw.status } : {}),
         ...(raw && raw.reason ? { reason: raw.reason } : {}),
         _repaired: true
-    };
+    } as ManagerResponse;
 }
 
 /**

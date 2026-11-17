@@ -620,17 +620,110 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
             const headersPayload = parsedChunkHeaders.length > 0
                 ? renderHeaders(parsedChunkHeaders, 1600)
                 : (cappedChunk || renderHeaders(parsedChunkHeaders, 1600));
-            const chunkReports = usePool
-                ? await globalPredictionWorkerPool.submitBatch(
-                    analysts.map((analyst) => () => executeAnalyst(analyst, headersPayload, 0))
-                )
-                : await Promise.all(
-                    analysts.map((analyst) => executeAnalyst(analyst, headersPayload, 0))
-                );
-            for (let a = 0; a < analysts.length; a++) {
-                const rep = chunkReports[a];
-                if (rep !== null && rep !== undefined) {
-                    allAnalystReports[a].push(rep);
+
+            const isCriticSeat = (a: Agent) => /critic|\brisk\b/i.test(a.role) || /critic|\brisk\b/i.test((a as any).id || '');
+            const proposerEntries = analysts.map((analyst, idx) => ({ analyst, idx })).filter(e => !isCriticSeat(e.analyst));
+            const criticEntries = analysts.map((analyst, idx) => ({ analyst, idx })).filter(e => isCriticSeat(e.analyst));
+
+            if (proposerEntries.length > 0 && criticEntries.length > 0) {
+                // Stage 1: Execute proposer seats first so they select candidate parlay/bet legs
+                const proposerReports = usePool
+                    ? await globalPredictionWorkerPool.submitBatch(
+                        proposerEntries.map(({ analyst }) => () => executeAnalyst(analyst, headersPayload, 0))
+                    )
+                    : await Promise.all(
+                        proposerEntries.map(({ analyst }) => executeAnalyst(analyst, headersPayload, 0))
+                    );
+
+                proposerEntries.forEach(({ idx }, pIdx) => {
+                    const rep = proposerReports[pIdx];
+                    if (rep !== null && rep !== undefined) {
+                        allAnalystReports[idx].push(rep);
+                    }
+                });
+
+                // Build proposed picks audit context from Stage 1 proposer outputs
+                const targetGameIdsSet = new Set<string>();
+                const summaryLines: string[] = [];
+
+                const matchHeaderEventId = (text: string): void => {
+                    if (!text) return;
+                    for (let hIdx = 0; hIdx < parsedChunkHeaders.length; hIdx++) {
+                        const h = parsedChunkHeaders[hIdx];
+                        if (!h.eventId) continue;
+                        const rowTag = `R${hIdx + 1}`;
+                        const rowRegex = new RegExp(`\\b${rowTag}\\b`, 'i');
+                        if (
+                            text.includes(h.eventId) ||
+                            rowRegex.test(text) ||
+                            (h.home && text.toLowerCase().includes(h.home.toLowerCase())) ||
+                            (h.away && text.toLowerCase().includes(h.away.toLowerCase()))
+                        ) {
+                            targetGameIdsSet.add(h.eventId);
+                        }
+                    }
+                };
+
+                for (const { analyst, idx } of proposerEntries) {
+                    const rep = allAnalystReports[idx]?.[0];
+                    if (!rep) continue;
+                    const picks = Array.isArray(rep.picks) ? rep.picks : [];
+                    if (picks.length > 0) {
+                        const pickDescs = picks.map((pk: any) => {
+                            const evId = pk.event_id || pk.eventId || pk.game_id || '';
+                            if (evId) targetGameIdsSet.add(String(evId));
+                            const desc = [pk.row, pk.game || pk.match || evId, pk.pick || pk.selection || pk.team, pk.market, pk.confidence ? `(conf ${pk.confidence})` : '']
+                                .filter(Boolean)
+                                .join(' ');
+                            matchHeaderEventId(desc);
+                            return desc;
+                        }).filter(Boolean);
+                        summaryLines.push(`- [${analyst.role}] Proposed ${picks.length} leg(s): ${pickDescs.join(' | ')}`);
+                    } else if (rep.scorecard && rep.scorecard.pick) {
+                        const sc = rep.scorecard;
+                        const desc = `${sc.row || ''} ${sc.pick} (${sc.verdict || 'lean'})`.trim();
+                        matchHeaderEventId(desc);
+                        summaryLines.push(`- [${analyst.role}] Scorecard pick: ${desc}`);
+                    } else {
+                        const text = String(rep.analysis || rep.summary || (Array.isArray(rep.insights) ? rep.insights.join('; ') : '')).slice(0, 260);
+                        matchHeaderEventId(text);
+                        summaryLines.push(`- [${analyst.role}]: ${text || 'No picks proposed'}`);
+                    }
+                }
+
+                const proposedAuditContext = {
+                    summaryText: summaryLines.join('\n').slice(0, 900),
+                    targetGameIds: Array.from(targetGameIdsSet)
+                };
+
+                // Stage 2: Execute Risk Critic seat(s) with Stage 1 proposed picks context
+                const criticReports = usePool
+                    ? await globalPredictionWorkerPool.submitBatch(
+                        criticEntries.map(({ analyst }) => () => executeAnalyst(analyst, headersPayload, 0, proposedAuditContext))
+                    )
+                    : await Promise.all(
+                        criticEntries.map(({ analyst }) => executeAnalyst(analyst, headersPayload, 0, proposedAuditContext))
+                    );
+
+                criticEntries.forEach(({ idx }, cIdx) => {
+                    const rep = criticReports[cIdx];
+                    if (rep !== null && rep !== undefined) {
+                        allAnalystReports[idx].push(rep);
+                    }
+                });
+            } else {
+                const chunkReports = usePool
+                    ? await globalPredictionWorkerPool.submitBatch(
+                        analysts.map((analyst) => () => executeAnalyst(analyst, headersPayload, 0))
+                    )
+                    : await Promise.all(
+                        analysts.map((analyst) => executeAnalyst(analyst, headersPayload, 0))
+                    );
+                for (let a = 0; a < analysts.length; a++) {
+                    const rep = chunkReports[a];
+                    if (rep !== null && rep !== undefined) {
+                        allAnalystReports[a].push(rep);
+                    }
                 }
             }
         }

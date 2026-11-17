@@ -30,6 +30,7 @@ export interface ProfilingPipelineParams {
 
 export interface ProfilingPipelineResult {
     effectiveDataPayload: string;
+    extractedCalibrationBlock?: string;
     preFilterResult?: PreFilterResult;
     rawInput: string;
     profile: DataProfile;
@@ -46,6 +47,30 @@ export interface ProfilingPipelineResult {
 }
 
 /**
+ * Separates a prepended `=== SWARM EMPIRICAL WIN CALIBRATION ===` header from the raw slate
+ * so `sketchDataset` and `profileData` analyze the actual slate rows rather than calibration bullets.
+ */
+export function extractCalibrationPrefix(payload: string): { calibrationBlock: string; cleanPayload: string } {
+    if (!payload || !payload.includes('=== SWARM EMPIRICAL WIN CALIBRATION ===')) {
+        return { calibrationBlock: '', cleanPayload: payload || '' };
+    }
+    const trimmed = payload.trimStart();
+    if (!trimmed.startsWith('=== SWARM EMPIRICAL WIN CALIBRATION ===')) {
+        return { calibrationBlock: '', cleanPayload: payload };
+    }
+    const doubleNewlineMatch = /\r?\n\r?\n/.exec(trimmed);
+    if (!doubleNewlineMatch || doubleNewlineMatch.index === undefined) {
+        return { calibrationBlock: trimmed, cleanPayload: '' };
+    }
+    const calibrationBlock = trimmed.slice(0, doubleNewlineMatch.index).trim();
+    const cleanPayload = trimmed.slice(doubleNewlineMatch.index + doubleNewlineMatch[0].length).trimStart();
+    if (!cleanPayload) {
+        return { calibrationBlock: '', cleanPayload: payload };
+    }
+    return { calibrationBlock, cleanPayload };
+}
+
+/**
  * Modular data profiling, pre-filtering, columnar sketching, provider-aware sharding,
  * deterministic math grounding, token budgeting, and task decomposition pipeline.
  */
@@ -54,12 +79,13 @@ export function runDataProfilingPipeline(params: ProfilingPipelineParams): Profi
     const optSettings = settings?.optimizationSettings;
     const coordinationSettings = settings?.coordinationSettings;
 
-    // 1. Data Profiling & Domain Pre-Filtering
-    let effectiveDataPayload = data || "";
+    // 1. Data Profiling & Domain Pre-Filtering (strip prepended calibration brief first so slate rows profile cleanly)
+    const { calibrationBlock: extractedCalibrationBlock, cleanPayload: initialCleanData } = extractCalibrationPrefix(data || "");
+    let effectiveDataPayload = initialCleanData;
     let preFilterResult: PreFilterResult | undefined;
 
-    if (optimizationEnabled && optSettings?.enablePreFiltering !== false && data) {
-        preFilterResult = globalDomainPreFilter.filter(data);
+    if (optimizationEnabled && optSettings?.enablePreFiltering !== false && initialCleanData) {
+        preFilterResult = globalDomainPreFilter.filter(initialCleanData);
         if (preFilterResult.tokensSaved > 0) {
             effectiveDataPayload = typeof preFilterResult.filteredData === 'string'
                 ? preFilterResult.filteredData
@@ -208,6 +234,7 @@ export function runDataProfilingPipeline(params: ProfilingPipelineParams): Profi
 
     return {
         effectiveDataPayload,
+        ...(extractedCalibrationBlock ? { extractedCalibrationBlock } : {}),
         preFilterResult,
         rawInput,
         profile,
