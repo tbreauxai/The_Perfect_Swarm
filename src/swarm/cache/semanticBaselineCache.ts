@@ -9,6 +9,16 @@ import { SemanticSimilarityEngine } from './semanticSimilarityEngine.ts';
 import { hashString } from './payloadCache.ts';
 
 /**
+ * Returns true unless SEMANTIC_CACHE_ENABLED is explicitly disabled ('false', '0', 'off', 'no').
+ */
+export function isSemanticCacheEnabled(): boolean {
+    const raw = typeof process !== 'undefined' ? process.env?.SEMANTIC_CACHE_ENABLED : undefined;
+    if (raw === undefined || raw === '') return true;
+    const normalized = String(raw).trim().toLowerCase();
+    return normalized !== 'false' && normalized !== '0' && normalized !== 'off' && normalized !== 'no';
+}
+
+/**
  * Lightweight Semantic Baseline Cache to match near-identical tasks and baseline queries,
  * immediately lowering token expenditure and bypassing redundant LLM executions.
  */

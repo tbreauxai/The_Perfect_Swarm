@@ -5,7 +5,7 @@ import type { SwarmEngineSettings } from '../types.ts';
 import type { AgentVariantConfig, AgentExperiment, ExecutionMetrics, ExperimentDecision } from '../experiment.ts';
 import { type MemoryCortex, normalizeDomain, extractEntityIds } from '../memory.ts';
 import type { TaskComplexity } from '../router.ts';
-import { globalPayloadCache, globalSemanticCache } from '../cache.ts';
+import { globalPayloadCache, globalSemanticCache, isSemanticCacheEnabled } from '../cache.ts';
 import { globalMetricsCollector, globalUnifiedProfiler, type SwarmBaselineReport } from '../profiler.ts';
 import { globalTieredCache, SelectiveSnapshotter, type TieredLookupResult } from '../tieredCache.ts';
 import { globalFeedbackEngine, analystLedger } from '../feedback.ts';
@@ -243,8 +243,12 @@ export async function runLearningPipeline(p: LearningPipelineParams): Promise<Le
     }
 
     if (finalAnalysis && !finalAnalysis.ui_title?.toLowerCase().includes("error")) {
-        globalPayloadCache.set(cacheKey, finalAnalysis);
-        globalSemanticCache.set(task, finalAnalysis, { data, configVersion: agentConfigVersion });
+        if (!params.bypassCache) {
+            globalPayloadCache.set(cacheKey, finalAnalysis);
+            if (isSemanticCacheEnabled()) {
+                globalSemanticCache.set(task, finalAnalysis, { data, configVersion: agentConfigVersion });
+            }
+        }
     }
 
     const workflowDurationMs = Date.now() - workflowStartTime;

@@ -222,6 +222,18 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
 
             if (c.req.method === 'POST') {
                 const body = await c.req.json().catch(() => ({}));
+                const url = new URL(c.req.url);
+                const requestBypass =
+                    Boolean(body?.bypassCache) ||
+                    url.searchParams.get('cache-bypass') === '1' ||
+                    url.searchParams.get('nocache') === '1' ||
+                    c.req.header('cache-bypass') === '1' ||
+                    c.req.header('x-cache-bypass') === '1' ||
+                    c.req.header('nocache') === '1' ||
+                    body?.['cache-bypass'] === 1 ||
+                    body?.['cache-bypass'] === '1' ||
+                    body?.nocache === 1 ||
+                    body?.nocache === '1';
                 const isSeedManifest = isSeedManifestRequest(body);
                 if (isSeedManifest) {
                     const manifestErr = validateSeedManifestRequest(body);
@@ -418,7 +430,7 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
                     speculativeParallel: body.speculativeParallel,
                     maxSpeculativeConcurrency: body.maxSpeculativeConcurrency,
                     complexityOverride: body.complexityOverride,
-                    bypassCache: body.bypassCache,
+                    bypassCache: requestBypass,
                     scorecardMode: body.scorecardMode === true,
                     eventIds: isSeedManifest ? [body.game_id] : (scopeCheck.scope.eventIds.length > 0 ? scopeCheck.scope.eventIds : slimMeta.eventIds),
                     date: scopeCheck.scope.date ?? slimMeta.date,
@@ -454,6 +466,12 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
                 const getSettings = sanitizeClientSettings({ domain }, edgeSettings, defaultSettings);
                 getSettings.appId = originApp;
                 hydrateAppOutcomes(originApp);
+                const getBypass =
+                    url.searchParams.get('cache-bypass') === '1' ||
+                    url.searchParams.get('nocache') === '1' ||
+                    c.req.header('cache-bypass') === '1' ||
+                    c.req.header('x-cache-bypass') === '1' ||
+                    c.req.header('nocache') === '1';
                 params = {
                     task,
                     data: prependCalibrationToData(data, originApp),
@@ -463,6 +481,7 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
                     settings: getSettings,
                     defaultAi,
                     cortex: defaultCortex,
+                    bypassCache: getBypass,
                     ...(getScope.ok ? { retrievalScope: getScope.scope } : {})
                 };
             } else {
@@ -480,6 +499,18 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
             const env = resolveEnvironment(c);
             const edgeSettings = buildEdgeSettings(env);
             const body = await c.req.json().catch(() => ({}));
+            const url = new URL(c.req.url);
+            const requestBypass =
+                Boolean(body?.bypassCache) ||
+                url.searchParams.get('cache-bypass') === '1' ||
+                url.searchParams.get('nocache') === '1' ||
+                c.req.header('cache-bypass') === '1' ||
+                c.req.header('x-cache-bypass') === '1' ||
+                c.req.header('nocache') === '1' ||
+                body?.['cache-bypass'] === 1 ||
+                body?.['cache-bypass'] === '1' ||
+                body?.nocache === 1 ||
+                body?.nocache === '1';
             const { callerAppId, originApp } = resolveAppIds(c, defaultSettings);
             const isSeedManifest = isSeedManifestRequest(body);
             if (isSeedManifest) {
@@ -686,7 +717,7 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
                 speculativeParallel: body.speculativeParallel,
                 maxSpeculativeConcurrency: body.maxSpeculativeConcurrency,
                 complexityOverride: body.complexityOverride,
-                bypassCache: body.bypassCache,
+                bypassCache: requestBypass,
                 scorecardMode: body.scorecardMode === true,
                 eventIds: isSeedManifest ? [body.game_id] : (scopeCheck.scope.eventIds.length > 0 ? scopeCheck.scope.eventIds : slimMeta.eventIds),
                 date: scopeCheck.scope.date ?? slimMeta.date,
