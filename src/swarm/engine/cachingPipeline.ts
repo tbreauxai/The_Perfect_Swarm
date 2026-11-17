@@ -1,6 +1,6 @@
 import { globalDomainSubComputationCache } from '../optimization.ts';
 import { globalTieredCache, type TieredLookupResult } from '../tieredCache.ts';
-import { globalSemanticCache, globalPayloadCache, type SemanticMatchResult } from '../cache.ts';
+import { globalSemanticCache, globalPayloadCache, isSemanticCacheEnabled, type SemanticMatchResult } from '../cache.ts';
 import { SwarmContext } from '../context.ts';
 import type { SwarmWorkflowResult, SwarmWorkflowParams, SwarmFeedbackReport } from './types.ts';
 import type { SwarmEngineSettings } from '../types.ts';
@@ -91,6 +91,9 @@ export interface SemanticCacheCheckParams {
 }
 
 export function checkSemanticCacheMatch(params: SemanticCacheCheckParams): SemanticMatchResult {
+    if (!isSemanticCacheEnabled()) {
+        return { hit: false, similarity: 0 };
+    }
     const { task, data, configVersion } = params;
     return globalSemanticCache.findMatch(task, {
         data,
@@ -308,7 +311,7 @@ export async function resolveEarlyCacheHit(p: EarlyCacheResolutionParams): Promi
     }
 
     // 0c. Semantic Match Cache
-    const semanticMatch: SemanticMatchResult = (forceFullSwarm || tieredCacheEnabled || bypassCache)
+    const semanticMatch: SemanticMatchResult = (forceFullSwarm || tieredCacheEnabled || bypassCache || !isSemanticCacheEnabled())
         ? { hit: false, similarity: 0 }
         : checkSemanticCacheMatch({ task, data, configVersion: agentConfigVersion });
 

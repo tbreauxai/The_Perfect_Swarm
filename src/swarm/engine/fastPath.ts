@@ -4,7 +4,7 @@ import { SwarmContext } from '../context.ts';
 import type { AgentVariantConfig, ExperimentDecision } from '../experiment.ts';
 import { AgentExperiment } from '../experiment.ts';
 import { globalPromptCompressor } from '../compression.ts';
-import { globalPayloadCache, globalSemanticCache } from '../cache.ts';
+import { globalPayloadCache, globalSemanticCache, isSemanticCacheEnabled } from '../cache.ts';
 import { globalMetricsCollector, globalUnifiedProfiler } from '../profiler.ts';
 import { globalTieredCache } from '../tieredCache.ts';
 import { globalFeedbackEngine } from '../feedback.ts';
@@ -179,8 +179,12 @@ export async function executeFastPath(
         }
 
         if (finalAnalysis && !finalAnalysis.ui_title?.toLowerCase().includes("error")) {
-            globalPayloadCache.set(cacheKey, finalAnalysis);
-            globalSemanticCache.set(task, finalAnalysis, { data, configVersion: agentConfigVersion });
+            if (!bypassCache) {
+                globalPayloadCache.set(cacheKey, finalAnalysis);
+                if (isSemanticCacheEnabled()) {
+                    globalSemanticCache.set(task, finalAnalysis, { data, configVersion: agentConfigVersion });
+                }
+            }
             if (memoryCortex) {
                 const content = `Task: ${task}\nResult: ${finalAnalysis.ui_title || 'Fast analysis complete'}`;
                 const writeOriginApp = (params as any).originApp || (params as any).callerAppId || targetAppId;
