@@ -27,11 +27,12 @@ import { ANALYST_SYSTEM_INSTRUCTION, RED_TEAM_ANALYST_ROLE, RED_TEAM_ANALYST_SYS
 import { recordDegraded } from './partialResult.ts';
 import { AnalystScorecardSchema } from '../types.ts';
 import { runScorecardSeat, renderScorecardInstruction, scorecardAnalystMaxTokens, scorecardToAnalystReport, validateScorecard } from './scorecard.ts';
-import { parseGameHeaders, renderHeaders } from '../context/gameHeaders.ts';
-import { runSeatWithTools } from './seatToolLoop.ts';
+import { parseGameHeaders, renderHeaders, type GameHeader } from '../context/gameHeaders.ts';
+import { runSeatWithTools, type ToolEvidenceItem } from './seatToolLoop.ts';
 import { GameQueryCache } from '../cache/gameQueryCache.ts';
 import { executeToolWithCacheAndTimeout } from './triageExecutor.ts';
 import { seatBudget } from '../context/promptBudget.ts';
+import { auditInjuryAttribution, sanitizeMisattributedPicksAndText } from '../tools/injuryAttribution.ts';
 
 export interface AnalystExecutorConfig {
     task: string;
@@ -191,8 +192,9 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
 
     const sharedQueryCache = new GameQueryCache();
     const sharedInjuryPrefetchMap = new Map<string, Promise<string>>();
+    const sharedInjuryItemsByGame = new Map<string, ToolEvidenceItem>();
 
-    const getSharedInjurySummary = (gameIds: string[], activeReg: ToolRegistry): Promise<string> => {
+    const getSharedInjurySummary = (gameIds: string[], activeReg: ToolRegistry, headers?: GameHeader[]): Promise<string> => {
         if (gameIds.length === 0 || !activeReg.has('get_injury_and_roster_delta')) {
             return Promise.resolve('');
         }
@@ -200,20 +202,44 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
         const existing = sharedInjuryPrefetchMap.get(key);
         if (existing) return existing;
 
+        const headerById = new Map<string, GameHeader>();
+        for (const h of headers || []) {
+            if (h.eventId) headerById.set(h.eventId, h);
+        }
+
         const promise = (async () => {
             const calls = gameIds.slice(0, 8);
             const results = await Promise.all(
                 calls.map(async (gId) => {
                     try {
+                        const hdr = headerById.get(gId);
+                        const toolOptions = hdr
+                            ? {
+                                  game: {
+                                      event_id: gId,
+                                      sport: hdr.sport,
+                                      home_team: hdr.home,
+                                      away_team: hdr.away,
+                                      home_team_abbr: hdr.home,
+                                      away_team_abbr: hdr.away
+                                  }
+                              }
+                            : undefined;
                         const res = await executeToolWithCacheAndTimeout(
                             { tool: 'get_injury_and_roster_delta', parameters: { game_id: gId } },
                             { game_id: gId },
                             activeReg,
                             sharedQueryCache,
-                            1500
+                            1500,
+                            toolOptions
                         );
                         if (res && res.success && typeof res.summary === 'string' && res.summary.trim()) {
-                            const singleLine = res.summary.replace(/\s*\r?\n\s*/g, '; ').trim();
+                            sharedInjuryItemsByGame.set(gId, {
+                                tool: 'get_injury_and_roster_delta',
+                                eventId: gId,
+                                summary: res.summary.trim()
+                            });
+                            const singleLine = res.summary.replace(/\s*\r?\n\s*/g, ' | ').trim();
                             return singleLine.includes(gId) ? singleLine : `${gId}: ${singleLine}`;
                         }
                         return '';
@@ -343,13 +369,15 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                 allGameIds = [...prioritized, ...remainder];
             }
 
-            const isBettingSeat = /^(a1|quant|a2|market)$/i.test(seat.trim()) || /^(a1|quant|a2|market)$/i.test(analyst.role.trim());
+            const isBettingSeat = /\b(a1|quant|a2|market)\b/i.test(seat.trim()) || /\b(a1|quant|a2|market)\b/i.test(analyst.role.trim());
             let seatPrompt = effectiveAnalystPrompt;
             if (isCritic && proposedAuditContext?.summaryText) {
                 seatPrompt += `\n\nProposed Picks From Specialist Seats (audit these specific legs for fatal injuries or rule violations; do not veto based on unpicked games):\n${proposedAuditContext.summaryText}`;
             }
+            let prefetchedInjurySummary = '';
             if (isBettingSeat && allGameIds.length > 0 && activeRegistry.has('get_injury_and_roster_delta')) {
-                const rawInjurySummary = await getSharedInjurySummary(allGameIds, activeRegistry);
+                const rawInjurySummary = await getSharedInjurySummary(allGameIds, activeRegistry, parsedHeaders);
+                prefetchedInjurySummary = rawInjurySummary;
                 if (rawInjurySummary) {
                     const pBudget = seatBudget(analyst.provider);
                     const maxAllowed = Math.min(
@@ -432,9 +460,39 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
             (resData as any)._chunkIndex = chunkIdx;
             (resData as any).coveredEventIds = scorecardReport?.coveredEventIds ?? seatLoopRes?.coveredEventIds ?? [];
             (resData as any).toolEvidence = scorecardReport?.toolEvidence ?? seatLoopRes?.toolEvidence ?? '';
-            (resData as any).toolEvidenceItems = (scorecardReport as any)?.toolEvidenceItems ?? seatLoopRes?.toolEvidenceItems ?? [];
+            const baseEvidenceItems: ToolEvidenceItem[] = [
+                ...((scorecardReport as any)?.toolEvidenceItems ?? seatLoopRes?.toolEvidenceItems ?? [])
+            ];
+            if (isBettingSeat && sharedInjuryItemsByGame.size > 0) {
+                for (const [gId, item] of sharedInjuryItemsByGame.entries()) {
+                    if (!baseEvidenceItems.some(e => e.tool === item.tool && e.eventId === gId)) {
+                        baseEvidenceItems.push(item);
+                    }
+                }
+            }
+            (resData as any).toolEvidenceItems = baseEvidenceItems;
             if (!(resData as any).seat) (resData as any).seat = seat;
             if (!(resData as any).role) (resData as any).role = analyst.role;
+
+            const combinedInjuryEvidence = [
+                prefetchedInjurySummary,
+                (resData as any).toolEvidence || '',
+                ...baseEvidenceItems.filter(e => e.tool === 'get_injury_and_roster_delta').map(e => e.summary)
+            ].filter(Boolean).join('\n');
+
+            if (!isCritic && combinedInjuryEvidence) {
+                sanitizeMisattributedPicksAndText(resData as any, combinedInjuryEvidence, renderedHeadersText);
+            } else if (isCritic && proposedAuditContext?.summaryText && combinedInjuryEvidence) {
+                const audit = auditInjuryAttribution(proposedAuditContext.summaryText, combinedInjuryEvidence, renderedHeadersText);
+                if (!audit.pass) {
+                    (resData as any).pass = false;
+                    const msg = audit.feedback || 'Veto: Proposed pick attributed an injury to the wrong team.';
+                    (resData as any).summary = msg;
+                    (resData as any).analysis = msg;
+                    if (!Array.isArray((resData as any).flags)) (resData as any).flags = [];
+                    (resData as any).flags.push('injury_misattribution');
+                }
+            }
             if (scorecardReport) {
                 // R2-S3: stream each scorecard as soon as the seat finishes.
                 try {

@@ -5,6 +5,7 @@ import { guardManagerResponse } from '../parser.ts';
 import { globalSpecialistProfiler } from '../loadBalancer.ts';
 import { getManagerContextTokenCeiling } from './synthesisPipeline.ts';
 import { parseGameHeaders, renderHeaders, filterPicksByCoverage } from '../context/gameHeaders.ts';
+import { INJURY_ATTRIBUTION_RULE, sanitizeMisattributedPicksAndText } from '../tools/injuryAttribution.ts';
 
 import type { SwarmEngineSettings } from '../types.ts';
 
@@ -52,9 +53,9 @@ export async function runDeepAnalysisVerification(
 
     const isMorningJudge = (settings as any)?.responseSchema === 'morning_judge';
     if (isMorningJudge) {
-        criticAgent.setSystemInstruction("You are the Swarm Verification Critic for Sports Betting Pre-game Judgment. Audit the proposed prediction strictly against the raw data, odds, injuries, and specialist reports. Ensure winProbHome (0.01-0.99), fairSpread, and likelyWinner are logically sound and formatted properly. Team names in Game Slate are authoritative; never rename or flag them.");
+        criticAgent.setSystemInstruction(`You are the Swarm Verification Critic for Sports Betting Pre-game Judgment. Audit the proposed prediction strictly against the raw data, odds, injuries, and specialist reports. Ensure winProbHome (0.01-0.99), fairSpread, and likelyWinner are logically sound and formatted properly. Team names in Game Slate are authoritative; never rename or flag them.\n\n${INJURY_ATTRIBUTION_RULE}`);
     } else {
-        criticAgent.setSystemInstruction("You are the Swarm Verification Critic. Audit proposed analyses strictly against the raw data, historical baselines, and analyst reports. Systematically evaluate and attempt to refute hypotheses formulated by specialists. Flag discrepancies, missed anomalies, ungrounded assumptions, or schema violations. VETO POLICY: Only fail (\"pass\": false) a betting proposal when a recommended pick leg itself has a fatal injury, fabricated stat/odds, missing coverage on that leg, or direct rule violation; do not veto valid proposed picks just because other unpicked games on the slate have heavy injuries or incomplete roster data. Team names in Game Slate are authoritative; never rename or flag them.");
+        criticAgent.setSystemInstruction(`You are the Swarm Verification Critic. Audit proposed analyses strictly against the raw data, historical baselines, and analyst reports. Systematically evaluate and attempt to refute hypotheses formulated by specialists. Flag discrepancies, missed anomalies, ungrounded assumptions, or schema violations. VETO POLICY: Only fail ("pass": false) a betting proposal when a recommended pick leg itself has a fatal injury, fabricated stat/odds, missing coverage on that leg, or direct rule violation; do not veto valid proposed picks just because other unpicked games on the slate have heavy injuries or incomplete roster data. Team names in Game Slate are authoritative; never rename or flag them.\n\n${INJURY_ATTRIBUTION_RULE}`);
     }
 
     const lifecycle = new AnalysisLifecycle(managerAgent, criticAgent, 2);
@@ -113,6 +114,9 @@ export async function runDeepAnalysisVerification(
                 attempts: lifecycleResult.attempts,
                 rating: lifecycleResult.computedRating
             };
+            if (p.toolResults) {
+                sanitizeMisattributedPicksAndText(finalAnalysis, p.toolResults, headersText || rawInput || task);
+            }
         }
     }
 

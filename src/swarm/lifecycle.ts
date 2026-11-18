@@ -5,6 +5,7 @@ import { redactForLog } from './parser/responseGuards.ts';
 import { groqPromptCharCap } from './providers/groq.ts';
 import { seatBudget } from './context/promptBudget.ts';
 import { parseGameHeaders, renderHeaders, filterPicksByCoverage } from './context/gameHeaders.ts';
+import { auditInjuryAttribution } from './tools/injuryAttribution.ts';
 
 import type { VerificationResult } from './types.ts';
 export type { VerificationResult };
@@ -89,7 +90,7 @@ export class AnalysisLifecycle {
             let executePrompt: string;
             if (feedback) {
                 const feedbackSummary = feedback.length > 2000 ? `${feedback.slice(0, 2000)}...` : feedback;
-                executePrompt = `${proposerPrompt}\n\n[Previous Verification Critique & Corrections Required (Attempt ${attempt - 1})]:\n${feedbackSummary}\n\nCRITICAL RETRY RULES:\n1. Output a clean, standalone final JSON response as if writing it for the first time. NEVER mention "a previous error", "this correction", or prior attempts in your summary or analysis.\n2. Fix any factual misstatements (such as Away vs. Home team status in "Away @ Home" headers, or references to teams not in the selected legs) so they strictly match the Game Slate headers and Analyst Reports.\n3. Do NOT flip an analyst's recommended pick side (e.g. keep the analyst's selected team/spread and simply describe its Away/Home status accurately) unless the critic identified a fatal injury on that team.`;
+                executePrompt = `${proposerPrompt}\n\n[Previous Verification Critique & Corrections Required (Attempt ${attempt - 1})]:\n${feedbackSummary}\n\nCRITICAL RETRY RULES:\n1. Output a clean, standalone final JSON response as if writing it for the first time. NEVER mention "a previous error", "this correction", or prior attempts in your summary or analysis.\n2. Fix any factual misstatements (such as Away vs. Home team status in "Away @ Home" headers, or references to teams not in the selected legs) so they strictly match the Game Slate headers and Analyst Reports.\n3. Do NOT flip an analyst's recommended pick side (e.g. keep the analyst's selected team/spread and simply describe its Away/Home status accurately) unless the critic identified a fatal injury on that team.\n4. INJURY ATTRIBUTION RULE: Every injury citation must match the team_id or team name in the tool result or board. Never assign a player to the opposing team.`;
             } else {
                 executePrompt = proposerPrompt;
             }
@@ -242,8 +243,9 @@ export class AnalysisLifecycle {
                 console.warn(`[Critic] unparsed verification output (attempt ${attempt}): ${redactForLog(String(verificationRaw)).slice(0, 300)}`);
             }
 
-            // A claim that cites no field in the game slate or tool results is a veto
-            if (verification.pass && currentProposal) {
+            // Deterministic Critic Check: A claim that cites no field in the game slate or tool results,
+            // or attributes an injury to the wrong team (INJURY ATTRIBUTION RULE), is a veto.
+            if (currentProposal) {
                 const slateHeaders = renderHeaders(parseGameHeaders(rawData));
                 const toolResultsSummary = typeof rawData === 'object' && rawData && 'toolResults' in rawData
                     ? String((rawData as any).toolResults)
@@ -252,28 +254,41 @@ export class AnalysisLifecycle {
                 const fallbackBoardText = typeof rawData === 'string'
                     ? rawData
                     : (rawData?.rawBoard || rawData?.dataSample || JSON.stringify(rawData || ''));
-                const verificationSource = (allowedSourceText || fallbackBoardText).toLowerCase();
 
-                const candidateClaims = Array.isArray(currentProposal.arguments)
-                    ? currentProposal.arguments
-                    : (Array.isArray(currentProposal.claims) ? currentProposal.claims : []);
+                const injuryAudit = auditInjuryAttribution(
+                    currentProposal,
+                    `${toolResultsSummary}\n${analystReports}`,
+                    slateHeaders || fallbackBoardText
+                );
+                if (!injuryAudit.pass) {
+                    verification.pass = false;
+                    verification.feedback = injuryAudit.feedback || 'Veto: Proposal attributed an injury to the wrong team.';
+                }
 
-                if (candidateClaims.length > 0 && verificationSource) {
-                    for (const arg of candidateClaims) {
-                        const claimSupporting = typeof arg === 'object' && arg !== null
-                            ? (arg.supportingData || arg.field || arg.claim || '')
-                            : String(arg);
-                        if (!claimSupporting || !claimSupporting.trim()) {
-                            verification.pass = false;
-                            verification.feedback = 'Veto: Claim cites no field in the source data.';
-                            break;
-                        }
-                        const tokens = String(claimSupporting).toLowerCase().match(/[a-z0-9_]{3,}/g) || [];
-                        const citesField = tokens.some(tok => verificationSource.includes(tok));
-                        if (!citesField && tokens.length > 0) {
-                            verification.pass = false;
-                            verification.feedback = `Veto: Claim "${String(claimSupporting).slice(0, 80)}" cites no field in the source data.`;
-                            break;
+                if (verification.pass) {
+                    const verificationSource = (allowedSourceText || fallbackBoardText).toLowerCase();
+
+                    const candidateClaims = Array.isArray(currentProposal.arguments)
+                        ? currentProposal.arguments
+                        : (Array.isArray(currentProposal.claims) ? currentProposal.claims : []);
+
+                    if (candidateClaims.length > 0 && verificationSource) {
+                        for (const arg of candidateClaims) {
+                            const claimSupporting = typeof arg === 'object' && arg !== null
+                                ? (arg.supportingData || arg.field || arg.claim || '')
+                                : String(arg);
+                            if (!claimSupporting || !claimSupporting.trim()) {
+                                verification.pass = false;
+                                verification.feedback = 'Veto: Claim cites no field in the source data.';
+                                break;
+                            }
+                            const tokens = String(claimSupporting).toLowerCase().match(/[a-z0-9_]{3,}/g) || [];
+                            const citesField = tokens.some(tok => verificationSource.includes(tok));
+                            if (!citesField && tokens.length > 0) {
+                                verification.pass = false;
+                                verification.feedback = `Veto: Claim "${String(claimSupporting).slice(0, 80)}" cites no field in the source data.`;
+                                break;
+                            }
                         }
                     }
                 }

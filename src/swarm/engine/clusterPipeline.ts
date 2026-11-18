@@ -672,7 +672,10 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
                         const pickDescs = picks.map((pk: any) => {
                             const evId = pk.event_id || pk.eventId || pk.game_id || '';
                             if (evId) targetGameIdsSet.add(String(evId));
-                            const desc = [pk.row, pk.game || pk.match || evId, pk.pick || pk.selection || pk.team, pk.market, pk.confidence ? `(conf ${pk.confidence})` : '']
+                            const reasonStr = typeof pk.reason === 'string' && pk.reason.trim()
+                                ? `— ${pk.reason.trim().slice(0, 140)}`
+                                : (Array.isArray(pk.reasons) && pk.reasons.length > 0 ? `— ${String(pk.reasons[0]).trim().slice(0, 140)}` : '');
+                            const desc = [pk.row, pk.game || pk.match || evId, pk.side || pk.pick || pk.selection || pk.team, pk.market, pk.confidence ? `(conf ${pk.confidence})` : '', reasonStr]
                                 .filter(Boolean)
                                 .join(' ');
                             matchHeaderEventId(desc);

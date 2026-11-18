@@ -373,9 +373,16 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
 
     const parsed = ManagerResponseSchema.safeParse(raw);
     if (parsed.success) {
+        const rawAnalysisVal = typeof raw?.analysis === 'string' && raw.analysis.trim().length > 0
+            ? stripApproximateOdds(raw.analysis.trim(), { allowExactOdds: true })
+            : undefined;
         const cleanedData: ManagerResponse = {
             ...parsed.data,
             ...(parsed.data.summary ? { summary: stripApproximateOdds(parsed.data.summary, { allowExactOdds: true }) } : {}),
+            ...(rawAnalysisVal ? { analysis: rawAnalysisVal } : {}),
+            ...(Array.isArray(raw?.picks) ? { picks: raw.picks } : {}),
+            ...(Array.isArray(raw?.scorecards) ? { scorecards: raw.scorecards } : {}),
+            ...(typeof raw?.pass === 'boolean' ? { pass: raw.pass } : {}),
             components: parsed.data.components.map((comp) => {
                 if (comp.type === 'InsightList') {
                     return {
@@ -391,7 +398,7 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
                 }
                 return comp;
             })
-        };
+        } as ManagerResponse;
         if (!wasRepaired) return cleanedData;
         return {
             ...cleanedData,
@@ -487,6 +494,7 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
         ...(finalMetadata ? { metadata: finalMetadata } : {}),
         ...(raw && Array.isArray(raw.picks) ? { picks: raw.picks } : {}),
         ...(raw && Array.isArray(raw.scorecards) ? { scorecards: raw.scorecards } : {}),
+        ...(raw && typeof raw.pass === 'boolean' ? { pass: raw.pass } : {}),
         ...(raw && raw.status ? { status: raw.status } : {}),
         ...(raw && raw.reason ? { reason: raw.reason } : {}),
         _repaired: true

@@ -9,6 +9,7 @@ import {
     isValidCalendarDate,
     utf8ByteLength
 } from '../engine/historyScope.ts';
+import { resolveInjuryTeam } from '../tools/injuryAttribution.ts';
 
 export interface SupabaseReadOnlyConfig {
     supabaseUrl: string;
@@ -1206,10 +1207,18 @@ export function formatGameContextForPrompt(
         const g = sec.game;
         const lines: string[] = [];
 
+        const teamLabelMap = new Map<string, string>();
+        if (g.home_team_id && g.home_team) teamLabelMap.set(g.home_team_id, g.home_team);
+        if (g.away_team_id && g.away_team) teamLabelMap.set(g.away_team_id, g.away_team);
+
         const mapTeamLabel = (id: string): string => {
             if (id === g.home_team_id) return g.home_team || id;
             if (id === g.away_team_id) return g.away_team || id;
-            return id;
+            const resolved = resolveInjuryTeam(
+                { team_id: id },
+                { teamLabelMap, sportHint: g.sport || g.event_id, matchupTeams: [g.away_team, g.home_team] }
+            );
+            return resolved ? resolved.name : id;
         };
 
         const statusPart = g.status_at_capture ? ` | status=${g.status_at_capture}` : '';
@@ -1256,10 +1265,20 @@ export function formatGameContextForPrompt(
         }
 
         if (sec.injuries.length > 0) {
-            const injSummaries = sec.injuries.slice(0, 8).map((inj) => {
-                return `${sanitizePromptValue(mapTeamLabel(inj.team_id))}:${sanitizePromptValue(inj.player_name)}(${inj.status})`;
-            });
-            lines.push(`  Injuries: ${injSummaries.join(', ')}`);
+            const injSummaries = sec.injuries
+                .map((inj) => {
+                    const resolved = resolveInjuryTeam(
+                        { team_id: inj.team_id },
+                        { teamLabelMap, sportHint: g.sport || g.event_id, matchupTeams: [g.away_team, g.home_team] }
+                    );
+                    if (!resolved) return null;
+                    return `${sanitizePromptValue(resolved.name)}:${sanitizePromptValue(inj.player_name)}(${inj.status})`;
+                })
+                .filter((x): x is string => Boolean(x))
+                .slice(0, 8);
+            if (injSummaries.length > 0) {
+                lines.push(`  Injuries: ${injSummaries.join(', ')}`);
+            }
         }
 
         if (sec.weather) {

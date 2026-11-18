@@ -6,6 +6,7 @@
 
 import type { SwarmTool } from './types.ts';
 import { QdrantClient } from '@qdrant/js-client-rest';
+import { resolveInjuryTeam } from './injuryAttribution.ts';
 
 export interface SupabaseRpcConfig {
   supabaseUrl: string;
@@ -424,19 +425,36 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
       return 3;
     };
 
+    const sportHint = String(d.sport || ctxAny?.game?.sport || gameId || '');
+    const matchupTeams = [
+      d.away_team,
+      d.home_team,
+      d.away?.name,
+      d.home?.name,
+      ctxAny?.game?.away_team,
+      ctxAny?.game?.home_team
+    ].filter((t): t is string => typeof t === 'string' && Boolean(t.trim()));
+
     const grouped = new Map<string, { label: string; items: any[] }>();
+    const keptInjuries: any[] = [];
     for (const p of injuries) {
       if (!p || typeof p !== 'object') continue;
-      const rawTeamId = p.team_id !== undefined && p.team_id !== null ? String(p.team_id).trim() : '';
-      const directLabel = p.team_abbr || p.team_name || p.team || '';
-      const teamLabel = (typeof directLabel === 'string' && directLabel.trim())
-        ? directLabel.trim()
-        : (rawTeamId ? (teamLabelMap.get(rawTeamId) ?? rawTeamId) : 'Unknown');
-      const groupKey = rawTeamId || teamLabel;
-      if (!grouped.has(groupKey)) {
-        grouped.set(groupKey, { label: teamLabel, items: [] });
+      const resolved = resolveInjuryTeam(p, { teamLabelMap, sportHint, matchupTeams });
+      if (!resolved) {
+        // Drop injury if the tool result does not clearly identify the team
+        continue;
       }
-      grouped.get(groupKey)!.items.push(p);
+      const enriched = {
+        ...p,
+        team_abbr: p.team_abbr || resolved.abbr,
+        team_name: p.team_name || resolved.name
+      };
+      keptInjuries.push(enriched);
+      const groupKey = resolved.abbr || resolved.label;
+      if (!grouped.has(groupKey)) {
+        grouped.set(groupKey, { label: resolved.label, items: [] });
+      }
+      grouped.get(groupKey)!.items.push(enriched);
     }
 
     const injuryLines: string[] = [];
@@ -467,11 +485,11 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
       return val;
     };
     const cleanedData = Array.isArray(d)
-      ? stripSourceRef(d)
+      ? stripSourceRef(keptInjuries)
       : {
           ...d,
-          ...(Array.isArray(d.injuries) ? { injuries: stripSourceRef(d.injuries) } : {}),
-          ...(Array.isArray(d.players) ? { players: stripSourceRef(d.players) } : {})
+          ...(Array.isArray(d.injuries) ? { injuries: stripSourceRef(keptInjuries) } : {}),
+          ...(Array.isArray(d.players) ? { players: stripSourceRef(keptInjuries) } : {})
         };
 
     const summary = [

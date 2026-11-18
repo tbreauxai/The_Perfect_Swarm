@@ -14,6 +14,7 @@ import { TokenEstimator } from '../compression/tokenEstimator.ts';
 import { seatBudget } from '../context/promptBudget.ts';
 import { parseGameHeaders, renderHeaders, filterPicksByCoverage } from '../context/gameHeaders.ts';
 import { partitionTaskAndContract } from './analystExecution.ts';
+import { sanitizeMisattributedPicksAndText } from '../tools/injuryAttribution.ts';
 
 export interface SynthesisPipelineParams {
     task: string;
@@ -488,6 +489,10 @@ export async function executeManagerSynthesis(
     const finalResult = (isMorningJudge || (parsedManagerOutput && typeof parsedManagerOutput === 'object' && ('winProbHome' in parsedManagerOutput || 'win_prob_home' in parsedManagerOutput)))
         ? parsedManagerOutput
         : guardManagerResponse(parsedManagerOutput, "Executive Swarm Synthesis");
+
+    if (finalResult && typeof finalResult === 'object') {
+        sanitizeMisattributedPicksAndText(finalResult, safeDynamicPrompt, safeDynamicPrompt);
+    }
 
     if (coveredEventIds && Array.isArray(finalResult?.picks)) {
         const headers = parseGameHeaders(safeDynamicPrompt);
