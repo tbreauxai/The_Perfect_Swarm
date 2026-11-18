@@ -26,23 +26,34 @@ describe('Semantic cache disable (SEMANTIC_CACHE_ENABLED) & per-request bypass',
         globalSemanticCache.clear();
     });
 
-    it('defaults SEMANTIC_CACHE_ENABLED to true and disables on false/0', () => {
-        expect(isSemanticCacheEnabled()).toBe(true);
+    it('defaults SEMANTIC_CACHE_ENABLED to false and enables only on true/1', () => {
+        expect(isSemanticCacheEnabled()).toBe(false);
         process.env.SEMANTIC_CACHE_ENABLED = 'false';
         expect(isSemanticCacheEnabled()).toBe(false);
         process.env.SEMANTIC_CACHE_ENABLED = '0';
         expect(isSemanticCacheEnabled()).toBe(false);
         process.env.SEMANTIC_CACHE_ENABLED = 'true';
         expect(isSemanticCacheEnabled()).toBe(true);
+        process.env.SEMANTIC_CACHE_ENABLED = '1';
+        expect(isSemanticCacheEnabled()).toBe(true);
     });
 
-    it('skips semantic cache lookup when SEMANTIC_CACHE_ENABLED=false', () => {
+    it('skips semantic cache lookup by default and when SEMANTIC_CACHE_ENABLED=false', () => {
         globalSemanticCache.set(
             'best 3-leg parlay today.',
             { analysis: 'Cached parlay' },
             { data: 'board-1', configVersion: 'v1' },
         );
 
+        expect(
+            checkSemanticCacheMatch({
+                task: 'best 3-leg parlay today.',
+                data: 'board-1',
+                configVersion: 'v1',
+            }),
+        ).toEqual({ hit: false, similarity: 0 });
+
+        process.env.SEMANTIC_CACHE_ENABLED = 'true';
         expect(
             checkSemanticCacheMatch({
                 task: 'best 3-leg parlay today.',

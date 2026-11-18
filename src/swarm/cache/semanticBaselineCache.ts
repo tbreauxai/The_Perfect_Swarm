@@ -9,13 +9,13 @@ import { SemanticSimilarityEngine } from './semanticSimilarityEngine.ts';
 import { hashString } from './payloadCache.ts';
 
 /**
- * Returns true unless SEMANTIC_CACHE_ENABLED is explicitly disabled ('false', '0', 'off', 'no').
+ * Returns false by default unless SEMANTIC_CACHE_ENABLED is explicitly enabled ('true', '1', 'on', 'yes').
  */
 export function isSemanticCacheEnabled(): boolean {
     const raw = typeof process !== 'undefined' ? process.env?.SEMANTIC_CACHE_ENABLED : undefined;
-    if (raw === undefined || raw === '') return true;
+    if (raw === undefined || raw === '') return false;
     const normalized = String(raw).trim().toLowerCase();
-    return normalized !== 'false' && normalized !== '0' && normalized !== 'off' && normalized !== 'no';
+    return normalized === 'true' || normalized === '1' || normalized === 'on' || normalized === 'yes';
 }
 
 /**

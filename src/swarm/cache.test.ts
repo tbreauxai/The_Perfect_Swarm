@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
     SemanticSimilarityEngine,
     SemanticBaselineCache,
@@ -136,9 +136,20 @@ describe('PayloadCache Integration with Semantic Baseline Cache', () => {
 });
 
 describe('Engine Step 0c Semantic Cache Integration', () => {
+    const origEnv = process.env.SEMANTIC_CACHE_ENABLED;
+
     beforeEach(() => {
+        process.env.SEMANTIC_CACHE_ENABLED = 'true';
         globalSemanticCache.clear();
         globalPayloadCache.clear();
+    });
+
+    afterEach(() => {
+        if (origEnv === undefined) {
+            delete process.env.SEMANTIC_CACHE_ENABLED;
+        } else {
+            process.env.SEMANTIC_CACHE_ENABLED = origEnv;
+        }
     });
 
     it('serves near-identical workflow queries via Semantic Baseline Cache', async () => {
