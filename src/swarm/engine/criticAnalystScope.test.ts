@@ -26,6 +26,8 @@ describe('Step 4 Tests: Critic JSON Seat, Per-Game Tools, and Coverage Pruning',
     it('verifies getRoleToolNames for critic returns expected tools', () => {
       expect(getRoleToolNames('critic')).toEqual([
         'get_injury_and_roster_delta',
+        'get_market_movement',
+        'get_matchup_fundamentals',
         'get_environment_and_weather'
       ]);
     });

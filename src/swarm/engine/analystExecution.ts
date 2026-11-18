@@ -28,6 +28,7 @@ import { recordDegraded } from './partialResult.ts';
 import { AnalystScorecardSchema } from '../types.ts';
 import { runScorecardSeat, renderScorecardInstruction, scorecardAnalystMaxTokens, scorecardToAnalystReport, validateScorecard } from './scorecard.ts';
 import { parseGameHeaders, renderHeaders, type GameHeader } from '../context/gameHeaders.ts';
+import { filterHeadersByEventIds } from '../context/selectedGames.ts';
 import { runSeatWithTools, type ToolEvidenceItem } from './seatToolLoop.ts';
 import { GameQueryCache } from '../cache/gameQueryCache.ts';
 import { executeToolWithCacheAndTimeout } from './triageExecutor.ts';
@@ -306,7 +307,10 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
         analyst.setSystemInstruction(baseInstruction);
 
         const { userTask: cappedTask, contractBlock } = partitionTaskAndContract(task);
-        const parsedHeaders = parseGameHeaders(chunk || (config as any)?.rawBoard, (config as any)?.eventIds);
+        const allParsedHeaders = parseGameHeaders(chunk || (config as any)?.rawBoard, (config as any)?.eventIds);
+        const parsedHeaders = (isCritic && proposedAuditContext?.targetGameIds && proposedAuditContext.targetGameIds.length > 0)
+            ? filterHeadersByEventIds(allParsedHeaders, proposedAuditContext.targetGameIds)
+            : allParsedHeaders;
         const cappedFallbackChunk = chunk && chunk.length > 1600 ? chunk.slice(0, 1600) : chunk;
         const renderedHeadersText = parsedHeaders.length > 0
             ? renderHeaders(parsedHeaders, 1600)
@@ -363,10 +367,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
             const rawGameIds = parsedHeaders.map(h => h.eventId).filter(Boolean);
             let allGameIds = rankGameIdsBySupabaseEdge(rawGameIds, `${historicalContext || ''}\n${chunk || ''}`);
             if (isCritic && proposedAuditContext?.targetGameIds && proposedAuditContext.targetGameIds.length > 0) {
-                const targetSet = new Set(proposedAuditContext.targetGameIds);
-                const prioritized = proposedAuditContext.targetGameIds.filter(id => allGameIds.includes(id) || Boolean(id));
-                const remainder = allGameIds.filter(id => !targetSet.has(id));
-                allGameIds = [...prioritized, ...remainder];
+                allGameIds = Array.from(new Set(proposedAuditContext.targetGameIds.filter(Boolean)));
             }
 
             const isBettingSeat = /\b(a1|quant|a2|market)\b/i.test(seat.trim()) || /\b(a1|quant|a2|market)\b/i.test(analyst.role.trim());

@@ -18,7 +18,7 @@ describe('Seat Tool Loop (PS2 Role-Scoped 2-Round Execution)', () => {
   it('correctly maps seat roles to tools', () => {
     expect(getRoleToolNames('a1')).toEqual(['get_matchup_fundamentals', 'get_player_prop_splits']);
     expect(getRoleToolNames('a2')).toEqual(['get_market_movement']);
-    expect(getRoleToolNames('critic')).toEqual(['get_injury_and_roster_delta', 'get_environment_and_weather']);
+    expect(getRoleToolNames('critic')).toEqual(['get_injury_and_roster_delta', 'get_market_movement', 'get_matchup_fundamentals', 'get_environment_and_weather']);
   });
 
   it('completes in 1 round when Round 1 emits no tool calls', async () => {

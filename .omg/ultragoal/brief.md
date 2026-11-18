@@ -1,12 +1,10 @@
-# Ultragoal Brief: fix/prefetch-args-evidence
+# Ultragoal Brief: Critic Pulls Evidence Only for Analyzer-Selected Games
 
-- **Objective:** Prefetch `market_movement` with `market_type`; don't prefetch `get_player_prop_splits` without real `player_id` + `stat_category`; share a short injury summary with betting seats; strip approximate odds/percents/payouts from analysis text.
-- **Base Commit:** `ab9237bd` (Swarm `main` after #158)
-- **Branch:** `fix/prefetch-args-evidence`
+- **Objective:** Replace the Critic's reliance on a pre-passed, budget-truncated evidence bundle with direct, game-scoped tool pulls (`get_market_movement`, `get_injury_and_roster_delta`, `get_matchup_fundamentals`, `get_environment_and_weather`) exclusively for analyzer-selected games across both Stage 2 Risk Critic and Deep Analysis Verification Critic.
+- **Base Commit:** `45a765f` (`main`)
 - **Constraints:**
-  - Prep only: no deploy, no prod SQL/db push, no live LLM or provider calls, no secrets in code/logs, no migration.
-  - Node 22 strip-only TS (no param properties, enums, namespaces, import=require, decorators).
-  - Do not raise `promptBudget` caps (Groq maxToolCalls 6 / maxToolResultChars 2000 / maxPromptChars 5600; others 8 / 6000 / 14000).
-  - Missing != 0; never invent player ids, market types, odds, or percents.
-  - `git add <explicit files>` only (never `-A`). Never reset / checkout . / restore / clean / rebase / squash / force-push. Commit after each step.
-  - NEVER push to `main`; push only `fix/prefetch-args-evidence`. Do not merge Swarm between 9 and 10 PM CT.
+  - Dual Critic Stage Coverage: both Stage 2 Risk Critic and Deep Analysis Verification Critic are scoped exclusively to analyzer-selected games (`event_id` / row IDs) and never scan or pull tools for unselected slate games.
+  - Full Verification Tool Suite for Selected Games: `get_market_movement`, `get_injury_and_roster_delta`, `get_matchup_fundamentals`, `get_environment_and_weather` sharing query cache when available and fetching from tool registry when missing.
+  - Strict Verification Rule: a proposed leg fails only when the Critic's own tool pull lacks the cited market/injury/matchup fact or violates Injury Attribution Rule.
+  - Node 22 strip-only TS (no parameter properties, enums, namespaces, import=require, decorators).
+  - Preserve existing `seatBudget` caps and pass-field contract.

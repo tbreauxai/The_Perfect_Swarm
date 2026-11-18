@@ -6,6 +6,8 @@ import { globalSpecialistProfiler } from '../loadBalancer.ts';
 import { getManagerContextTokenCeiling } from './synthesisPipeline.ts';
 import { parseGameHeaders, renderHeaders, filterPicksByCoverage } from '../context/gameHeaders.ts';
 import { INJURY_ATTRIBUTION_RULE, sanitizeMisattributedPicksAndText } from '../tools/injuryAttribution.ts';
+import type { ToolRegistry } from '../tools/registry.ts';
+import type { GameQueryCache } from '../cache/gameQueryCache.ts';
 
 import type { SwarmEngineSettings } from '../types.ts';
 
@@ -22,6 +24,10 @@ export interface VerificationPipelineParams {
     settings?: SwarmEngineSettings;
     coveredEventIds?: string[];
     toolResults?: string;
+    appComputedCounts?: string;
+    toolRegistry?: ToolRegistry;
+    queryCache?: GameQueryCache;
+    toolOptions?: { env?: Record<string, string | undefined>; fetchFn?: typeof fetch; qdrantClient?: any };
 }
 
 export interface VerificationPipelineResult {
@@ -55,10 +61,14 @@ export async function runDeepAnalysisVerification(
     if (isMorningJudge) {
         criticAgent.setSystemInstruction(`You are the Swarm Verification Critic for Sports Betting Pre-game Judgment. Audit the proposed prediction strictly against the raw data, odds, injuries, and specialist reports. Ensure winProbHome (0.01-0.99), fairSpread, and likelyWinner are logically sound and formatted properly. Team names in Game Slate are authoritative; never rename or flag them.\n\n${INJURY_ATTRIBUTION_RULE}`);
     } else {
-        criticAgent.setSystemInstruction(`You are the Swarm Verification Critic. Audit proposed analyses strictly against the raw data, historical baselines, and analyst reports. Systematically evaluate and attempt to refute hypotheses formulated by specialists. Flag discrepancies, missed anomalies, ungrounded assumptions, or schema violations. VETO POLICY: Only fail ("pass": false) a betting proposal when a recommended pick leg itself has a fatal injury, fabricated stat/odds, missing coverage on that leg, or direct rule violation; do not veto valid proposed picks just because other unpicked games on the slate have heavy injuries or incomplete roster data. Team names in Game Slate are authoritative; never rename or flag them.\n\n${INJURY_ATTRIBUTION_RULE}`);
+        criticAgent.setSystemInstruction(`You are the Swarm Verification Critic. Audit proposed analyses strictly against the raw data, historical baselines, and analyst reports. Systematically evaluate and attempt to refute hypotheses formulated by specialists. Flag discrepancies, missed anomalies, ungrounded assumptions, or schema violations. VETO POLICY: Only fail ("pass": false) a betting proposal when a recommended pick leg itself has a fatal injury, fabricated stat/odds, missing coverage on that leg, or direct rule violation; do not veto valid proposed picks just because other unpicked games on the slate have heavy injuries or incomplete roster data. Team names in Game Slate are authoritative; never rename or flag them.\n\nCRITIC SCOPE:\n- You may call tools to verify evidence.\n- Only pull evidence for the games/legs the analyzers proposed.\n- Do not scan the full slate.\n- A leg fails only if your own tool pull for that game does not support the cited market or injury.\n- Do not reject a leg solely because a prior evidence bundle was incomplete.\n\n${INJURY_ATTRIBUTION_RULE}`);
     }
 
-    const lifecycle = new AnalysisLifecycle(managerAgent, criticAgent, 2);
+    const lifecycle = new AnalysisLifecycle(managerAgent, criticAgent, 2, {
+        toolRegistry: p.toolRegistry,
+        queryCache: p.queryCache,
+        toolOptions: p.toolOptions
+    });
     context.addEvent({
         agentRole: 'Analysis Lifecycle',
         action: 'Deep Analysis Verification Loop Started',

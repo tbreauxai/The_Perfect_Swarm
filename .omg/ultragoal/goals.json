@@ -1,40 +1,33 @@
 {
-  "activeGoalId": "goal-5-tests-verify-pr",
+  "activeGoalId": "goal-4-tests-and-verify",
   "goals": [
     {
-      "id": "goal-1-market-type-prefetch",
-      "title": "Step 1: Pass market_type on get_market_movement prefetch",
-      "description": "In src/swarm/engine/seatToolLoop.ts buildPrefetchCalls, always pass market_type for get_market_movement (all|spread|total|ml mapped from spreads/totals/moneyline/h2h, default 'all').",
+      "id": "goal-1-selected-game-resolver",
+      "title": "Selected Game Resolver: Map proposed legs & cited rows to selected event_ids",
+      "description": "Implement/update deterministic Selected Game Resolver to extract unique event_ids from proposed picks/legs (event_id, game_id, row, match, side, selection) and scorecard citations mapped against parsed slate headers, dropping unselected slate games.",
       "status": "completed",
-      "verificationCriteria": "A 6-game Market prefetch sends market_type on every call and never returns invalid_market_type."
+      "verificationCriteria": "Unit test confirms selected event_ids are extracted from picks/scorecards and unselected slate games excluded."
     },
     {
-      "id": "goal-2-skip-unkeyed-prop-splits",
-      "title": "Step 2: Skip unkeyed prop splits and cover all games with primary tool first",
-      "description": "Do not prefetch get_player_prop_splits unless real player_id and stat_category are known from slate prop rows. Quant prefetches get_matchup_fundamentals for all slate games first, then get_injury_and_roster_delta with remaining maxToolCalls. Market prefetches get_market_movement for all games first, then injury with leftover calls.",
+      "id": "goal-2-stage2-critic-scoping",
+      "title": "Stage 2 Risk Critic Seat Scoping & Tool Suite + CRITIC SCOPE prompt",
+      "description": "In analystExecution.ts / seatToolLoop.ts / constants.ts, restrict Stage 2 Risk Critic allGameIds strictly to proposedAuditContext.targetGameIds, filter board headers to selected games, grant get_market_movement, get_injury_and_roster_delta, get_matchup_fundamentals, get_environment_and_weather, and add CRITIC SCOPE prompt rule.",
       "status": "completed",
-      "verificationCriteria": "6-game game-line Quant prefetch has 0 prop-split calls, 6 fundamentals, and no invented player_id."
+      "verificationCriteria": "Stage 2 Critic receives only selected game headers/IDs, pulls tools for selected games only, and preserves pass-field & injury attribution rules."
     },
     {
-      "id": "goal-3-shared-injury-evidence",
-      "title": "Step 3: Share short per-game injury evidence with Quant and Market",
-      "description": "In analystExecution.ts / shared pre-seat prefetch (using GameQueryCache), share a short Injury evidence block on betting-seat prompts within existing maxPromptChars/maxToolResultChars caps without raw board.",
+      "id": "goal-3-verification-critic-scoped-pulls",
+      "title": "Deep Analysis Verification Critic Loop Scoped Tool Pulls",
+      "description": "In lifecycle.ts / verificationPipeline.ts / engine/index.ts, extract proposed leg event_ids before Critic verification, pull get_market_movement, get_injury_and_roster_delta, get_matchup_fundamentals for those selected games via tool registry/cache, build [Tool Evidence] and [Raw Board Sample] exclusively from selected games, and include verified games in coveredEventIds.",
       "status": "completed",
-      "verificationCriteria": "Quant/Market prompt contains short injury summary (e.g. Lamar Jackson OUT) without raw board."
+      "verificationCriteria": "Multi-sport parlay (e.g. Lakers -7.5, Clippers -6.5, Dallas ML) pulls evidence for all selected games and passes verification without false truncation vetoes."
     },
     {
-      "id": "goal-4-strip-approximate-odds",
-      "title": "Step 4: Strip approximate odds, percents, and payouts from analysis text",
-      "description": "In responseGuards.ts guardAnalystResponse and guardManagerResponse, strip ~65%, ~+650, ~=, 'about +650' from insights/summary/analysis/verdict without replacing with defaults or altering toolEvidence/slate prices.",
+      "id": "goal-4-tests-and-verify",
+      "title": "Tests & Full Verification (tsc, vitest, smoke-start)",
+      "description": "Add comprehensive tests for dual-stage Critic scoping and multi-sport parlays; run npx tsc --noEmit, npx vitest run, and node scripts/smoke-start.mjs.",
       "status": "completed",
-      "verificationCriteria": "~65% and ~+650 stripped from guarded Quant/manager text while real prices in toolEvidence remain."
-    },
-    {
-      "id": "goal-5-tests-verify-pr",
-      "title": "Step 5: Tests, verification, push branch, and open PR",
-      "description": "Add tests (A-D) under src/__repro__/ or seat/guard tests, verify with tsc/vitest/smoke-start, push fix/prefetch-args-evidence, and open PR.",
-      "status": "completed",
-      "verificationCriteria": "All new/touched tests pass; tsc & smoke pass; PR opened on GitHub."
+      "verificationCriteria": "tsc --noEmit, full vitest run, and smoke-start pass."
     }
   ]
 }

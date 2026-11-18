@@ -5,7 +5,13 @@ import { redactForLog } from './parser/responseGuards.ts';
 import { groqPromptCharCap } from './providers/groq.ts';
 import { seatBudget } from './context/promptBudget.ts';
 import { parseGameHeaders, renderHeaders, filterPicksByCoverage } from './context/gameHeaders.ts';
+import { resolveSelectedGameIds, filterHeadersByEventIds } from './context/selectedGames.ts';
 import { auditInjuryAttribution } from './tools/injuryAttribution.ts';
+import type { ToolRegistry } from './tools/registry.ts';
+import { GameQueryCache } from './cache/gameQueryCache.ts';
+import { executeToolWithCacheAndTimeout } from './engine/triageExecutor.ts';
+import { buildVerifierEvidence } from './engine/verifierEvidence.ts';
+import type { ToolEvidenceItem } from './engine/seatToolLoop.ts';
 
 import type { VerificationResult } from './types.ts';
 export type { VerificationResult };
@@ -23,21 +29,35 @@ export interface LifecycleExecutionResult {
     finalProposal: any;
     criticFeedback?: string;
     computedRating: number;
+    verifiedEventIds?: string[];
+}
+
+export interface AnalysisLifecycleOptions {
+    toolRegistry?: ToolRegistry;
+    queryCache?: GameQueryCache;
+    toolOptions?: { env?: Record<string, string | undefined>; fetchFn?: typeof fetch; qdrantClient?: any };
 }
 
 export class AnalysisLifecycle {
     private proposer: Agent;
     private critic: Agent;
     private maxRetries: number;
+    private toolRegistry?: ToolRegistry;
+    private queryCache?: GameQueryCache;
+    private toolOptions?: { env?: Record<string, string | undefined>; fetchFn?: typeof fetch; qdrantClient?: any };
 
     constructor(
         proposer: Agent,
         critic: Agent,
-        maxRetries: number = 3
+        maxRetries: number = 3,
+        options?: AnalysisLifecycleOptions
     ) {
         this.proposer = proposer;
         this.critic = critic;
         this.maxRetries = maxRetries;
+        this.toolRegistry = options?.toolRegistry;
+        this.queryCache = options?.queryCache;
+        this.toolOptions = options?.toolOptions;
     }
 
     /**
@@ -72,6 +92,7 @@ export class AnalysisLifecycle {
         let attempt = 0;
         let currentProposal: any = null;
         let feedback = "";
+        const verifiedEventIdsSet = new Set<string>(coveredEventIds || []);
 
         const effectiveCoveredEventIds: string[] | undefined =
             coveredEventIds || (Array.isArray(rawData?.coveredEventIds) ? rawData.coveredEventIds : undefined);
@@ -140,9 +161,78 @@ export class AnalysisLifecycle {
                 ? `${proposalText.slice(0, PROPOSAL_MAX).trimEnd().replace(/\s+\S*$/, '')}…[truncated]`
                 : proposalText;
 
-            const toolResults = typeof rawData === 'object' && rawData && 'toolResults' in rawData
+            const prePassedToolResults = typeof rawData === 'object' && rawData && 'toolResults' in rawData
                 ? toSampleText((rawData as any).toolResults)
                 : '';
+
+            const allParsedHeaders = parseGameHeaders(rawData);
+            const selectedGameIds = resolveSelectedGameIds(currentProposal, allParsedHeaders);
+            const scopedHeaders = selectedGameIds.length > 0
+                ? filterHeadersByEventIds(allParsedHeaders, selectedGameIds)
+                : allParsedHeaders;
+
+            let scopedToolResults = '';
+            if (this.toolRegistry && selectedGameIds.length > 0) {
+                const criticTools = [
+                    'get_market_movement',
+                    'get_injury_and_roster_delta',
+                    'get_matchup_fundamentals',
+                    'get_environment_and_weather'
+                ].filter(t => this.toolRegistry!.has(t));
+                if (criticTools.length > 0) {
+                    const cache = this.queryCache ?? new GameQueryCache();
+                    const headerById = new Map(allParsedHeaders.map(h => [h.eventId, h]));
+                    const pullCalls = selectedGameIds.flatMap(gId =>
+                        criticTools.map(tool => ({ tool, gId }))
+                    );
+                    const pulledItems: ToolEvidenceItem[] = [];
+                    await Promise.all(
+                        pullCalls.map(async ({ tool, gId }) => {
+                            const hdr = headerById.get(gId);
+                            const opts = hdr
+                                ? {
+                                      ...this.toolOptions,
+                                      game: {
+                                          event_id: hdr.eventId,
+                                          home_team: hdr.home,
+                                          away_team: hdr.away,
+                                          home_team_abbr: hdr.home,
+                                          away_team_abbr: hdr.away
+                                      }
+                                  }
+                                : this.toolOptions;
+                            const params: Record<string, unknown> = tool === 'get_market_movement'
+                                ? { game_id: gId, market_type: 'all' }
+                                : { game_id: gId };
+                            const res = await executeToolWithCacheAndTimeout(
+                                { tool, parameters: params },
+                                { game_id: gId },
+                                this.toolRegistry!,
+                                cache,
+                                1500,
+                                opts
+                            );
+                            if (res?.success === true && typeof res.summary === 'string' && res.summary.trim().length > 0) {
+                                pulledItems.push({ tool, eventId: gId, summary: res.summary.trim() });
+                                verifiedEventIdsSet.add(gId);
+                            }
+                        })
+                    );
+                    if (pulledItems.length > 0) {
+                        scopedToolResults = buildVerifierEvidence([{ toolEvidenceItems: pulledItems }], rawData)
+                            || pulledItems.map(i => i.summary).join('\n\n');
+                        context.addEvent({
+                            agentRole: this.critic.role,
+                            action: 'Scoped Critic Tool Pulls',
+                            modelName: this.critic.modelName,
+                            prompt: `selectedGames=${selectedGameIds.length}`,
+                            output: { selectedGameIds, toolsPulled: pulledItems.length }
+                        });
+                    }
+                }
+            }
+
+            const toolResults = scopedToolResults || prePassedToolResults;
             const rawAnalystReports = typeof rawData === 'object' && rawData && 'analystReports' in rawData
                 ? (rawData as any).analystReports
                 : undefined;
@@ -161,9 +251,11 @@ export class AnalysisLifecycle {
             const historicalBaselines = typeof rawData === 'object' && rawData && 'historicalBaselines' in rawData
                 ? toSampleText((rawData as any).historicalBaselines)
                 : '';
-            const rawBoard = typeof rawData === 'object' && rawData && 'rawBoard' in rawData
-                ? toSampleText((rawData as any).rawBoard)
-                : (typeof rawData === 'string' ? rawData : '');
+            const rawBoard = (selectedGameIds.length > 0 && scopedHeaders.length > 0)
+                ? renderHeaders(scopedHeaders, 1600)
+                : (typeof rawData === 'object' && rawData && 'rawBoard' in rawData
+                    ? toSampleText((rawData as any).rawBoard)
+                    : (typeof rawData === 'string' ? rawData : ''));
 
             const appComputedCounts = typeof rawData === 'object' && rawData && 'appComputedCounts' in rawData
                 ? toSampleText((rawData as any).appComputedCounts)
@@ -246,10 +338,8 @@ export class AnalysisLifecycle {
             // Deterministic Critic Check: A claim that cites no field in the game slate or tool results,
             // or attributes an injury to the wrong team (INJURY ATTRIBUTION RULE), is a veto.
             if (currentProposal) {
-                const slateHeaders = renderHeaders(parseGameHeaders(rawData));
-                const toolResultsSummary = typeof rawData === 'object' && rawData && 'toolResults' in rawData
-                    ? String((rawData as any).toolResults)
-                    : '';
+                const slateHeaders = renderHeaders(scopedHeaders);
+                const toolResultsSummary = toolResults;
                 const allowedSourceText = `${slateHeaders}\n${toolResultsSummary}`.trim();
                 const fallbackBoardText = typeof rawData === 'string'
                     ? rawData
@@ -309,7 +399,8 @@ export class AnalysisLifecycle {
                     attempts: attempt,
                     finalProposal: currentProposal,
                     criticFeedback: verification.feedback,
-                    computedRating
+                    computedRating,
+                    verifiedEventIds: Array.from(verifiedEventIdsSet)
                 };
             } else {
                 feedback = verification.feedback || "Proposal failed verification without specific feedback.";
@@ -337,7 +428,8 @@ export class AnalysisLifecycle {
             attempts: attempt,
             finalProposal: currentProposal,
             criticFeedback: feedback,
-            computedRating
+            computedRating,
+            verifiedEventIds: Array.from(verifiedEventIdsSet)
         };
     }
 }

@@ -82,8 +82,8 @@ export function getRoleToolNames(seat: string): string[] {
   if (norm === 'a2' || norm === 'market') {
     return ['get_market_movement'];
   }
-  if (norm === 'critic' || norm === 'risk' || norm === 'risk_critic') {
-    return ['get_injury_and_roster_delta', 'get_environment_and_weather'];
+  if (norm === 'critic' || norm === 'risk' || norm === 'risk_critic' || norm.includes('critic') || norm.includes('risk')) {
+    return ['get_injury_and_roster_delta', 'get_market_movement', 'get_matchup_fundamentals', 'get_environment_and_weather'];
   }
   return ['get_matchup_fundamentals', 'get_market_movement'];
 }
@@ -206,6 +206,29 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     const calls: { tool: string; parameters: Record<string, unknown> }[] = [];
     const targetGames = gameIds.length > 0 ? gameIds : [gameId];
     const availableTools = tools.filter(t => registry.has(t));
+
+    if (isCriticSeat(seat)) {
+      const orderedCriticTools = [
+        ...availableTools.filter(t => t === 'get_injury_and_roster_delta'),
+        ...availableTools.filter(t => t === 'get_market_movement'),
+        ...availableTools.filter(t => t === 'get_matchup_fundamentals'),
+        ...availableTools.filter(t => t !== 'get_injury_and_roster_delta' && t !== 'get_market_movement' && t !== 'get_matchup_fundamentals')
+      ];
+      for (const t of orderedCriticTools) {
+        for (const gId of targetGames) {
+          if (calls.length >= budget.maxToolCalls) break;
+          if (t === 'get_market_movement') {
+            const mType = resolvePrefetchMarketType(params.marketTypesByGame?.[gId] ?? params.marketType);
+            calls.push({ tool: t, parameters: { game_id: gId, market_type: mType } });
+          } else {
+            calls.push({ tool: t, parameters: { game_id: gId } });
+          }
+        }
+        if (calls.length >= budget.maxToolCalls) break;
+      }
+      return calls;
+    }
+
     const coreTools = ['get_injury_and_roster_delta', 'get_matchup_fundamentals'].filter(t => availableTools.includes(t));
     const extraTools = availableTools.filter(t => t !== 'get_injury_and_roster_delta' && t !== 'get_matchup_fundamentals');
 

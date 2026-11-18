@@ -1,39 +1,79 @@
-The*Perfect_Swarm | ONE PR | fix/tool-rpc-params | base 2c0729e67d27fc07d4960b5244dcd838e7516a1d ("groq fix" = origin/main HEAD and the live Render deploy, rechecked Nov 14 10:3x AM CT) | SWARM ONLY, one pass
-GIT: git fetch origin && [ -z "$(git status --porcelain --untracked-files=no)" ] (else STOP; the untracked audit_runbook_perfect_swarm.md is fine, leave it untracked, never add it) && git checkout main && git pull --ff-only (REQUIRED: local main is at 935bfaf, Sep 30, ~420 commits behind; it is an ancestor so ff-only works) && git merge-base --is-ancestor 2c0729e67d27fc07d4960b5244dcd838e7516a1d HEAD (else STOP) && [ -z "$(git branch --list fix/tool-rpc-params)" ] (else STOP) && git checkout -b fix/tool-rpc-params
-RULES: commit after each step with explicit `git add <files>` (never -A). Never reset, checkout ., restore, clean, rebase, squash or force-push. Node 22 strip-only TS (no parameter properties, enums, namespaces, import=require or decorators). No secrets; mocked fetch only (0 Supabase/LLM calls). Missing != zero; no fabrication.
-WHY: Code Auditor 1:42 PM CST (audit_runbook_duelodds.md L5086). PostgREST matches RPC args by name and every SQL arg is p*-prefixed, so the unprefixed bodies get PGRST202 for all 5 tools.
-Bodies on main @2c0729e6 in src/swarm/tools/dueloddsRpcTools.ts (722 lines): L144, L216, L328-333, L420, L511 (rechecked Nov 14; the runbook's L146/218/331/422/513 are 0-2 lines off).
-MAPPING (exact; DuelOdds PR #224 merged Nov 14 and LIVE in prod, read-only pg_proc check Nov 14 10:3x AM CT: all 5 exist, STABLE, EXECUTE granted to anon only):
-get_matchup_fundamentals_v1(p_game_id TEXT, p_window TEXT='L10')
-get_injury_and_roster_delta_v1(p_game_id TEXT, p_position_group TEXT=NULL)
-get_player_prop_splits_v1(p_player_id TEXT, p_stat_category TEXT, p_last_n INT=10, p_line NUMERIC=NULL)
-get_environment_and_weather_v1(p_game_id TEXT)
-get_market_movement_v1(p_game_id TEXT, p_market_type TEXT='all'; accepts spread|total|ml|h2h|all)
-STEPS (file | function | action | done-when):
+Swarm Fix: Critic Pulls Evidence Only for Analyzer-Selected Games
+Ensure the Swarm Critic (both the Stage 2 Risk Critic and the Deep Analysis Verification Critic) scopes its evaluation strictly to the games/legs proposed by the analyzers and pulls its own authoritative tool evidence (get_market_movement, get_injury_and_roster_delta, get_matchup_fundamentals, etc.) for those selected games rather than relying on a truncated or incomplete pre-passed evidence bundle.
+User Review & Critical Decisions
+Since the clarification prompt was skipped, this plan uses the recommended defaults below so both Critic stages behave consistently across multi-sport slates (such as NBA + NHL parlays).
+Confirmed Default 1 — Dual Critic Stage Coverage: Both the Stage 2 Risk Critic seat and the Deep Analysis Verification Critic loop are scoped exclusively to the analyzer-selected games (event_id / row IDs) and never scan or pull tools for unselected slate games.
+Confirmed Default 2 — Full Verification Tool Suite for Selected Games: The Critic is granted access to get_market_movement, get_injury_and_roster_delta, get_matchup_fundamentals, and get_environment_and_weather for the analyzer-selected games, pulling fresh/cached tool evidence per proposed leg before rendering its verdict.
+Confirmed Default 3 — Strict Verification Rule: A proposed leg fails verification only when the Critic's own tool pull for that specific game lacks the cited market, injury, or matchup fact (or violates the Injury Attribution Rule), never because an earlier evidence bundle was truncated or omitted a sport/game.
 
-1. [x] src/swarm/tools/dueloddsRpcTools.ts | the 5 callSupabaseRpc calls | send exactly the mapping keys: game_id->p_game_id, window->p_window, position_group->p_position_group, player_id->p_player_id, stat_category->p_stat_category, last_n->p_last_n (integer: Math.trunc), line->p_line, market_type->p_market_type
-   Omit optional keys when unset, as today. Keep the tool-facing arg names (game_id etc.) unchanged for the LLM.
-   Also resolveSupabaseRpcConfig L18-37: drop the SUPABASE_SERVICE_ROLE_KEY / SUPABASE_SERVICE_KEY fallbacks (L27-28) and reject a key equal to the service key or containing 'service_role' (same rule as getSupabaseReadOnlyConfig, src/swarm/morning/gameContext.ts L251-281). This is publishable key only, so the RPCs run as anon, the only role granted EXECUTE after the DuelOdds PR
-   | done-when: `rg -n "\{ game_id:|player_id: playerId|market_type: marketType" src/swarm/tools/dueloddsRpcTools.ts` matches only result objects, not RPC bodies. Commit "fix(tools): send p*-prefixed RPC args, publishable key only".
-2. [x] same file | getPlayerPropSplitsTool L346-372 | read the SQL keys: sample_size, mean, median, iqr, hit_rate_pct (already a %), home_hit_rate_pct, away_hit_rate_pct, recent_logs[] of {date,val,min,home}
-   Remove the `?? args.last_n` sample fallback (L349), the d.hit_rate\*100 and d.over_count/variance reads, and the join of objects (L353-357).
-   player_game_logs has 0 rows in prod, so sample_size 0 / null stats is the live path. Return success true, data d, empty:true, summary "[PLAYER PROP SPLITS: <id> | <stat>] No game logs available (sample 0); no splits." No 0% hit rate, no invented sample
-   | done-when: the 0-row mock yields that summary. Commit "fix(tools): prop splits empty-valid on 0 logs, no fabricated sample".
-3. [x] same file | getMarketMovementTool L524-551 | read {opening, latest, line_delta, deltas, snapshots_tracked} from the new SQL shape (opening.spread/total/ml_home)
-   Remove the invented '-110' prices (L526/L528), the '0' delta fallback (L529-533) and the steam 0 (L535); missing -> 'N/A'. Map tool arg 'ml'/'moneyline' through unchanged (SQL normalizes). snapshots_tracked 0 -> empty:true, "no FanDuel snapshots"
-   | done-when: no '-110' literal left in the file. Commit "fix(tools): market movement reads real FanDuel fields, no default prices".
-4. [x] TESTS | fixtures/duelodds_tool_rpc_signatures_v1.json (new) + tests/contract/toolRpcParams.test.ts (new) + update src/swarm/tools/dueloddsRpcTools.test.ts
-   Fixture: {source:"tbreauxai/DuelOdds supabase/migrations/<phase2_readonly_tool_rpcs>.sql + <phase2_tool_canonical_aliases>.sql (20261109000000/20261113130000 today; 20261114154045/20261114154050 after the reconcile PR)", source_commit:"6f71c6ac78c18f459c473dc3a485d5a594ffcf15 (DuelOdds main, Nov 14)", functions:{name:{args:[{name,type,required}]}}}
-   Copy it from the 5 CREATE FUNCTION headers = the MAPPING above (the Swarm repo can't see DuelOdds), and add a header note: "regenerate if the DuelOdds signatures change".
-   Contract test: for each of the 5 tools, call execute with all args through a mocked fetchFn and capture URL + JSON body. Assert the RPC name is in the fixture, Object.keys(body) is a subset of the fixture arg names, every required arg is present, and every key starts with p*.
-   Also a minimal-args call (no window/last_n/line/position_group) sends only required keys.
-   Update the existing tests L80-81, L122-123, L169-172 to the p* keys; replace the L175-177 hit_rate/sample_size mock and the L285-305 '-110' expectations with the real SQL shapes; add 0-log props and 0-snapshot market cases
-   A service-role-only env -> supabase_not_configured. Commit "test(tools): RPC arg contract vs DuelOdds migration signatures".
-   SMOKE: npm run build && node scripts/smoke-start.mjs (Dockerfile CMD `node --experimental-strip-types server.ts`) -> "[smoke] GET /api/health -> 200" + "[smoke] PASS".
-   VERIFY ONCE: env -u SWARM_APP_TOKEN npx vitest run (paste the real totals, never invent them); npm run lint (= tsc --noEmit); npx tsc --noEmit --erasableSyntaxOnly --verbatimModuleSyntax -p . (TS1484 lines already on main are not new); npm run build; npx oxlint if present (otherwise "not present"); the smoke test
-   secret scan: git diff main | rg -n "sk-or-v1-[A-Za-z0-9]{20,}|service_role|eyJ[A-Za-z0-9*-]{20,}|gsk*[A-Za-z0-9]{20,}" returns nothing outside the literal 'service_role' guard string and its test.
-   Paste git log --oneline main..HEAD and git diff --stat main; confirm the diff is non-empty. Then: git push -u origin fix/tool-rpc-params && gh pr create --base main --title "fix(tools): p*-prefixed DuelOdds RPC args + contract test, no fabricated props/movement". No auto-merge.
-   NEVER push to main; push only the feature branch.
-   TYLER: ORDER IS SATISFIED: both RPC migrations are applied in prod (recorded as 20261114154045 + 20261114154050; the 5 \_v1 functions take p_game_id/p_window, p_position_group, p_player_id/p_stat_category/p_last_n/p_line, p_market_type). Merge any time except 9-10 PM CT; it does not wait on the reconcile PR.
-   Render srv-dan9l6ek1f9s73fvd6a0 auto-deploys on merge, so merge = deploy; approve in Code Auditor's chat. Don't merge between 9 and 10 PM CT. Afterwards GET https://the-perfect-swarm.onrender.com/api/health -> 200, then run one chat parlay and look for no PGRST202 in Render logs.
-   Rollback: the Render deploy for 2c0729e6 (live since Nov 13 ~1:04 PM CT; record its dep- id before merging). No DB, KV, env or flag changes.
+1. Overview & Core Concept
+   What It Does: Replaces the Critic's reliance on a pre-passed, budget-truncated evidence string with direct, game-scoped tool pulls for the exact games selected by the analyzers.
+   Target Audience / Persona: DuelOdds Swarm analysis consumers requesting multi-sport or multi-leg parlay recommendations (e.g., NBA spreads like Lakers -7.5 and Clippers -6.5 combined with NHL moneyline legs like Dallas ML).
+   Key Value: Eliminates false-negative Critic vetoes caused by prompt budget truncation (where later games on a slate were dropped from the pre-passed evidence bundle, causing the Critic to claim "evidence only contains NHL events" and driving RLAIF down to 35%).
+2. User Experience & Visual Design
+   Key User Flows:
+   Analyzer Proposal Phase: Specialist seats (Quant / Market) evaluate the slate and propose specific legs (e.g., Lakers -7.5, Clippers -6.5, Dallas ML).
+   Scoped Critic Evidence Pull: The Critic extracts the exact game IDs / row IDs referenced by the proposed legs, filters out unselected slate games, and pulls get_market_movement, get_injury_and_roster_delta, and get_matchup_fundamentals specifically for those selected games.
+   Targeted Verification & Verdict: The Critic verifies each leg against the evidence pulled for that game. Valid legs supported by tool data pass on Attempt 1 (98% RLAIF rating) without false "missing coverage" rejections.
+   Visual Identity & Theme:
+   Aesthetic Direction: Utilitarian, high-signal Swarm telemetry and diagnostic clarity.
+   Color Palette & Mood: Preserves the existing dark-mode console theme (--background, --primary, --accent) with clean verification status indicators.
+   Typography & Hierarchy: Monospace telemetry traces paired with structured JSON recommendation outputs.
+   Component Styling & Layout: Existing Swarm dashboard and API response contracts remain unchanged while verification reliability improves.
+   Interactive Feedback & Motion: Swarm trace events log the Critic's scoped game list and tool pulls so operators can inspect the exact per-game evidence verified during each run.
+3. Key Product Decisions & Trade-Offs
+   Decision 1 — Scoped Per-Game Tool Pulls in Critic Verification
+   Chosen Approach: Extract the unique event_ids from the analyzer-selected picks/legs and have the Critic pull get_market_movement, get_injury_and_roster_delta, and get_matchup_fundamentals (sharing the run's query cache when available and fetching live from the tool registry when missing) exclusively for those selected games.
+   Why: Guarantees that every proposed leg has complete market (spreads, totals, ml_home/ml_away), injury, and matchup evidence in the Critic's context, even on large multi-sport slates where a full-slate bundle would be truncated.
+   Alternatives Considered: Increasing the global prompt budget for pre-passed bundles was rejected because large slates still hit provider token ceilings and waste tokens on games the analyzers didn't pick.
+   Decision 2 — Restricting Critic Slate Context to Selected Games
+   Chosen Approach: Pass only the analyzer-selected game headers and selected-game tool results to the Critic, removing unselected remainder games from the Critic's prefetch queue and verification prompt.
+   Why: Prevents the Critic from wasting tool call capacity on unpicked games or hallucinating missing coverage from unrelated slate rows.
+4. Technical Architecture & Data Strategy (Technical Reference)
+   Architecture & Component Diagram:
+   Code
+   ┌─────────────────────────────────────────────────────────────────────────┐
+   │ Analyzer Seats (Quant / Market) │
+   │ Propose candidate legs (e.g. Lakers -7.5, Clippers -6.5, Dallas ML) │
+   └───────────────────────────────────┬─────────────────────────────────────┘
+   │
+   ▼
+   ┌─────────────────────────────────────────────────────────────────────────┐
+   │ Selected Game Resolver (Event ID / Row Mapper) │
+   │ Maps proposed legs & cited rows -> Selected Game IDs ONLY │
+   │ (Drops unselected slate games from Critic scope) │
+   └─────────────────┬───────────────────────────────────┬───────────────────┘
+   │ │
+   ▼ ▼
+   ┌───────────────────────────────────┐ ┌───────────────────────────────────┐
+   │ Stage 2 Risk Critic Seat │ │ Deep Analysis Verification Loop │
+   │ • Receives selected games only │ │ • Extracts proposal leg game IDs │
+   │ • Pulls market, injury, matchup │ │ • Pulls market, injury, matchup │
+   │ tools for selected games only │ │ tools for proposed legs only │
+   │ • Enforces CRITIC SCOPE & │ │ • Verifies legs against Critic's │
+   │ INJURY ATTRIBUTION RULE │ │ own per-game tool evidence │
+   └─────────────────┬─────────────────┘ └─────────────────┬─────────────────┘
+   │ │
+   └──────────────────┬──────────────────┘
+   ▼
+   ┌─────────────────────────────────────────────────────────────────────────┐
+   │ Verified Swarm Recommendation Output │
+   │ • Grounded spreads (Lakers -7.5, Clippers -6.5) & ML (Dallas ml_home) │
+   │ • Preserves pass-field contract & injury attribution enforcement │
+   └─────────────────────────────────────────────────────────────────────────┘
+   Data Model & State:
+   Selected Game Scope: Derived deterministically from picks (event_id, game_id, row, match, side, selection) and scorecard citations mapped against parsed slate headers.
+   Critic Tool Set: Includes get_market_movement, get_injury_and_roster_delta, get_matchup_fundamentals, and get_environment_and_weather scoped strictly to the selected game IDs.
+   Prompt Rule (CRITIC SCOPE):
+   Code
+   CRITIC SCOPE:
+
+- You may call tools to verify evidence.
+- Only pull evidence for the games/legs the analyzers proposed.
+- Do not scan the full slate.
+- A leg fails only if your own tool pull for that game does not support the cited market or injury.
+- Do not reject a leg solely because a prior evidence bundle was incomplete.
+  Interactive Component & State Mapping:
+  Stage 2 Risk Critic Execution: When proposedAuditContext.targetGameIds is populated from Stage 1 analyzer proposals, the Critic's allGameIds list is restricted strictly to targetGameIds (never appending unselected remainder games), its board headers are filtered to those games, and its tool pulls fetch market, injury, and matchup data for those games only.
+  Verification Critic Loop: Before evaluating a manager/proposer proposal, the lifecycle extracts the event IDs of all proposed legs, executes/resolves tool pulls (get_market_movement, get_injury_and_roster_delta, get_matchup_fundamentals) for those specific games via the tool registry, and builds the Critic's [Tool Evidence] and [Raw Board Sample] exclusively from the selected games.
+  Coverage & Grounding Preservation: Any game verified by the Critic's own tool pull is included in coveredEventIds so valid legs (such as Lakers -7.5, Clippers -6.5, and Dallas moneyline supported by ml_home) are never pruned as "uncovered" or rejected due to truncated pre-passed bundles, while legs whose tool pulls lack the cited market/injury or violate team injury attribution still fail verification (pass: false).

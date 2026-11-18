@@ -5,6 +5,7 @@ import type { SwarmEngineSettings } from '../types.ts';
 import type { AgentVariantConfig } from '../experiment.ts';
 import { ToolRegistry } from '../tools/index.ts';
 import { parseGameHeaders, renderHeaders } from '../context/gameHeaders.ts';
+import { resolveSelectedGameIds } from '../context/selectedGames.ts';
 import {
     globalHierarchicalMessageBus,
     type ClusterDigest,
@@ -643,60 +644,38 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
                 });
 
                 // Build proposed picks audit context from Stage 1 proposer outputs
-                const targetGameIdsSet = new Set<string>();
+                const auditProposerReports: any[] = [];
                 const summaryLines: string[] = [];
-
-                const matchHeaderEventId = (text: string): void => {
-                    if (!text) return;
-                    for (let hIdx = 0; hIdx < parsedChunkHeaders.length; hIdx++) {
-                        const h = parsedChunkHeaders[hIdx];
-                        if (!h.eventId) continue;
-                        const rowTag = `R${hIdx + 1}`;
-                        const rowRegex = new RegExp(`\\b${rowTag}\\b`, 'i');
-                        if (
-                            text.includes(h.eventId) ||
-                            rowRegex.test(text) ||
-                            (h.home && text.toLowerCase().includes(h.home.toLowerCase())) ||
-                            (h.away && text.toLowerCase().includes(h.away.toLowerCase()))
-                        ) {
-                            targetGameIdsSet.add(h.eventId);
-                        }
-                    }
-                };
 
                 for (const { analyst, idx } of proposerEntries) {
                     const rep = allAnalystReports[idx]?.[0];
                     if (!rep) continue;
+                    auditProposerReports.push(rep);
                     const picks = Array.isArray(rep.picks) ? rep.picks : [];
                     if (picks.length > 0) {
                         const pickDescs = picks.map((pk: any) => {
                             const evId = pk.event_id || pk.eventId || pk.game_id || '';
-                            if (evId) targetGameIdsSet.add(String(evId));
                             const reasonStr = typeof pk.reason === 'string' && pk.reason.trim()
                                 ? `— ${pk.reason.trim().slice(0, 140)}`
                                 : (Array.isArray(pk.reasons) && pk.reasons.length > 0 ? `— ${String(pk.reasons[0]).trim().slice(0, 140)}` : '');
-                            const desc = [pk.row, pk.game || pk.match || evId, pk.side || pk.pick || pk.selection || pk.team, pk.market, pk.confidence ? `(conf ${pk.confidence})` : '', reasonStr]
+                            return [pk.row, pk.game || pk.match || evId, pk.side || pk.pick || pk.selection || pk.team, pk.market, pk.confidence ? `(conf ${pk.confidence})` : '', reasonStr]
                                 .filter(Boolean)
                                 .join(' ');
-                            matchHeaderEventId(desc);
-                            return desc;
                         }).filter(Boolean);
                         summaryLines.push(`- [${analyst.role}] Proposed ${picks.length} leg(s): ${pickDescs.join(' | ')}`);
                     } else if (rep.scorecard && rep.scorecard.pick) {
                         const sc = rep.scorecard;
                         const desc = `${sc.row || ''} ${sc.pick} (${sc.verdict || 'lean'})`.trim();
-                        matchHeaderEventId(desc);
                         summaryLines.push(`- [${analyst.role}] Scorecard pick: ${desc}`);
                     } else {
                         const text = String(rep.analysis || rep.summary || (Array.isArray(rep.insights) ? rep.insights.join('; ') : '')).slice(0, 260);
-                        matchHeaderEventId(text);
                         summaryLines.push(`- [${analyst.role}]: ${text || 'No picks proposed'}`);
                     }
                 }
 
                 const proposedAuditContext = {
                     summaryText: summaryLines.join('\n').slice(0, 900),
-                    targetGameIds: Array.from(targetGameIdsSet)
+                    targetGameIds: resolveSelectedGameIds(auditProposerReports, parsedChunkHeaders)
                 };
 
                 // Stage 2: Execute Risk Critic seat(s) with Stage 1 proposed picks context

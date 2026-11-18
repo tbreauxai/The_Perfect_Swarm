@@ -491,11 +491,20 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                 context,
                                 settings,
                                 coveredEventIds: coveredEventIdsList,
+                                toolRegistry,
+                                queryCache: globalGameQueryCache,
                                 ...(verifierToolResults ? { toolResults: verifierToolResults } : {}),
                                 ...(synthesisResult.appComputedCounts ? { appComputedCounts: synthesisResult.appComputedCounts } : {})
                             });
                             finalAnalysis = verificationResult.finalAnalysis;
                             workflowLifecycleResult = verificationResult.lifecycleResult;
+                            if (Array.isArray(workflowLifecycleResult?.verifiedEventIds)) {
+                                for (const evId of workflowLifecycleResult.verifiedEventIds) {
+                                    if (evId && !coveredEventIdsList.includes(evId)) {
+                                        coveredEventIdsList.push(evId);
+                                    }
+                                }
+                            }
                         } else {
                             finalAnalysis = await executeManagerSynthesis(
                                 managerAgent,
