@@ -151,7 +151,7 @@ export class AnalysisLifecycle {
             // 2. Critic verifies
             const CAP = seatBudget(this.critic.provider).maxPromptChars;
             const PROPOSAL_MAX = Math.min(3000, Math.floor(CAP * 0.35));
-            const REMINDER = 'Reply only {"pass":boolean,"feedback":string}.';
+            const REMINDER = 'Do not call any tools or code-execution helpers. Reply only {"pass":boolean,"feedback":string}.';
 
             const toSampleText = (value: unknown): string => {
                 if (value === null || value === undefined || value === '') return '';
@@ -352,7 +352,8 @@ export class AnalysisLifecycle {
 
             const verificationRaw = await this.critic.run(verifyPrompt, context, {
                 responseMimeType: 'application/json',
-                bypassCache: true
+                bypassCache: true,
+                timeoutMs: 45000
             });
             
             const verification: VerificationResult = guardVerificationResult(verificationRaw);

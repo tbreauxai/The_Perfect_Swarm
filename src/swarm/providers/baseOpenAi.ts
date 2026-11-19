@@ -1,5 +1,18 @@
 import { parseStandardResponse, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
 import { parseRetryAfterHeader, parseRetryAfterMs } from '../utils/httpTimeouts.ts';
+import { isBlockedBuiltinTool } from '../tools/registry.ts';
+
+export function sanitizeOpenAiTools(tools: any[]): any[] {
+    if (!Array.isArray(tools)) return [];
+    return tools.filter((t) => {
+        if (!t || typeof t !== 'object') return false;
+        const toolType = String(t.type || '').toLowerCase().trim();
+        if (toolType === 'code_interpreter' || toolType === 'browser_search') return false;
+        const name = t.function?.name ?? t.name ?? '';
+        if (isBlockedBuiltinTool(name)) return false;
+        return true;
+    });
+}
 
 export interface OpenAiCompatibleConfig {
     providerName: string;
@@ -39,19 +52,29 @@ export async function executeOpenAiCompatibleChat(
 ): Promise<string> {
     const providerLabel = config.providerLabel || config.providerName;
     const effectiveModel = config.effectiveModel || options.modelName;
-    const resolvedTools = config.tools ?? options.config?.tools ?? [];
-    const resolvedToolChoice = config.toolChoice ?? options.config?.toolChoice ?? (resolvedTools.length > 0 ? 'auto' : undefined);
+    const resolvedTools = sanitizeOpenAiTools(config.tools ?? options.config?.tools ?? []);
+    const rawToolChoice = config.toolChoice ?? options.config?.toolChoice;
+    const isToolChoiceNone = typeof rawToolChoice === 'string' && rawToolChoice.toLowerCase().trim() === 'none';
+    const resolvedToolChoice = resolvedTools.length > 0
+        ? (!rawToolChoice || isToolChoiceNone ? 'auto' : rawToolChoice)
+        : undefined;
 
     const makeRequest = async (useJson: boolean): Promise<Response> => {
+        const sanitizedExtraBody = config.extraBody ? { ...config.extraBody } : undefined;
+        if (sanitizedExtraBody && 'tool_choice' in sanitizedExtraBody) {
+            const extraTc = String(sanitizedExtraBody.tool_choice ?? '').toLowerCase().trim();
+            if (resolvedTools.length === 0 || extraTc === 'none') {
+                delete sanitizedExtraBody.tool_choice;
+            }
+        }
         const bodyPayload: Record<string, any> = {
             model: effectiveModel,
             messages: config.messages,
             max_tokens: config.maxTokens,
             ...(config.temperature !== undefined ? { temperature: config.temperature } : {}),
             ...(useJson && !resolvedTools.length ? { response_format: { type: 'json_object' } } : {}),
-            ...(resolvedTools.length > 0 ? { tools: resolvedTools } : {}),
-            ...(resolvedTools.length > 0 ? { tool_choice: resolvedToolChoice } : {}),
-            ...(config.extraBody || {})
+            ...(sanitizedExtraBody || {}),
+            ...(resolvedTools.length > 0 ? { tools: resolvedTools, tool_choice: resolvedToolChoice } : {})
         };
 
         const headers: Record<string, string> = {

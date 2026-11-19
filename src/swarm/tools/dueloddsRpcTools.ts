@@ -1207,6 +1207,27 @@ export const getHistoricalLessonsTool: SwarmTool = {
   }
 };
 
+export const ALLOWED_FILTERED_SPORTS_TOOLS_V1 = [
+  'get_matchup_fundamentals_v1',
+  'get_injury_and_roster_delta_v1',
+  'get_environment_and_weather_v1',
+  'get_market_movement_v1',
+  'get_player_prop_splits_v1'
+] as const;
+
+export const FILTERED_SPORTS_TOOL_CANONICAL_NAMES: Record<string, string> = {
+  get_matchup_fundamentals: 'get_matchup_fundamentals_v1',
+  get_injury_and_roster_delta: 'get_injury_and_roster_delta_v1',
+  get_environment_and_weather: 'get_environment_and_weather_v1',
+  get_market_movement: 'get_market_movement_v1',
+  get_player_prop_splits: 'get_player_prop_splits_v1',
+  get_matchup_fundamentals_v1: 'get_matchup_fundamentals_v1',
+  get_injury_and_roster_delta_v1: 'get_injury_and_roster_delta_v1',
+  get_environment_and_weather_v1: 'get_environment_and_weather_v1',
+  get_market_movement_v1: 'get_market_movement_v1',
+  get_player_prop_splits_v1: 'get_player_prop_splits_v1'
+};
+
 /**
  * Array of all 6 DuelOdds Database RPC & Historical Lessons tools.
  */

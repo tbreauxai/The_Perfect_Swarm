@@ -44,10 +44,13 @@ export function countVerifiedCitations(reportObj: any): number {
     const rawEvidence = typeof reportObj === 'string'
         ? reportObj
         : (typeof reportObj?.toolEvidence === 'string' ? reportObj.toolEvidence : text);
-    const toolHeaderMatches = rawEvidence.match(/^\[[A-Z &/]+: (?:nba|nfl|nhl|ncaaf)-\d+/gm)
-        || text.match(/\[[A-Z &/]+: (?:nba|nfl|nhl|ncaaf)-\d+/g)
+    const toolHeaderMatches = rawEvidence.match(/^\[[A-Z &/]+: (?:(?:nba|nfl|nhl|ncaaf)-\d+|[a-z0-9_-]+@[a-z0-9_-]+|(?:nba|nfl|nhl|ncaaf)-[a-z0-9_-]+)/gim)
+        || text.match(/\[[A-Z &/]+: (?:(?:nba|nfl|nhl|ncaaf)-\d+|(?:nba|nfl|nhl|ncaaf)-[a-z0-9_-]+)/gi)
         || [];
-    const uniqueToolHeaders = new Set(toolHeaderMatches).size;
+    const itemCount = Array.isArray(reportObj?.toolEvidenceItems)
+        ? reportObj.toolEvidenceItems.filter((i: any) => i && typeof i.eventId === 'string' && typeof i.summary === 'string' && i.summary.trim()).length
+        : 0;
+    const uniqueToolHeaders = Math.max(new Set(toolHeaderMatches).size, itemCount);
     const pctOrZMatches = (text.match(/\b(?:z\s*=\s*[-+]?\d+\.\d+|r\s*=\s*[-+]?\d+\.\d+|CI\s*=\s*\[|\d+(?:\.\d+)?%)/gi) || []).length;
     return uniqueRows + toolResultMatches * 2 + uniqueToolHeaders * 2 + Math.min(4, pctOrZMatches);
 }

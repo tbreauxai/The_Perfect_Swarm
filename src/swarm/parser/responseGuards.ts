@@ -60,8 +60,15 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
         if (raw && typeof raw === 'object' && !Array.isArray(raw) && typeof raw.pass === 'boolean') {
             const rawVerdict = typeof raw.verdict === 'string' && raw.verdict.trim()
                 ? raw.verdict.trim()
-                : (typeof raw.summary === 'string' && raw.summary.trim() ? raw.summary.trim() : (raw.pass ? 'pass' : 'fail'));
+                : (typeof raw.summary === 'string' && raw.summary.trim()
+                    ? raw.summary.trim()
+                    : (typeof raw.feedback === 'string' && raw.feedback.trim()
+                        ? raw.feedback.trim()
+                        : (raw.pass ? 'pass' : 'fail')));
             const verdictStr = stripSeatText(rawVerdict);
+            const feedbackStr = typeof raw.feedback === 'string' && raw.feedback.trim()
+                ? stripSeatText(raw.feedback.trim())
+                : undefined;
             const flagsList = Array.isArray(raw.flags)
                 ? raw.flags.map((f: any) => stripSeatText(String(f))).filter((s: string) => s.length > 0)
                 : [];
@@ -74,6 +81,7 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
                 summary: verdictStr,
                 pass: raw.pass,
                 verdict: verdictStr,
+                ...(feedbackStr ? { feedback: feedbackStr } : {}),
                 flags: flagsList,
                 ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
                 ...(wasRepaired ? { _repaired: true } : {})

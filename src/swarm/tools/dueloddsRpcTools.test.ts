@@ -201,8 +201,8 @@ describe('DuelOdds Database RPC Tools', () => {
         expect(body.p_position_group).toBe('WR');
         return new Response(
           JSON.stringify([
-            { player_name: 'Rashee Rice', position: 'WR', status: 'OUT', minute_shift: -32.5 },
-            { player_name: 'Xavier Worthy', position: 'WR', status: 'QUESTIONABLE', minute_shift: 8.0 }
+            { team_abbr: 'KC', player_name: 'Rashee Rice', position: 'WR', status: 'OUT', minute_shift: -32.5 },
+            { team_abbr: 'KC', player_name: 'Xavier Worthy', position: 'WR', status: 'QUESTIONABLE', minute_shift: 8.0 }
           ]),
           { status: 200 }
         );

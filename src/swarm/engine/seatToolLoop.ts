@@ -22,10 +22,25 @@ export const PROVIDER_CALL_DEADLINES: Record<string, number> = {
   others: 30000
 };
 
+export const CRITIC_CALL_DEADLINE_MS = 45000;
 export const SEAT_DEADLINE_MS = 75000;
+
+export function isCriticSeatName(seat: string): boolean {
+  const norm = String(seat || '').toLowerCase().trim();
+  return norm === 'critic' || norm === 'risk' || norm === 'risk_critic' || norm.includes('critic') || norm.includes('risk');
+}
 
 export function getProviderCallDeadlineMs(provider: string): number {
   return PROVIDER_CALL_DEADLINES[provider] ?? PROVIDER_CALL_DEADLINES.others ?? 30000;
+}
+
+export function getSeatCallDeadlineMs(provider: string, seat?: string): number {
+  const base = getProviderCallDeadlineMs(provider);
+  if (base < 5000) return base;
+  if (seat && isCriticSeatName(seat)) {
+    return Math.max(base, CRITIC_CALL_DEADLINE_MS);
+  }
+  return base;
 }
 
 export interface RunSeatWithToolsParams {
@@ -127,8 +142,16 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     prompt
   });
 
+  const fallbackList = (typeof (agent as any).getFallbacks === 'function'
+    ? (agent as any).getFallbacks()
+    : (agent as any).fallbacks) || params.runConfig?.fallbackProviders || [];
+  const targetCount = 1 + (Array.isArray(fallbackList) ? fallbackList.length : 0);
+  const effectiveSeatDeadlineMs = isCriticSeatName(seat)
+    ? Math.max(SEAT_DEADLINE_MS, CRITIC_CALL_DEADLINE_MS * Math.max(2, targetCount) + 15000)
+    : SEAT_DEADLINE_MS;
+
   const seatStartAt = Date.now();
-  const seatDeadlineAt = seatStartAt + SEAT_DEADLINE_MS;
+  const seatDeadlineAt = seatStartAt + effectiveSeatDeadlineMs;
 
   const logFailure = (startTime: number, err: any) => {
     const durationMs = Date.now() - startTime;
@@ -166,13 +189,18 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
       throw err;
     }
 
-    const providerDeadlineMs = getProviderCallDeadlineMs(agent.provider);
-    const callTimeoutMs = Math.min(providerDeadlineMs, remainingSeatMs);
+    const perTargetDeadlineMs = getSeatCallDeadlineMs(agent.provider, seat);
+    const callTimeoutMs = targetCount > 1 && perTargetDeadlineMs >= 5000
+      ? Math.min(perTargetDeadlineMs * targetCount + 2000, remainingSeatMs)
+      : Math.min(perTargetDeadlineMs, remainingSeatMs);
+    const requestTimeoutMs = perTargetDeadlineMs < 5000
+      ? perTargetDeadlineMs
+      : Math.max(1000, perTargetDeadlineMs - 2000);
     const controller = new AbortController();
     const configWithSignal = {
       ...cfg,
       signal: controller.signal,
-      timeoutMs: Math.max(1000, callTimeoutMs - 2000)
+      timeoutMs: requestTimeoutMs
     };
 
     let timer: any;
@@ -212,12 +240,15 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     ? params.gameIds
     : (gameId && gameId !== 'unknown-game' ? [gameId] : []);
 
-  const buildPrefetchCalls = (tools: string[]) => {
+  const buildPrefetchCalls = (tools: string[], targetGamesOverride?: string[], maxCallsOverride?: number) => {
     const calls: { tool: string; parameters: Record<string, unknown> }[] = [];
-    const targetGames = gameIds.length > 0 ? gameIds : [gameId];
+    const targetGames = targetGamesOverride && targetGamesOverride.length > 0
+      ? targetGamesOverride
+      : (gameIds.length > 0 ? gameIds : [gameId]);
     const availableTools = tools.filter(t => registry.has(t));
+    const maxCalls = maxCallsOverride ?? budget.maxToolCalls;
 
-    if (isCriticSeat(seat)) {
+    if (isCriticSeatName(seat)) {
       const orderedCriticTools = [
         ...availableTools.filter(t => t === 'get_injury_and_roster_delta'),
         ...availableTools.filter(t => t === 'get_market_movement'),
@@ -226,7 +257,7 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
       ];
       for (const t of orderedCriticTools) {
         for (const gId of targetGames) {
-          if (calls.length >= budget.maxToolCalls) break;
+          if (calls.length >= maxCalls) break;
           if (t === 'get_market_movement') {
             const mType = resolvePrefetchMarketType(params.marketTypesByGame?.[gId] ?? params.marketType);
             calls.push({ tool: t, parameters: { game_id: gId, market_type: mType } });
@@ -234,7 +265,7 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
             calls.push({ tool: t, parameters: { game_id: gId } });
           }
         }
-        if (calls.length >= budget.maxToolCalls) break;
+        if (calls.length >= maxCalls) break;
       }
       return calls;
     }
@@ -382,10 +413,7 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     return summaryText;
   };
 
-  const isCriticSeat = (s: string) => {
-    const norm = s.toLowerCase().trim();
-    return norm === 'critic' || norm === 'risk' || norm === 'risk_critic' || norm.includes('critic') || norm.includes('risk');
-  };
+  const isCriticSeat = (s: string) => isCriticSeatName(s);
   const isBettingRoleSeat = (s: string) => {
     const norm = s.toLowerCase().trim();
     return norm === 'a1' || norm === 'quant' || norm === 'a2' || norm === 'market';
@@ -404,7 +432,20 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     return baseTools.filter(t => registry.has(t));
   };
 
-  if (isCriticSeat(seat) || (isBettingRoleSeat(seat) && gameIds.length > 0 && hasBaseTools)) {
+  const buildNoToolsConfig = () => {
+    const cfg: any = {
+      groqMode: 'chat',
+      systemInstruction,
+      ...params.runConfig
+    };
+    delete cfg.tools;
+    delete cfg.toolChoice;
+    return cfg;
+  };
+
+  const jsonOnlySuffix = 'Tool phase complete; do not call any tools or code-execution helpers.';
+
+  if (isBettingRoleSeat(seat) && gameIds.length > 0 && hasBaseTools) {
     // Prefetch role tools server-side into maxToolResultChars budget,
     // then run one JSON round with no tools.
     const prefetchCalls = buildPrefetchCalls(getPrefetchToolsForSeat());
@@ -413,18 +454,12 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     const prefetchedPrompt = assertPromptFits(agent.provider, {
       systemInstruction,
       prompt,
-      toolResults: toolResultsSummary ? `Tool results:\n${toolResultsSummary}\n\n${finalInstruction}` : finalInstruction
+      toolResults: toolResultsSummary
+        ? `Tool results:\n${toolResultsSummary}\n\n${jsonOnlySuffix} ${finalInstruction}`
+        : `${jsonOnlySuffix} ${finalInstruction}`
     });
 
-    const prefetchedConfig: any = {
-      groqMode: 'chat',
-      systemInstruction,
-      ...params.runConfig
-    };
-    delete prefetchedConfig.tools;
-    delete prefetchedConfig.toolChoice;
-
-    const output = await runAgentWithDeadline(prefetchedPrompt, prefetchedConfig);
+    const output = await runAgentWithDeadline(prefetchedPrompt, buildNoToolsConfig());
     return {
       report: output,
       rounds: 1,
@@ -456,28 +491,28 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     round1Output = await runAgentWithDeadline(prompt, r1Config);
   } catch (err: any) {
     const msg = String(err?.message || err);
+    const msgLower = msg.toLowerCase();
     const isToolError =
       msg.includes('400') ||
-      msg.includes('tool_use_failed') ||
-      msg.includes('tool-use') ||
-      msg.includes('tool call');
+      msgLower.includes('tool_use_failed') ||
+      msgLower.includes('tool-use') ||
+      msgLower.includes('tool call') ||
+      msgLower.includes('tool choice');
 
-    if (agent.provider === 'groq' && isToolError) {
-      // Groq native tool rejection fallback: prefetch role tools and run 1 round
-      const prefetchCalls = buildPrefetchCalls(baseTools.filter(t => registry.has(t)));
-      const toolResultsSummary = await executeCalls(prefetchCalls);
+    if ((agent.provider === 'groq' || isCriticSeat(seat)) && isToolError) {
+      // Native tool rejection fallback: prefetch role tools and run 1 round without tools
+      const prefetchCalls = buildPrefetchCalls(getPrefetchToolsForSeat());
+      const toolResultsSummary = prefetchCalls.length > 0 ? await executeCalls(prefetchCalls) : '';
 
       const fallbackPrompt = assertPromptFits(agent.provider, {
         systemInstruction,
         prompt,
-        toolResults: `Tool results:\n${toolResultsSummary}\n\n${finalInstruction}`
+        toolResults: toolResultsSummary
+          ? `Tool results:\n${toolResultsSummary}\n\n${jsonOnlySuffix} ${finalInstruction}`
+          : `${jsonOnlySuffix} ${finalInstruction}`
       });
 
-      const fallbackOutput = await runAgentWithDeadline(fallbackPrompt, {
-        groqMode: 'chat',
-        systemInstruction,
-        ...params.runConfig
-      });
+      const fallbackOutput = await runAgentWithDeadline(fallbackPrompt, buildNoToolsConfig());
 
       return {
         report: fallbackOutput,
@@ -493,10 +528,43 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
   }
 
   // Parse tool calls produced by model
-  const toolCalls = scopedRegistry.parseToolCalls(round1Output);
+  let toolCalls = scopedRegistry.parseToolCalls(round1Output);
 
-  // If no tool calls in Round 1, output is final
+  // Enforce Critic scope strictly to analyzer-selected games
+  if (isCriticSeat(seat) && gameIds.length > 0 && toolCalls.length > 0) {
+    const allowedGames = new Set(gameIds);
+    toolCalls = toolCalls.filter((c) => {
+      const gId = String(c.parameters?.game_id || c.parameters?.p_game_id || '').trim();
+      return Boolean(gId && allowedGames.has(gId));
+    });
+  }
+
+  // If no valid tool calls in Round 1:
+  // - For Critic with scoped gameIds & tools, automatically fall back to scoped prefetch + Round 2 JSON verdict.
+  // - Otherwise, Round 1 output is final.
   if (toolCalls.length === 0) {
+    if (isCriticSeat(seat) && gameIds.length > 0 && hasBaseTools) {
+      const prefetchCalls = buildPrefetchCalls(getPrefetchToolsForSeat());
+      const toolResultsSummary = prefetchCalls.length > 0 ? await executeCalls(prefetchCalls) : '';
+      const round2Prompt = assertPromptFits(agent.provider, {
+        systemInstruction,
+        prompt,
+        toolResults: toolResultsSummary
+          ? `Tool results:\n${toolResultsSummary}\n\n${jsonOnlySuffix} ${finalInstruction}`
+          : `${jsonOnlySuffix} ${finalInstruction}`
+      });
+      const round2Output = await runAgentWithDeadline(round2Prompt, buildNoToolsConfig());
+      return {
+        report: round2Output,
+        rounds: 2,
+        toolCallsExecuted: executedTools,
+        coveredEventIds: Array.from(coveredEventIds),
+        toolEvidence: toolResultsSummary,
+        toolEvidenceItems,
+        ...(marketToolRecords.length > 0 ? { marketToolRecords } : {})
+      };
+    }
+
     return {
       report: round1Output,
       rounds: 1,
@@ -508,20 +576,29 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
   }
 
   // Execute Round 1 tool calls
-  const toolResultsSummary = await executeCalls(toolCalls);
+  let toolResultsSummary = await executeCalls(toolCalls);
+
+  // Top up any analyzer-selected games missed in Critic's Round 1 calls within remaining tool budget
+  if (isCriticSeat(seat) && gameIds.length > 0 && hasBaseTools && executedTools.length < budget.maxToolCalls) {
+    const missingGames = gameIds.filter(gId => !coveredEventIds.has(gId));
+    if (missingGames.length > 0) {
+      const remainingBudget = budget.maxToolCalls - executedTools.length;
+      const topUpCalls = buildPrefetchCalls(getPrefetchToolsForSeat(), missingGames, remainingBudget);
+      if (topUpCalls.length > 0) {
+        await executeCalls(topUpCalls);
+        toolResultsSummary = toolEvidenceItems.map(i => i.summary).join('\n\n');
+      }
+    }
+  }
 
   // Round 2: prompt + tool results + final instruction (no tools)
   const round2Prompt = assertPromptFits(agent.provider, {
     systemInstruction,
     prompt,
-    toolResults: `Tool results:\n${toolResultsSummary}\n\n${finalInstruction}`
+    toolResults: `Tool results:\n${toolResultsSummary}\n\n${jsonOnlySuffix} ${finalInstruction}`
   });
 
-  const round2Output = await runAgentWithDeadline(round2Prompt, {
-    groqMode: 'chat',
-    systemInstruction,
-    ...params.runConfig
-  });
+  const round2Output = await runAgentWithDeadline(round2Prompt, buildNoToolsConfig());
 
   return {
     report: round2Output,

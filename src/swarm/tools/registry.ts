@@ -24,6 +24,49 @@ function extractJsonObjects(text: string): string[] {
     return results;
 }
 
+export const BLOCKED_BUILTIN_TOOL_NAMES = new Set<string>([
+    'container.exec',
+    'shell',
+    'bash',
+    'python',
+    'python_exec',
+    'code_interpreter',
+    'exec'
+]);
+
+const SPORTS_TOOL_BASE_TO_V1: Record<string, string> = {
+    get_matchup_fundamentals: 'get_matchup_fundamentals_v1',
+    get_injury_and_roster_delta: 'get_injury_and_roster_delta_v1',
+    get_environment_and_weather: 'get_environment_and_weather_v1',
+    get_market_movement: 'get_market_movement_v1',
+    get_player_prop_splits: 'get_player_prop_splits_v1'
+};
+
+const SPORTS_TOOL_V1_TO_BASE: Record<string, string> = {
+    get_matchup_fundamentals_v1: 'get_matchup_fundamentals',
+    get_injury_and_roster_delta_v1: 'get_injury_and_roster_delta',
+    get_environment_and_weather_v1: 'get_environment_and_weather',
+    get_market_movement_v1: 'get_market_movement',
+    get_player_prop_splits_v1: 'get_player_prop_splits'
+};
+
+export function isBlockedBuiltinTool(name: unknown): boolean {
+    if (typeof name !== 'string') return false;
+    const norm = name.trim().toLowerCase();
+    if (!norm) return false;
+    return BLOCKED_BUILTIN_TOOL_NAMES.has(norm) || norm.startsWith('container.') || norm.startsWith('functions.container.');
+}
+
+export function getSportsToolAlias(name: string): string | undefined {
+    const trimmed = name.trim();
+    return SPORTS_TOOL_BASE_TO_V1[trimmed] || SPORTS_TOOL_V1_TO_BASE[trimmed];
+}
+
+export function toCanonicalOpenAiToolName(name: string): string {
+    const trimmed = name.trim();
+    return SPORTS_TOOL_BASE_TO_V1[trimmed] || trimmed;
+}
+
 /**
  * Registry for managing and executing deterministic tools in the Swarm runtime.
  */
@@ -33,18 +76,45 @@ export class ToolRegistry {
 
     constructor(initialTools?: SwarmTool[], whitelist?: string[]) {
         if (whitelist) {
-            this.whitelist = new Set(whitelist.map((n) => String(n).trim()).filter(Boolean));
+            const expanded = new Set<string>();
+            for (const raw of whitelist) {
+                const n = String(raw).trim();
+                if (!n || isBlockedBuiltinTool(n)) continue;
+                expanded.add(n);
+                const alias = getSportsToolAlias(n);
+                if (alias) expanded.add(alias);
+            }
+            this.whitelist = expanded;
         }
         if (initialTools) {
             this.registerAll(initialTools);
         }
     }
 
+    private isWhitelisted(name: string): boolean {
+        if (!this.whitelist) return true;
+        if (this.whitelist.has(name)) return true;
+        const alias = getSportsToolAlias(name);
+        return Boolean(alias && this.whitelist.has(alias));
+    }
+
+    private resolveRegisteredKey(name: string): string | undefined {
+        const trimmed = String(name || '').trim();
+        if (!trimmed || isBlockedBuiltinTool(trimmed)) return undefined;
+        if (this.tools.has(trimmed)) return trimmed;
+        const alias = getSportsToolAlias(trimmed);
+        if (alias && this.tools.has(alias)) return alias;
+        return undefined;
+    }
+
     register(tool: SwarmTool): void {
         if (!tool || !tool.name) {
             throw new Error('Tool must have a valid name.');
         }
-        if (this.whitelist && !this.whitelist.has(tool.name)) {
+        if (isBlockedBuiltinTool(tool.name)) {
+            return;
+        }
+        if (!this.isWhitelisted(tool.name)) {
             return;
         }
         this.tools.set(tool.name, tool);
@@ -61,32 +131,46 @@ export class ToolRegistry {
     }
 
     get(name: string): SwarmTool | undefined {
-        if (this.whitelist && !this.whitelist.has(name)) {
+        const key = this.resolveRegisteredKey(name);
+        if (!key || !this.isWhitelisted(key)) {
             return undefined;
         }
-        return this.tools.get(name);
+        return this.tools.get(key);
     }
 
     has(name: string): boolean {
-        if (this.whitelist && !this.whitelist.has(name)) {
-            return false;
-        }
-        return this.tools.has(name);
+        const key = this.resolveRegisteredKey(name);
+        if (!key) return false;
+        return this.isWhitelisted(key);
     }
 
     list(): SwarmTool[] {
-        const all = Array.from(this.tools.values());
+        const all = Array.from(this.tools.values()).filter((t) => !isBlockedBuiltinTool(t.name));
         if (!this.whitelist) return all;
-        return all.filter((t) => this.whitelist!.has(t.name));
+        return all.filter((t) => this.isWhitelisted(t.name));
     }
 
     /**
      * Creates a child scoped ToolRegistry strictly restricted to the specified whitelisted tool names.
      */
     scoped(whitelistedNames: string[]): ToolRegistry {
-        const allowed = whitelistedNames.map((n) => String(n).trim()).filter(Boolean);
-        const filtered = this.list().filter((t) => allowed.includes(t.name));
-        return new ToolRegistry(filtered, allowed);
+        const allowedSet = new Set<string>();
+        const priorityIndex = new Map<string, number>();
+        whitelistedNames.forEach((raw, idx) => {
+            const n = String(raw).trim();
+            if (!n || isBlockedBuiltinTool(n)) return;
+            allowedSet.add(n);
+            if (!priorityIndex.has(n)) priorityIndex.set(n, idx);
+            const alias = getSportsToolAlias(n);
+            if (alias) {
+                allowedSet.add(alias);
+                if (!priorityIndex.has(alias)) priorityIndex.set(alias, idx);
+            }
+        });
+        const filtered = this.list()
+            .filter((t) => allowedSet.has(t.name))
+            .sort((a, b) => (priorityIndex.get(a.name) ?? Number.MAX_SAFE_INTEGER) - (priorityIndex.get(b.name) ?? Number.MAX_SAFE_INTEGER));
+        return new ToolRegistry(filtered, Array.from(allowedSet));
     }
 
     /**
@@ -95,7 +179,18 @@ export class ToolRegistry {
     async execute(name: string, parameters: any = {}): Promise<ToolExecutionResult> {
         const startTime = Date.now();
 
-        if (this.whitelist && !this.whitelist.has(name)) {
+        if (isBlockedBuiltinTool(name)) {
+            return {
+                tool: name,
+                parameters,
+                error: `Tool '${name}' is blocked (built-in code/shell execution tools are not permitted).`,
+                success: false,
+                durationMs: Date.now() - startTime
+            };
+        }
+
+        const resolvedKey = this.resolveRegisteredKey(name);
+        if (this.whitelist && !this.isWhitelisted(resolvedKey || name)) {
             return {
                 tool: name,
                 parameters,
@@ -105,7 +200,7 @@ export class ToolRegistry {
             };
         }
 
-        const tool = this.tools.get(name);
+        const tool = resolvedKey ? this.tools.get(resolvedKey) : undefined;
 
         if (!tool) {
             return {
@@ -139,7 +234,7 @@ export class ToolRegistry {
 
             const result = await tool.execute(parameters);
             return {
-                tool: name,
+                tool: tool.name,
                 parameters,
                 result,
                 success: true,
@@ -147,7 +242,7 @@ export class ToolRegistry {
             };
         } catch (err: any) {
             return {
-                tool: name,
+                tool: tool.name,
                 parameters,
                 error: err?.message || String(err),
                 success: false,
@@ -157,7 +252,8 @@ export class ToolRegistry {
     }
 
     /**
-     * Converts the registry into OpenAI-compatible function-calling definitions.
+     * Converts the registry into OpenAI-compatible function-calling definitions,
+     * advertising canonical _v1 names for filtered sports data tools and stripping blocked tools.
      */
     toOpenAiTools(): any[] {
         return this.list().map((tool) => {
@@ -177,7 +273,7 @@ export class ToolRegistry {
             return {
                 type: 'function',
                 function: {
-                    name: tool.name,
+                    name: toCanonicalOpenAiToolName(tool.name),
                     description: tool.description,
                     parameters: {
                         type: 'object',
@@ -223,12 +319,10 @@ export class ToolRegistry {
                 const rawName = parsed.tool ?? parsed.name ?? parsed.function?.name;
                 if (typeof rawName !== 'string') return;
                 const trimmedName = rawName.trim();
-                if (!trimmedName || trimmedName.toLowerCase() === 'json') return;
-                const resolvedName = this.has(trimmedName)
-                    ? trimmedName
-                    : (trimmedName.endsWith('_v1') && this.has(trimmedName.slice(0, -3))
-                        ? trimmedName.slice(0, -3)
-                        : null);
+                if (!trimmedName || trimmedName.toLowerCase() === 'json' || isBlockedBuiltinTool(trimmedName)) return;
+                const resolvedKey = this.resolveRegisteredKey(trimmedName)
+                    ?? (trimmedName.endsWith('_v1') ? this.resolveRegisteredKey(trimmedName.slice(0, -3)) : undefined);
+                const resolvedName = resolvedKey && this.isWhitelisted(resolvedKey) ? resolvedKey : null;
                 if (!resolvedName) return;
 
                 let rawArgs = parsed.parameters ?? parsed.arguments ?? parsed.function?.parameters ?? parsed.function?.arguments ?? {};

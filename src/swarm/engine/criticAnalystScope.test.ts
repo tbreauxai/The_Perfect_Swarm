@@ -67,7 +67,7 @@ describe('Step 4 Tests: Critic JSON Seat, Per-Game Tools, and Coverage Pruning',
       expect(capturedConfig.toolChoice).toBeUndefined();
     });
 
-    it('runSeatWithTools for critic prefetches tools and runs 1 round with no tools in runConfig', async () => {
+    it('runSeatWithTools for critic exposes canonical _v1 tools with toolChoice auto in Round 1 and falls back to prefetch in Round 2 when no tools called', async () => {
       const tool1 = createMockTool('get_injury_and_roster_delta', 'Injury report');
       const tool2 = createMockTool('get_environment_and_weather', 'Weather report');
       const registry = new ToolRegistry([tool1, tool2]);
@@ -91,16 +91,21 @@ describe('Step 4 Tests: Critic JSON Seat, Per-Game Tools, and Coverage Pruning',
         registry
       });
 
-      expect(res.rounds).toBe(1);
+      expect(res.rounds).toBe(2);
       expect(tool1.execute).toHaveBeenCalledWith(expect.objectContaining({ game_id: 'DAL@BOS' }), expect.anything());
       expect(tool2.execute).toHaveBeenCalledWith(expect.objectContaining({ game_id: 'DAL@BOS' }), expect.anything());
       expect(res.toolCallsExecuted).toEqual(['get_injury_and_roster_delta', 'get_environment_and_weather']);
       expect(res.coveredEventIds).toEqual(['DAL@BOS']);
 
-      expect(capturedRunConfigs).toHaveLength(1);
-      expect(capturedRunConfigs[0].tools).toBeUndefined();
-      expect(capturedRunConfigs[0].toolChoice).toBeUndefined();
-      expect(mockCriticAgent.run.mock.calls[0][0]).toContain('Injury report for DAL@BOS');
+      expect(capturedRunConfigs).toHaveLength(2);
+      expect(capturedRunConfigs[0].tools.map((t: any) => t.function.name)).toEqual([
+        'get_injury_and_roster_delta_v1',
+        'get_environment_and_weather_v1'
+      ]);
+      expect(capturedRunConfigs[0].toolChoice).toBe('auto');
+      expect(capturedRunConfigs[1].tools).toBeUndefined();
+      expect(capturedRunConfigs[1].toolChoice).toBeUndefined();
+      expect(mockCriticAgent.run.mock.calls[1][0]).toContain('Injury report for DAL@BOS');
     });
   });
 

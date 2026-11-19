@@ -13,6 +13,7 @@ import { groqPromptCharCap } from './providers/groq.ts';
 import { globalPayloadCache, PayloadCache } from './cache.ts';
 import { parseJsonSafe, guardManagerResponse, guardAnalystResponse } from './parser.ts';
 import { ManagerResponseSchema, AnalystResponseSchema } from './schemas.ts';
+import { isBlockedBuiltinTool } from './tools/registry.ts';
 
 export { DEFAULT_PROVIDER_MODELS } from './server/modelsProvider.ts';
 
@@ -82,7 +83,9 @@ export class Agent {
 
     async run(prompt: string, context: SwarmContext, config?: AgentRunConfig): Promise<any> {
         const startTime = Date.now();
-        const timeoutMs = config?.timeoutMs || PROVIDER_CALL_TIMEOUT_MS; // 25s per call (PS2), then next fallback
+        const roleNorm = this.role.toLowerCase();
+        const isCriticRole = roleNorm.includes('critic') || roleNorm.includes('risk');
+        const timeoutMs = config?.timeoutMs || (isCriticRole ? 45000 : PROVIDER_CALL_TIMEOUT_MS); // Fresh budget per target in targetChain
 
         const lb = (config?.loadBalancer as AdaptiveLoadBalancer) || this.loadBalancer || globalLoadBalancer;
         const candidateFallbacks = config?.fallbackProviders || this.fallbacks;
@@ -174,29 +177,37 @@ export class Agent {
                         ...config,
                         maxTokens: config?.maxTokens ?? this.maxTokens ?? defaultRoleTokens
                     };
-                    const isStrictJsonSeat =
-                        roleLower.includes('critic') ||
-                        roleLower.includes('risk') ||
+                    const isStrictJsonRequest =
                         effectiveConfig.responseMimeType === 'application/json' ||
                         Boolean(effectiveConfig.zodSchema || (effectiveConfig as any)?.responseSchema || (effectiveConfig as any)?.schema);
 
                     let effectiveRuntimeConfig: AgentRunConfig;
-                    if (isStrictJsonSeat) {
+                    if (isStrictJsonRequest) {
                         const { tools: _discardTools, toolChoice: _discardToolChoice, toolRegistry: _discardRegistry, ...restConfig } = effectiveConfig as any;
                         effectiveRuntimeConfig = restConfig;
                     } else {
-                        const nativeTools = Array.isArray(effectiveConfig.tools)
+                        const rawNativeTools = Array.isArray(effectiveConfig.tools)
                             ? effectiveConfig.tools
                             : (effectiveConfig.toolRegistry && typeof (effectiveConfig.toolRegistry as any).toOpenAiTools === 'function'
                                 ? (effectiveConfig.toolRegistry as any).toOpenAiTools()
                                 : undefined);
-                        effectiveRuntimeConfig = nativeTools && nativeTools.length > 0
-                            ? {
+                        const nativeTools = Array.isArray(rawNativeTools)
+                            ? rawNativeTools.filter((t: any) => !isBlockedBuiltinTool(t?.function?.name ?? t?.name ?? ''))
+                            : undefined;
+                        const requestedToolChoice = effectiveConfig.toolChoice;
+                        const resolvedToolChoice = !requestedToolChoice || String(requestedToolChoice).toLowerCase().trim() === 'none'
+                            ? 'auto'
+                            : requestedToolChoice;
+                        if (nativeTools && nativeTools.length > 0) {
+                            effectiveRuntimeConfig = {
                                 ...effectiveConfig,
                                 tools: nativeTools,
-                                toolChoice: effectiveConfig.toolChoice ?? 'auto'
-                            }
-                            : effectiveConfig;
+                                toolChoice: resolvedToolChoice
+                            };
+                        } else {
+                            const { tools: _discardTools, toolChoice: _discardToolChoice, ...restConfig } = effectiveConfig as any;
+                            effectiveRuntimeConfig = restConfig;
+                        }
                     }
 
                     const cacheFingerprint = PayloadCache.computeFingerprint(
@@ -414,6 +425,8 @@ export class Agent {
                         errMsg.includes('model_decommissioned') ||
                         errLower.includes('timeout') ||
                         errLower.includes('timed out') || // provider adapters emit "[TIMEOUT] ... timed out after Nms"
+                        errLower.includes('tool choice') ||
+                        errLower.includes('tool_use_failed') ||
                         errLower.includes('high traffic') ||
                         errLower.includes('overloaded') ||
                         errLower.includes('unavailable') ||

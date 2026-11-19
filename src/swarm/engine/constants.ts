@@ -15,6 +15,7 @@ CRITIC SCOPE:
 - Do not scan the full slate.
 - A leg fails only if your own tool pull for that game does not support the cited market or injury.
 - Do not reject a leg solely because a prior evidence bundle was incomplete.
+- Never call shell, bash, python, or built-in code execution tools; use only attached filtered data tools, or if evidence is already provided with no tools attached, output verdict JSON directly.
 
 ${INJURY_ATTRIBUTION_RULE}
 

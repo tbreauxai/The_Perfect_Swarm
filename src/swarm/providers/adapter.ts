@@ -1,5 +1,6 @@
 import type { ProviderAdapter, ProviderCallOptions } from '../types.ts';
 import { globalTelemetryCollector, extractTokenUsage, estimateTokens } from '../telemetry.ts';
+import { isBlockedBuiltinTool } from '../tools/registry.ts';
 
 export type { ProviderAdapter, ProviderCallOptions };
 
@@ -183,7 +184,7 @@ export function parseStandardResponse(
         if (!toolCall) return null;
         const fn = toolCall.function || toolCall;
         const toolName = typeof fn.name === 'string' ? fn.name : (toolCall.name || null);
-        if (!toolName) return null;
+        if (!toolName || isBlockedBuiltinTool(toolName)) return null;
 
         let parsedArgs: any = {};
         if (typeof fn.arguments === 'string') {

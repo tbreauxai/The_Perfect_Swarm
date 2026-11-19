@@ -1,4 +1,5 @@
 import { cleanToken, buildStandardMessages, parseStandardResponse, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
+import { sanitizeOpenAiTools } from './baseOpenAi.ts';
 
 /** GitHub Models was retired on 2026-07-30 (inference API, catalog and BYOK removed for everyone). */
 export let GITHUB_MODELS_RETIRED = true;
@@ -26,7 +27,9 @@ export class GitHubAdapter implements ProviderAdapter {
 
         const isJson = options.config?.responseMimeType === 'application/json';
         const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 30000; // 30s default: fail fast on free-tier stalls instead of hanging for 2 minutes
-        const resolvedTools = options.config?.tools ?? [];
+        const resolvedTools = sanitizeOpenAiTools(options.config?.tools ?? []);
+        const rawToolChoice = options.config?.toolChoice;
+        const resolvedToolChoice = !rawToolChoice || String(rawToolChoice).toLowerCase().trim() === 'none' ? 'auto' : rawToolChoice;
 
         const bodyParams: any = {
             model: options.modelName,
@@ -39,7 +42,7 @@ export class GitHubAdapter implements ProviderAdapter {
         }
         if (resolvedTools.length > 0) {
             bodyParams.tools = resolvedTools;
-            bodyParams.tool_choice = options.config?.toolChoice ?? 'auto';
+            bodyParams.tool_choice = resolvedToolChoice;
         }
 
         const startTime = Date.now();
