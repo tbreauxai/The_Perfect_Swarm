@@ -69,15 +69,21 @@ export function isEmptyToolSummary(summary: string): boolean {
   );
 }
 
+const FUNDAMENTALS_MOD =
+  '(?:(?:any|specific|clear|detailed|supporting|underlying|verified|available|full|additional|further|game|matchup|team|form)\\s+){0,3}';
+const MARKET_MOD =
+  '(?:(?:any|specific|detailed|supporting|fresh|live|current)\\s+){0,2}';
+
 export function looksLikePassOrMissingDataClaim(text: string): boolean {
   if (!text || typeof text !== 'string') return false;
   const norm = normalizeText(text);
   if (/"picks"\s*:\s*\[\s*\]/i.test(norm)) return true;
   if (/"status"\s*:\s*"no_play"/i.test(norm)) return true;
   if (/ui_title["']?\s*:\s*["']Insufficient data["']/i.test(norm)) return true;
-  return /\b(?:no[\s_-]?play|passing\s+on|pass\s+on|recommend(?:ing)?\s+a\s+pass|take\s+a\s+pass|insufficient\s+data|not\s+fetched|not\s+pulled|fundamentals\s+(?:are\s+|were\s+)?missing|missing\s+(?:matchup\s+)?fundamentals|no\s+(?:matchup\s+)?fundamentals|no\s+market\s+(?:movement|data)|market\s+(?:movement|data)\s+(?:is|was)?\s*(?:missing|not\s+fetched|unavailable)|no\s+injury\s+(?:data|reports?)|injury\s+(?:data|reports?)\s+(?:is|are|was|were)?\s*(?:missing|not\s+fetched|unavailable))\b/i.test(
-    norm
-  );
+  return new RegExp(
+    `\\b(?:no[\\s_-]?play|passing\\s+on|pass\\s+on|recommend(?:ing)?\\s+a\\s+pass|take\\s+a\\s+pass|insufficient\\s+data|not\\s+fetched|not\\s+pulled|${FUNDAMENTALS_MOD}fundamentals\\s+(?:are\\s+|were\\s+|is\\s+|was\\s+)?(?:missing|unavailable|absent)|(?:missing|lacking|without|no)\\s+${FUNDAMENTALS_MOD}fundamentals|no\\s+${MARKET_MOD}market\\s+(?:movement|data)|${MARKET_MOD}market\\s+(?:movement|data)\\s+(?:is|was)?\\s*(?:missing|not\\s+fetched|unavailable)|no\\s+injury\\s+(?:data|reports?)|injury\\s+(?:data|reports?)\\s+(?:is|are|was|were)?\\s*(?:missing|not\\s+fetched|unavailable))\\b`,
+    'i'
+  ).test(norm);
 }
 
 export function mergeToolCallTraceEntries(entries: ToolCallTraceEntry[]): ToolCallTraceEntry[] {
@@ -294,6 +300,12 @@ interface GameMentionEntry {
   abbrAliases: string[];
 }
 
+const COLLEGE_RAW_STOP_TOKENS = new Set([
+  'state', 'tech', 'university', 'college', 'north', 'south', 'east', 'west',
+  'central', 'western', 'eastern', 'northern', 'southern', 'golden', 'blue',
+  'red', 'green', 'black', 'white', 'crimson', 'city', 'team'
+]);
+
 function buildGameMentionEntries(headers: GameHeader[]): GameMentionEntry[] {
   const cityCounts = new Map<string, number>();
   const resolvedTeams = headers.map(h => ({
@@ -310,6 +322,23 @@ function buildGameMentionEntries(headers: GameHeader[]): GameMentionEntry[] {
     }
   }
 
+  const rawTokenCounts = new Map<string, number>();
+  for (const item of resolvedTeams) {
+    const pairs: Array<[string, EspnTeamEntry | undefined]> = [
+      [item.header.away, item.awayEntry],
+      [item.header.home, item.homeEntry]
+    ];
+    for (const [rawName, entry] of pairs) {
+      if (entry) continue;
+      const cleanRaw = String(rawName || '').trim().toLowerCase();
+      if (!cleanRaw || /^(away|home|unknown|tbd)$/i.test(cleanRaw)) continue;
+      const uniqTokens = new Set(cleanRaw.split(/\s+/).filter(t => t.length >= 3));
+      for (const tok of uniqTokens) {
+        rawTokenCounts.set(tok, (rawTokenCounts.get(tok) || 0) + 1);
+      }
+    }
+  }
+
   return resolvedTeams.map(({ header, awayEntry, homeEntry }) => {
     const nameAliases = new Set<string>();
     const abbrAliases = new Set<string>();
@@ -319,7 +348,15 @@ function buildGameMentionEntries(headers: GameHeader[]): GameMentionEntry[] {
       if (cleanRaw && !/^(away|home|unknown|tbd)$/i.test(cleanRaw)) {
         nameAliases.add(cleanRaw);
         for (const tok of cleanRaw.split(/\s+/)) {
-          if (tok.length >= 4) nameAliases.add(tok);
+          if (entry) {
+            if (tok.length >= 4) nameAliases.add(tok);
+          } else if (
+            tok.length >= 3 &&
+            !COLLEGE_RAW_STOP_TOKENS.has(tok) &&
+            (rawTokenCounts.get(tok) || 0) < 2
+          ) {
+            nameAliases.add(tok);
+          }
         }
       }
       if (entry) {
@@ -384,13 +421,17 @@ function findMentionedGameIds(text: string, entries: GameMentionEntry[]): string
 }
 
 const POLICY_ECHO_OR_NEGATED_REGEX =
-  /\b(?:before\s+saying\s+a\s+game\s+has\s+no|do\s+not\s+say\s+(?:it\s+was\s+not\s+fetched|market\s+data)|pull\s+before\s+pass|no\s+missing\s+(?:fundamentals|injur|market)|fundamentals\s+(?:are\s+)?(?:present|available|complete|fetched|pulled)|market\s+(?:movement|data)\s+(?:was|is)\s+(?:fetched|pulled|available|present))\b/i;
+  /\b(?:before\s+saying\s+a\s+game\s+has\s+no|do\s+not\s+say\s+(?:it\s+was\s+not\s+fetched|fundamentals\s+or\s+market\s+data|market\s+data)|pull\s+before\s+pass|no\s+missing\s+(?:fundamentals|injur|market)|fundamentals\s+(?:are\s+)?(?:present|available|complete|fetched|pulled)|market\s+(?:movement|data)\s+(?:was|is)\s+(?:fetched|pulled|available|present))\b/i;
 
-const MARKET_MISSING_REGEX =
-  /\b(?:no\s+(?:market\s+(?:movement|data)|line\s+movement)(?:\s+(?:or|and)\s+(?:prop|props|player\s+prop)\s+data)?\s+(?:was|were|has\s+been)?\s*(?:fetched|pulled|available|found|provided|returned)|(?:market\s+(?:movement|data)|line\s+movement)(?:\s+(?:or|and)\s+(?:prop|props)\s+data)?\s+(?:was|were|is|are)?\s*(?:not\s+(?:fetched|pulled|available|found|provided|returned)|missing|unavailable|absent)|(?:missing|lacking|without|no)\s+(?:any\s+)?(?:market\s+(?:movement|data)|line\s+movement))\b/i;
+const MARKET_MISSING_REGEX = new RegExp(
+  `\\b(?:no\\s+${MARKET_MOD}(?:market\\s+(?:movement|data)|line\\s+movement)(?:\\s+(?:or|and)\\s+(?:prop|props|player\\s+prop)\\s+data)?\\s+(?:was|were|has\\s+been)?\\s*(?:fetched|pulled|available|found|provided|returned)|${MARKET_MOD}(?:market\\s+(?:movement|data)|line\\s+movement)(?:\\s+(?:or|and)\\s+(?:prop|props)\\s+data)?\\s+(?:was|were|is|are)?\\s*(?:not\\s+(?:fetched|pulled|available|found|provided|returned)|missing|unavailable|absent)|(?:missing|lacking|without|no)\\s+${MARKET_MOD}(?:market\\s+(?:movement|data)|line\\s+movement))\\b`,
+  'i'
+);
 
-const FUNDAMENTALS_MISSING_REGEX =
-  /\b(?:(?:matchup\s+)?fundamentals\s+(?:are|were|is|was)?\s*(?:missing|unavailable|not\s+(?:fetched|pulled|available|found|provided|returned)|absent|incomplete)|(?:missing|no|lack(?:ing)?|without)\s+(?:matchup\s+)?fundamentals(?:\s+data)?|no\s+(?:matchup\s+)?fundamentals\s+(?:data\s+)?(?:was|were)?\s*(?:fetched|pulled|available|found|returned))\b/i;
+const FUNDAMENTALS_MISSING_REGEX = new RegExp(
+  `\\b(?:${FUNDAMENTALS_MOD}fundamentals\\s+(?:are|were|is|was)?\\s*(?:missing|unavailable|not\\s+(?:fetched|pulled|available|found|provided|returned)|absent|incomplete)|(?:missing|no|lack(?:ing)?|without)\\s+${FUNDAMENTALS_MOD}fundamentals(?:\\s+data)?|no\\s+${FUNDAMENTALS_MOD}fundamentals\\s+(?:data\\s+)?(?:was|were)?\\s*(?:fetched|pulled|available|found|returned))\\b`,
+  'i'
+);
 
 const INJURY_MISSING_REGEX =
   /\b(?:no\s+(?:injury|injuries|roster\s+delta)\s+(?:data|reports?|info)\s+(?:was|were)?\s*(?:fetched|pulled|available|found|provided|returned)|(?:injury|injuries|roster\s+delta)\s+(?:data|reports?|info)\s+(?:is|are|was|were)?\s*(?:missing|unavailable|not\s+(?:fetched|pulled|available|found|provided|returned)|absent)|(?:missing|lack(?:ing)?|without)\s+(?:any\s+)?(?:injury|injuries|roster\s+delta)\s+(?:data|reports?))\b/i;
@@ -468,7 +509,14 @@ function collectProposalTextSnippets(proposal: any): string[] {
           push(typeof ins === 'string' ? ins : ins?.message);
         }
       } else if (comp.type === 'MetricCard') {
+        push(comp.props.title);
+        push(comp.props.value);
         push(comp.props.subtitle);
+      } else if (comp.type === 'DataTable' && Array.isArray(comp.props.rows)) {
+        for (const row of comp.props.rows) {
+          if (!row || typeof row !== 'object') continue;
+          for (const val of Object.values(row)) push(val);
+        }
       }
     }
   }
@@ -548,6 +596,17 @@ function auditMissingDataClaimInClause(
     }
   }
 
+  const hasAnyDataForGame = (gId: string): boolean => {
+    const m = ledger.byEvent.get(gId);
+    if (!m) return false;
+    for (const st of m.values()) {
+      if (st === 'data') return true;
+    }
+    return false;
+  };
+  const hasAnyDataAcrossSlate = (): boolean =>
+    targetSlateIds.some(gId => hasAnyDataForGame(gId));
+
   // Check B: Matchup fundamentals or injury data missing / not fetched
   const checks: Array<{ tool: string; label: string; regex: RegExp }> = [
     { tool: 'get_matchup_fundamentals', label: 'matchup fundamentals', regex: FUNDAMENTALS_MISSING_REGEX },
@@ -565,8 +624,10 @@ function auditMissingDataClaimInClause(
             flag: 'false_missing_data_claim',
             violation: `Claimed ${label} missing/not fetched for ${gId}, but ${tool} returned data.`
           });
-        } else if (status === undefined && isToolAvailable(tool)) {
-          recordMissing(gId, tool);
+        } else if (status === undefined && (isToolAvailable(tool) || (!hasExplicitAvailableTools && hasAnyDataForGame(gId)))) {
+          if (isToolAvailable(tool)) {
+            recordMissing(gId, tool);
+          }
           findings.push({
             flag: 'unqueried_missing_data_claim',
             violation: `Claimed ${label} missing for ${gId} without calling ${tool}.`
@@ -613,6 +674,11 @@ function auditMissingDataClaimInClause(
         findings.push({
           flag: 'false_missing_data_claim',
           violation: `Claimed ${label} missing/not fetched, but ${tool} returned data for: ${dataGames.join(', ')}.`
+        });
+      } else if (uncalledGames.length > 0 && !hasExplicitAvailableTools && hasAnyDataAcrossSlate() && emptyOrErrorGames.length === 0) {
+        findings.push({
+          flag: 'unqueried_missing_data_claim',
+          violation: `Claimed ${label} missing/not fetched without calling ${tool} while other tools returned data.`
         });
       }
     }
@@ -821,6 +887,21 @@ export function sanitizePullBeforePassClaims<T extends Record<string, any>>(
         kept.push(withoutParen);
         continue;
       }
+      const withoutInlineMissing = s
+        .replace(
+          new RegExp(
+            `,?\\s*\\bwithout\\s+(?:${FUNDAMENTALS_MOD}fundamentals(?:\\s+data)?|${MARKET_MOD}(?:market\\s+(?:movement|data)|line\\s+movement)|(?:any\\s+)?(?:injury|injuries|roster\\s+delta)\\s+(?:data|reports?))\\b`,
+            'gi'
+          ),
+          ''
+        )
+        .replace(/\s+([,.;!?])/g, '$1')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+      if (withoutInlineMissing && withoutInlineMissing !== s.trim() && !clauseHasViolation(withoutInlineMissing)) {
+        kept.push(withoutInlineMissing);
+        continue;
+      }
       const subParts = s.split(/;\s+|,\s*(?=(?:while|whereas|but|although|though|so|yet|and)\b)/i);
       if (subParts.length > 1) {
         const cleanSubs = subParts.filter(part => !clauseHasViolation(part));
@@ -897,8 +978,21 @@ export function sanitizePullBeforePassClaims<T extends Record<string, any>>(
             }
             return true;
           });
-      } else if (comp.type === 'MetricCard' && typeof comp.props.subtitle === 'string') {
-        comp.props.subtitle = cleanTextField(comp.props.subtitle);
+      } else if (comp.type === 'MetricCard') {
+        for (const pKey of ['title', 'value', 'subtitle'] as const) {
+          if (typeof comp.props[pKey] === 'string') {
+            comp.props[pKey] = cleanTextField(comp.props[pKey]);
+          }
+        }
+      } else if (comp.type === 'DataTable' && Array.isArray(comp.props.rows)) {
+        for (const row of comp.props.rows) {
+          if (!row || typeof row !== 'object') continue;
+          for (const rk of Object.keys(row)) {
+            if (typeof row[rk] === 'string' && row[rk].trim()) {
+              row[rk] = cleanTextField(row[rk]);
+            }
+          }
+        }
       }
     }
   }

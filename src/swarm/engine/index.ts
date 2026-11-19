@@ -562,6 +562,9 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                 }
                             }
                         } else {
+                            const availableTools = toolRegistry
+                                ? ['get_matchup_fundamentals', 'get_injury_and_roster_delta', 'get_market_movement'].filter(t => toolRegistry.has(t))
+                                : undefined;
                             finalAnalysis = await executeManagerSynthesis(
                                 managerAgent,
                                 synthesisResult.effectiveDynamicPrompt,
@@ -577,7 +580,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                     ...(stage2VetoedLegs.length > 0 ? { vetoedLegs: stage2VetoedLegs } : {}),
                                     ...(stage2VetoedClaims.length > 0 ? { vetoedClaims: stage2VetoedClaims } : {}),
                                     rawBoard: profilingResult.rawInput,
-                                    ...(allToolCallTrace.length > 0 ? { toolCallTrace: allToolCallTrace } : {})
+                                    ...(allToolCallTrace.length > 0 ? { toolCallTrace: allToolCallTrace } : {}),
+                                    ...(availableTools && availableTools.length > 0 ? { availableTools } : {})
                                 }
                             );
                         }

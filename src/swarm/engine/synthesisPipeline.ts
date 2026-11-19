@@ -469,6 +469,7 @@ export async function executeManagerSynthesis(
         vetoedClaims?: string[];
         rawBoard?: string;
         toolCallTrace?: ToolCallTraceEntry[];
+        availableTools?: string[];
     }
 ): Promise<any> {
     const managerInstruction = (settings as any)?.managerInstruction
@@ -561,6 +562,9 @@ export async function executeManagerSynthesis(
             sanitizePullBeforePassClaims(finalResult, toolEvidenceForGrounding, slateSourceForGrounding, {
                 headers: parsedHeaders,
                 toolCallTrace: groundingContext?.toolCallTrace,
+                ...(groundingContext?.availableTools && groundingContext.availableTools.length > 0
+                    ? { availableTools: groundingContext.availableTools }
+                    : {}),
                 marketToolRecords: groundingContext?.marketToolRecords
             });
         }
