@@ -14,11 +14,19 @@ export const GROUNDING_RULE = `GROUNDING:
 - If key players on that team are OUT, do not call the team relatively healthy.
 - A vetoed leg is removed from picks. Do not rewrite it as a recommended single bet.`;
 
+export const VETO_STICKS_RULE = `VETO STICKS:
+- A Critic veto for ungrounded form, missing market, or fatal injury removes that leg.
+- Do not repeat the vetoed claim in a later attempt or in the final analysis.
+- Do not put a vetoed leg back into picks.
+- If every leg is vetoed, the result is a pass.`;
+
 export interface GroundingAuditResult {
   pass: boolean;
   violations: string[];
   flags: string[];
   feedback?: string;
+  vetoedLegs?: VetoedLegTarget[];
+  vetoedClaims?: string[];
 }
 
 export interface VetoedLegTarget {
@@ -164,14 +172,14 @@ function extractRecordsFromSegment(seg: string): Set<string> {
   const norm = normalizeText(seg);
 
   const prefixRx =
-    /\b(?:W-L|L(?:3|5|7|10|15|20)|last[\s_]?(?:3|5|7|10|15|20)|record|ATS|SU|home|away|road|overall|form)\b["']?\s*[:="']?\s*(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?\b/gi;
+    /\b(?:W-L|L\d{1,2}|last[\s_]?\d{1,2}|record|ATS|SU|home|away|road|overall|form)\b["']?\s*[:="']?\s*(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?\b/gi;
   let m: RegExpExecArray | null;
   while ((m = prefixRx.exec(norm)) !== null) {
     addGroundedRecordValue(records, m[1], m[2], m[3]);
   }
 
   const suffixRx =
-    /\b(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?\s*(?:L(?:3|5|7|10|15|20)|W-L|ATS|SU|record|last\s+\d+)\b/gi;
+    /\b(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?\s*(?:L\d{1,2}|W-L|ATS|SU|record|last\s+\d+)\b/gi;
   while ((m = suffixRx.exec(norm)) !== null) {
     addGroundedRecordValue(records, m[1], m[2], m[3]);
   }
@@ -189,13 +197,13 @@ function extractRecordsFromSegment(seg: string): Set<string> {
   }
 
   const jsonRecordStrRx =
-    /"(?:l3|l5|l7|l10|l15|l20|last_5|last_10|record|wl|w_l)"\s*:\s*"(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?"/gi;
+    /"(?:l\d{1,2}|last_?\d{1,2}|record|wl|w_l)"\s*:\s*"(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?"/gi;
   while ((m = jsonRecordStrRx.exec(norm)) !== null) {
     addGroundedRecordValue(records, m[1], m[2], m[3]);
   }
 
   const recentRx =
-    /(?:\bRecent\s*:?\s*([WLOT](?:\s*[,/\s-]\s*(?:OTL|OT|[WLT]))+)|"recent_results"\s*:\s*\[([^\]]+)\])/gi;
+    /(?:\b(?:Recent|team_games(?:\s+last[\s_]?\d{1,2})?|last[\s_]?\d{1,2})\s*:?\s*([WLOT](?:\s*[,/\s-]\s*(?:OTL|OT|[WLT]))+)|"recent_results"\s*:\s*\[([^\]]+)\])/gi;
   while ((m = recentRx.exec(norm)) !== null) {
     const rawSeq = m[1] || m[2] || '';
     const tokens = rawSeq.match(/\b(?:OTL|OT|[WLT])\b/gi);
@@ -330,17 +338,19 @@ function isRecordGrounded(
   return groundedRecords.allRecords.has(fullKey) || (!otl && groundedRecords.allRecords.has(shortKey));
 }
 
-/**
- * Checks a single clause for ungrounded score / goals-allowed / points-allowed / runs-allowed / W-L record claims.
- */
-function findUngroundedFormClaimInClause(
+interface FormClaimDetail {
+  reason: string;
+  claimTexts: string[];
+}
+
+function findUngroundedFormClaimDetailInClause(
   clause: string,
   cleanEvidence: string,
   groundedRecords?: GroundedRecordSet,
   candidates: TeamDescriptor[] = [],
   hasSportsSignal: boolean = false,
   sideHint?: string
-): string | null {
+): FormClaimDetail | null {
   if (!clause || typeof clause !== 'string') return null;
   const norm = normalizeText(clause);
 
@@ -358,7 +368,11 @@ function findUngroundedFormClaimInClause(
     while ((m = rx.exec(norm)) !== null) {
       const val = m[1];
       if (!isNumericStatGrounded(val, cleanEvidence)) {
-        return `Ungrounded form/score claim ("${m[0].trim()}") not found in a successful tool result.`;
+        const phrase = m[0].trim();
+        return {
+          reason: `Ungrounded form/score claim ("${phrase}") not found in a successful tool result.`,
+          claimTexts: [phrase]
+        };
       }
     }
   }
@@ -373,7 +387,11 @@ function findUngroundedFormClaimInClause(
     let m: RegExpExecArray | null;
     while ((m = rx.exec(norm)) !== null) {
       if (!isScorePairGrounded(m[1], m[2], cleanEvidence)) {
-        return `Ungrounded score claim ("${m[0].trim()}") not found in a successful tool result.`;
+        const phrase = m[0].trim();
+        return {
+          reason: `Ungrounded score claim ("${phrase}") not found in a successful tool result.`,
+          claimTexts: [phrase]
+        };
       }
     }
   }
@@ -394,12 +412,43 @@ function findUngroundedFormClaimInClause(
     while ((m = rx.exec(norm)) !== null) {
       const targetTeam = findNearestTeamForSpan(norm, m.index, m.index + m[0].length, candidates, sideHint);
       if (!isRecordGrounded(m[1], m[2], m[3], targetTeam, groundedRecords)) {
-        return `Ungrounded record/form claim ("${m[0].trim()}") not found in a successful tool result.`;
+        const phrase = m[0].trim();
+        const claims = [phrase];
+        if (m[3]) {
+          claims.push(`${m[1]}-${m[2]}-${m[3]}`);
+        }
+        return {
+          reason: `Ungrounded record/form claim ("${phrase}") not found in a successful tool result.`,
+          claimTexts: claims
+        };
       }
     }
   }
 
   return null;
+}
+
+/**
+ * Checks a single clause for ungrounded score / goals-allowed / points-allowed / runs-allowed / W-L record claims.
+ */
+function findUngroundedFormClaimInClause(
+  clause: string,
+  cleanEvidence: string,
+  groundedRecords?: GroundedRecordSet,
+  candidates: TeamDescriptor[] = [],
+  hasSportsSignal: boolean = false,
+  sideHint?: string
+): string | null {
+  return (
+    findUngroundedFormClaimDetailInClause(
+      clause,
+      cleanEvidence,
+      groundedRecords,
+      candidates,
+      hasSportsSignal,
+      sideHint
+    )?.reason ?? null
+  );
 }
 
 const POSITIVE_HEALTH_CLAIM_REGEX =
@@ -598,7 +647,7 @@ function findHealthViolationInClause(
   headers: GameHeader[],
   coverage: { coveredEventIds: Set<string>; coveredTeamKeys: Set<string>; hasGlobalCoverage: boolean },
   selectedSideHint?: string
-): { flag: 'contradicted_health_claim' | 'ungrounded_health_claim'; reason: string } | null {
+): { flag: 'contradicted_health_claim' | 'ungrounded_health_claim'; reason: string; claimText: string } | null {
   const norm = normalizeText(clause);
   const subClauses = norm
     .split(/(?<=[.!?])\s+|\n+|;\s+|\s+--\s+|,\s*(?=(?:while|whereas|but|although|though|yet)\b)|\s+(?=(?:while|whereas|but|although|though)\b)/i)
@@ -659,15 +708,19 @@ function findHealthViolationInClause(
         const teamOuts = getOutInjuriesForTeam(team, outInjuries);
         if (teamOuts.length > 0) {
           const players = teamOuts.slice(0, 3).map(o => o.playerName).join(', ');
+          const phrase = m[0].trim();
           return {
             flag: 'contradicted_health_claim',
-            reason: `Contradicted health claim ("${m[0].trim()}") for ${team.label}: ${players} ${teamOuts.length === 1 ? 'is' : 'are'} OUT.`
+            reason: `Contradicted health claim ("${phrase}") for ${team.label}: ${players} ${teamOuts.length === 1 ? 'is' : 'are'} OUT.`,
+            claimText: phrase
           };
         }
         if (!teamHasInjuryCoverage(team, headers, coverage)) {
+          const phrase = m[0].trim();
           return {
             flag: 'ungrounded_health_claim',
-            reason: `Ungrounded health claim ("${m[0].trim()}") for ${team.label}: no successful injury tool result covers this team.`
+            reason: `Ungrounded health claim ("${phrase}") for ${team.label}: no successful injury tool result covers this team.`,
+            claimText: phrase
           };
         }
       }
@@ -678,7 +731,10 @@ function findHealthViolationInClause(
 }
 
 const LEG_VETO_SIGNAL_REGEX =
-  /\b(?:veto(?:ed|ing)?(?:\s+leg)?|reject(?:ed|ing)?(?:\s+leg)?|remov(?:ed|e)(?:\s+leg)?|drop(?:ped)?(?:\s+leg)?|disqualif(?:ied|y)|exclud(?:ed|e)|do\s+not\s+(?:bet|play|back|pick|recommend)|cannot\s+(?:bet|play|back|pick|recommend)|must\s+be\s+removed|fatal\s+injury|critical\s+roster\s+scratch|missing_(?:moneyline|spread|total)_coverage|missing\s+(?:moneyline|spread|total)\s+coverage)\b/i;
+  /\b(?:veto(?:ed|ing)?(?:\s+leg)?|reject(?:ed|ing)?(?:\s+leg)?|remov(?:ed|e)(?:\s+leg)?|drop(?:ped)?(?:\s+leg)?|disqualif(?:ied|y)|exclud(?:ed|e)|do\s+not\s+(?:bet|play|back|pick|recommend)|cannot\s+(?:bet|play|back|pick|recommend)|must\s+be\s+removed|fatal\s+injury|critical\s+roster\s+scratch|injury\s+misattribution|missing_(?:moneyline|spread|total)_coverage|missing\s+(?:moneyline|spread|total)\s+coverage|ungrounded|contradicted)\b/i;
+
+const EXPLICIT_LEG_REF_IN_CLAUSE_REGEX =
+  /\b(?:leg|pick|side|parlay|must\s+be\s+removed|vetoed\s+leg|R\d+|ML|moneyline|puckline|over\s+\d|under\s+\d)\b|[+-]\d+(?:\.5|\.0)\b/i;
 
 const PURE_APPROVAL_CLAUSE_REGEX =
   /\b(?:verified|approved|passed|valid|clean)\b/i;
@@ -711,6 +767,74 @@ function resolveRowTeamDescriptor(
   return undefined;
 }
 
+export function mergeVetoedLegTargets(...lists: Array<VetoedLegTarget[] | undefined>): VetoedLegTarget[] {
+  const merged: VetoedLegTarget[] = [];
+  const seen = new Set<string>();
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const item of list) {
+      if (!item) continue;
+      const rowKey = item.rowId ? `row:${item.rowId.toUpperCase()}` : undefined;
+      const teamKey = item.teamLabel ? `team:${item.teamLabel.toLowerCase()}` : (item.teamAliases?.[0] ? `alias:${item.teamAliases[0].toLowerCase()}` : undefined);
+      const evKey = item.eventId ? `ev:${item.eventId}` : '';
+      const key = rowKey || (teamKey ? `${evKey}|${teamKey}` : `raw:${item.reason.slice(0, 60)}`);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push({
+        ...(item.rowId ? { rowId: item.rowId.toUpperCase() } : {}),
+        ...(item.eventId ? { eventId: item.eventId } : {}),
+        ...(item.teamLabel ? { teamLabel: item.teamLabel } : {}),
+        teamAliases: Array.isArray(item.teamAliases) ? Array.from(new Set(item.teamAliases)) : [],
+        reason: item.reason
+      });
+    }
+  }
+  return merged;
+}
+
+export function mergeVetoedClaims(...lists: Array<string[] | undefined>): string[] {
+  const merged: string[] = [];
+  const seen = new Set<string>();
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const raw of list) {
+      if (typeof raw !== 'string') continue;
+      const clean = normalizeText(raw).trim();
+      if (clean.length < 3) continue;
+      const key = clean.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(clean);
+    }
+  }
+  return merged;
+}
+
+/**
+ * Extracts explicitly quoted ungrounded/contradicted/vetoed claim phrases from Critic veto feedback lines.
+ */
+export function extractQuotedVetoedClaims(vetoTexts: string[]): string[] {
+  if (!Array.isArray(vetoTexts) || vetoTexts.length === 0) return [];
+  const claims: string[] = [];
+  for (const raw of vetoTexts) {
+    if (!raw || typeof raw !== 'string') continue;
+    const norm = normalizeText(raw);
+    const rx =
+      /(?:Ungrounded\s+(?:record\/form|form\/score|score|health)\s+claim|Contradicted\s+health\s+claim|Vetoed\s+claim)\s*\(\s*["']([^"']{2,100})["']\s*\)/gi;
+    let m: RegExpExecArray | null;
+    while ((m = rx.exec(norm)) !== null) {
+      const phrase = m[1].trim();
+      if (!phrase) continue;
+      claims.push(phrase);
+      const threePartRecord = phrase.match(/\b(\d{1,3}\s*-\s*\d{1,3}\s*-\s*\d{1,3})\b/);
+      if (threePartRecord) {
+        claims.push(threePartRecord[1].replace(/\s+/g, ''));
+      }
+    }
+  }
+  return mergeVetoedClaims(claims);
+}
+
 /**
  * Extracts vetoed leg targets (row IDs and team aliases) from Critic veto messages.
  */
@@ -734,11 +858,14 @@ export function extractVetoedLegTargets(
       const trimmed = clause.trim();
       if (!trimmed) continue;
       if (/\brow\s+side\s+mismatch\b|\brow_side_mismatch\b/i.test(trimmed)) continue;
-      if (/^Veto\s*\((?:GROUNDING|INJURY ATTRIBUTION RULE|PULL BEFORE PASS)\):/i.test(trimmed) && !/\bmust\s+be\s+removed\b/i.test(trimmed)) {
+      if (/^Veto\s*\(PULL BEFORE PASS\):/i.test(trimmed) && !/\bmust\s+be\s+removed\b/i.test(trimmed)) {
+        continue;
+      }
+      if (/^Veto\s*\((?:GROUNDING|INJURY ATTRIBUTION RULE)\):/i.test(trimmed) && !EXPLICIT_LEG_REF_IN_CLAUSE_REGEX.test(trimmed)) {
         continue;
       }
       if (!LEG_VETO_SIGNAL_REGEX.test(trimmed)) continue;
-      if (PURE_APPROVAL_CLAUSE_REGEX.test(trimmed) && !/\b(?:veto|reject|remove|drop|fatal|missing)\b/i.test(trimmed)) {
+      if (PURE_APPROVAL_CLAUSE_REGEX.test(trimmed) && !/\b(?:veto|reject|remove|drop|fatal|missing|ungrounded|contradicted)\b/i.test(trimmed)) {
         continue;
       }
 
@@ -784,111 +911,306 @@ export function extractVetoedLegTargets(
   return targets;
 }
 
+const EXPLICIT_VETO_EXPLANATION_REGEX =
+  /\b(?:was\s+vetoed|were\s+vetoed|is\s+vetoed|vetoed\s+(?:from|for|due|and)|rejected|remov(?:ed|ing)|drop(?:ped|ping)|exclud(?:ed|ing)|disqualif(?:ied|y)|off\s+the\s+card|not\s+recommend(?:ed|ing)|do\s+not\s+(?:bet|play|back|pick|recommend)|cannot\s+(?:bet|play|back|pick|recommend)|must\s+be\s+removed|avoid(?:ed|ing)?|skip(?:ped|ping)?|pass(?:ed|ing)?\s+on)\b/i;
+
+const LEG_REC_CONTEXT_REGEX =
+  /\b(?:parlay|recommend(?:ed|ing|s)?|recommended\s+bets?|play(?:ing)?|back(?:ing)?|take|taking|pick(?:ed|s|ing)?|bet(?:s|ting)?|ticket|card|leg|legs)\b/i;
+
 function textMatchesAliases(text: string, aliases: string[]): boolean {
-  for (const alias of aliases) {
-    if (alias.length <= 4 && /^[a-z]+$/.test(alias)) {
-      const upperRx = new RegExp(`(?<![a-zA-Z0-9])${escapeRegex(alias.toUpperCase())}(?![a-zA-Z0-9])`);
-      if (upperRx.test(text)) return true;
-      if (alias.length === 4) {
-        const rx = new RegExp(`(?<![a-zA-Z0-9])${escapeRegex(alias)}(?![a-zA-Z0-9])`, 'i');
-        if (rx.test(text)) return true;
-      }
-    } else {
-      const rx = new RegExp(`(?<![a-zA-Z0-9])${escapeRegex(alias)}(?![a-zA-Z0-9])`, 'i');
-      if (rx.test(text)) return true;
-    }
-  }
-  return false;
+  if (!text || aliases.length === 0) return false;
+  const norm = normalizeText(text).toLowerCase();
+  return aliases.some(alias => {
+    const trimmed = alias.trim().toLowerCase();
+    if (trimmed.length < 2) return false;
+    const rx = new RegExp(`(?<![a-z0-9])${escapeRegex(trimmed)}(?![a-z0-9])`, 'i');
+    return rx.test(norm);
+  });
 }
 
-function pickMatchesVetoedTarget(pick: any, target: VetoedLegTarget): boolean {
-  const rowId = typeof pick?.row === 'string' && /^R\d+$/i.test(pick.row.trim())
-    ? pick.row.trim().toUpperCase()
-    : (typeof pick?.id === 'string' && /^R\d+$/i.test(pick.id.trim()) ? pick.id.trim().toUpperCase() : undefined);
-  const sideText = [pick?.side, pick?.pick, pick?.selection, pick?.team, pick?.note, typeof pick === 'string' ? pick : '']
-    .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
-    .join(' ')
-    .trim();
+function pickMatchesVetoedTarget(pk: any, target: VetoedLegTarget): boolean {
+  if (!pk) return false;
+  if (typeof pk === 'string') {
+    return targetMatchesTextSpan(pk, target);
+  }
+  if (typeof pk !== 'object') return false;
 
-  if (target.rowId) {
-    if (rowId && rowId === target.rowId) return true;
-    if (new RegExp(`\\b${escapeRegex(target.rowId)}\\b`, 'i').test(sideText)) return true;
-    if (!rowId && target.teamAliases.length > 0 && textMatchesAliases(sideText, target.teamAliases)) {
-      return true;
-    }
+  const rawRow = pk.row ?? pk.Row ?? pk.rowId ?? pk.id ?? pk.ID;
+  const pkRowId = typeof rawRow === 'string' && /^R\d+$/i.test(rawRow.trim())
+    ? rawRow.trim().toUpperCase()
+    : undefined;
+
+  if (target.rowId && pkRowId) {
+    return pkRowId === target.rowId;
+  }
+  if (target.rowId && targetMatchesTextSpan(String(pk.pick || pk.side || pk.selection || ''), { ...target, teamAliases: [] })) {
+    return true;
+  }
+
+  const pkEventId = typeof pk.event_id === 'string' && pk.event_id.trim()
+    ? pk.event_id.trim()
+    : (typeof pk.eventId === 'string' && pk.eventId.trim() ? pk.eventId.trim() : undefined);
+  if (target.eventId && pkEventId && target.eventId !== pkEventId) {
     return false;
   }
 
-  if (target.teamAliases.length > 0 && textMatchesAliases(sideText, target.teamAliases)) {
-    return true;
-  }
-  return false;
+  const sideText = [pk.side, pk.pick, pk.selection, pk.team, pk.Side, pk.Pick]
+    .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+    .join(' ')
+    .trim();
+  if (!sideText) return false;
+  return targetMatchesTextSpan(sideText, target);
 }
 
 function findSingleBetRewriteViolationInClause(
   clause: string,
   vetoedTargets: VetoedLegTarget[],
-  priorSubWasVetoedSubject: boolean
+  priorSubjectWasVetoed: boolean
 ): { violation: string | null; endsWithVetoedSubject: boolean } {
+  if (!clause || vetoedTargets.length === 0) {
+    return { violation: null, endsWithVetoedSubject: false };
+  }
   const norm = normalizeText(clause);
+  const endsWithVetoed = vetoedTargets.some(t => targetMatchesTextSpan(norm.slice(-120), t));
+
+  SINGLE_BET_REC_REGEX.lastIndex = 0;
+  if (!SINGLE_BET_REC_REGEX.test(norm) || NEGATED_SINGLE_BET_REGEX.test(norm)) {
+    return { violation: null, endsWithVetoedSubject: endsWithVetoed };
+  }
+
+  // Split into sub-clauses so a negated/explanatory veto clause followed by a DIFFERENT grounded leg passes cleanly.
   const subClauses = norm
-    .split(/,\s*(?=(?:so|leaving|making|which\s+leaves|instead|after|while|whereas)\b)|\s+(?:after|because|since|while|whereas)\s+|;\s+/i)
+    .split(/,\s*(?=(?:so|leaving|making|which\s+leaves|instead|thus|therefore)\b)|;\s*/i)
     .map(s => s.trim())
     .filter(Boolean);
 
-  let lastSubWasVetoed = priorSubWasVetoedSubject;
-  for (const sub of subClauses) {
-    const subHasVetoTarget = vetoedTargets.some(
-      t =>
-        (t.rowId && new RegExp(`\\b${escapeRegex(t.rowId)}\\b`, 'i').test(sub)) ||
-        (t.teamAliases.length > 0 && textMatchesAliases(sub, t.teamAliases))
-    );
-    const subHasInlineVeto = INLINE_VETO_REF_REGEX.test(sub);
-    const subIsSingleBetRec = SINGLE_BET_REC_REGEX.test(sub) && !NEGATED_SINGLE_BET_REGEX.test(sub);
+  for (let i = 0; i < subClauses.length; i++) {
+    const sub = subClauses[i];
+    SINGLE_BET_REC_REGEX.lastIndex = 0;
+    if (!SINGLE_BET_REC_REGEX.test(sub) || NEGATED_SINGLE_BET_REGEX.test(sub)) continue;
 
-    if (subIsSingleBetRec) {
-      if (subHasVetoTarget) {
-        const matchedTarget = vetoedTargets.find(
-          t =>
-            (t.rowId && new RegExp(`\\b${escapeRegex(t.rowId)}\\b`, 'i').test(sub)) ||
-            (t.teamAliases.length > 0 && textMatchesAliases(sub, t.teamAliases))
-        );
-        const label = matchedTarget?.rowId || matchedTarget?.teamLabel || 'vetoed leg';
-        return {
-          violation: `Vetoed leg (${label}) was rewritten as a recommended single bet.`,
-          endsWithVetoedSubject: true
-        };
-      }
+    // Look directly in this sub-clause for a vetoed target (taking care if both vetoed & non-vetoed appear, use segment right before single-bet phrase)
+    const mSingle = SINGLE_BET_REC_REGEX.exec(sub);
+    const localSpan = mSingle ? sub.slice(Math.max(0, mSingle.index - 80), mSingle.index + mSingle[0].length) : sub;
 
-      if (subHasInlineVeto || EXPLICIT_VETO_PRONOUN_REGEX.test(sub) || (lastSubWasVetoed && VETO_PRONOUN_REF_REGEX.test(sub))) {
-        return {
-          violation: `Vetoed leg was rewritten as a recommended single bet ("${sub.slice(0, 100)}").`,
-          endsWithVetoedSubject: true
-        };
-      }
+    const directMatch = vetoedTargets.find(t => targetMatchesTextSpan(localSpan, t))
+      || vetoedTargets.find(t => targetMatchesTextSpan(sub, t));
+    if (directMatch && !/^(?:the|that)\s+vetoed/i.test(sub)) {
+      const label = directMatch.rowId || directMatch.teamLabel || 'vetoed leg';
+      return {
+        violation: `Vetoed leg (${label}) must not be rewritten as a recommended single bet.`,
+        endsWithVetoedSubject: true
+      };
     }
 
-    if (subHasVetoTarget || subHasInlineVeto) {
-      lastSubWasVetoed = true;
-    } else if (!VETO_PRONOUN_REF_REGEX.test(sub)) {
-      lastSubWasVetoed = false;
+    // Pronoun fallback when sub-clause refers to prior vetoed subject without naming a non-vetoed team
+    if (
+      (EXPLICIT_VETO_PRONOUN_REGEX.test(sub) || (VETO_PRONOUN_REF_REGEX.test(sub) && (priorSubjectWasVetoed || i > 0)))
+    ) {
+      const prevSub = i > 0 ? subClauses[i - 1] : '';
+      const prevTarget = prevSub ? vetoedTargets.find(t => targetMatchesTextSpan(prevSub, t)) : undefined;
+      if (prevTarget || priorSubjectWasVetoed || EXPLICIT_VETO_PRONOUN_REGEX.test(sub)) {
+        const label = prevTarget?.rowId || prevTarget?.teamLabel || 'vetoed leg';
+        return {
+          violation: `Vetoed leg (${label}) must not be rewritten as a recommended single bet.`,
+          endsWithVetoedSubject: true
+        };
+      }
     }
   }
 
-  return { violation: null, endsWithVetoedSubject: lastSubWasVetoed };
+  return { violation: null, endsWithVetoedSubject: endsWithVetoed };
+}
+
+function targetMatchesTextSpan(text: string, target: VetoedLegTarget): boolean {
+  if (!text) return false;
+  if (target.rowId && new RegExp(`\\b${escapeRegex(target.rowId)}\\b`, 'i').test(text)) {
+    return true;
+  }
+  if (target.teamAliases.length > 0 && textMatchesAliases(text, target.teamAliases)) {
+    return true;
+  }
+  return false;
+}
+
+function findRepeatedVetoedClaimInClause(clause: string, vetoedClaims: string[]): string | null {
+  if (!clause || !Array.isArray(vetoedClaims) || vetoedClaims.length === 0) return null;
+  const normClause = normalizeText(clause);
+  for (const claim of vetoedClaims) {
+    if (!claim || claim.length < 3) continue;
+    const escaped = escapeRegex(claim);
+    const rx = new RegExp(`(?<![a-zA-Z0-9-])${escaped}(?![a-zA-Z0-9-])`, 'i');
+    if (rx.test(normClause)) {
+      return claim;
+    }
+  }
+  return null;
+}
+
+function isParlayLegString(segment: string): boolean {
+  return /\b(?:R\d+|ML|moneyline|puckline|runline|over|under)\b|[+-]\d+(?:\.\d+)?/i.test(segment);
+}
+
+/**
+ * Strips vetoed legs from `+`-separated parlay lists (e.g. "Ottawa ML + Chicago ML + Vancouver +1.5").
+ */
+export function stripVetoedLegsFromParlayText(text: string, vetoedTargets: VetoedLegTarget[]): string {
+  if (!text || vetoedTargets.length === 0 || !text.includes('+')) return text;
+  // Match "+"-joined multi-leg parlay phrases (2+ segments joined by " + ")
+  return text.replace(
+    /([A-Za-z0-9.()\-+\s/']{3,55}?(?:\s+\+\s+[A-Za-z0-9.()\-+\s/']{3,55}?)+)/g,
+    (fullMatch) => {
+      const parts = fullMatch.split(/\s+\+\s+/);
+      if (parts.length < 2) return fullMatch;
+      const looksLikeParlay = parts.some(isParlayLegString);
+      if (!looksLikeParlay) return fullMatch;
+      const kept = parts.filter(part => !vetoedTargets.some(t => targetMatchesTextSpan(part, t)));
+      if (kept.length === parts.length) return fullMatch;
+      return kept.join(' + ');
+    }
+  );
+}
+
+function findVetoedLegRecommendationInClause(
+  clause: string,
+  vetoedTargets: VetoedLegTarget[]
+): { target: VetoedLegTarget; subClause: string } | null {
+  if (!clause || vetoedTargets.length === 0) return null;
+  const norm = normalizeText(clause);
+  const subClauses = norm
+    .split(/,\s*(?=(?:so|leaving|making|which\s+leaves|instead|after|while|whereas)\b)|;\s+/i)
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  for (const sub of subClauses) {
+    if (EXPLICIT_VETO_EXPLANATION_REGEX.test(sub)) continue;
+    const matched = vetoedTargets.find(t => targetMatchesTextSpan(sub, t));
+    if (!matched) continue;
+
+    // Flag if sub-clause either lists it as a "+" parlay leg, includes bet syntax (ML/+1.5/R-id),
+    // or explicitly recommends/plays/picks/backs it.
+    const hasParlayPlus = /\s\+\s/.test(sub);
+    const hasBetMarker =
+      (matched.rowId && new RegExp(`\\b${escapeRegex(matched.rowId)}\\b`, 'i').test(sub)) ||
+      /\b(?:ML|moneyline|puckline|over\s+\d|under\s+\d)\b|[+-]\d+(?:\.5|\.0)\b/i.test(sub);
+    if (hasParlayPlus || (hasBetMarker && LEG_REC_CONTEXT_REGEX.test(sub)) || /\b(?:play|back|take|pick|recommend(?:s|ed|ing)?|parlay)\b/i.test(sub)) {
+      return { target: matched, subClause: sub };
+    }
+  }
+  return null;
+}
+
+function buildVetoTargetFromPick(
+  pk: any,
+  headers: GameHeader[],
+  rowMap: Map<string, RowOptionEntry>,
+  candidates: TeamDescriptor[],
+  reason: string
+): VetoedLegTarget | null {
+  if (!pk) return null;
+  if (typeof pk === 'string') {
+    const rMatch = pk.match(/\b(R\d+)\b/i);
+    const rowId = rMatch ? rMatch[1].toUpperCase() : undefined;
+    const rowEntry = rowId ? rowMap.get(rowId) : undefined;
+    const rowTeam = rowEntry ? resolveRowTeamDescriptor(rowEntry, candidates) : undefined;
+    const textTeam = rowTeam || findTeamMentionsInText(pk, candidates)[0]?.team;
+    const matchedEntry = textTeam ? undefined : matchTeamByLabel(pk);
+    const teamAliases = textTeam
+      ? textTeam.allAliases
+      : (matchedEntry ? descriptorFromEntry(matchedEntry).allAliases : []);
+    if (!rowId && teamAliases.length === 0) return null;
+    return {
+      ...(rowId ? { rowId } : {}),
+      eventId: rowEntry?.eventId || textTeam?.eventIds[0],
+      teamLabel: textTeam?.label || matchedEntry?.name,
+      teamAliases,
+      reason: reason.slice(0, 140)
+    };
+  }
+
+  if (typeof pk !== 'object') return null;
+  let rowId = typeof pk.row === 'string' && /^R\d+$/i.test(pk.row.trim())
+    ? pk.row.trim().toUpperCase()
+    : (typeof pk.id === 'string' && /^R\d+$/i.test(pk.id.trim()) ? pk.id.trim().toUpperCase() : undefined);
+  const sideText = [pk.side, pk.pick, pk.selection, pk.team, pk.note]
+    .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+    .join(' ')
+    .trim();
+  if (!rowId && sideText) {
+    const m = sideText.match(/\b(R\d+)\b/i);
+    if (m) rowId = m[1].toUpperCase();
+  }
+
+  const rowEntry = rowId ? rowMap.get(rowId) : undefined;
+  const eventId = getEventIdForPick(pk, headers) || rowEntry?.eventId;
+  const scopedCandidates = eventId
+    ? candidates.filter(c => c.eventIds.length === 0 || c.eventIds.includes(eventId))
+    : candidates;
+  const pool = scopedCandidates.length > 0 ? scopedCandidates : candidates;
+
+  const sideTeam = sideText ? findTeamMentionsInText(sideText, pool)[0]?.team : undefined;
+  const rowTeam = rowEntry ? resolveRowTeamDescriptor(rowEntry, pool) : undefined;
+  const team = sideTeam || rowTeam;
+  const matchedEntry = !team && sideText ? matchTeamByLabel(sideText) : undefined;
+  const teamAliases = team
+    ? team.allAliases
+    : (matchedEntry ? descriptorFromEntry(matchedEntry).allAliases : []);
+  const teamLabel = team?.label || matchedEntry?.name || (sideText || undefined);
+
+  if (!rowId && teamAliases.length === 0) return null;
+  return {
+    ...(rowId ? { rowId } : {}),
+    ...(eventId ? { eventId } : {}),
+    ...(teamLabel ? { teamLabel } : {}),
+    teamAliases,
+    reason: reason.slice(0, 140)
+  };
+}
+
+function isRecommendationTable(comp: any): boolean {
+  if (!comp || comp.type !== 'DataTable' || !comp.props) return false;
+  const title = String(comp.props.title || '');
+  if (/\b(?:recommend|bet|pick|parlay|play|selection|card|leg)\b/i.test(title) && !/\bslate\s+overview\b|\bodds\s+board\b/i.test(title)) {
+    return true;
+  }
+  const cols = Array.isArray(comp.props.columns) ? comp.props.columns : [];
+  if (cols.some((c: any) => /^(?:pick|leg|selection|bet|side|parlay)$/i.test(String(c?.key || c?.header || '')))) {
+    return true;
+  }
+  const headers = Array.isArray(comp.props.headers) ? comp.props.headers : [];
+  return headers.some((h: any) => /^(?:pick|leg|selection|bet|side|parlay)$/i.test(String(h || '')));
+}
+
+function dataTableRowMatchesTarget(row: any, target: VetoedLegTarget): boolean {
+  if (!row || typeof row !== 'object') return false;
+  const rawRow = row.row ?? row.Row ?? row.id ?? row.ID;
+  const rowId = typeof rawRow === 'string' && /^R\d+$/i.test(rawRow.trim())
+    ? rawRow.trim().toUpperCase()
+    : undefined;
+  if (target.rowId && rowId) return rowId === target.rowId;
+  const joined = Object.values(row)
+    .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+    .join(' ');
+  return targetMatchesTextSpan(joined, target);
 }
 
 /**
  * Deterministically audits a proposal or analyst report for:
- *  1) Ungrounded score / goals-allowed claims not in successful tool results
+ *  1) Ungrounded score / goals-allowed / form claims not in successful tool results
  *  2) Contradicted or ungrounded positive team health claims
- *  3) Vetoed legs retained in picks or rewritten as recommended single bets
+ *  3) Vetoed legs retained in picks/Recommended Bets tables or rewritten as recommended bets/singles
+ *  4) Previously vetoed claims repeated in retry attempts or final analysis
  */
 export function auditClaimGrounding(
   proposal: any,
   evidenceText: string,
   slateText?: string,
-  options?: { headers?: GameHeader[]; vetoTexts?: string[] }
+  options?: {
+    headers?: GameHeader[];
+    vetoTexts?: string[];
+    vetoedLegs?: VetoedLegTarget[];
+    vetoedClaims?: string[];
+  }
 ): GroundingAuditResult {
   if (!proposal) return { pass: true, violations: [], flags: [] };
 
@@ -912,13 +1234,34 @@ export function auditClaimGrounding(
   const candidates = buildTeamDescriptors(headers, outInjuries, hasSportsSignal);
   const groundedRecords = extractGroundedRecords(successfulEvidence, candidates);
   const injuryCoverage = collectSuccessfulInjuryCoverage(successfulEvidence, candidates);
-  const vetoedTargets = extractVetoedLegTargets(options?.vetoTexts || [], headers, rowMap, candidates);
+  const vetoedTargets = mergeVetoedLegTargets(
+    options?.vetoedLegs,
+    extractVetoedLegTargets(options?.vetoTexts || [], headers, rowMap, candidates)
+  );
+  const priorVetoedClaims = mergeVetoedClaims(
+    options?.vetoedClaims,
+    extractQuotedVetoedClaims(options?.vetoTexts || [])
+  );
 
   const violations: string[] = [];
   const flags: string[] = [];
+  const detectedVetoedLegs: VetoedLegTarget[] = [];
+  const detectedVetoedClaims: string[] = [];
+
   const addViolation = (flag: string, msg: string) => {
     if (!flags.includes(flag)) flags.push(flag);
     if (!violations.includes(msg)) violations.push(msg);
+  };
+  const recordClaims = (claims: string[]) => {
+    for (const c of claims) {
+      if (c && !detectedVetoedClaims.some(x => x.toLowerCase() === c.toLowerCase())) {
+        detectedVetoedClaims.push(c);
+      }
+    }
+  };
+  const recordVetoedLeg = (target: VetoedLegTarget | null) => {
+    if (!target) return;
+    detectedVetoedLegs.push(target);
   };
 
   if (typeof proposal === 'object' && Array.isArray(proposal.picks) && vetoedTargets.length > 0) {
@@ -929,19 +1272,25 @@ export function auditClaimGrounding(
           'vetoed_leg_kept',
           `Vetoed leg (${matched.rowId || matched.teamLabel || 'pick'}) must be removed from picks.`
         );
+        recordVetoedLeg(matched);
       }
     }
   }
 
   let priorSubWasVetoed = false;
-  const checkText = (text: unknown, sideHint?: string) => {
+  const checkText = (
+    text: unknown,
+    sideHint?: string,
+    onViolation?: (reason: string) => void,
+    checkLegRec: boolean = true
+  ) => {
     if (typeof text !== 'string' || !text.trim()) return;
     priorSubWasVetoed = false;
     const clauses = text.split(/(?<=[.!?])\s+|\n+|;\s+/);
     for (const clause of clauses) {
       if (!clause.trim()) continue;
 
-      const formErr = findUngroundedFormClaimInClause(
+      const formDetail = findUngroundedFormClaimDetailInClause(
         clause,
         cleanEvidence,
         groundedRecords,
@@ -949,7 +1298,11 @@ export function auditClaimGrounding(
         hasSportsSignal,
         sideHint
       );
-      if (formErr) addViolation('ungrounded_form_claim', formErr);
+      if (formDetail) {
+        addViolation('ungrounded_form_claim', formDetail.reason);
+        recordClaims(formDetail.claimTexts);
+        onViolation?.(formDetail.reason);
+      }
 
       const healthErr = findHealthViolationInClause(
         clause,
@@ -959,11 +1312,34 @@ export function auditClaimGrounding(
         injuryCoverage,
         sideHint
       );
-      if (healthErr) addViolation(healthErr.flag, healthErr.reason);
+      if (healthErr) {
+        addViolation(healthErr.flag, healthErr.reason);
+        recordClaims([healthErr.claimText]);
+        onViolation?.(healthErr.reason);
+      }
+
+      const repeatedClaim = findRepeatedVetoedClaimInClause(clause, priorVetoedClaims);
+      if (repeatedClaim) {
+        const msg = `Vetoed claim ("${repeatedClaim}") must not be repeated.`;
+        addViolation('vetoed_claim_repeated', msg);
+        recordClaims([repeatedClaim]);
+        onViolation?.(msg);
+      }
 
       const singleBetRes = findSingleBetRewriteViolationInClause(clause, vetoedTargets, priorSubWasVetoed);
       priorSubWasVetoed = singleBetRes.endsWithVetoedSubject;
-      if (singleBetRes.violation) addViolation('vetoed_leg_rewritten', singleBetRes.violation);
+      if (singleBetRes.violation) {
+        addViolation('vetoed_leg_rewritten', singleBetRes.violation);
+      } else if (checkLegRec && vetoedTargets.length > 0) {
+        const legRec = findVetoedLegRecommendationInClause(clause, vetoedTargets);
+        if (legRec) {
+          const label = legRec.target.rowId || legRec.target.teamLabel || 'vetoed leg';
+          addViolation(
+            'vetoed_leg_recommended',
+            `Vetoed leg (${label}) must not be recommended in analysis.`
+          );
+        }
+      }
     }
   };
 
@@ -985,18 +1361,23 @@ export function auditClaimGrounding(
     if (Array.isArray(proposal.picks)) {
       for (const pk of proposal.picks) {
         if (!pk || typeof pk !== 'object') {
-          checkText(pk);
+          checkText(pk, undefined, (reason) => {
+            recordVetoedLeg(buildVetoTargetFromPick(pk, headers, rowMap, candidates, reason));
+          }, false);
           continue;
         }
         const sideHint = String(pk.side || pk.pick || pk.selection || pk.team || '');
-        checkText(pk.reason, sideHint);
-        checkText(pk.rationale, sideHint);
-        checkText(pk.edge, sideHint);
-        checkText(pk.note, sideHint);
-        checkText(pk.description, sideHint);
-        checkText(pk.claim, sideHint);
+        const onPickViolation = (reason: string) => {
+          recordVetoedLeg(buildVetoTargetFromPick(pk, headers, rowMap, candidates, reason));
+        };
+        checkText(pk.reason, sideHint, onPickViolation, false);
+        checkText(pk.rationale, sideHint, onPickViolation, false);
+        checkText(pk.edge, sideHint, onPickViolation, false);
+        checkText(pk.note, sideHint, onPickViolation, false);
+        checkText(pk.description, sideHint, onPickViolation, false);
+        checkText(pk.claim, sideHint, onPickViolation, false);
         if (Array.isArray(pk.reasons)) {
-          for (const r of pk.reasons) checkText(r, sideHint);
+          for (const r of pk.reasons) checkText(r, sideHint, onPickViolation, false);
         }
       }
     }
@@ -1004,20 +1385,26 @@ export function auditClaimGrounding(
       for (const sc of proposal.scorecards) {
         if (!sc || typeof sc !== 'object') continue;
         const sideHint = String(sc.pick || sc.side || '');
-        checkText(sc.note, sideHint);
-        checkText(sc.reason, sideHint);
-        checkText(sc.summary, sideHint);
+        const onScViolation = (reason: string) => {
+          recordVetoedLeg(buildVetoTargetFromPick(sc, headers, rowMap, candidates, reason));
+        };
+        checkText(sc.note, sideHint, onScViolation, false);
+        checkText(sc.reason, sideHint, onScViolation, false);
+        checkText(sc.summary, sideHint, onScViolation, false);
         if (Array.isArray(sc.reasons)) {
-          for (const r of sc.reasons) checkText(r, sideHint);
+          for (const r of sc.reasons) checkText(r, sideHint, onScViolation, false);
         }
       }
     }
     if (proposal.scorecard && typeof proposal.scorecard === 'object') {
       const sc = proposal.scorecard;
       const sideHint = String(sc.pick || sc.side || '');
-      checkText(sc.note, sideHint);
-      checkText(sc.reason, sideHint);
-      checkText(sc.summary, sideHint);
+      const onScViolation = (reason: string) => {
+        recordVetoedLeg(buildVetoTargetFromPick(sc, headers, rowMap, candidates, reason));
+      };
+      checkText(sc.note, sideHint, onScViolation, false);
+      checkText(sc.reason, sideHint, onScViolation, false);
+      checkText(sc.summary, sideHint, onScViolation, false);
     }
     if (Array.isArray(proposal.components)) {
       for (const comp of proposal.components) {
@@ -1028,17 +1415,39 @@ export function auditClaimGrounding(
           }
         } else if (comp.type === 'MetricCard' && typeof comp.props.subtitle === 'string') {
           checkText(comp.props.subtitle);
+        } else if (comp.type === 'DataTable' && Array.isArray(comp.props.rows)) {
+          const isRecs = isRecommendationTable(comp);
+          for (const row of comp.props.rows) {
+            if (!row || typeof row !== 'object') continue;
+            if (isRecs && vetoedTargets.length > 0) {
+              const matched = vetoedTargets.find(t => dataTableRowMatchesTarget(row, t));
+              if (matched) {
+                addViolation(
+                  'vetoed_leg_kept',
+                  `Vetoed leg (${matched.rowId || matched.teamLabel || 'pick'}) must be removed from ${comp.props.title || 'DataTable'}.`
+                );
+              }
+            }
+            for (const val of Object.values(row)) {
+              if (typeof val === 'string') checkText(val, undefined, undefined, false);
+            }
+          }
         }
       }
     }
   }
+
+  const mergedLegs = mergeVetoedLegTargets(detectedVetoedLegs);
+  const mergedClaims = mergeVetoedClaims(detectedVetoedClaims);
 
   if (violations.length > 0) {
     return {
       pass: false,
       violations,
       flags,
-      feedback: `Veto (GROUNDING): ${violations.join(' ')}`
+      feedback: `Veto (GROUNDING): ${violations.join(' ')}`,
+      ...(mergedLegs.length > 0 ? { vetoedLegs: mergedLegs } : {}),
+      ...(mergedClaims.length > 0 ? { vetoedClaims: mergedClaims } : {})
     };
   }
 
@@ -1046,14 +1455,20 @@ export function auditClaimGrounding(
 }
 
 /**
- * Deterministically removes vetoed legs from picks/scorecards and strips ungrounded form/score/health
- * claims and vetoed single-bet rewrites from report prose fields.
+ * Deterministically removes vetoed legs from picks/scorecards/Recommended Bets tables and strips
+ * ungrounded/vetoed form/score/health claims and vetoed leg recommendations from report prose fields.
  */
 export function sanitizeUngroundedClaims<T extends Record<string, any>>(
   report: T,
   evidenceText: string,
   slateText?: string,
-  options?: { headers?: GameHeader[]; vetoTexts?: string[] }
+  options?: {
+    headers?: GameHeader[];
+    vetoTexts?: string[];
+    vetoedLegs?: VetoedLegTarget[];
+    vetoedClaims?: string[];
+    stripVetoedLegRecommendations?: boolean;
+  }
 ): T {
   if (!report || typeof report !== 'object') return report;
 
@@ -1077,11 +1492,27 @@ export function sanitizeUngroundedClaims<T extends Record<string, any>>(
   const candidates = buildTeamDescriptors(headers, outInjuries, hasSportsSignal);
   const groundedRecords = extractGroundedRecords(successfulEvidence, candidates);
   const injuryCoverage = collectSuccessfulInjuryCoverage(successfulEvidence, candidates);
-  const vetoedTargets = extractVetoedLegTargets(options?.vetoTexts || [], headers, rowMap, candidates);
 
-  const sentenceHasViolation = (sentence: string, sideHint?: string, priorSubWasVetoed: boolean = false): { hasViolation: boolean; endsWithVetoedSubject: boolean } => {
+  let vetoedTargets = mergeVetoedLegTargets(
+    options?.vetoedLegs,
+    extractVetoedLegTargets(options?.vetoTexts || [], headers, rowMap, candidates)
+  );
+  const vetoedClaims = mergeVetoedClaims(
+    options?.vetoedClaims,
+    extractQuotedVetoedClaims(options?.vetoTexts || [])
+  );
+
+  const sentenceHasViolation = (
+    sentence: string,
+    sideHint?: string,
+    priorSubWasVetoed: boolean = false,
+    checkLegRec: boolean = false
+  ): { hasViolation: boolean; endsWithVetoedSubject: boolean } => {
     if (!sentence.trim()) return { hasViolation: false, endsWithVetoedSubject: priorSubWasVetoed };
     const singleRes = findSingleBetRewriteViolationInClause(sentence, vetoedTargets, priorSubWasVetoed);
+    const legRecViolation = checkLegRec && vetoedTargets.length > 0
+      ? Boolean(findVetoedLegRecommendationInClause(sentence, vetoedTargets))
+      : false;
     const hasViolation = Boolean(
       findUngroundedFormClaimInClause(
         sentence,
@@ -1092,17 +1523,20 @@ export function sanitizeUngroundedClaims<T extends Record<string, any>>(
         sideHint
       ) ||
       findHealthViolationInClause(sentence, candidates, outInjuries, headers, injuryCoverage, sideHint) ||
-      singleRes.violation
+      findRepeatedVetoedClaimInClause(sentence, vetoedClaims) ||
+      singleRes.violation ||
+      legRecViolation
     );
     return { hasViolation, endsWithVetoedSubject: singleRes.endsWithVetoedSubject };
   };
 
-  const cleanTextField = (text: string, sideHint?: string): string => {
-    const sentences = text.split(/(?<=[.!?])\s+|\n+/);
+  const cleanTextField = (text: string, sideHint?: string, checkLegRec: boolean = true): string => {
+    const preStripped = vetoedTargets.length > 0 ? stripVetoedLegsFromParlayText(text, vetoedTargets) : text;
+    const sentences = preStripped.split(/(?<=[.!?])\s+|\n+/);
     const kept: string[] = [];
     let priorSubWasVetoed = false;
     for (const s of sentences) {
-      const checkRes = sentenceHasViolation(s, sideHint, priorSubWasVetoed);
+      const checkRes = sentenceHasViolation(s, sideHint, priorSubWasVetoed, checkLegRec);
       const prevVetoFlag = priorSubWasVetoed;
       priorSubWasVetoed = checkRes.endsWithVetoedSubject;
       if (!checkRes.hasViolation) {
@@ -1111,7 +1545,7 @@ export function sanitizeUngroundedClaims<T extends Record<string, any>>(
       }
       // Try removing an offending parenthetical or contrast sub-clause first
       const withoutParen = s.replace(/\s*\([^)]*\)/g, '').replace(/\s{2,}/g, ' ').trim();
-      if (withoutParen && withoutParen !== s.trim() && !sentenceHasViolation(withoutParen, sideHint, prevVetoFlag).hasViolation) {
+      if (withoutParen && withoutParen !== s.trim() && !sentenceHasViolation(withoutParen, sideHint, prevVetoFlag, checkLegRec).hasViolation) {
         kept.push(withoutParen);
         continue;
       }
@@ -1121,12 +1555,12 @@ export function sanitizeUngroundedClaims<T extends Record<string, any>>(
         let subPrior = prevVetoFlag;
         const cleanSubs: string[] = [];
         for (const part of subParts) {
-          const partRes = sentenceHasViolation(part, sideHint, subPrior);
+          const partRes = sentenceHasViolation(part, sideHint, subPrior, checkLegRec);
           subPrior = partRes.endsWithVetoedSubject;
           if (!partRes.hasViolation) cleanSubs.push(part);
         }
         const rejoined = cleanSubs.join(', ').trim();
-        if (rejoined && !sentenceHasViolation(rejoined, sideHint, prevVetoFlag).hasViolation) {
+        if (rejoined && !sentenceHasViolation(rejoined, sideHint, prevVetoFlag, checkLegRec).hasViolation) {
           kept.push(rejoined);
         }
       }
@@ -1135,6 +1569,37 @@ export function sanitizeUngroundedClaims<T extends Record<string, any>>(
   };
 
   const rep = report as Record<string, any>;
+  const stripRecs = options?.stripVetoedLegRecommendations !== false;
+
+  // If a pick repeats a previously vetoed claim in its reasoning, that leg is also vetoed.
+  if (Array.isArray(rep.picks) && vetoedClaims.length > 0) {
+    const additionalTargets: VetoedLegTarget[] = [];
+    for (const pk of rep.picks) {
+      if (!pk || typeof pk !== 'object') {
+        if (typeof pk === 'string' && findRepeatedVetoedClaimInClause(pk, vetoedClaims)) {
+          const t = buildVetoTargetFromPick(pk, headers, rowMap, candidates, 'Vetoed claim repeated in pick.');
+          if (t) additionalTargets.push(t);
+        }
+        continue;
+      }
+      const pkTexts = [
+        pk.reason,
+        pk.rationale,
+        pk.edge,
+        pk.note,
+        pk.description,
+        pk.claim,
+        ...(Array.isArray(pk.reasons) ? pk.reasons : [])
+      ].filter((x): x is string => typeof x === 'string' && x.trim().length > 0);
+      if (pkTexts.some(t => Boolean(findRepeatedVetoedClaimInClause(t, vetoedClaims)))) {
+        const t = buildVetoTargetFromPick(pk, headers, rowMap, candidates, 'Vetoed claim repeated in pick reasoning.');
+        if (t) additionalTargets.push(t);
+      }
+    }
+    if (additionalTargets.length > 0) {
+      vetoedTargets = mergeVetoedLegTargets(vetoedTargets, additionalTargets);
+    }
+  }
 
   if (Array.isArray(rep.picks)) {
     if (vetoedTargets.length > 0) {
@@ -1145,12 +1610,12 @@ export function sanitizeUngroundedClaims<T extends Record<string, any>>(
       const sideHint = String(pk.side || pk.pick || pk.selection || pk.team || '');
       for (const field of ['reason', 'rationale', 'edge', 'note', 'description', 'claim'] as const) {
         if (typeof pk[field] === 'string' && pk[field].trim()) {
-          pk[field] = cleanTextField(pk[field], sideHint);
+          pk[field] = cleanTextField(pk[field], sideHint, false);
         }
       }
       if (Array.isArray(pk.reasons)) {
         pk.reasons = pk.reasons
-          .map((r: any) => (typeof r === 'string' ? cleanTextField(r, sideHint) : r))
+          .map((r: any) => (typeof r === 'string' ? cleanTextField(r, sideHint, false) : r))
           .filter((r: any) => typeof r !== 'string' || r.trim().length > 0);
       }
     }
@@ -1165,7 +1630,7 @@ export function sanitizeUngroundedClaims<T extends Record<string, any>>(
       const sideHint = String(sc.pick || sc.side || '');
       for (const field of ['note', 'reason', 'summary'] as const) {
         if (typeof sc[field] === 'string' && sc[field].trim()) {
-          sc[field] = cleanTextField(sc[field], sideHint);
+          sc[field] = cleanTextField(sc[field], sideHint, false);
         }
       }
     }
@@ -1173,18 +1638,18 @@ export function sanitizeUngroundedClaims<T extends Record<string, any>>(
 
   for (const field of ['summary', 'analysis', 'reason', 'rationale', 'conclusion'] as const) {
     if (typeof rep[field] === 'string' && rep[field].trim()) {
-      rep[field] = cleanTextField(rep[field]);
+      rep[field] = cleanTextField(rep[field], undefined, stripRecs);
     }
   }
 
   if (Array.isArray(rep.insights)) {
     rep.insights = rep.insights
-      .map((ins: any) => (typeof ins === 'string' ? cleanTextField(ins) : ins))
+      .map((ins: any) => (typeof ins === 'string' ? cleanTextField(ins, undefined, stripRecs) : ins))
       .filter((ins: any) => typeof ins !== 'string' || ins.trim().length > 0);
   }
   if (Array.isArray(rep.anomalies)) {
     rep.anomalies = rep.anomalies
-      .map((anom: any) => (typeof anom === 'string' ? cleanTextField(anom) : anom))
+      .map((anom: any) => (typeof anom === 'string' ? cleanTextField(anom, undefined, false) : anom))
       .filter((anom: any) => typeof anom !== 'string' || anom.trim().length > 0);
   }
   if (Array.isArray(rep.components)) {
@@ -1193,9 +1658,9 @@ export function sanitizeUngroundedClaims<T extends Record<string, any>>(
       if (comp.type === 'InsightList' && Array.isArray(comp.props.insights)) {
         comp.props.insights = comp.props.insights
           .map((ins: any) => {
-            if (typeof ins === 'string') return cleanTextField(ins);
+            if (typeof ins === 'string') return cleanTextField(ins, undefined, stripRecs);
             if (ins && typeof ins === 'object' && typeof ins.message === 'string') {
-              return { ...ins, message: cleanTextField(ins.message) };
+              return { ...ins, message: cleanTextField(ins.message, undefined, stripRecs) };
             }
             return ins;
           })
@@ -1205,10 +1670,49 @@ export function sanitizeUngroundedClaims<T extends Record<string, any>>(
             return true;
           });
       } else if (comp.type === 'MetricCard' && typeof comp.props.subtitle === 'string') {
-        comp.props.subtitle = cleanTextField(comp.props.subtitle);
+        comp.props.subtitle = cleanTextField(comp.props.subtitle, undefined, stripRecs);
+      } else if (comp.type === 'DataTable' && Array.isArray(comp.props.rows)) {
+        const isRecs = isRecommendationTable(comp);
+        if (isRecs && vetoedTargets.length > 0) {
+          comp.props.rows = comp.props.rows.filter((row: any) => !vetoedTargets.some(t => dataTableRowMatchesTarget(row, t)));
+        }
+        for (const row of comp.props.rows) {
+          if (!row || typeof row !== 'object') continue;
+          for (const key of Object.keys(row)) {
+            if (typeof row[key] === 'string' && row[key].trim()) {
+              row[key] = cleanTextField(row[key], undefined, false);
+            }
+          }
+        }
       }
     }
   }
 
+  return report;
+}
+
+/**
+ * Normalizes a report into a clean pass if all proposed picks were removed by Critic vetoes.
+ */
+export function normalizePassIfAllLegsVetoed<T extends Record<string, any>>(
+  report: T,
+  initialPickCount: number,
+  hadVetoes: boolean
+): T {
+  if (!report || typeof report !== 'object') return report;
+  const rep = report as Record<string, any>;
+  if (initialPickCount > 0 && hadVetoes && Array.isArray(rep.picks) && rep.picks.length === 0) {
+    rep.pass = true;
+    rep.status = 'no_play';
+    if (!rep.ui_title || !/insufficient|pass|no play/i.test(String(rep.ui_title))) {
+      rep.ui_title = 'Pass';
+    }
+    if (typeof rep.summary !== 'string' || !rep.summary.trim()) {
+      rep.summary = 'Pass: every proposed leg was vetoed during verification.';
+    }
+    if (typeof rep.analysis === 'string' && !rep.analysis.trim()) {
+      rep.analysis = rep.summary;
+    }
+  }
   return report;
 }

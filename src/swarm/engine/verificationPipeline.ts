@@ -7,7 +7,15 @@ import { getManagerContextTokenCeiling } from './synthesisPipeline.ts';
 import { parseGameHeaders, renderHeaders, filterPicksByCoverage } from '../context/gameHeaders.ts';
 import { INJURY_ATTRIBUTION_RULE, sanitizeMisattributedPicksAndText } from '../tools/injuryAttribution.ts';
 import { MARKET_AND_ROW_RULES, sanitizeRowMismatchedPicks, type MarketToolRecord } from '../tools/marketRowBinding.ts';
-import { GROUNDING_RULE, sanitizeUngroundedClaims } from '../tools/claimGrounding.ts';
+import {
+    GROUNDING_RULE,
+    VETO_STICKS_RULE,
+    mergeVetoedClaims,
+    mergeVetoedLegTargets,
+    normalizePassIfAllLegsVetoed,
+    sanitizeUngroundedClaims,
+    type VetoedLegTarget
+} from '../tools/claimGrounding.ts';
 import {
     PULL_BEFORE_PASS_RULE,
     mergeToolCallTraceEntries,
@@ -35,6 +43,8 @@ export interface VerificationPipelineParams {
     marketToolRecords?: MarketToolRecord[];
     toolCallTrace?: ToolCallTraceEntry[];
     criticVetoes?: string[];
+    vetoedLegs?: VetoedLegTarget[];
+    vetoedClaims?: string[];
     appComputedCounts?: string;
     toolRegistry?: ToolRegistry;
     queryCache?: GameQueryCache;
@@ -70,9 +80,9 @@ export async function runDeepAnalysisVerification(
 
     const isMorningJudge = (settings as any)?.responseSchema === 'morning_judge';
     if (isMorningJudge) {
-        criticAgent.setSystemInstruction(`You are the Swarm Verification Critic for Sports Betting Pre-game Judgment. Audit the proposed prediction strictly against the raw data, odds, injuries, and specialist reports. Ensure winProbHome (0.01-0.99), fairSpread, and likelyWinner are logically sound and formatted properly. Team names in Game Slate are authoritative; never rename or flag them.\n\n${INJURY_ATTRIBUTION_RULE}\n\n${MARKET_AND_ROW_RULES}\n\n${GROUNDING_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
+        criticAgent.setSystemInstruction(`You are the Swarm Verification Critic for Sports Betting Pre-game Judgment. Audit the proposed prediction strictly against the raw data, odds, injuries, and specialist reports. Ensure winProbHome (0.01-0.99), fairSpread, and likelyWinner are logically sound and formatted properly. Team names in Game Slate are authoritative; never rename or flag them.\n\n${INJURY_ATTRIBUTION_RULE}\n\n${MARKET_AND_ROW_RULES}\n\n${GROUNDING_RULE}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
     } else {
-        criticAgent.setSystemInstruction(`You are the Swarm Verification Critic. Audit proposed analyses strictly against the raw data, historical baselines, and analyst reports. Systematically evaluate and attempt to refute hypotheses formulated by specialists. Flag discrepancies, missed anomalies, ungrounded assumptions, or schema violations. VETO POLICY: Only fail ("pass": false) a betting proposal when a recommended pick leg itself has a fatal injury, fabricated stat/odds, missing coverage on that leg, or direct rule violation; do not veto valid proposed picks just because other unpicked games on the slate have heavy injuries or incomplete roster data. Team names in Game Slate are authoritative; never rename or flag them.\n\nCRITIC SCOPE:\n- You may call tools to verify evidence.\n- Only pull evidence for the games/legs the analyzers proposed.\n- Do not scan the full slate.\n- A leg fails only if your own tool pull for that game does not support the cited market or injury.\n- Do not reject a leg solely because a prior evidence bundle was incomplete.\n- Never call shell, bash, python, or built-in code execution tools; when scoped evidence is already supplied below, output verdict JSON directly.\n\n${INJURY_ATTRIBUTION_RULE}\n\n${MARKET_AND_ROW_RULES}\n\n${GROUNDING_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
+        criticAgent.setSystemInstruction(`You are the Swarm Verification Critic. Audit proposed analyses strictly against the raw data, historical baselines, and analyst reports. Systematically evaluate and attempt to refute hypotheses formulated by specialists. Flag discrepancies, missed anomalies, ungrounded assumptions, or schema violations. VETO POLICY: Only fail ("pass": false) a betting proposal when a recommended pick leg itself has a fatal injury, fabricated stat/odds, missing coverage on that leg, or direct rule violation; do not veto valid proposed picks just because other unpicked games on the slate have heavy injuries or incomplete roster data. Team names in Game Slate are authoritative; never rename or flag them.\n\nCRITIC SCOPE:\n- You may call tools to verify evidence.\n- Only pull evidence for the games/legs the analyzers proposed.\n- Do not scan the full slate.\n- A leg fails only if your own tool pull for that game does not support the cited market or injury.\n- Do not reject a leg solely because a prior evidence bundle was incomplete.\n- Never call shell, bash, python, or built-in code execution tools; when scoped evidence is already supplied below, output verdict JSON directly.\n\n${INJURY_ATTRIBUTION_RULE}\n\n${MARKET_AND_ROW_RULES}\n\n${GROUNDING_RULE}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
     }
 
     const lifecycle = new AnalysisLifecycle(managerAgent, criticAgent, 2, {
@@ -104,6 +114,8 @@ export async function runDeepAnalysisVerification(
             ...(p.marketToolRecords ? { marketToolRecords: p.marketToolRecords } : {}),
             ...(p.toolCallTrace && p.toolCallTrace.length > 0 ? { toolCallTrace: p.toolCallTrace } : {}),
             ...(p.criticVetoes && p.criticVetoes.length > 0 ? { criticVetoes: p.criticVetoes } : {}),
+            ...(p.vetoedLegs && p.vetoedLegs.length > 0 ? { vetoedLegs: p.vetoedLegs } : {}),
+            ...(p.vetoedClaims && p.vetoedClaims.length > 0 ? { vetoedClaims: p.vetoedClaims } : {}),
             ...((p as any).appComputedCounts ? { appComputedCounts: (p as any).appComputedCounts } : {})
         },
         context,
@@ -120,6 +132,62 @@ export async function runDeepAnalysisVerification(
         : guardManagerResponse(finalProposal, "Executive Swarm Synthesis");
 
     if (finalAnalysis && typeof finalAnalysis === 'object') {
+        const combinedVerifiedToolResults = [p.toolResults, lifecycleResult?.verifiedToolEvidence]
+            .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+            .join('\n\n');
+        const combinedToolTrace = mergeToolCallTraceEntries([
+            ...(Array.isArray(p.toolCallTrace) ? p.toolCallTrace : []),
+            ...(Array.isArray(lifecycleResult?.verifiedToolTrace) ? lifecycleResult.verifiedToolTrace : [])
+        ]);
+        const combinedVetoTexts = Array.from(
+            new Set(
+                [
+                    ...(Array.isArray(p.criticVetoes) ? p.criticVetoes : []),
+                    ...(Array.isArray(lifecycleResult?.accumulatedVetoes) ? lifecycleResult.accumulatedVetoes : []),
+                    ...(lifecycleResult?.criticFeedback && !lifecycleResult.success ? [lifecycleResult.criticFeedback] : [])
+                ].filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+            )
+        );
+        const combinedVetoedLegs = mergeVetoedLegTargets(p.vetoedLegs, lifecycleResult?.vetoedLegs);
+        const combinedVetoedClaims = mergeVetoedClaims(p.vetoedClaims, lifecycleResult?.vetoedClaims);
+
+        const initialPickCount = Array.isArray(finalAnalysis.picks) ? finalAnalysis.picks.length : 0;
+        const boardSourceForSanitize = rawInput || task || headersText;
+
+        if (combinedVerifiedToolResults || p.toolResults) {
+            sanitizeMisattributedPicksAndText(
+                finalAnalysis,
+                combinedVerifiedToolResults || p.toolResults!,
+                headersText || rawInput || task
+            );
+        }
+        sanitizeRowMismatchedPicks(finalAnalysis, boardSourceForSanitize, parsedHeaders);
+        if (
+            parsedHeaders.length > 0 ||
+            combinedVerifiedToolResults ||
+            combinedVetoTexts.length > 0 ||
+            combinedVetoedLegs.length > 0 ||
+            combinedVetoedClaims.length > 0
+        ) {
+            sanitizeUngroundedClaims(finalAnalysis, combinedVerifiedToolResults, boardSourceForSanitize, {
+                headers: parsedHeaders,
+                vetoTexts: combinedVetoTexts,
+                vetoedLegs: combinedVetoedLegs,
+                vetoedClaims: combinedVetoedClaims,
+                stripVetoedLegRecommendations: true
+            });
+        }
+        if (parsedHeaders.length > 0 || combinedVerifiedToolResults || combinedToolTrace.length > 0) {
+            sanitizePullBeforePassClaims(finalAnalysis, combinedVerifiedToolResults, boardSourceForSanitize, {
+                headers: parsedHeaders,
+                toolCallTrace: combinedToolTrace,
+                marketToolRecords: p.marketToolRecords
+            });
+        }
+
+        const survivingPickCount = Array.isArray(finalAnalysis.picks) ? finalAnalysis.picks.length : 0;
+        const hadVetoedLegs = combinedVetoedLegs.length > 0 || initialPickCount > survivingPickCount;
+
         if (lifecycleResult.success === false) {
             finalAnalysis.verified = false;
             finalAnalysis.verification = {
@@ -127,12 +195,20 @@ export async function runDeepAnalysisVerification(
                 attempts: lifecycleResult.attempts,
                 rating: lifecycleResult.computedRating
             };
-            finalAnalysis.picks = [];
-            finalAnalysis.components = [];
-            const rawSummary = typeof finalAnalysis.summary === 'string' && finalAnalysis.summary.trim()
-                ? finalAnalysis.summary.trim()
-                : (typeof finalAnalysis.reason === 'string' && finalAnalysis.reason.trim() ? finalAnalysis.reason.trim() : 'Verification failed.');
-            finalAnalysis.summary = /^\[unverified\]/i.test(rawSummary) ? rawSummary : `[UNVERIFIED] ${rawSummary}`;
+            if (hadVetoedLegs && survivingPickCount > 0) {
+                // Keep remaining grounded picks and cleaned components after stripping vetoed legs and claims.
+            } else if (initialPickCount > 0 && hadVetoedLegs && survivingPickCount === 0) {
+                finalAnalysis.picks = [];
+                finalAnalysis.components = [];
+                normalizePassIfAllLegsVetoed(finalAnalysis, initialPickCount, true);
+            } else {
+                finalAnalysis.picks = [];
+                finalAnalysis.components = [];
+                const rawSummary = typeof finalAnalysis.summary === 'string' && finalAnalysis.summary.trim()
+                    ? finalAnalysis.summary.trim()
+                    : (typeof finalAnalysis.reason === 'string' && finalAnalysis.reason.trim() ? finalAnalysis.reason.trim() : 'Verification failed.');
+                finalAnalysis.summary = /^\[unverified\]/i.test(rawSummary) ? rawSummary : `[UNVERIFIED] ${rawSummary}`;
+            }
         } else {
             finalAnalysis.verified = true;
             finalAnalysis.verification = {
@@ -140,30 +216,11 @@ export async function runDeepAnalysisVerification(
                 attempts: lifecycleResult.attempts,
                 rating: lifecycleResult.computedRating
             };
-            if (p.toolResults) {
-                sanitizeMisattributedPicksAndText(finalAnalysis, p.toolResults, headersText || rawInput || task);
-            }
-            sanitizeRowMismatchedPicks(finalAnalysis, rawInput || task || headersText, parsedHeaders);
-            const combinedVerifiedToolResults = [p.toolResults, lifecycleResult?.verifiedToolEvidence]
-                .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
-                .join('\n\n');
-            const combinedToolTrace = mergeToolCallTraceEntries([
-                ...(Array.isArray(p.toolCallTrace) ? p.toolCallTrace : []),
-                ...(Array.isArray(lifecycleResult?.verifiedToolTrace) ? lifecycleResult.verifiedToolTrace : [])
-            ]);
-            if (parsedHeaders.length > 0 || combinedVerifiedToolResults || (p.criticVetoes && p.criticVetoes.length > 0)) {
-                sanitizeUngroundedClaims(finalAnalysis, combinedVerifiedToolResults, rawInput || task || headersText, {
-                    headers: parsedHeaders,
-                    vetoTexts: p.criticVetoes
-                });
-            }
-            if (parsedHeaders.length > 0 || combinedVerifiedToolResults || combinedToolTrace.length > 0) {
-                sanitizePullBeforePassClaims(finalAnalysis, combinedVerifiedToolResults, rawInput || task || headersText, {
-                    headers: parsedHeaders,
-                    toolCallTrace: combinedToolTrace,
-                    marketToolRecords: p.marketToolRecords
-                });
-            }
+            normalizePassIfAllLegsVetoed(
+                finalAnalysis,
+                initialPickCount,
+                hadVetoedLegs || combinedVetoTexts.length > 0
+            );
         }
     }
 

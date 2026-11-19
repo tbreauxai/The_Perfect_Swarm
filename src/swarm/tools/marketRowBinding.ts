@@ -32,10 +32,19 @@ export interface GameMarketCoverage {
   hasTotal: boolean;
 }
 
+export interface MarketVetoLegTarget {
+  rowId?: string;
+  eventId?: string;
+  teamLabel?: string;
+  teamAliases: string[];
+  reason: string;
+}
+
 export interface MarketRowAuditResult {
   pass: boolean;
   feedback?: string;
   flags: string[];
+  vetoedLegs?: MarketVetoLegTarget[];
 }
 
 function escapeRegex(value: string): string {
@@ -716,28 +725,53 @@ export function auditMarketCoverageAndRowBinding(
         const pickOU = extractOverUnder(item.sideText);
         const pickSpread = extractSpreadNumber(item.sideText);
 
+        const buildMarketVetoTarget = (reason: string): MarketVetoLegTarget => {
+          const rowEntry = item.rowId ? rowMap.get(item.rowId) : undefined;
+          const contextTeams = rowEntry ? [rowEntry.away, rowEntry.home].filter((t): t is string => Boolean(t)) : undefined;
+          const resolved = resolveTeamFromText(item.sideText || rowEntry?.text || '', rowEntry?.sport, contextTeams);
+          const teamEntry = resolved
+            ? ESPN_TEAMS.find(t => `${t.sport}:${t.abbr}` === resolved.canonical || t.name === resolved.name)
+            : undefined;
+          const aliases = teamEntry
+            ? Array.from(new Set([teamEntry.name.toLowerCase(), teamEntry.city.toLowerCase(), teamEntry.nickname.toLowerCase(), teamEntry.abbr.toLowerCase(), ...teamEntry.aliases]))
+            : (resolved ? [resolved.name.toLowerCase()] : []);
+          return {
+            ...(item.rowId ? { rowId: item.rowId } : {}),
+            eventId: item.eventId,
+            ...(resolved?.name ? { teamLabel: resolved.name } : {}),
+            teamAliases: aliases,
+            reason: reason.slice(0, 140)
+          };
+        };
+
         if (pickIsML && !cov.hasMoneyline) {
           flags.push('missing_moneyline_coverage');
+          const msg = `Veto: Missing moneyline coverage for ${item.eventId}; tool result and board do not contain ml_home or ml_away.`;
           return {
             pass: false,
-            feedback: `Veto: Missing moneyline coverage for ${item.eventId}; tool result and board do not contain ml_home or ml_away.`,
-            flags
+            feedback: msg,
+            flags,
+            vetoedLegs: [buildMarketVetoTarget(msg)]
           };
         }
         if (pickOU && !cov.hasTotal) {
           flags.push('missing_total_coverage');
+          const msg = `Veto: Missing total coverage for ${item.eventId}.`;
           return {
             pass: false,
-            feedback: `Veto: Missing total coverage for ${item.eventId}.`,
-            flags
+            feedback: msg,
+            flags,
+            vetoedLegs: [buildMarketVetoTarget(msg)]
           };
         }
         if (pickSpread !== null && !cov.hasSpread && !pickIsML && !pickOU) {
           flags.push('missing_spread_coverage');
+          const msg = `Veto: Missing spread coverage for ${item.eventId}.`;
           return {
             pass: false,
-            feedback: `Veto: Missing spread coverage for ${item.eventId}.`,
-            flags
+            feedback: msg,
+            flags,
+            vetoedLegs: [buildMarketVetoTarget(msg)]
           };
         }
       }

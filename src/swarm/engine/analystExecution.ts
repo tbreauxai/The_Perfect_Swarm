@@ -34,7 +34,13 @@ import { GameQueryCache } from '../cache/gameQueryCache.ts';
 import { executeToolWithCacheAndTimeout } from './triageExecutor.ts';
 import { seatBudget } from '../context/promptBudget.ts';
 import { auditInjuryAttribution, sanitizeMisattributedPicksAndText } from '../tools/injuryAttribution.ts';
-import { auditClaimGrounding, sanitizeUngroundedClaims } from '../tools/claimGrounding.ts';
+import {
+    auditClaimGrounding,
+    mergeVetoedClaims,
+    mergeVetoedLegTargets,
+    sanitizeUngroundedClaims,
+    type VetoedLegTarget
+} from '../tools/claimGrounding.ts';
 import {
     auditMarketCoverageAndRowBinding,
     isFalseMissingMoneylineCritique,
@@ -582,19 +588,8 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                     }
                 );
             } else if (isCritic && proposedAuditContext?.summaryText) {
-                let injuryAuditPassed = true;
-                if (combinedInjuryEvidence) {
-                    const audit = auditInjuryAttribution(proposedAuditContext.summaryText, combinedInjuryEvidence, renderedHeadersText);
-                    if (!audit.pass) {
-                        injuryAuditPassed = false;
-                        (resData as any).pass = false;
-                        const msg = audit.feedback || 'Veto: Proposed pick attributed an injury to the wrong team.';
-                        (resData as any).summary = msg;
-                        (resData as any).analysis = msg;
-                        if (!Array.isArray((resData as any).flags)) (resData as any).flags = [];
-                        (resData as any).flags.push('injury_misattribution');
-                    }
-                }
+                let stage2VetoedLegs: VetoedLegTarget[] = [];
+                let stage2VetoedClaims: string[] = [];
 
                 const auditTargetProposal = Array.isArray(proposedAuditContext.proposerReports) && proposedAuditContext.proposerReports.length > 0
                     ? {
@@ -624,6 +619,23 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                     }
                     : auditTargetProposal;
 
+                let injuryAuditPassed = true;
+                if (combinedInjuryEvidence) {
+                    const audit = auditInjuryAttribution(groundingTargetProposal, combinedInjuryEvidence, renderedHeadersText);
+                    if (!audit.pass) {
+                        injuryAuditPassed = false;
+                        (resData as any).pass = false;
+                        const msg = audit.feedback || 'Veto: Proposed pick attributed an injury to the wrong team.';
+                        (resData as any).summary = msg;
+                        (resData as any).analysis = msg;
+                        if (!Array.isArray((resData as any).flags)) (resData as any).flags = [];
+                        (resData as any).flags.push('injury_misattribution');
+                        if (Array.isArray(audit.vetoedLegs) && audit.vetoedLegs.length > 0) {
+                            stage2VetoedLegs = mergeVetoedLegTargets(stage2VetoedLegs, audit.vetoedLegs);
+                        }
+                    }
+                }
+
                 const marketRowAudit = auditMarketCoverageAndRowBinding(
                     auditTargetProposal,
                     marketEvidenceText,
@@ -640,6 +652,9 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                     if (!Array.isArray((resData as any).flags)) (resData as any).flags = [];
                     for (const f of marketRowAudit.flags) {
                         if (!(resData as any).flags.includes(f)) (resData as any).flags.push(f);
+                    }
+                    if (Array.isArray(marketRowAudit.vetoedLegs) && marketRowAudit.vetoedLegs.length > 0) {
+                        stage2VetoedLegs = mergeVetoedLegTargets(stage2VetoedLegs, marketRowAudit.vetoedLegs);
                     }
                 }
 
@@ -660,6 +675,12 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                     if (!Array.isArray((resData as any).flags)) (resData as any).flags = [];
                     for (const f of groundingAudit.flags) {
                         if (!(resData as any).flags.includes(f)) (resData as any).flags.push(f);
+                    }
+                    if (Array.isArray(groundingAudit.vetoedLegs) && groundingAudit.vetoedLegs.length > 0) {
+                        stage2VetoedLegs = mergeVetoedLegTargets(stage2VetoedLegs, groundingAudit.vetoedLegs);
+                    }
+                    if (Array.isArray(groundingAudit.vetoedClaims) && groundingAudit.vetoedClaims.length > 0) {
+                        stage2VetoedClaims = mergeVetoedClaims(stage2VetoedClaims, groundingAudit.vetoedClaims);
                     }
                 }
 
@@ -716,6 +737,17 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                     (resData as any).summary = okMsg;
                     (resData as any).analysis = okMsg;
                     (resData as any).flags = [];
+                    stage2VetoedLegs = [];
+                    stage2VetoedClaims = [];
+                }
+
+                if ((resData as any).pass === false) {
+                    if (stage2VetoedLegs.length > 0) {
+                        (resData as any).vetoedLegs = stage2VetoedLegs;
+                    }
+                    if (stage2VetoedClaims.length > 0) {
+                        (resData as any).vetoedClaims = stage2VetoedClaims;
+                    }
                 }
             }
             if (scorecardReport) {

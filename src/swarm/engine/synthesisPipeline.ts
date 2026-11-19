@@ -16,7 +16,13 @@ import { parseGameHeaders, renderHeaders, filterPicksByCoverage } from '../conte
 import { partitionTaskAndContract } from './analystExecution.ts';
 import { sanitizeMisattributedPicksAndText } from '../tools/injuryAttribution.ts';
 import { sanitizeRowMismatchedPicks } from '../tools/marketRowBinding.ts';
-import { sanitizeUngroundedClaims } from '../tools/claimGrounding.ts';
+import {
+    mergeVetoedClaims,
+    mergeVetoedLegTargets,
+    normalizePassIfAllLegsVetoed,
+    sanitizeUngroundedClaims,
+    type VetoedLegTarget
+} from '../tools/claimGrounding.ts';
 import {
     buildToolCoverageSummaryLine,
     sanitizePullBeforePassClaims,
@@ -455,7 +461,14 @@ export async function executeManagerSynthesis(
     bypassCache: boolean = false,
     settings?: SwarmEngineSettings,
     coveredEventIds?: string[],
-    groundingContext?: { toolResults?: string; criticVetoes?: string[]; rawBoard?: string; toolCallTrace?: ToolCallTraceEntry[] }
+    groundingContext?: {
+        toolResults?: string;
+        criticVetoes?: string[];
+        vetoedLegs?: VetoedLegTarget[];
+        vetoedClaims?: string[];
+        rawBoard?: string;
+        toolCallTrace?: ToolCallTraceEntry[];
+    }
 ): Promise<any> {
     const managerInstruction = (settings as any)?.managerInstruction
         || (settings as any)?.systemPrompts?.[managerAgent.id || managerAgent.role]
@@ -510,31 +523,44 @@ export async function executeManagerSynthesis(
         : guardManagerResponse(parsedManagerOutput, "Executive Swarm Synthesis");
 
     if (finalResult && typeof finalResult === 'object') {
+        const initialPickCount = Array.isArray(finalResult.picks) ? finalResult.picks.length : 0;
         sanitizeMisattributedPicksAndText(finalResult, safeDynamicPrompt, safeDynamicPrompt);
         sanitizeRowMismatchedPicks(finalResult, safeDynamicPrompt);
         const slateSourceForGrounding = groundingContext?.rawBoard || safeDynamicPrompt;
+        const parsedHeaders = parseGameHeaders(slateSourceForGrounding);
         const toolEvidenceForGrounding = groundingContext?.toolResults !== undefined
             ? groundingContext.toolResults
             : extractToolEvidenceSection(safeDynamicPrompt);
         const criticVetoes = groundingContext?.criticVetoes || [];
+        const vetoedLegs = mergeVetoedLegTargets(groundingContext?.vetoedLegs);
+        const vetoedClaims = mergeVetoedClaims(groundingContext?.vetoedClaims);
         if (
-            parseGameHeaders(slateSourceForGrounding).length > 0 ||
+            parsedHeaders.length > 0 ||
             Boolean(toolEvidenceForGrounding) ||
-            criticVetoes.length > 0
+            criticVetoes.length > 0 ||
+            vetoedLegs.length > 0 ||
+            vetoedClaims.length > 0
         ) {
             sanitizeUngroundedClaims(finalResult, toolEvidenceForGrounding, slateSourceForGrounding, {
-                vetoTexts: criticVetoes
+                headers: parsedHeaders,
+                vetoTexts: criticVetoes,
+                vetoedLegs,
+                vetoedClaims,
+                stripVetoedLegRecommendations: true
             });
         }
         if (
-            parseGameHeaders(slateSourceForGrounding).length > 0 ||
+            parsedHeaders.length > 0 ||
             Boolean(toolEvidenceForGrounding) ||
             Boolean(groundingContext?.toolCallTrace?.length)
         ) {
             sanitizePullBeforePassClaims(finalResult, toolEvidenceForGrounding, slateSourceForGrounding, {
+                headers: parsedHeaders,
                 toolCallTrace: groundingContext?.toolCallTrace
             });
         }
+        const hadVetoes = criticVetoes.length > 0 || vetoedLegs.length > 0 || vetoedClaims.length > 0;
+        normalizePassIfAllLegsVetoed(finalResult, initialPickCount, hadVetoes);
     }
 
     if (coveredEventIds && Array.isArray(finalResult?.picks)) {

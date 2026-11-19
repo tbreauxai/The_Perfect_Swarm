@@ -7,9 +7,17 @@ import { seatBudget } from './context/promptBudget.ts';
 import { parseGameHeaders, renderHeaders, filterPicksByCoverage, type GameHeader } from './context/gameHeaders.ts';
 import { resolveSelectedGameIds, filterHeadersByEventIds } from './context/selectedGames.ts';
 import { auditInjuryAttribution } from './tools/injuryAttribution.ts';
-import { auditClaimGrounding } from './tools/claimGrounding.ts';
+import {
+    auditClaimGrounding,
+    extractQuotedVetoedClaims,
+    extractVetoedLegTargets,
+    mergeVetoedClaims,
+    mergeVetoedLegTargets,
+    type VetoedLegTarget
+} from './tools/claimGrounding.ts';
 import {
     auditMarketCoverageAndRowBinding,
+    extractRowOptions,
     isFalseMissingMoneylineCritique,
     type MarketToolRecord
 } from './tools/marketRowBinding.ts';
@@ -45,6 +53,9 @@ export interface LifecycleExecutionResult {
     verifiedEventIds?: string[];
     verifiedToolEvidence?: string;
     verifiedToolTrace?: ToolCallTraceEntry[];
+    vetoedLegs?: VetoedLegTarget[];
+    vetoedClaims?: string[];
+    accumulatedVetoes?: string[];
 }
 
 export interface AnalysisLifecycleOptions {
@@ -114,6 +125,23 @@ export class AnalysisLifecycle {
             : [];
         const freshRetryEvidenceParts: string[] = [];
 
+        const initialCriticVetoes: string[] = Array.isArray((rawData as any)?.criticVetoes)
+            ? (rawData as any).criticVetoes.filter((x: any): x is string => typeof x === 'string' && x.trim().length > 0)
+            : [];
+        const accumulatedVetoTexts: string[] = [...initialCriticVetoes];
+        const initHeaders: GameHeader[] = Array.isArray((rawData as any)?.allHeaders) && (rawData as any).allHeaders.length > 0
+            ? ((rawData as any).allHeaders as GameHeader[])
+            : parseGameHeaders((rawData as any)?.fullBoard || rawData);
+        const initRowMap = extractRowOptions([(rawData as any)?.fullBoard || rawData], initHeaders);
+        let accumulatedVetoedLegs: VetoedLegTarget[] = mergeVetoedLegTargets(
+            Array.isArray((rawData as any)?.vetoedLegs) ? (rawData as any).vetoedLegs : [],
+            extractVetoedLegTargets(initialCriticVetoes, initHeaders, initRowMap)
+        );
+        let accumulatedVetoedClaims: string[] = mergeVetoedClaims(
+            Array.isArray((rawData as any)?.vetoedClaims) ? (rawData as any).vetoedClaims : [],
+            extractQuotedVetoedClaims(initialCriticVetoes)
+        );
+
         const effectiveCoveredEventIds: string[] | undefined =
             coveredEventIds || (Array.isArray(rawData?.coveredEventIds) ? rawData.coveredEventIds : undefined);
 
@@ -134,7 +162,24 @@ export class AnalysisLifecycle {
                 const freshBlock = freshRetryEvidenceParts.length > 0
                     ? `\n\n[Fresh Tool Evidence Pulled Before Retry]:\n${freshRetryEvidenceParts.join('\n\n').slice(0, 2400)}`
                     : '';
-                executePrompt = `${proposerPrompt}\n\n[Previous Verification Critique & Corrections Required (Attempt ${attempt - 1})]:\n${feedbackSummary}${freshBlock}\n\nCRITICAL RETRY RULES:\n1. Output a clean, standalone final JSON response as if writing it for the first time. NEVER mention "a previous error", "this correction", or prior attempts in your summary or analysis.\n2. Fix any factual misstatements (such as Away vs. Home team status in "Away @ Home" headers, or references to teams not in the selected legs) so they strictly match the Game Slate headers and Analyst Reports.\n3. Do NOT flip an analyst's recommended pick side (e.g. keep the analyst's selected team/spread and simply describe its Away/Home status accurately) unless the critic identified a fatal injury on that team.\n4. INJURY ATTRIBUTION RULE: Every injury citation must match the team_id or team name in the tool result or board. Never assign a player to the opposing team.\n5. MARKET AND ROW RULES: Cite the exact row ID matching the picked team, market, and line; never assign a row to the opposite team or opposite side.\n6. GROUNDING: Do not cite a score, goals-allowed, or health claim unless it is in a successful tool result. If key players on that team are OUT, do not call the team relatively healthy. A vetoed leg is removed from picks. Do not rewrite it as a recommended single bet.\n7. PULL BEFORE PASS: Before saying a game has no fundamentals, injuries, or market data, call the tool for that game. If the tool returns data, use it and do not say it was not fetched. If the tool returns empty or errors, then you may say that game has no data. Do not cite a record, score, or L5 form unless it is in a successful tool result. A pass is allowed only after the relevant tools were called, or the tool result was empty.`;
+                const vetoLines: string[] = [];
+                if (accumulatedVetoedLegs.length > 0) {
+                    vetoLines.push('- Vetoed legs (DO NOT put back into picks, Recommended Bets, or summary; keep remaining grounded legs, swap in another grounded leg from the slate, or pass if every leg is vetoed):');
+                    for (const leg of accumulatedVetoedLegs) {
+                        const label = [leg.rowId, leg.teamLabel].filter(Boolean).join(' ') || 'vetoed leg';
+                        vetoLines.push(`  * ${label} (${leg.reason})`);
+                    }
+                }
+                if (accumulatedVetoedClaims.length > 0) {
+                    vetoLines.push('- Vetoed claims (DO NOT repeat in summary, opening analysis, insights, or pick reasons):');
+                    for (const c of accumulatedVetoedClaims) {
+                        vetoLines.push(`  * "${c}"`);
+                    }
+                }
+                const vetoBlock = vetoLines.length > 0
+                    ? `\n\n[VETOED LEGS & CLAIMS — DO NOT INCLUDE]:\n${vetoLines.join('\n')}`
+                    : '';
+                executePrompt = `${proposerPrompt}\n\n[Previous Verification Critique & Corrections Required (Attempt ${attempt - 1})]:\n${feedbackSummary}${vetoBlock}${freshBlock}\n\nCRITICAL RETRY RULES:\n1. Output a clean, standalone final JSON response as if writing it for the first time. NEVER mention "a previous error", "this correction", or prior attempts in your summary or analysis.\n2. Fix any factual misstatements (such as Away vs. Home team status in "Away @ Home" headers, or references to teams not in the selected legs) so they strictly match the Game Slate headers and Analyst Reports.\n3. Do NOT flip an analyst's recommended pick side (e.g. keep the analyst's selected team/spread and simply describe its Away/Home status accurately) unless the critic identified a fatal injury on that team.\n4. INJURY ATTRIBUTION RULE: Every injury citation must match the team_id or team name in the tool result or board. Never assign a player to the opposing team.\n5. MARKET AND ROW RULES: Cite the exact row ID matching the picked team, market, and line; never assign a row to the opposite team or opposite side.\n6. GROUNDING: Do not cite a score, goals-allowed, or health claim unless it is in a successful tool result. If key players on that team are OUT, do not call the team relatively healthy. A vetoed leg is removed from picks. Do not rewrite it as a recommended single bet.\n7. PULL BEFORE PASS: Before saying a game has no fundamentals, injuries, or market data, call the tool for that game. If the tool returns data, use it and do not say it was not fetched. If the tool returns empty or errors, then you may say that game has no data. Do not cite a record, score, or L5 form unless it is in a successful tool result. A pass is allowed only after the relevant tools were called, or the tool result was empty.\n8. VETO STICKS: A Critic veto for ungrounded form, missing market, or fatal injury removes that leg. Do not repeat the vetoed claim in a later attempt or in the final analysis. Do not put a vetoed leg back into picks. If every leg is vetoed, the result is a pass.`;
             } else {
                 executePrompt = proposerPrompt;
             }
@@ -444,15 +489,17 @@ export class AnalysisLifecycle {
                     verification.feedback = marketRowAudit.feedback || 'Veto: Row side mismatch or missing market coverage.';
                 }
 
-                const vetoTexts = [
-                    ...(Array.isArray((rawData as any)?.criticVetoes) ? (rawData as any).criticVetoes : []),
-                    ...(attempt > 1 && feedback ? [feedback] : [])
-                ].filter((x): x is string => typeof x === 'string' && x.trim().length > 0);
+                const auditRowMap = extractRowOptions([boardSourceForAudit], allParsedHeaders);
                 const groundingAudit = auditClaimGrounding(
                     currentProposal,
                     combinedToolSummary,
                     boardSourceForAudit,
-                    { headers: allParsedHeaders, vetoTexts }
+                    {
+                        headers: allParsedHeaders,
+                        vetoTexts: accumulatedVetoTexts,
+                        vetoedLegs: accumulatedVetoedLegs,
+                        vetoedClaims: accumulatedVetoedClaims
+                    }
                 );
                 if (!groundingAudit.pass) {
                     verification.pass = false;
@@ -461,6 +508,18 @@ export class AnalysisLifecycle {
                         ? gMsg
                         : [verification.feedback, gMsg].filter(Boolean).join(' ');
                 }
+
+                // Merge structured veto targets from deterministic audits immediately into the cumulative ledger
+                accumulatedVetoedLegs = mergeVetoedLegTargets(
+                    accumulatedVetoedLegs,
+                    injuryAudit.vetoedLegs,
+                    marketRowAudit.vetoedLegs,
+                    groundingAudit.vetoedLegs
+                );
+                accumulatedVetoedClaims = mergeVetoedClaims(
+                    accumulatedVetoedClaims,
+                    groundingAudit.vetoedClaims
+                );
 
                 accumulatedToolTrace = mergeToolCallTraceEntries(accumulatedToolTrace);
                 const availableSportsTools = this.toolRegistry
@@ -616,6 +675,19 @@ export class AnalysisLifecycle {
                         }
                     }
                 }
+                if (!verification.pass && verification.feedback) {
+                    if (!accumulatedVetoTexts.includes(verification.feedback)) {
+                        accumulatedVetoTexts.push(verification.feedback);
+                    }
+                    accumulatedVetoedLegs = mergeVetoedLegTargets(
+                        accumulatedVetoedLegs,
+                        extractVetoedLegTargets([verification.feedback], allParsedHeaders, auditRowMap)
+                    );
+                    accumulatedVetoedClaims = mergeVetoedClaims(
+                        accumulatedVetoedClaims,
+                        extractQuotedVetoedClaims([verification.feedback])
+                    );
+                }
             }
 
             // 3. Pass/Fail evaluation
@@ -636,7 +708,10 @@ export class AnalysisLifecycle {
                     computedRating,
                     verifiedEventIds: Array.from(verifiedEventIdsSet),
                     ...(lastCombinedToolSummary ? { verifiedToolEvidence: lastCombinedToolSummary } : {}),
-                    ...(accumulatedToolTrace.length > 0 ? { verifiedToolTrace: mergeToolCallTraceEntries(accumulatedToolTrace) } : {})
+                    ...(accumulatedToolTrace.length > 0 ? { verifiedToolTrace: mergeToolCallTraceEntries(accumulatedToolTrace) } : {}),
+                    ...(accumulatedVetoedLegs.length > 0 ? { vetoedLegs: accumulatedVetoedLegs } : {}),
+                    ...(accumulatedVetoedClaims.length > 0 ? { vetoedClaims: accumulatedVetoedClaims } : {}),
+                    ...(accumulatedVetoTexts.length > 0 ? { accumulatedVetoes: accumulatedVetoTexts } : {})
                 };
             } else {
                 feedback = verification.feedback || "Proposal failed verification without specific feedback.";
@@ -667,7 +742,10 @@ export class AnalysisLifecycle {
             computedRating,
             verifiedEventIds: Array.from(verifiedEventIdsSet),
             ...(lastCombinedToolSummary ? { verifiedToolEvidence: lastCombinedToolSummary } : {}),
-            ...(accumulatedToolTrace.length > 0 ? { verifiedToolTrace: mergeToolCallTraceEntries(accumulatedToolTrace) } : {})
+            ...(accumulatedToolTrace.length > 0 ? { verifiedToolTrace: mergeToolCallTraceEntries(accumulatedToolTrace) } : {}),
+            ...(accumulatedVetoedLegs.length > 0 ? { vetoedLegs: accumulatedVetoedLegs } : {}),
+            ...(accumulatedVetoedClaims.length > 0 ? { vetoedClaims: accumulatedVetoedClaims } : {}),
+            ...(accumulatedVetoTexts.length > 0 ? { accumulatedVetoes: accumulatedVetoTexts } : {})
         };
     }
 }

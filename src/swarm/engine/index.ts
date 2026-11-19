@@ -41,6 +41,7 @@ import {
 } from "./scorecardManager.ts";
 import { parseGameHeaders, filterPicksByCoverage } from "../context/gameHeaders.ts";
 import { buildVerifierEvidence } from "./verifierEvidence.ts";
+import { mergeVetoedClaims, mergeVetoedLegTargets, type VetoedLegTarget } from "../tools/claimGrounding.ts";
 import { mergeToolCallTraceEntries, type ToolCallTraceEntry } from "../tools/pullBeforePass.ts";
 import { isDataRequest } from "../parser/responseGuards.ts";
 import { planTriage, type TriagePlan } from "./triagePlanner.ts";
@@ -423,6 +424,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 const criticReports = flatReports.filter(isCriticSeat);
                 const nonCriticReports = flatReports.filter(r => !isCriticSeat(r));
                 const stage2CriticVetoes: string[] = [];
+                let stage2VetoedLegs: VetoedLegTarget[] = [];
+                let stage2VetoedClaims: string[] = [];
                 for (const cr of criticReports) {
                     if (cr && cr.pass === false) {
                         const parts = [
@@ -433,6 +436,12 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                             Array.isArray(cr.flags) && cr.flags.length > 0 ? cr.flags.join(', ') : ''
                         ].filter(Boolean);
                         if (parts.length > 0) stage2CriticVetoes.push(parts.join(' | '));
+                        if (Array.isArray((cr as any).vetoedLegs)) {
+                            stage2VetoedLegs = mergeVetoedLegTargets(stage2VetoedLegs, (cr as any).vetoedLegs);
+                        }
+                        if (Array.isArray((cr as any).vetoedClaims)) {
+                            stage2VetoedClaims = mergeVetoedClaims(stage2VetoedClaims, (cr as any).vetoedClaims);
+                        }
                     }
                 }
                 const paramCriticRes = (params as any)?.criticResult || (params as any)?.criticFeedback || (settings as any)?.criticResult;
@@ -443,6 +452,12 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                         const parts = [paramCriticRes.feedback, paramCriticRes.verdict, paramCriticRes.summary]
                             .filter((x): x is string => typeof x === 'string' && Boolean(x.trim()));
                         if (parts.length > 0) stage2CriticVetoes.push(parts.join(' | '));
+                        if (Array.isArray(paramCriticRes.vetoedLegs)) {
+                            stage2VetoedLegs = mergeVetoedLegTargets(stage2VetoedLegs, paramCriticRes.vetoedLegs);
+                        }
+                        if (Array.isArray(paramCriticRes.vetoedClaims)) {
+                            stage2VetoedClaims = mergeVetoedClaims(stage2VetoedClaims, paramCriticRes.vetoedClaims);
+                        }
                     }
                 }
                 const allPlaceholderOrDataRequest = flatReports.length > 0 && nonCriticReports.every(r =>
@@ -531,6 +546,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                 ...(marketToolRecords.length > 0 ? { marketToolRecords } : {}),
                                 ...(allToolCallTrace.length > 0 ? { toolCallTrace: allToolCallTrace } : {}),
                                 ...(stage2CriticVetoes.length > 0 ? { criticVetoes: stage2CriticVetoes } : {}),
+                                ...(stage2VetoedLegs.length > 0 ? { vetoedLegs: stage2VetoedLegs } : {}),
+                                ...(stage2VetoedClaims.length > 0 ? { vetoedClaims: stage2VetoedClaims } : {}),
                                 ...(verifierToolResults ? { toolResults: verifierToolResults } : {}),
                                 ...(synthesisResult.appComputedCounts ? { appComputedCounts: synthesisResult.appComputedCounts } : {})
                             });
@@ -555,6 +572,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                 {
                                     toolResults: verifierToolResults,
                                     criticVetoes: stage2CriticVetoes,
+                                    ...(stage2VetoedLegs.length > 0 ? { vetoedLegs: stage2VetoedLegs } : {}),
+                                    ...(stage2VetoedClaims.length > 0 ? { vetoedClaims: stage2VetoedClaims } : {}),
                                     rawBoard: profilingResult.rawInput,
                                     ...(allToolCallTrace.length > 0 ? { toolCallTrace: allToolCallTrace } : {})
                                 }

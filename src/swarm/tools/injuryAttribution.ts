@@ -746,6 +746,57 @@ export function findClauseInjuryMisattribution(
   return null;
 }
 
+export interface InjuryVetoLegTarget {
+  rowId?: string;
+  eventId?: string;
+  teamLabel?: string;
+  teamAliases: string[];
+  reason: string;
+}
+
+function buildInjuryVetoTarget(pk: any, reason: string, headers: GameHeader[]): InjuryVetoLegTarget | null {
+  if (!pk) return null;
+  if (typeof pk === 'string') {
+    const rMatch = pk.match(/\b(R\d+)\b/i);
+    const rowId = rMatch ? rMatch[1].toUpperCase() : undefined;
+    const entry = matchTeamByLabel(pk);
+    const aliases = entry ? buildAliasesForLabel(entry.name, entry) : [];
+    if (!rowId && aliases.length === 0) return null;
+    return {
+      ...(rowId ? { rowId } : {}),
+      ...(entry ? { teamLabel: `${entry.name} (${entry.abbr})` } : {}),
+      teamAliases: aliases,
+      reason: reason.slice(0, 140)
+    };
+  }
+  if (typeof pk !== 'object') return null;
+  let rowId = typeof pk.row === 'string' && /^R\d+$/i.test(pk.row.trim())
+    ? pk.row.trim().toUpperCase()
+    : (typeof pk.id === 'string' && /^R\d+$/i.test(pk.id.trim()) ? pk.id.trim().toUpperCase() : undefined);
+  const sideText = [pk.side, pk.pick, pk.selection, pk.team, pk.note]
+    .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+    .join(' ')
+    .trim();
+  if (!rowId && sideText) {
+    const m = sideText.match(/\b(R\d+)\b/i);
+    if (m) rowId = m[1].toUpperCase();
+  }
+  const eventId = typeof pk.event_id === 'string' && pk.event_id.trim()
+    ? pk.event_id.trim()
+    : (typeof pk.eventId === 'string' && pk.eventId.trim() ? pk.eventId.trim() : undefined);
+  const hdr = eventId ? headers.find(h => h.eventId === eventId) : undefined;
+  const entry = sideText ? matchTeamByLabel(sideText, hdr?.sport) : undefined;
+  const aliases = entry ? buildAliasesForLabel(entry.name, entry) : [];
+  if (!rowId && aliases.length === 0) return null;
+  return {
+    ...(rowId ? { rowId } : {}),
+    ...(eventId ? { eventId } : {}),
+    ...(entry ? { teamLabel: `${entry.name} (${entry.abbr})` } : (sideText ? { teamLabel: sideText } : {})),
+    teamAliases: aliases,
+    reason: reason.slice(0, 140)
+  };
+}
+
 /**
  * Audits a full proposal or analyst report for any injury team misattribution.
  */
@@ -753,20 +804,23 @@ export function auditInjuryAttribution(
   proposal: any,
   evidenceText: string,
   slateText?: string
-): { pass: boolean; violations: string[]; feedback?: string } {
+): { pass: boolean; violations: string[]; feedback?: string; vetoedLegs?: InjuryVetoLegTarget[] } {
   const injuries = extractAuthoritativeInjuries(evidenceText, slateText);
   if (injuries.length === 0 || !proposal) {
     return { pass: true, violations: [] };
   }
 
+  const headers = parseGameHeaders(slateText || evidenceText || '');
   const violations: string[] = [];
-  const checkText = (text: unknown, sideHint?: string) => {
+  const vetoedLegs: InjuryVetoLegTarget[] = [];
+  const checkText = (text: unknown, sideHint?: string, onViolation?: (v: string) => void) => {
     if (typeof text !== 'string' || !text.trim()) return;
     const clauses = text.split(/(?<=[.!?])\s+|\n+|;\s+/);
     for (const c of clauses) {
       const v = findClauseInjuryMisattribution(c, injuries, sideHint);
-      if (v && !violations.includes(v)) {
-        violations.push(v);
+      if (v) {
+        if (!violations.includes(v)) violations.push(v);
+        onViolation?.(v);
       }
     }
   };
@@ -789,18 +843,25 @@ export function auditInjuryAttribution(
     if (Array.isArray(proposal.picks)) {
       for (const pk of proposal.picks) {
         if (!pk || typeof pk !== 'object') {
-          checkText(pk);
+          checkText(pk, undefined, (v) => {
+            const target = buildInjuryVetoTarget(pk, v, headers);
+            if (target) vetoedLegs.push(target);
+          });
           continue;
         }
         const sideHint = String(pk.side || pk.pick || pk.selection || pk.team || '');
-        checkText(pk.reason, sideHint);
-        checkText(pk.rationale, sideHint);
-        checkText(pk.edge, sideHint);
-        checkText(pk.note, sideHint);
-        checkText(pk.description, sideHint);
-        checkText(pk.claim, sideHint);
+        const onPickV = (v: string) => {
+          const target = buildInjuryVetoTarget(pk, v, headers);
+          if (target) vetoedLegs.push(target);
+        };
+        checkText(pk.reason, sideHint, onPickV);
+        checkText(pk.rationale, sideHint, onPickV);
+        checkText(pk.edge, sideHint, onPickV);
+        checkText(pk.note, sideHint, onPickV);
+        checkText(pk.description, sideHint, onPickV);
+        checkText(pk.claim, sideHint, onPickV);
         if (Array.isArray(pk.reasons)) {
-          for (const r of pk.reasons) checkText(r, sideHint);
+          for (const r of pk.reasons) checkText(r, sideHint, onPickV);
         }
       }
     }
@@ -808,20 +869,28 @@ export function auditInjuryAttribution(
       for (const sc of proposal.scorecards) {
         if (!sc || typeof sc !== 'object') continue;
         const sideHint = String(sc.pick || sc.side || '');
-        checkText(sc.note, sideHint);
-        checkText(sc.reason, sideHint);
-        checkText(sc.summary, sideHint);
+        const onScV = (v: string) => {
+          const target = buildInjuryVetoTarget(sc, v, headers);
+          if (target) vetoedLegs.push(target);
+        };
+        checkText(sc.note, sideHint, onScV);
+        checkText(sc.reason, sideHint, onScV);
+        checkText(sc.summary, sideHint, onScV);
         if (Array.isArray(sc.reasons)) {
-          for (const r of sc.reasons) checkText(r, sideHint);
+          for (const r of sc.reasons) checkText(r, sideHint, onScV);
         }
       }
     }
     if (proposal.scorecard && typeof proposal.scorecard === 'object') {
       const sc = proposal.scorecard;
       const sideHint = String(sc.pick || sc.side || '');
-      checkText(sc.note, sideHint);
-      checkText(sc.reason, sideHint);
-      checkText(sc.summary, sideHint);
+      const onScV = (v: string) => {
+        const target = buildInjuryVetoTarget(sc, v, headers);
+        if (target) vetoedLegs.push(target);
+      };
+      checkText(sc.note, sideHint, onScV);
+      checkText(sc.reason, sideHint, onScV);
+      checkText(sc.summary, sideHint, onScV);
     }
   }
 
@@ -829,7 +898,8 @@ export function auditInjuryAttribution(
     return {
       pass: false,
       violations,
-      feedback: `Veto (INJURY ATTRIBUTION RULE): ${violations.join(' ')}`
+      feedback: `Veto (INJURY ATTRIBUTION RULE): ${violations.join(' ')}`,
+      ...(vetoedLegs.length > 0 ? { vetoedLegs } : {})
     };
   }
 
@@ -838,7 +908,7 @@ export function auditInjuryAttribution(
 
 /**
  * Filters out any pick legs from an analyst or manager report whose reason attributes an injury to the wrong team,
- * and strips misattributed clauses from summary/analysis/insights.
+ * and strips misattributed clauses from summary/analysis/insights/components.
  */
 export function sanitizeMisattributedPicksAndText<T extends Record<string, any>>(
   report: T,
@@ -883,18 +953,57 @@ export function sanitizeMisattributedPicksAndText<T extends Record<string, any>>
     });
   }
 
+  if (Array.isArray(rep.scorecards)) {
+    rep.scorecards = rep.scorecards.filter((sc: any) => {
+      if (!sc || typeof sc !== 'object') return true;
+      const sideHint = String(sc.pick || sc.side || '');
+      const texts = [sc.note, sc.reason, sc.summary, ...(Array.isArray(sc.reasons) ? sc.reasons : [])]
+        .filter((x): x is string => typeof x === 'string' && x.trim().length > 0);
+      return !texts.some(t => Boolean(findClauseInjuryMisattribution(t, injuries, sideHint)));
+    });
+  }
+
   if (typeof rep.summary === 'string' && rep.summary.trim()) {
-    const cleaned = cleanClauses(rep.summary);
-    if (cleaned) rep.summary = cleaned;
+    rep.summary = cleanClauses(rep.summary);
   }
   if (typeof rep.analysis === 'string' && rep.analysis.trim()) {
-    const cleaned = cleanClauses(rep.analysis);
-    if (cleaned) rep.analysis = cleaned;
+    rep.analysis = cleanClauses(rep.analysis);
   }
   if (Array.isArray(rep.insights)) {
-    rep.insights = rep.insights.filter(
-      (ins: any) => typeof ins !== 'string' || !findClauseInjuryMisattribution(ins, injuries)
-    );
+    rep.insights = rep.insights
+      .map((ins: any) => (typeof ins === 'string' ? cleanClauses(ins) : ins))
+      .filter((ins: any) => typeof ins !== 'string' || ins.trim().length > 0);
+  }
+  if (Array.isArray(rep.components)) {
+    for (const comp of rep.components) {
+      if (!comp || typeof comp !== 'object' || !comp.props) continue;
+      if (comp.type === 'InsightList' && Array.isArray(comp.props.insights)) {
+        comp.props.insights = comp.props.insights
+          .map((ins: any) => {
+            if (typeof ins === 'string') return cleanClauses(ins);
+            if (ins && typeof ins === 'object' && typeof ins.message === 'string') {
+              return { ...ins, message: cleanClauses(ins.message) };
+            }
+            return ins;
+          })
+          .filter((ins: any) => {
+            if (typeof ins === 'string') return ins.trim().length > 0;
+            if (ins && typeof ins === 'object' && typeof ins.message === 'string') return ins.message.trim().length > 0;
+            return true;
+          });
+      } else if (comp.type === 'MetricCard' && typeof comp.props.subtitle === 'string') {
+        comp.props.subtitle = cleanClauses(comp.props.subtitle);
+      } else if (comp.type === 'DataTable' && Array.isArray(comp.props.rows)) {
+        for (const row of comp.props.rows) {
+          if (!row || typeof row !== 'object') continue;
+          for (const key of Object.keys(row)) {
+            if (typeof row[key] === 'string' && row[key].trim()) {
+              row[key] = cleanClauses(row[key]);
+            }
+          }
+        }
+      }
+    }
   }
 
   return report;
