@@ -15,7 +15,7 @@ import { seatBudget } from '../context/promptBudget.ts';
 import { parseGameHeaders, renderHeaders, filterPicksByCoverage } from '../context/gameHeaders.ts';
 import { partitionTaskAndContract } from './analystExecution.ts';
 import { sanitizeMisattributedPicksAndText } from '../tools/injuryAttribution.ts';
-import { sanitizeRowMismatchedPicks } from '../tools/marketRowBinding.ts';
+import { sanitizeRowMismatchedPicks, type MarketToolRecord } from '../tools/marketRowBinding.ts';
 import {
     mergeVetoedClaims,
     mergeVetoedLegTargets,
@@ -463,6 +463,7 @@ export async function executeManagerSynthesis(
     coveredEventIds?: string[],
     groundingContext?: {
         toolResults?: string;
+        marketToolRecords?: MarketToolRecord[];
         criticVetoes?: string[];
         vetoedLegs?: VetoedLegTarget[];
         vetoedClaims?: string[];
@@ -531,7 +532,8 @@ export async function executeManagerSynthesis(
             : extractToolEvidenceSection(safeDynamicPrompt);
         sanitizeMisattributedPicksAndText(finalResult, safeDynamicPrompt, safeDynamicPrompt);
         sanitizeRowMismatchedPicks(finalResult, slateSourceForGrounding, parsedHeaders, {
-            toolEvidenceText: toolEvidenceForGrounding
+            toolEvidenceText: toolEvidenceForGrounding,
+            toolRecords: groundingContext?.marketToolRecords
         });
         const criticVetoes = groundingContext?.criticVetoes || [];
         const vetoedLegs = mergeVetoedLegTargets(groundingContext?.vetoedLegs);
@@ -558,7 +560,8 @@ export async function executeManagerSynthesis(
         ) {
             sanitizePullBeforePassClaims(finalResult, toolEvidenceForGrounding, slateSourceForGrounding, {
                 headers: parsedHeaders,
-                toolCallTrace: groundingContext?.toolCallTrace
+                toolCallTrace: groundingContext?.toolCallTrace,
+                marketToolRecords: groundingContext?.marketToolRecords
             });
         }
         const hadVetoes = criticVetoes.length > 0 || vetoedLegs.length > 0 || vetoedClaims.length > 0;

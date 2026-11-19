@@ -31,7 +31,7 @@ describe('SwarmEngine: Tiered Caching & State-Compression Integration', () => {
                     });
                 }
 
-                if (systemInst.includes('Critic') || prompt.includes('Verify whether this analysis faithfully represents')) {
+                if (systemInst.includes('Swarm Verification Critic') || systemInst.includes('Swarm Risk Critic') || prompt.includes('Verify whether this analysis faithfully represents')) {
                     return JSON.stringify({
                         pass: true,
                         computedRating: 0.95,

@@ -268,10 +268,10 @@ function stripOddsParentheses(text: string): string {
 function stripNonSpreadParentheses(text: string): string {
   return text.replace(/\(([^)]*)\)/g, (full, inner) => {
     const trimmed = String(inner || '').trim();
-    if (!trimmed) return ' ';
-    if (/^R\d+$/i.test(trimmed)) return ' ';
-    if (/\b(?:ml|moneyline|money\s*line|h2h|o\/u|over|under|total)\b/i.test(trimmed)) return ' ';
-    if (/^[+-]\d{3,}(?:\.\d+)?$/.test(trimmed)) return ' ';
+    if (!trimmed) return ' '.repeat(full.length);
+    if (/^R\d+$/i.test(trimmed)) return ' '.repeat(full.length);
+    if (/\b(?:ml|moneyline|money\s*line|h2h|o\/u|over|under|total)\b/i.test(trimmed)) return ' '.repeat(full.length);
+    if (/^[+-]\d{3,}(?:\.\d+)?$/.test(trimmed)) return ' '.repeat(full.length);
     return full;
   });
 }
@@ -748,6 +748,39 @@ function toFiniteNumber(v: unknown): number | null {
   return null;
 }
 
+function extractBoardText(boardSource: unknown): string {
+  if (typeof boardSource === 'string') return boardSource;
+  if (boardSource && typeof boardSource === 'object') {
+    const b = boardSource as any;
+    return [b.rawBoard, b.board, b.dataSample, b.task, b.content].filter(Boolean).join('\n');
+  }
+  return '';
+}
+
+function resolveBareSpreadWithMl(
+  bare: number | null,
+  mlH: number | null,
+  mlA: number | null
+): { home: number; away: number } | null {
+  if (bare === null || !Number.isFinite(bare) || Math.abs(bare) >= 100 || bare === 0) return null;
+  if (mlH !== null && mlA !== null && mlH !== mlA) {
+    const homeIsFav = mlH < mlA;
+    if ((homeIsFav && bare > 0) || (!homeIsFav && bare < 0)) {
+      return { home: -bare, away: bare };
+    }
+    return { home: bare, away: -bare };
+  }
+  if (mlH !== null) {
+    if (mlH <= -135) return bare > 0 ? { home: -bare, away: bare } : { home: bare, away: -bare };
+    if (mlH >= 135) return bare < 0 ? { home: -bare, away: bare } : { home: bare, away: -bare };
+  }
+  if (mlA !== null) {
+    if (mlA <= -135) return bare < 0 ? { home: -bare, away: bare } : { home: bare, away: -bare };
+    if (mlA >= 135) return bare > 0 ? { home: -bare, away: bare } : { home: bare, away: -bare };
+  }
+  return null;
+}
+
 function extractSpreadsFromToolSummary(
   text: string,
   awayLabel: string,
@@ -773,6 +806,27 @@ function extractSpreadsFromToolSummary(
     }
   }
 
+  // Fallback: check gameContext.ts odds format ("spread=-10.5/10.5") preferring (curr)
+  const currOddsMatch = text.match(/\(curr\)[^|\n]*?\bspread=([+-]?\d+(?:\.\d+)?)\/([+-]?\d+(?:\.\d+)?)/i)
+    || text.match(/\bspread=([+-]?\d+(?:\.\d+)?)\/([+-]?\d+(?:\.\d+)?)/i);
+  if (currOddsMatch) {
+    const hVal = parseFloat(currOddsMatch[1]);
+    const aVal = parseFloat(currOddsMatch[2]);
+    if (Number.isFinite(hVal) && Number.isFinite(aVal) && Math.abs(hVal) < 100 && Math.abs(aVal) < 100) {
+      return { home: hVal, away: aVal };
+    }
+  }
+
+  // Fallback: check supabase.ts line_snapshots format ("Spread=+10.5, Total=228.5, ML(H/A)=-500/+380")
+  const snapLineMatch = text.match(/\bSpread=([+-]?\d+(?:\.\d+)?)\b[^\n]*?\bML\(H\/A\)=([+-]?\d+|N\/A)\/([+-]?\d+|N\/A)/i);
+  if (snapLineMatch) {
+    const bare = parseFloat(snapLineMatch[1]);
+    const mlH = snapLineMatch[2].toUpperCase() === 'N/A' ? null : parseFloat(snapLineMatch[2]);
+    const mlA = snapLineMatch[3].toUpperCase() === 'N/A' ? null : parseFloat(snapLineMatch[3]);
+    const resolved = resolveBareSpreadWithMl(bare, mlH, mlA);
+    if (resolved) return resolved;
+  }
+
   // Fallback: check if bare spread + ml_home / ml_away appear together in summary
   const bareMatch = targetLine.match(/\bspread\s+([+-]\d+(?:\.\d+)?)\b/i);
   if (bareMatch) {
@@ -781,15 +835,8 @@ function extractSpreadsFromToolSummary(
     const mlAwayMatch = text.match(/\bml_away\b[^\n+-]*?([+-]\d{3,4})/i);
     const mlH = mlHomeMatch ? parseFloat(mlHomeMatch[1]) : null;
     const mlA = mlAwayMatch ? parseFloat(mlAwayMatch[1]) : null;
-    if (Number.isFinite(bare) && Math.abs(bare) < 100 && bare !== 0) {
-      if (mlH !== null && mlA !== null && mlH !== mlA) {
-        const homeIsFav = mlH < mlA;
-        if ((homeIsFav && bare > 0) || (!homeIsFav && bare < 0)) {
-          return { home: -bare, away: bare };
-        }
-        return { home: bare, away: -bare };
-      }
-    }
+    const resolved = resolveBareSpreadWithMl(bare, mlH, mlA);
+    if (resolved) return resolved;
   }
 
   // Fallback: match explicit "<HomeName> <+/-X>" / "<AwayName> <+/-Y>"
@@ -825,7 +872,8 @@ export function extractAuthoritativeTeamSpreads(
   headers: GameHeader[],
   rowMap: Map<string, RowOptionEntry>,
   toolEvidenceText?: string,
-  toolRecords?: MarketToolRecord[]
+  toolRecords?: MarketToolRecord[],
+  boardText?: string
 ): Map<string, AuthoritativeTeamSpread> {
   const spreadMap = new Map<string, AuthoritativeTeamSpread>();
 
@@ -913,16 +961,11 @@ export function extractAuthoritativeTeamSpreads(
             const bare = toFiniteNumber(latest.spread ?? d.current_spread ?? lastSnap.spread ?? opening.spread ?? d.opening_spread ?? firstSnap.spread);
             const mlH = toFiniteNumber(latest.ml_home ?? d.current_ml_home ?? d.ml_home ?? lastSnap.ml_home ?? opening.ml_home);
             const mlA = toFiniteNumber(latest.ml_away ?? d.current_ml_away ?? d.ml_away ?? lastSnap.ml_away ?? opening.ml_away);
-            if (bare !== null && bare !== 0 && mlH !== null && mlA !== null && mlH !== mlA) {
+            const resolvedBare = resolveBareSpreadWithMl(bare, mlH, mlA);
+            if (resolvedBare) {
               source = 'tool';
-              const homeIsFav = mlH < mlA;
-              if ((homeIsFav && bare > 0) || (!homeIsFav && bare < 0)) {
-                homeSpread = -bare;
-                awaySpread = bare;
-              } else {
-                homeSpread = bare;
-                awaySpread = -bare;
-              }
+              homeSpread = resolvedBare.home;
+              awaySpread = resolvedBare.away;
             }
           }
         }
@@ -939,6 +982,21 @@ export function extractAuthoritativeTeamSpreads(
           source = 'tool';
           homeSpread = parsedBlock.home ?? (parsedBlock.away! === 0 ? 0 : -parsedBlock.away!);
           awaySpread = parsedBlock.away ?? (homeSpread === 0 ? 0 : -homeSpread);
+        }
+      }
+    }
+
+    // 4. Supplement from boardText snapshot lines/blocks when still unresolved
+    if ((awaySpread === undefined || homeSpread === undefined) && boardText) {
+      const boardBlocks = boardText.split(/(?=^EVENT\s+|^\s*•?\s*\[?event_id=)/m);
+      const matchedBlocks = boardBlocks.filter(b => b.includes(h.eventId)).join('\n');
+      const matchedLines = matchedBlocks || boardText.split(/\r?\n/).filter(l => l.includes(h.eventId)).join('\n');
+      if (matchedLines) {
+        const parsedBoard = extractSpreadsFromToolSummary(matchedLines, h.away, h.home);
+        if (parsedBoard.home !== undefined || parsedBoard.away !== undefined) {
+          source = 'slate';
+          homeSpread = parsedBoard.home ?? (parsedBoard.away! === 0 ? 0 : -parsedBoard.away!);
+          awaySpread = parsedBoard.away ?? (homeSpread === 0 ? 0 : -homeSpread);
         }
       }
     }
@@ -1009,7 +1067,8 @@ interface SpreadSideViolation {
   wrongNumberEnd?: number;
 }
 
-const STAT_CONTEXT_WORDS = /\b(?:net\s*rating|nrtg|ortg|drtg|margin|diff(?:erential)?|edge|xgf|xg|ppg|gpg|goals|runs|yards|era|pace|delta|move|moved|movement|steam|swing|roi|ev|kelly|units?|u\b)\b/i;
+const DIRECT_STAT_PREFIX_RX = /\b(?:net\s*rating|nrtg|ortg|drtg|point\s*diff(?:erential)?|goal\s*diff(?:erential)?|run\s*diff(?:erential)?|diff(?:erential)?|xgf|xg|ppg|gpg|era|pace|delta|roi|ev|kelly|(?:moved|move|steam(?:ed)?|swing)\s+(?:by|of)|margin\s+of|edge\s+of)\s*[:=of\s]*$/i;
+const DIRECT_STAT_SUFFIX_RX = /^\s*(?:%|pts?\s+(?:move|delta|swing|diff|margin)|units?\b|u\b|net\s*rating\b|nrtg\b|ortg\b|drtg\b|diff(?:erential)?\b|ppg\b|gpg\b|goals?\b|runs?\b|yards?\b|era\b|roi\b|ev\b)/i;
 
 function findSpreadSideViolationInClause(
   clause: string,
@@ -1021,7 +1080,7 @@ function findSpreadSideViolationInClause(
 
   // 1. Check explicit signed spread numbers paired with a team in the clause
   const cleanedForNum = stripNonSpreadParentheses(clause);
-  const numRx = /(?:^|[\s,:(])([+-]\d+(?:\.\d+)?)(?=$|[\s,);.!])/g;
+  const numRx = /(?:^|[\s,:(\["'/])([+-]\d+(?:\.\d+)?)(?=$|[\s,);.!?:\]"'/—–])/g;
   let nm: RegExpExecArray | null;
   while ((nm = numRx.exec(cleanedForNum)) !== null) {
     const numStr = nm[1];
@@ -1031,18 +1090,21 @@ function findSpreadSideViolationInClause(
     // Sports spreads/pucklines/runlines only come in whole or half-point (.0 / .5) increments, never e.g. -0.9 or +1.1 net ratings
     if (Math.round(Math.abs(val) * 2) !== Math.abs(val) * 2) continue;
 
-    // Skip ML odds explicitly labeled (e.g. ML -11), W-L record parentheticals ("3-7 (-0.9)"), or explicit stat differentials
+    // Skip ML odds explicitly labeled (e.g. ML -11), W-L record parentheticals ("3-7 (-0.9)"), or corrective negations
     const prefix = clause.slice(Math.max(0, numOffset - 22), numOffset);
     const suffix = clause.slice(numOffset + numStr.length, Math.min(clause.length, numOffset + numStr.length + 22));
     if (/\b(?:ml|moneyline|h2h|o\/u|over|under|total)\s*$/i.test(prefix)) continue;
     if (/\b\d{1,2}-\d{1,2}(?:-\d{1,2})?\s*[,(\s]*$/i.test(prefix)) continue;
-    if (STAT_CONTEXT_WORDS.test(prefix) || STAT_CONTEXT_WORDS.test(suffix)) continue;
     if (/\b(?:not|never|instead of|rather than|isn't|aren't|wasn't|weren't|vs\.?|versus)\s*(?:a|an|the|listed as)?\s*$/i.test(prefix)) continue;
 
     // Find nearest preceding team within 45 chars, or nearest immediately following team if none precede
     const preceding = [...teamHits].reverse().find(t => t.end <= numOffset && numOffset - t.end <= 45);
     const targetHit = preceding || teamHits.find(t => t.start >= numOffset + numStr.length && t.start - (numOffset + numStr.length) <= 25 && !/[,.]/.test(clause.slice(numOffset + numStr.length, t.start)));
     if (!targetHit) continue;
+
+    // Only skip when a stat/unit qualifier directly applies between the team and number or immediately follows the number
+    const statPrefix = preceding ? clause.slice(preceding.end, numOffset) : prefix;
+    if (DIRECT_STAT_PREFIX_RX.test(statPrefix) || DIRECT_STAT_SUFFIX_RX.test(suffix)) continue;
 
     // Skip corrective negations right before the team name: "not Portland -10.5"
     const beforeTeam = clause.slice(Math.max(0, targetHit.start - 20), targetHit.start);
@@ -1084,7 +1146,7 @@ function findSpreadSideViolationInClause(
     const spanBefore = (i > 0 && lastSepEnd === 0) ? '' : rawBefore.slice(lastSepEnd);
 
     if (entry.role === 'underdog') {
-      const favAfter = spanAfter.match(/\b(?:favored|favorite|favorites|chalk)\b/i);
+      const favAfter = spanAfter.match(/\b(?:favored|favorite|favorites|chalk|laying\s+[+-]?\d+(?:\.\d+)?)\b/i);
       const favBefore = spanBefore.match(/\b(?:favored|favorite|favorites|chalk)\b/i);
       const favMatch = favAfter ? { text: spanAfter, idx: favAfter.index! } : (favBefore ? { text: spanBefore, idx: favBefore.index! } : null);
       if (favMatch) {
@@ -1204,16 +1266,10 @@ export function auditMarketCoverageAndRowBinding(
     : parseGameHeaders(boardSource);
   const rowMap = extractRowOptions([boardSource], headers);
 
-  let boardText = '';
-  if (typeof boardSource === 'string') {
-    boardText = boardSource;
-  } else if (boardSource && typeof boardSource === 'object') {
-    const b = boardSource as any;
-    boardText = [b.rawBoard, b.board, b.dataSample, b.task, b.content].filter(Boolean).join('\n');
-  }
+  const boardText = extractBoardText(boardSource);
 
   const coverageByGame = extractMarketCoverageByGame(toolEvidenceText, boardText, headers, toolRecords);
-  const authoritativeSpreads = extractAuthoritativeTeamSpreads(headers, rowMap, toolEvidenceText, toolRecords);
+  const authoritativeSpreads = extractAuthoritativeTeamSpreads(headers, rowMap, toolEvidenceText, toolRecords, boardText);
   const picks = extractProposalPicks(proposal, headers, rowMap);
   const flags: string[] = [];
 
@@ -1343,6 +1399,28 @@ export function auditMarketCoverageAndRowBinding(
     };
     if (proposal.scorecard) checkScorecard(proposal.scorecard);
     if (Array.isArray(proposal.scorecards)) proposal.scorecards.forEach(checkScorecard);
+    if (Array.isArray(proposal.components)) {
+      for (const comp of proposal.components) {
+        if (!comp || typeof comp !== 'object' || !comp.props) continue;
+        for (const pKey of ['title', 'subtitle', 'value']) {
+          if (typeof comp.props[pKey] === 'string' && comp.props[pKey].trim()) proseTexts.push(comp.props[pKey]);
+        }
+        if (Array.isArray(comp.props.insights)) {
+          for (const ins of comp.props.insights) {
+            if (typeof ins === 'string' && ins.trim()) proseTexts.push(ins);
+            else if (ins && typeof ins === 'object' && typeof ins.message === 'string' && ins.message.trim()) proseTexts.push(ins.message);
+          }
+        }
+        if (Array.isArray(comp.props.rows)) {
+          for (const row of comp.props.rows) {
+            if (!row || typeof row !== 'object') continue;
+            for (const val of Object.values(row)) {
+              if (typeof val === 'string' && val.trim()) proseTexts.push(val);
+            }
+          }
+        }
+      }
+    }
 
     for (const txt of proseTexts) {
       for (const clause of splitClausesPreservingDelimiters(txt)) {
@@ -1395,12 +1473,7 @@ export function isFalseMissingMoneylineCritique(
 
   const headers = headersInput && headersInput.length > 0 ? headersInput : parseGameHeaders(boardSource);
   const rowMap = extractRowOptions([boardSource], headers);
-  let boardText = '';
-  if (typeof boardSource === 'string') boardText = boardSource;
-  else if (boardSource && typeof boardSource === 'object') {
-    const b = boardSource as any;
-    boardText = [b.rawBoard, b.board, b.dataSample, b.task, b.content].filter(Boolean).join('\n');
-  }
+  const boardText = extractBoardText(boardSource);
   const coverageByGame = extractMarketCoverageByGame(toolEvidenceText, boardText, headers, toolRecords);
   const picks = extractProposalPicks(proposal, headers, rowMap);
   const mlPicks = picks.filter(p => isMoneylineText(p.sideText, p.marketField));
@@ -1432,11 +1505,13 @@ export function sanitizeRowMismatchedPicks<T extends Record<string, any>>(
   if (!report || typeof report !== 'object') return report;
   const headers = headersInput && headersInput.length > 0 ? headersInput : parseGameHeaders(boardSource);
   const rowMap = extractRowOptions([boardSource], headers);
+  const boardText = extractBoardText(boardSource);
   const authoritativeSpreads = extractAuthoritativeTeamSpreads(
     headers,
     rowMap,
     options?.toolEvidenceText,
-    options?.toolRecords
+    options?.toolRecords,
+    boardText
   );
   if (rowMap.size === 0 && authoritativeSpreads.size === 0) return report;
 
@@ -1527,13 +1602,11 @@ export function sanitizeRowMismatchedPicks<T extends Record<string, any>>(
     if (Array.isArray(rep.components)) {
       for (const comp of rep.components) {
         if (!comp || typeof comp !== 'object' || !comp.props) continue;
-        if (typeof comp.props.subtitle === 'string') {
-          const cleaned = sanitizeSpreadText(comp.props.subtitle, authoritativeSpreads);
-          if (cleaned.changed) comp.props.subtitle = cleaned.text;
-        }
-        if (typeof comp.props.value === 'string') {
-          const cleaned = sanitizeSpreadText(comp.props.value, authoritativeSpreads);
-          if (cleaned.changed) comp.props.value = cleaned.text;
+        for (const pKey of ['title', 'subtitle', 'value']) {
+          if (typeof comp.props[pKey] === 'string') {
+            const cleaned = sanitizeSpreadText(comp.props[pKey], authoritativeSpreads);
+            if (cleaned.changed) comp.props[pKey] = cleaned.text;
+          }
         }
         if (Array.isArray(comp.props.insights)) {
           comp.props.insights = comp.props.insights

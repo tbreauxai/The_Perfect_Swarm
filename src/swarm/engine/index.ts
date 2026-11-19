@@ -506,6 +506,14 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     };
                 } else {
                     try {
+                        const marketToolRecords = flatReports
+                            .flatMap((r: any) =>
+                                Array.isArray(r?.marketToolRecords) && r.marketToolRecords.length > 0
+                                    ? r.marketToolRecords
+                                    : (Array.isArray(r?.toolEvidenceItems) ? r.toolEvidenceItems : [])
+                            )
+                            .filter((item: any) => item && item.tool === 'get_market_movement' && item.eventId);
+
                         if (blackboard) {
                             // R2-S4/S5: critic + manager see the brief, the scorecards and citedRows only (never the full data).
                             // The critic runs when deep analysis is on (same gate as the verification critic).
@@ -522,13 +530,6 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                 onStage: params.onStage
                             });
                         } else if (deepAnalysisRequested && (analysts.length > 0 || dedicatedCriticAgent)) {
-                            const marketToolRecords = flatReports
-                                .flatMap((r: any) =>
-                                    Array.isArray(r?.marketToolRecords) && r.marketToolRecords.length > 0
-                                        ? r.marketToolRecords
-                                        : (Array.isArray(r?.toolEvidenceItems) ? r.toolEvidenceItems : [])
-                                )
-                                .filter((item: any) => item && item.tool === 'get_market_movement' && item.eventId);
                             const verificationResult = await runDeepAnalysisVerification({
                                 task,
                                 rawInput: profilingResult.rawInput,
@@ -571,6 +572,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                 coveredEventIdsList,
                                 {
                                     toolResults: verifierToolResults,
+                                    ...(marketToolRecords.length > 0 ? { marketToolRecords } : {}),
                                     criticVetoes: stage2CriticVetoes,
                                     ...(stage2VetoedLegs.length > 0 ? { vetoedLegs: stage2VetoedLegs } : {}),
                                     ...(stage2VetoedClaims.length > 0 ? { vetoedClaims: stage2VetoedClaims } : {}),

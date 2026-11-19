@@ -6,7 +6,7 @@
 
 import type { SwarmTool } from './types.ts';
 import { QdrantClient } from '@qdrant/js-client-rest';
-import { resolveInjuryTeam } from './injuryAttribution.ts';
+import { resolveInjuryTeam, matchTeamByLabel } from './injuryAttribution.ts';
 
 export interface SupabaseRpcConfig {
   supabaseUrl: string;
@@ -973,8 +973,39 @@ export const getMarketMovementTool: SwarmTool = {
     const inferSlateHomeSpread = (): number | null => {
       if (gameOptions.length === 0) return null;
       const escapeRx = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const awayTokens = awayCandidates.flatMap(c => c.toLowerCase().split(/\s+/)).filter(w => w.length >= 3);
-      const homeTokens = homeCandidates.flatMap(c => c.toLowerCase().split(/\s+/)).filter(w => w.length >= 3);
+      const gameSport = (context as any)?.game?.sport;
+      const awayEntries = awayCandidates.map(c => matchTeamByLabel(c, gameSport)).filter((e): e is NonNullable<typeof e> => Boolean(e));
+      const homeEntries = homeCandidates.map(c => matchTeamByLabel(c, gameSport)).filter((e): e is NonNullable<typeof e> => Boolean(e));
+      const sharedCity = awayEntries.some(a => homeEntries.some(h => a.city && h.city && a.city.toLowerCase() === h.city.toLowerCase()));
+      const stopAliases = new Set(['la', 'ny', 'sa', 'sd', 'sf', 'gb', 'kc', 'lv', 'ne', 'tb', 'no', 'as', 'in', 'or', 'at', 'by', 'to', 'on', 'of']);
+
+      const collectTeamMatchers = (cands: string[], entries: typeof awayEntries): { words: string[]; abbrs: string[] } => {
+        const words = new Set<string>();
+        const abbrs = new Set<string>();
+        for (const c of cands) {
+          if (/^[A-Z]{2,4}$/.test(c.trim())) abbrs.add(c.trim());
+          for (const w of c.toLowerCase().split(/\s+/)) {
+            if (w.length >= 3) words.add(w);
+          }
+        }
+        for (const e of entries) {
+          words.add(e.name.toLowerCase());
+          if (e.nickname) words.add(e.nickname.toLowerCase());
+          if (e.abbr && e.abbr.length >= 2) abbrs.add(e.abbr.toUpperCase());
+          if (e.city && !sharedCity) words.add(e.city.toLowerCase());
+          for (const a of e.aliases || []) {
+            const al = a.toLowerCase().trim();
+            if (!al || al.length < 3 || stopAliases.has(al)) continue;
+            if (sharedCity && e.city && al === e.city.toLowerCase()) continue;
+            words.add(al);
+          }
+        }
+        return { words: Array.from(words), abbrs: Array.from(abbrs) };
+      };
+
+      const awayMatchers = collectTeamMatchers(awayCandidates, awayEntries);
+      const homeMatchers = collectTeamMatchers(homeCandidates, homeEntries);
+
       let rowHome: number | null = null;
       let rowAway: number | null = null;
       for (const opt of gameOptions) {
@@ -986,8 +1017,12 @@ export const getMarketMovementTool: SwarmTool = {
         const val = parseFloat(m[1]);
         if (!Number.isFinite(val) || Math.abs(val) >= 100) continue;
         const lower = cleaned.toLowerCase();
-        const matchesHome = homeTokens.some(tok => new RegExp(`\\b${escapeRx(tok)}\\b`, 'i').test(lower));
-        const matchesAway = awayTokens.some(tok => new RegExp(`\\b${escapeRx(tok)}\\b`, 'i').test(lower));
+        const matchesHome =
+          homeMatchers.words.some(tok => new RegExp(`\\b${escapeRx(tok)}\\b`, 'i').test(lower)) ||
+          homeMatchers.abbrs.some(ab => new RegExp(`\\b${escapeRx(ab)}\\b`).test(cleaned));
+        const matchesAway =
+          awayMatchers.words.some(tok => new RegExp(`\\b${escapeRx(tok)}\\b`, 'i').test(lower)) ||
+          awayMatchers.abbrs.some(ab => new RegExp(`\\b${escapeRx(ab)}\\b`).test(cleaned));
         if (matchesHome && !matchesAway) rowHome = val;
         else if (matchesAway && !matchesHome) rowAway = val;
       }
@@ -1005,6 +1040,14 @@ export const getMarketMovementTool: SwarmTool = {
       }
       return null;
     };
+
+    const bareOpenNum = toNum(bareOpenSpread ?? opening.line ?? d.open_line);
+    const bareCurrNum = toNum(bareCurrSpread ?? latest.line ?? d.current_line);
+    const bareSpreadDelta = toNum(d.line_delta) ?? (
+      bareOpenNum !== null && bareCurrNum !== null
+        ? Number((bareCurrNum - bareOpenNum).toFixed(2))
+        : null
+    );
 
     const resolveSpreadPair = (
       explicitHome: unknown,
@@ -1034,7 +1077,7 @@ export const getMarketMovementTool: SwarmTool = {
         }
       }
 
-      // 2. Check explicit spread_team / favorite / steam_direction hints
+      // 2. Check explicit spread_team hint
       const spreadTeamRaw = String(d.spread_team ?? latest.spread_team ?? opening.spread_team ?? '').toLowerCase().trim();
       if (spreadTeamRaw) {
         const matchesAway = awayCandidates.some(c => {
@@ -1052,14 +1095,9 @@ export const getMarketMovementTool: SwarmTool = {
           return { home: bare, away: bare === 0 ? 0 : -bare };
         }
       }
-      if (steamDirHint.includes('home')) {
-        return { home: bare, away: bare === 0 ? 0 : -bare };
-      }
-      if (steamDirHint.includes('away')) {
-        return { home: bare === 0 ? 0 : -bare, away: bare };
-      }
 
-      // 3. Check moneyline favorite/underdog consistency: negative spread = favorite, positive spread = underdog
+      // 3. Check moneyline favorite/underdog consistency BEFORE steam_direction:
+      //    negative spread = favorite, positive spread = underdog
       const mlH = toNum(mlHomeVal);
       const mlA = toNum(mlAwayVal);
       if (bare !== 0) {
@@ -1072,17 +1110,36 @@ export const getMarketMovementTool: SwarmTool = {
           }
           return { home: bare, away: -bare };
         }
-        if (mlH !== null && mlH <= -135 && bare > 0) {
-          // Clear home moneyline favorite with positive bare spread => away underdog line
-          return { home: -bare, away: bare };
+        if (mlH !== null) {
+          if (mlH <= -135) {
+            return bare > 0 ? { home: -bare, away: bare } : { home: bare, away: -bare };
+          }
+          if (mlH >= 135) {
+            return bare < 0 ? { home: -bare, away: bare } : { home: bare, away: -bare };
+          }
         }
-        if (mlA !== null && mlA <= -135 && bare < 0) {
-          // Clear away moneyline favorite with negative bare spread => away favorite line
-          return { home: -bare, away: bare };
+        if (mlA !== null) {
+          if (mlA <= -135) {
+            return bare < 0 ? { home: -bare, away: bare } : { home: bare, away: -bare };
+          }
+          if (mlA >= 135) {
+            return bare > 0 ? { home: -bare, away: bare } : { home: bare, away: -bare };
+          }
         }
       }
 
-      // 4. Unattributed bare spread with no explicit home/away row/ML signal: emit raw spread without flipping
+      // 4. Steam direction + movement sign fallback: infer column perspective only when movement delta confirms it
+      if (bareSpreadDelta !== null && bareSpreadDelta !== 0 && (steamDirHint.includes('home') || steamDirHint.includes('away'))) {
+        const isHomePerspective =
+          (steamDirHint.includes('home') && bareSpreadDelta < 0) ||
+          (steamDirHint.includes('away') && bareSpreadDelta > 0);
+        if (isHomePerspective) {
+          return { home: bare, away: bare === 0 ? 0 : -bare };
+        }
+        return { home: bare === 0 ? 0 : -bare, away: bare };
+      }
+
+      // 5. Unattributed bare spread with no explicit home/away row/ML signal: emit raw spread without flipping
       return { raw: bare };
     };
 

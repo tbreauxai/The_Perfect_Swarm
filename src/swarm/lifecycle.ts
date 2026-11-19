@@ -52,6 +52,7 @@ export interface LifecycleExecutionResult {
     computedRating: number;
     verifiedEventIds?: string[];
     verifiedToolEvidence?: string;
+    verifiedMarketToolRecords?: MarketToolRecord[];
     verifiedToolTrace?: ToolCallTraceEntry[];
     vetoedLegs?: VetoedLegTarget[];
     vetoedClaims?: string[];
@@ -123,6 +124,14 @@ export class AnalysisLifecycle {
         let accumulatedToolTrace: ToolCallTraceEntry[] = Array.isArray((rawData as any)?.toolCallTrace)
             ? mergeToolCallTraceEntries((rawData as any).toolCallTrace)
             : [];
+        const accumulatedMarketRecords: MarketToolRecord[] = Array.isArray((rawData as any)?.marketToolRecords)
+            ? [...(rawData as any).marketToolRecords]
+            : [];
+        const pushUniqueMarketRecord = (rec: MarketToolRecord) => {
+            if (!accumulatedMarketRecords.some(existing => existing.eventId === rec.eventId && existing.summary === rec.summary)) {
+                accumulatedMarketRecords.push(rec);
+            }
+        };
         const freshRetryEvidenceParts: string[] = [];
 
         const initialCriticVetoes: string[] = Array.isArray((rawData as any)?.criticVetoes)
@@ -248,9 +257,7 @@ export class AnalysisLifecycle {
 
             let scopedToolResults = '';
             let rawPulledText = '';
-            const pulledMarketRecords: MarketToolRecord[] = Array.isArray((rawData as any)?.marketToolRecords)
-                ? [...(rawData as any).marketToolRecords]
-                : [];
+            const pulledMarketRecords = accumulatedMarketRecords;
             if (this.toolRegistry && selectedGameIds.length > 0) {
                 const criticTools = [
                     'get_market_movement',
@@ -318,7 +325,7 @@ export class AnalysisLifecycle {
                                     summary: res.summary.trim()
                                 });
                                 if (tool === 'get_market_movement') {
-                                    pulledMarketRecords.push({
+                                    pushUniqueMarketRecord({
                                         tool,
                                         eventId: gId,
                                         summary: res.summary.trim(),
@@ -605,7 +612,7 @@ export class AnalysisLifecycle {
                                         newlyPulled.push(cleanSum);
                                         verifiedEventIdsSet.add(gId);
                                         if (tool === 'get_market_movement') {
-                                            pulledMarketRecords.push({
+                                            pushUniqueMarketRecord({
                                                 tool,
                                                 eventId: gId,
                                                 summary: cleanSum,
@@ -712,6 +719,7 @@ export class AnalysisLifecycle {
                     computedRating,
                     verifiedEventIds: Array.from(verifiedEventIdsSet),
                     ...(lastCombinedToolSummary ? { verifiedToolEvidence: lastCombinedToolSummary } : {}),
+                    ...(accumulatedMarketRecords.length > 0 ? { verifiedMarketToolRecords: accumulatedMarketRecords } : {}),
                     ...(accumulatedToolTrace.length > 0 ? { verifiedToolTrace: mergeToolCallTraceEntries(accumulatedToolTrace) } : {}),
                     ...(accumulatedVetoedLegs.length > 0 ? { vetoedLegs: accumulatedVetoedLegs } : {}),
                     ...(accumulatedVetoedClaims.length > 0 ? { vetoedClaims: accumulatedVetoedClaims } : {}),
@@ -746,6 +754,7 @@ export class AnalysisLifecycle {
             computedRating,
             verifiedEventIds: Array.from(verifiedEventIdsSet),
             ...(lastCombinedToolSummary ? { verifiedToolEvidence: lastCombinedToolSummary } : {}),
+            ...(accumulatedMarketRecords.length > 0 ? { verifiedMarketToolRecords: accumulatedMarketRecords } : {}),
             ...(accumulatedToolTrace.length > 0 ? { verifiedToolTrace: mergeToolCallTraceEntries(accumulatedToolTrace) } : {}),
             ...(accumulatedVetoedLegs.length > 0 ? { vetoedLegs: accumulatedVetoedLegs } : {}),
             ...(accumulatedVetoedClaims.length > 0 ? { vetoedClaims: accumulatedVetoedClaims } : {}),

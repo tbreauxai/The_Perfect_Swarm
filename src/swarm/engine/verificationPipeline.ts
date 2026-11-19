@@ -151,6 +151,20 @@ export async function runDeepAnalysisVerification(
         const combinedVetoedLegs = mergeVetoedLegTargets(p.vetoedLegs, lifecycleResult?.vetoedLegs);
         const combinedVetoedClaims = mergeVetoedClaims(p.vetoedClaims, lifecycleResult?.vetoedClaims);
 
+        const combinedMarketToolRecords: MarketToolRecord[] = [];
+        const seenMarketKeys = new Set<string>();
+        for (const rec of [
+            ...(Array.isArray(p.marketToolRecords) ? p.marketToolRecords : []),
+            ...(Array.isArray(lifecycleResult?.verifiedMarketToolRecords) ? lifecycleResult.verifiedMarketToolRecords : [])
+        ]) {
+            if (!rec || !rec.eventId) continue;
+            const key = `${rec.eventId}::${rec.summary || ''}`;
+            if (!seenMarketKeys.has(key)) {
+                seenMarketKeys.add(key);
+                combinedMarketToolRecords.push(rec);
+            }
+        }
+
         const initialPickCount = Array.isArray(finalAnalysis.picks) ? finalAnalysis.picks.length : 0;
         const boardSourceForSanitize = rawInput || task || headersText;
 
@@ -163,7 +177,7 @@ export async function runDeepAnalysisVerification(
         }
         sanitizeRowMismatchedPicks(finalAnalysis, boardSourceForSanitize, parsedHeaders, {
             toolEvidenceText: combinedVerifiedToolResults,
-            toolRecords: p.marketToolRecords
+            toolRecords: combinedMarketToolRecords
         });
         if (
             parsedHeaders.length > 0 ||
@@ -184,7 +198,7 @@ export async function runDeepAnalysisVerification(
             sanitizePullBeforePassClaims(finalAnalysis, combinedVerifiedToolResults, boardSourceForSanitize, {
                 headers: parsedHeaders,
                 toolCallTrace: combinedToolTrace,
-                marketToolRecords: p.marketToolRecords
+                marketToolRecords: combinedMarketToolRecords
             });
         }
 

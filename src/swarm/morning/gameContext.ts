@@ -921,6 +921,8 @@ export function adaptContextEnvelope(rawRow: unknown): Record<string, unknown> |
                 for (const entry of byBook.values()) {
                     if (entry.spread_home !== null && entry.spread_away === null) {
                         entry.spread_away = entry.spread_home === 0 ? 0 : -entry.spread_home;
+                    } else if (entry.spread_away !== null && entry.spread_home === null) {
+                        entry.spread_home = entry.spread_away === 0 ? 0 : -entry.spread_away;
                     }
                 }
                 adaptedSections.odds = Array.from(byBook.values());

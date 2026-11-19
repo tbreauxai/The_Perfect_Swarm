@@ -473,4 +473,187 @@ describe('Spread side must match the row (Blazers @ Bucks)', () => {
       runSpy.mockRestore();
     }
   });
+
+  it('(6) get_market_movement handles steam_direction + ML priority and abbreviated POR +10.5 slate options without flipping', async () => {
+    // A: Blazers @ Bucks snapshot with spread: +10.5, ml_home: -500, ml_away: +380, steam_direction: 'home_steam' (NO slate options)
+    const fetchFnWithHomeSteam: any = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          game_id: 'nba-por-mil',
+          bookmaker: 'fanduel',
+          opening: { spread: 10.5, total: 227.5, ml_home: -480, ml_away: 360, price: -110 },
+          latest: { spread: 10.5, total: 228.5, ml_home: -500, ml_away: 380, price: -110 },
+          steam_direction: 'home_steam',
+          line_snapshots: [
+            { spread: 10.5, total: 227.5, ml_home: -480, ml_away: 360, captured_at: '2026-11-19T14:00:00Z' },
+            { spread: 10.5, total: 228.5, ml_home: -500, ml_away: 380, captured_at: '2026-11-19T18:00:00Z' }
+          ]
+        }),
+        { status: 200 }
+      )
+    );
+
+    const resSteamMl: any = await getMarketMovementTool.execute(
+      { game_id: 'nba-por-mil', market_type: 'all' },
+      {
+        fetchFn: fetchFnWithHomeSteam,
+        env,
+        game: {
+          event_id: 'nba-por-mil',
+          sport: 'basketball_nba',
+          away_team: 'Portland Trail Blazers',
+          home_team: 'Milwaukee Bucks'
+        }
+      } as any
+    );
+    expect(resSteamMl.success).toBe(true);
+    expect(resSteamMl.summary).toContain('home Milwaukee Bucks -10.5 / away Portland Trail Blazers +10.5');
+    expect(resSteamMl.summary).not.toContain('Portland Trail Blazers -10.5');
+
+    // B: Away steam pushing a home favorite from -3.5 to -2.5 (line_delta: +1.0) without ML keeps home -2.5 / away +2.5
+    const fetchFnAwaySteam: any = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          game_id: 'nba-away-steam',
+          bookmaker: 'fanduel',
+          opening: { spread: -3.5, price: -110 },
+          latest: { spread: -2.5, price: -110 },
+          line_delta: 1.0,
+          steam_direction: 'away_steam',
+          snapshots_tracked: 4
+        }),
+        { status: 200 }
+      )
+    );
+
+    const resAwaySteam: any = await getMarketMovementTool.execute(
+      { game_id: 'nba-away-steam', market_type: 'spread' },
+      { fetchFn: fetchFnAwaySteam, env } as any
+    );
+    expect(resAwaySteam.success).toBe(true);
+    expect(resAwaySteam.summary).toContain('Open: home HOME -3.5 / away AWAY +3.5 (-110) -> Current: home HOME -2.5 / away AWAY +2.5 (-110)');
+
+    // C: Abbreviated slate options (POR +10.5 / MIL -10.5) match full team names in game metadata
+    const fetchFnAbbr: any = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          game_id: 'nba-por-mil',
+          latest: { spread: 10.5, price: -110 },
+          line_snapshots: [{ spread: 10.5, captured_at: '2026-11-19T18:00:00Z' }]
+        }),
+        { status: 200 }
+      )
+    );
+    const resAbbr: any = await getMarketMovementTool.execute(
+      { game_id: 'nba-por-mil', market_type: 'spread' },
+      {
+        fetchFn: fetchFnAbbr,
+        env,
+        game: {
+          event_id: 'nba-por-mil',
+          sport: 'basketball_nba',
+          away_team: 'Portland Trail Blazers',
+          home_team: 'Milwaukee Bucks',
+          options: [
+            { id: 'R1', text: 'POR +10.5 (-110)' },
+            { id: 'R2', text: 'MIL -10.5 (-110)' }
+          ]
+        }
+      } as any
+    );
+    expect(resAbbr.success).toBe(true);
+    expect(resAbbr.summary).toContain('home Milwaukee Bucks -10.5 / away Portland Trail Blazers +10.5');
+  });
+
+  it('(7) Catches parenthetical, stat-adjacent, component, and snapshot-only spread flips while sparing real stats', () => {
+    const board =
+      'event_id=nba-por-mil | sport=basketball_nba | Portland Trail Blazers @ Milwaukee Bucks | commence=2026-11-19T23:00:00Z | options: R14 Portland Trail Blazers +10.5 (-110), R15 Milwaukee Bucks -10.5 (-110)';
+
+    // A: Length-preserving stripNonSpreadParentheses avoids offset corruption after (R14)
+    const sanitizedParen = sanitizeRowMismatchedPicks(
+      {
+        summary: 'Take Portland (R14) -10.5 (-110) against Milwaukee.',
+        picks: []
+      },
+      board
+    );
+    expect(sanitizedParen.summary).toBe('Take Portland (R14) +10.5 (-110) against Milwaukee.');
+
+    // B: Spread flips with nearby action words are caught, while true stat differentials are spared
+    for (const flippedPhrase of [
+      'Portland moved to -10.5 overnight.',
+      'Portland -10.5 offers strong edge here.',
+      'Play Portland -10.5 for 1 unit.',
+      'Sharp steam on Portland -10.5 today.',
+      'Portland -10.5: value play.'
+    ]) {
+      const res = auditMarketCoverageAndRowBinding({ summary: flippedPhrase, picks: [] }, '', board);
+      expect(res.pass).toBe(false);
+      expect(res.flags).toContain('spread_side_mismatch');
+    }
+
+    const nhlBoard =
+      'event_id=nhl-col | sport=icehockey_nhl | Anaheim Ducks @ Colorado Avalanche | options: R47 Anaheim Ducks +1.5 (-130), R48 Colorado Avalanche -1.5 (+110)';
+    for (const validStatPhrase of [
+      'Portland net rating -10.5 trails Milwaukee.',
+      'Bucks +2.5% EV on the moneyline.',
+      'Portland Trail Blazers line moved by +1.0.'
+    ]) {
+      const res = auditMarketCoverageAndRowBinding({ summary: validStatPhrase, picks: [] }, '', board);
+      expect(res.pass).toBe(true);
+    }
+    const unitStatRes = auditMarketCoverageAndRowBinding({ summary: 'Avalanche +1.5 units risked today.', picks: [] }, '', nhlBoard);
+    expect(unitStatRes.pass).toBe(true);
+
+    // C: Underdog "laying 10.5" role flip is caught
+    const layingAudit = auditMarketCoverageAndRowBinding(
+      { summary: 'Portland is laying 10.5 on the road.', picks: [] },
+      '',
+      board
+    );
+    expect(layingAudit.pass).toBe(false);
+    expect(layingAudit.flags).toContain('spread_side_mismatch');
+
+    // D: Flipped spreads inside proposal.components (MetricCard / InsightList / DataTable row) fail Critic audit
+    const componentAudit = auditMarketCoverageAndRowBinding(
+      {
+        summary: 'Blazers @ Bucks market check.',
+        picks: [],
+        components: [
+          {
+            id: 'c1',
+            type: 'DataTable',
+            props: {
+              title: 'Portland -10.5 Split',
+              rows: [{ matchup: 'Portland Trail Blazers -10.5', note: 'Road side' }]
+            }
+          }
+        ]
+      },
+      '',
+      board
+    );
+    expect(componentAudit.pass).toBe(false);
+    expect(componentAudit.flags).toContain('spread_side_mismatch');
+
+    // E: Rowless snapshot board format ("Spread=+10.5, Total=228.5, ML(H/A)=-500/+380") is parsed and audited
+    const snapshotOnlyBoard = [
+      'event_id=nba-por-mil | sport=basketball_nba | Portland Trail Blazers @ Milwaukee Bucks',
+      'Line Snapshots (1 rows):',
+      '  • [event_id=nba-por-mil | LIVE] Spread=+10.5, Total=228.5, ML(H/A)=-500/+380 (2026-11-19T18:00:00Z)'
+    ].join('\n');
+    const snapshotAudit = auditMarketCoverageAndRowBinding(
+      { summary: 'Portland -10.5 is wrongly favored.', picks: [] },
+      '',
+      snapshotOnlyBoard
+    );
+    expect(snapshotAudit.pass).toBe(false);
+    expect(snapshotAudit.flags).toContain('spread_side_mismatch');
+
+    const snapshotSanitized = sanitizeRowMismatchedPicks(
+      { summary: 'Portland -10.5 vs Milwaukee +10.5.', picks: [] },
+      snapshotOnlyBoard
+    );
+    expect(snapshotSanitized.summary).toBe('Portland +10.5 vs Milwaukee -10.5.');
+  });
 });
