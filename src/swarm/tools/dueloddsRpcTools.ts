@@ -858,10 +858,14 @@ export const getMarketMovementTool: SwarmTool = {
     const isTotalRequested = normMarket === 'total' || normMarket === 'totals';
     const isSpreadRequested = normMarket === 'spread' || normMarket === 'spreads';
 
-    const openSpreadHome = pickFirst(opening.spread_home, opening.spread, d.opening_spread, firstSnap.spread_home, firstSnap.spread);
-    const currSpreadHome = pickFirst(latest.spread_home, latest.spread, d.current_spread, lastSnap.spread_home, lastSnap.spread);
+    const explicitOpenSpreadHome = pickFirst(opening.spread_home, d.opening_spread_home);
+    const explicitCurrSpreadHome = pickFirst(latest.spread_home, d.current_spread_home);
     const openSpreadAway = pickFirst(opening.spread_away, d.opening_spread_away, firstSnap.spread_away);
     const currSpreadAway = pickFirst(latest.spread_away, d.current_spread_away, lastSnap.spread_away);
+    const bareOpenSpread = pickFirst(opening.spread, d.opening_spread, firstSnap.spread);
+    const bareCurrSpread = pickFirst(latest.spread, d.current_spread, lastSnap.spread);
+    const openSpreadHome = pickFirst(explicitOpenSpreadHome, firstSnap.spread_home, bareOpenSpread);
+    const currSpreadHome = pickFirst(explicitCurrSpreadHome, lastSnap.spread_home, bareCurrSpread);
 
     const openTotal = pickFirst(opening.total, d.opening_total, firstSnap.total);
     const currTotal = pickFirst(latest.total, d.current_total, lastSnap.total);
@@ -895,7 +899,8 @@ export const getMarketMovementTool: SwarmTool = {
       d.ml_away
     );
 
-    const hasAnyOddsData = hasVal(openSpreadHome) || hasVal(currSpreadHome) || hasVal(openTotal) || hasVal(currTotal)
+    const hasAnyOddsData = hasVal(openSpreadHome) || hasVal(currSpreadHome) || hasVal(openSpreadAway) || hasVal(currSpreadAway)
+      || hasVal(openTotal) || hasVal(currTotal)
       || hasVal(openMlHome) || hasVal(currMlHome) || hasVal(openMlAway) || hasVal(currMlAway)
       || hasVal(opening.line) || hasVal(latest.line) || hasVal(d.open_line) || hasVal(d.current_line);
 
@@ -919,7 +924,9 @@ export const getMarketMovementTool: SwarmTool = {
     }
 
     const marketsCovered: string[] = [];
-    if (hasVal(openSpreadHome) || hasVal(currSpreadHome)) marketsCovered.push('spread');
+    if (hasVal(openSpreadHome) || hasVal(currSpreadHome) || hasVal(openSpreadAway) || hasVal(currSpreadAway)) {
+      marketsCovered.push('spread');
+    }
     if (hasVal(openTotal) || hasVal(currTotal)) marketsCovered.push('total');
     if (hasVal(openMlHome) || hasVal(currMlHome) || hasVal(openMlAway) || hasVal(currMlAway)) marketsCovered.push('ml');
 
@@ -942,6 +949,142 @@ export const getMarketMovementTool: SwarmTool = {
 
     const openPrice = opening.price ?? d.open_price ?? d.opening_price ?? 'N/A';
     const currPrice = latest.price ?? d.current_price ?? 'N/A';
+    const steamDirHint = String(d.steam_direction || d.steam_dir || '').toLowerCase();
+
+    // Infer whether a bare `spread` number belongs to Home or Away using slate rows, spread_team, or ML favorite/underdog
+    const gameOptions: Array<{ id?: string; text?: string }> = Array.isArray((context as any)?.game?.options)
+      ? (context as any).game.options
+      : [];
+    const awayCandidates = Array.from(
+      new Set(
+        [awayLabel, (context as any)?.game?.away_team, (context as any)?.game?.away_team_abbr]
+          .filter((x): x is string => typeof x === 'string' && x.trim().length >= 2 && !/^away$/i.test(x.trim()))
+          .map(s => s.trim())
+      )
+    );
+    const homeCandidates = Array.from(
+      new Set(
+        [homeLabel, (context as any)?.game?.home_team, (context as any)?.game?.home_team_abbr]
+          .filter((x): x is string => typeof x === 'string' && x.trim().length >= 2 && !/^home$/i.test(x.trim()))
+          .map(s => s.trim())
+      )
+    );
+
+    const inferSlateHomeSpread = (): number | null => {
+      if (gameOptions.length === 0) return null;
+      const escapeRx = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const awayTokens = awayCandidates.flatMap(c => c.toLowerCase().split(/\s+/)).filter(w => w.length >= 3);
+      const homeTokens = homeCandidates.flatMap(c => c.toLowerCase().split(/\s+/)).filter(w => w.length >= 3);
+      let rowHome: number | null = null;
+      let rowAway: number | null = null;
+      for (const opt of gameOptions) {
+        const txt = String(opt?.text || '');
+        if (!txt || /\b(?:ml|moneyline|over|under)\b/i.test(txt)) continue;
+        const cleaned = txt.replace(/\([+-]\d{3,4}\)/g, ' ');
+        const m = cleaned.match(/([+-]\d+(?:\.\d+)?)\b/);
+        if (!m) continue;
+        const val = parseFloat(m[1]);
+        if (!Number.isFinite(val) || Math.abs(val) >= 100) continue;
+        const lower = cleaned.toLowerCase();
+        const matchesHome = homeTokens.some(tok => new RegExp(`\\b${escapeRx(tok)}\\b`, 'i').test(lower));
+        const matchesAway = awayTokens.some(tok => new RegExp(`\\b${escapeRx(tok)}\\b`, 'i').test(lower));
+        if (matchesHome && !matchesAway) rowHome = val;
+        else if (matchesAway && !matchesHome) rowAway = val;
+      }
+      if (rowHome !== null) return rowHome;
+      if (rowAway !== null) return rowAway === 0 ? 0 : -rowAway;
+      return null;
+    };
+    const slateHomeSpread = inferSlateHomeSpread();
+
+    const toNum = (v: unknown): number | null => {
+      if (typeof v === 'number' && Number.isFinite(v)) return v;
+      if (typeof v === 'string' && v.trim() !== '') {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : null;
+      }
+      return null;
+    };
+
+    const resolveSpreadPair = (
+      explicitHome: unknown,
+      explicitAway: unknown,
+      bareSpread: unknown,
+      mlHomeVal: unknown,
+      mlAwayVal: unknown
+    ): { home: number; away: number } | { raw: number } | null => {
+      const eHome = toNum(explicitHome);
+      const eAway = toNum(explicitAway);
+      if (eHome !== null || eAway !== null) {
+        const h = eHome !== null ? eHome : (eAway! === 0 ? 0 : -eAway!);
+        const a = eAway !== null ? eAway : (h === 0 ? 0 : -h);
+        return { home: h, away: a };
+      }
+
+      const bare = toNum(bareSpread);
+      if (bare === null) return null;
+
+      // 1. Check slate row options: if slate matches bare or -bare explicitly, honor slate sign
+      if (slateHomeSpread !== null && bare !== 0) {
+        if (Math.abs(slateHomeSpread - bare) <= 3 && Math.sign(slateHomeSpread) === Math.sign(bare)) {
+          return { home: bare, away: -bare };
+        }
+        if (Math.abs(-slateHomeSpread - bare) <= 3 && Math.sign(-slateHomeSpread) === Math.sign(bare)) {
+          return { home: -bare, away: bare };
+        }
+      }
+
+      // 2. Check explicit spread_team / favorite / steam_direction hints
+      const spreadTeamRaw = String(d.spread_team ?? latest.spread_team ?? opening.spread_team ?? '').toLowerCase().trim();
+      if (spreadTeamRaw) {
+        const matchesAway = awayCandidates.some(c => {
+          const cl = c.toLowerCase();
+          return spreadTeamRaw.includes(cl) || cl.includes(spreadTeamRaw);
+        });
+        const matchesHome = homeCandidates.some(c => {
+          const cl = c.toLowerCase();
+          return spreadTeamRaw.includes(cl) || cl.includes(spreadTeamRaw);
+        });
+        if (matchesAway && !matchesHome) {
+          return { home: bare === 0 ? 0 : -bare, away: bare };
+        }
+        if (matchesHome && !matchesAway) {
+          return { home: bare, away: bare === 0 ? 0 : -bare };
+        }
+      }
+      if (steamDirHint.includes('home')) {
+        return { home: bare, away: bare === 0 ? 0 : -bare };
+      }
+      if (steamDirHint.includes('away')) {
+        return { home: bare === 0 ? 0 : -bare, away: bare };
+      }
+
+      // 3. Check moneyline favorite/underdog consistency: negative spread = favorite, positive spread = underdog
+      const mlH = toNum(mlHomeVal);
+      const mlA = toNum(mlAwayVal);
+      if (bare !== 0) {
+        if (mlH !== null && mlA !== null && mlH !== mlA) {
+          const homeIsFav = mlH < mlA;
+          const bareIsUnderdogLine = bare > 0;
+          // Home favored & bare positive => bare belongs to away underdog; Home dog & bare negative => bare belongs to away fav
+          if ((homeIsFav && bareIsUnderdogLine) || (!homeIsFav && !bareIsUnderdogLine)) {
+            return { home: -bare, away: bare };
+          }
+          return { home: bare, away: -bare };
+        }
+        if (mlH !== null && mlH <= -135 && bare > 0) {
+          // Clear home moneyline favorite with positive bare spread => away underdog line
+          return { home: -bare, away: bare };
+        }
+        if (mlA !== null && mlA <= -135 && bare < 0) {
+          // Clear away moneyline favorite with negative bare spread => away favorite line
+          return { home: -bare, away: bare };
+        }
+      }
+
+      // 4. Unattributed bare spread with no explicit home/away row/ML signal: emit raw spread without flipping
+      return { raw: bare };
+    };
 
     let openLine: unknown;
     let currLine: unknown;
@@ -953,8 +1096,8 @@ export const getMarketMovementTool: SwarmTool = {
     } else if (isTotalRequested) {
       openLine = openTotal ?? opening.line ?? d.open_line ?? 'N/A';
       currLine = currTotal ?? latest.line ?? d.current_line ?? 'N/A';
-    } else if (isSpreadRequested || hasVal(openSpreadHome) || hasVal(currSpreadHome)) {
-      isSpreadPrimary = isSpreadRequested || hasVal(openSpreadHome) || hasVal(currSpreadHome);
+    } else if (isSpreadRequested || hasVal(openSpreadHome) || hasVal(currSpreadHome) || hasVal(openSpreadAway) || hasVal(currSpreadAway)) {
+      isSpreadPrimary = isSpreadRequested || hasVal(openSpreadHome) || hasVal(currSpreadHome) || hasVal(openSpreadAway) || hasVal(currSpreadAway);
       openLine = openSpreadHome ?? opening.line ?? d.open_line ?? 'N/A';
       currLine = currSpreadHome ?? latest.line ?? d.current_line ?? 'N/A';
     } else if (hasVal(openTotal) || hasVal(currTotal)) {
@@ -968,16 +1111,25 @@ export const getMarketMovementTool: SwarmTool = {
       currLine = latest.line ?? d.current_line ?? 'N/A';
     }
 
-    const formatLineValue = (homeVal: unknown, awayVal: unknown): string => {
-      if (isSpreadPrimary && typeof homeVal === 'number' && Number.isFinite(homeVal)) {
-        const awayNum = typeof awayVal === 'number' && Number.isFinite(awayVal) ? awayVal : (homeVal === 0 ? 0 : -homeVal);
-        return `home ${homeLabel} ${fmtSigned(homeVal)} / away ${awayLabel} ${fmtSigned(awayNum)}`;
+    const openResolved = isSpreadPrimary
+      ? resolveSpreadPair(explicitOpenSpreadHome ?? firstSnap.spread_home, openSpreadAway, bareOpenSpread ?? opening.line ?? d.open_line, openMlHome ?? currMlHome, openMlAway ?? currMlAway)
+      : null;
+    const currResolved = isSpreadPrimary
+      ? resolveSpreadPair(explicitCurrSpreadHome ?? lastSnap.spread_home, currSpreadAway, bareCurrSpread ?? latest.line ?? d.current_line, currMlHome ?? openMlHome, currMlAway ?? openMlAway)
+      : null;
+
+    const formatResolvedLine = (resolved: { home: number; away: number } | { raw: number } | null, fallbackVal: unknown): string => {
+      if (isSpreadPrimary && resolved) {
+        if ('raw' in resolved) {
+          return `spread ${fmtSigned(resolved.raw)}`;
+        }
+        return `home ${homeLabel} ${fmtSigned(resolved.home)} / away ${awayLabel} ${fmtSigned(resolved.away)}`;
       }
-      return String(homeVal);
+      return String(fallbackVal);
     };
 
-    const openDisplay = formatLineValue(openLine, openSpreadAway);
-    const currDisplay = formatLineValue(currLine, currSpreadAway);
+    const openDisplay = formatResolvedLine(openResolved, openLine);
+    const currDisplay = formatResolvedLine(currResolved, currLine);
 
     // When requesting 'all' (or when multiple markets exist alongside spread/total), emit Total and ML explicitly
     const extraMarketParts: string[] = [];
@@ -1021,9 +1173,11 @@ export const getMarketMovementTool: SwarmTool = {
     }
 
     const delta = d.line_delta ?? (
-      typeof openLine === 'number' && typeof currLine === 'number'
-        ? Number((currLine - openLine).toFixed(2))
-        : 'N/A'
+      openResolved && currResolved && 'home' in openResolved && 'home' in currResolved
+        ? Number((currResolved.home - openResolved.home).toFixed(2))
+        : (typeof openLine === 'number' && typeof currLine === 'number'
+            ? Number((currLine - openLine).toFixed(2))
+            : 'N/A')
     );
     const steamDir = d.steam_direction || d.steam_dir || 'neutral';
     const steamMag = d.steam_magnitude ?? (typeof delta === 'number' ? Math.abs(delta) : 'N/A');

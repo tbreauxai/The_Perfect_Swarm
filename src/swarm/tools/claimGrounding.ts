@@ -857,7 +857,7 @@ export function extractVetoedLegTargets(
     for (const clause of clauses) {
       const trimmed = clause.trim();
       if (!trimmed) continue;
-      if (/\brow\s+side\s+mismatch\b|\brow_side_mismatch\b/i.test(trimmed)) continue;
+      if (/\b(?:row|spread)\s+side\s+mismatch\b|\b(?:row|spread)_side_mismatch\b/i.test(trimmed)) continue;
       if (/^Veto\s*\(PULL BEFORE PASS\):/i.test(trimmed) && !/\bmust\s+be\s+removed\b/i.test(trimmed)) {
         continue;
       }

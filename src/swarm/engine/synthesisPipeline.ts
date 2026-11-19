@@ -524,13 +524,15 @@ export async function executeManagerSynthesis(
 
     if (finalResult && typeof finalResult === 'object') {
         const initialPickCount = Array.isArray(finalResult.picks) ? finalResult.picks.length : 0;
-        sanitizeMisattributedPicksAndText(finalResult, safeDynamicPrompt, safeDynamicPrompt);
-        sanitizeRowMismatchedPicks(finalResult, safeDynamicPrompt);
         const slateSourceForGrounding = groundingContext?.rawBoard || safeDynamicPrompt;
         const parsedHeaders = parseGameHeaders(slateSourceForGrounding);
         const toolEvidenceForGrounding = groundingContext?.toolResults !== undefined
             ? groundingContext.toolResults
             : extractToolEvidenceSection(safeDynamicPrompt);
+        sanitizeMisattributedPicksAndText(finalResult, safeDynamicPrompt, safeDynamicPrompt);
+        sanitizeRowMismatchedPicks(finalResult, slateSourceForGrounding, parsedHeaders, {
+            toolEvidenceText: toolEvidenceForGrounding
+        });
         const criticVetoes = groundingContext?.criticVetoes || [];
         const vetoedLegs = mergeVetoedLegTargets(groundingContext?.vetoedLegs);
         const vetoedClaims = mergeVetoedClaims(groundingContext?.vetoedClaims);

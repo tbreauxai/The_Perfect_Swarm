@@ -476,10 +476,12 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
               ...options,
               game: {
                 event_id: hdr.eventId,
+                sport: hdr.sport,
                 home_team: hdr.home,
                 away_team: hdr.away,
                 home_team_abbr: hdr.home,
-                away_team_abbr: hdr.away
+                away_team_abbr: hdr.away,
+                ...(Array.isArray(hdr.options) && hdr.options.length > 0 ? { options: hdr.options } : {})
               }
             }
           : options;

@@ -1,10 +1,10 @@
 import { AnalystResponseSchema, ManagerResponseSchema } from "../schemas.ts";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { INJURY_ATTRIBUTION_RULE } from "../tools/injuryAttribution.ts";
-import { MARKET_AND_ROW_RULES } from "../tools/marketRowBinding.ts";
+import { MARKET_AND_ROW_RULES, SPREAD_SIDE_RULE } from "../tools/marketRowBinding.ts";
 import { GROUNDING_RULE, VETO_STICKS_RULE } from "../tools/claimGrounding.ts";
 import { PULL_BEFORE_PASS_RULE } from "../tools/pullBeforePass.ts";
-export { INJURY_ATTRIBUTION_RULE, MARKET_AND_ROW_RULES, GROUNDING_RULE, VETO_STICKS_RULE, PULL_BEFORE_PASS_RULE };
+export { INJURY_ATTRIBUTION_RULE, MARKET_AND_ROW_RULES, SPREAD_SIDE_RULE, GROUNDING_RULE, VETO_STICKS_RULE, PULL_BEFORE_PASS_RULE };
 export const RED_TEAM_ANALYST_ROLE = 'RedTeamAnalyst';
 
 export const CRITIC_VERDICT_SYSTEM_INSTRUCTION = `You are the Swarm Risk Critic.
@@ -22,6 +22,8 @@ CRITIC SCOPE:
 ${INJURY_ATTRIBUTION_RULE}
 
 ${MARKET_AND_ROW_RULES}
+
+${SPREAD_SIDE_RULE}
 
 ${GROUNDING_RULE}
 
@@ -46,6 +48,8 @@ Team names in Game Slate are authoritative; never rename or flag them.
 ${INJURY_ATTRIBUTION_RULE}
 
 ${MARKET_AND_ROW_RULES}
+
+${SPREAD_SIDE_RULE}
 
 ${GROUNDING_RULE}
 
@@ -80,6 +84,8 @@ ${INJURY_ATTRIBUTION_RULE}
 
 ${MARKET_AND_ROW_RULES}
 
+${SPREAD_SIDE_RULE}
+
 ${GROUNDING_RULE}
 
 ${VETO_STICKS_RULE}
@@ -108,6 +114,8 @@ SPORTS CONTEXT REQUIREMENT: Always resolve and use supplied game context (injuri
 ${INJURY_ATTRIBUTION_RULE}
 
 ${MARKET_AND_ROW_RULES}
+
+${SPREAD_SIDE_RULE}
 
 ${GROUNDING_RULE}
 

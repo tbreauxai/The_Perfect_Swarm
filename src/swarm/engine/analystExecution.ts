@@ -568,7 +568,10 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                 sanitizeMisattributedPicksAndText(resData as any, combinedInjuryEvidence, renderedHeadersText);
             }
             if (!isCritic) {
-                sanitizeRowMismatchedPicks(resData as any, fullRawSource || renderedHeadersText, mergedHeadersForRowCheck);
+                sanitizeRowMismatchedPicks(resData as any, fullRawSource || renderedHeadersText, mergedHeadersForRowCheck, {
+                    toolEvidenceText: marketEvidenceText,
+                    toolRecords: marketToolRecords
+                });
                 if (mergedHeadersForRowCheck.length > 0 || Boolean(successfulToolEvidence)) {
                     sanitizeUngroundedClaims(
                         resData as any,
@@ -637,7 +640,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                 }
 
                 const marketRowAudit = auditMarketCoverageAndRowBinding(
-                    auditTargetProposal,
+                    groundingTargetProposal,
                     marketEvidenceText,
                     fullRawSource || renderedHeadersText,
                     mergedHeadersForRowCheck,

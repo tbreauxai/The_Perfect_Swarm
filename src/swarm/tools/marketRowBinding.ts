@@ -1,11 +1,17 @@
 import { parseGameHeaders, getEventIdForPick, type GameHeader } from '../context/gameHeaders.ts';
-import { ESPN_TEAMS, normalizeSportHint, type EspnTeamEntry } from './injuryAttribution.ts';
+import { ESPN_TEAMS, matchTeamByLabel, normalizeSportHint, type EspnTeamEntry } from './injuryAttribution.ts';
 
 export const MARKET_AND_ROW_RULES = `MARKET AND ROW RULES:
 - A moneyline is covered when the tool or board has ml_home or ml_away for that game.
 - Do not reject a ML leg solely because a spread is also present.
 - Cite the row ID for the exact side you are picking.
 - Never assign a row to the opposite team or the opposite side of the line.`;
+
+export const SPREAD_SIDE_RULE = `SPREAD SIDE:
+- Read the sign from the row or the tool.
+- A negative spread is the favorite. A positive spread is the underdog.
+- Do not flip the sign when naming the other team.
+- Portland +10.5 is not Portland -10.5.`;
 
 export interface RowOptionEntry {
   rowId: string;
@@ -259,14 +265,25 @@ function stripOddsParentheses(text: string): string {
   return text.replace(/\([^)]*\)/g, ' ');
 }
 
+function stripNonSpreadParentheses(text: string): string {
+  return text.replace(/\(([^)]*)\)/g, (full, inner) => {
+    const trimmed = String(inner || '').trim();
+    if (!trimmed) return ' ';
+    if (/^R\d+$/i.test(trimmed)) return ' ';
+    if (/\b(?:ml|moneyline|money\s*line|h2h|o\/u|over|under|total)\b/i.test(trimmed)) return ' ';
+    if (/^[+-]\d{3,}(?:\.\d+)?$/.test(trimmed)) return ' ';
+    return full;
+  });
+}
+
 function extractSpreadNumber(text: string): number | null {
   if (!text) return null;
-  const cleaned = stripOddsParentheses(text);
-  // Ignore explicit ML odds like "ML -166"
+  const cleaned = stripNonSpreadParentheses(text);
+  // Ignore explicit ML odds like "ML -166" unless a fractional spread is also clearly present
   if (/\b(?:ml|moneyline|money\s*line|h2h)\b/i.test(cleaned) && !/[+-]\d+(?:\.5|\.0)\b/.test(cleaned)) {
     return null;
   }
-  const matches = cleaned.match(/(?:^|[\s,:(])([+-]\d+(?:\.\d+)?)(?=$|[\s,);])/g);
+  const matches = cleaned.match(/(?:^|[\s,:(])([+-]\d+(?:\.\d+)?)(?=$|[\s,);.!])/g);
   if (!matches) return null;
   for (const m of matches) {
     const numMatch = m.match(/([+-]\d+(?:\.\d+)?)/);
@@ -673,10 +690,507 @@ function extractProposalPicks(proposal: any, headers: GameHeader[], rowMap: Map<
   return results;
 }
 
+export interface AuthoritativeTeamSpread {
+  canonical: string;
+  teamName: string;
+  aliases: string[];
+  abbr?: string;
+  spread: number;
+  role: 'favorite' | 'underdog' | 'pickem';
+  eventId?: string;
+  source: 'slate' | 'tool';
+}
+
+const STOPWORD_ALIASES = new Set(['as', 'no', 'was', 'in', 'or', 'at', 'by', 'to', 'on', 'of', 'la', 'ny', 'sa', 'sd', 'sf', 'gb', 'kc', 'lv', 'ne', 'tb']);
+
+function buildSafeTeamAliases(
+  rawTeamLabel: string,
+  sportHint: string | undefined,
+  sharedCityCollision: Set<string>,
+  sharedSlateCities: Set<string>
+): { canonical: string; teamName: string; aliases: string[]; abbr?: string } {
+  const entry = matchTeamByLabel(rawTeamLabel, sportHint);
+  const canonical = entry ? `${entry.sport}:${entry.abbr}` : `raw:${rawTeamLabel.toLowerCase().trim()}`;
+  const teamName = entry?.name || rawTeamLabel.trim();
+  const aliasSet = new Set<string>();
+
+  if (teamName) aliasSet.add(teamName.toLowerCase());
+  if (rawTeamLabel.trim()) aliasSet.add(rawTeamLabel.toLowerCase().trim());
+  if (entry) {
+    if (entry.nickname) aliasSet.add(entry.nickname.toLowerCase());
+    const cityLower = entry.city.toLowerCase();
+    if (cityLower && !sharedCityCollision.has(cityLower) && !sharedSlateCities.has(cityLower)) {
+      aliasSet.add(cityLower);
+    }
+    for (const a of entry.aliases) {
+      const al = a.toLowerCase().trim();
+      if (!al || al === entry.abbr.toLowerCase() || al.length < 3) continue;
+      if (STOPWORD_ALIASES.has(al)) continue;
+      if (al === cityLower && (sharedCityCollision.has(cityLower) || sharedSlateCities.has(cityLower))) continue;
+      aliasSet.add(al);
+    }
+  }
+
+  return {
+    canonical,
+    teamName,
+    aliases: Array.from(aliasSet).sort((a, b) => b.length - a.length),
+    ...(entry?.abbr ? { abbr: entry.abbr } : {})
+  };
+}
+
+function toFiniteNumber(v: unknown): number | null {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string' && v.trim() !== '') {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+function extractSpreadsFromToolSummary(
+  text: string,
+  awayLabel: string,
+  homeLabel: string
+): { home?: number; away?: number } {
+  if (!text) return {};
+  const escapeRx = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const awayEntry = matchTeamByLabel(awayLabel);
+  const homeEntry = matchTeamByLabel(homeLabel);
+  const awayNames = Array.from(new Set([awayLabel, awayEntry?.name, awayEntry?.abbr, awayEntry?.nickname, awayEntry?.city].filter((x): x is string => Boolean(x))));
+  const homeNames = Array.from(new Set([homeLabel, homeEntry?.name, homeEntry?.abbr, homeEntry?.nickname, homeEntry?.city].filter((x): x is string => Boolean(x))));
+
+  // Prefer Current:/Line: over Open: if multiple appear
+  const currentLineMatch = text.match(/(?:Current|Line):\s*([^\n]+)/i);
+  const targetLine = currentLineMatch ? currentLineMatch[1] : text;
+
+  const pairMatch = targetLine.match(/home\s+([^\n/]+?)\s+([+-]\d+(?:\.\d+)?)\s*\/\s*away\s+([^\n|]+?)\s+([+-]\d+(?:\.\d+)?)/i);
+  if (pairMatch) {
+    const hVal = parseFloat(pairMatch[2]);
+    const aVal = parseFloat(pairMatch[4]);
+    if (Number.isFinite(hVal) && Number.isFinite(aVal) && Math.abs(hVal) < 100 && Math.abs(aVal) < 100) {
+      return { home: hVal, away: aVal };
+    }
+  }
+
+  // Fallback: check if bare spread + ml_home / ml_away appear together in summary
+  const bareMatch = targetLine.match(/\bspread\s+([+-]\d+(?:\.\d+)?)\b/i);
+  if (bareMatch) {
+    const bare = parseFloat(bareMatch[1]);
+    const mlHomeMatch = text.match(/\bml_home\b[^\n+-]*?([+-]\d{3,4})/i);
+    const mlAwayMatch = text.match(/\bml_away\b[^\n+-]*?([+-]\d{3,4})/i);
+    const mlH = mlHomeMatch ? parseFloat(mlHomeMatch[1]) : null;
+    const mlA = mlAwayMatch ? parseFloat(mlAwayMatch[1]) : null;
+    if (Number.isFinite(bare) && Math.abs(bare) < 100 && bare !== 0) {
+      if (mlH !== null && mlA !== null && mlH !== mlA) {
+        const homeIsFav = mlH < mlA;
+        if ((homeIsFav && bare > 0) || (!homeIsFav && bare < 0)) {
+          return { home: -bare, away: bare };
+        }
+        return { home: bare, away: -bare };
+      }
+    }
+  }
+
+  // Fallback: match explicit "<HomeName> <+/-X>" / "<AwayName> <+/-Y>"
+  let hOut: number | undefined;
+  let aOut: number | undefined;
+  for (const hName of homeNames) {
+    const m = targetLine.match(new RegExp(`\\b${escapeRx(hName)}\\s+([+-]\\d+(?:\\.\\d+)?)\\b`, 'i'));
+    if (m) {
+      const v = parseFloat(m[1]);
+      if (Number.isFinite(v) && Math.abs(v) < 100) {
+        hOut = v;
+        break;
+      }
+    }
+  }
+  for (const aName of awayNames) {
+    const m = targetLine.match(new RegExp(`\\b${escapeRx(aName)}\\s+([+-]\\d+(?:\\.\\d+)?)\\b`, 'i'));
+    if (m) {
+      const v = parseFloat(m[1]);
+      if (Number.isFinite(v) && Math.abs(v) < 100) {
+        aOut = v;
+        break;
+      }
+    }
+  }
+  return {
+    ...(hOut !== undefined ? { home: hOut } : {}),
+    ...(aOut !== undefined ? { away: aOut } : {})
+  };
+}
+
+export function extractAuthoritativeTeamSpreads(
+  headers: GameHeader[],
+  rowMap: Map<string, RowOptionEntry>,
+  toolEvidenceText?: string,
+  toolRecords?: MarketToolRecord[]
+): Map<string, AuthoritativeTeamSpread> {
+  const spreadMap = new Map<string, AuthoritativeTeamSpread>();
+
+  // Detect any cities shared across DIFFERENT teams in the current slate so bare city names remain unambiguous
+  const cityToCanonicals = new Map<string, Set<string>>();
+  for (const h of headers || []) {
+    for (const rawTeam of [h.away, h.home]) {
+      const e = matchTeamByLabel(rawTeam, h.sport);
+      if (e?.city) {
+        const cl = e.city.toLowerCase();
+        if (!cityToCanonicals.has(cl)) cityToCanonicals.set(cl, new Set());
+        cityToCanonicals.get(cl)!.add(`${e.sport}:${e.abbr}`);
+      }
+    }
+  }
+  const sharedSlateCities = new Set<string>();
+  for (const [city, set] of cityToCanonicals.entries()) {
+    if (set.size > 1) sharedSlateCities.add(city);
+  }
+
+  for (const h of headers || []) {
+    const contextTeams = [h.away, h.home].filter((t): t is string => Boolean(t));
+    const awayEntry = matchTeamByLabel(h.away, h.sport);
+    const homeEntry = matchTeamByLabel(h.home, h.sport);
+    const sharedInGame = new Set<string>();
+    if (awayEntry?.city && homeEntry?.city && awayEntry.city.toLowerCase() === homeEntry.city.toLowerCase()) {
+      sharedInGame.add(awayEntry.city.toLowerCase());
+    }
+
+    const awayProfile = buildSafeTeamAliases(h.away, h.sport, sharedInGame, sharedSlateCities);
+    const homeProfile = buildSafeTeamAliases(h.home, h.sport, sharedInGame, sharedSlateCities);
+
+    let awaySpread: number | undefined;
+    let homeSpread: number | undefined;
+    let source: 'slate' | 'tool' = 'slate';
+
+    // 1. Check slate options on header and rowMap
+    const candidateOptions: Array<{ text: string }> = [
+      ...(h.options || []),
+      ...Array.from(rowMap.values()).filter(r => r.eventId === h.eventId && !(h.options || []).some(o => o.id.toUpperCase() === r.rowId))
+    ];
+    for (const opt of candidateOptions) {
+      if (!opt?.text || isMoneylineText(opt.text) || extractOverUnder(opt.text)) continue;
+      const sp = extractSpreadNumber(opt.text);
+      if (sp === null) continue;
+      const resolved = resolveTeamFromText(opt.text, h.sport, contextTeams);
+      if (!resolved) continue;
+      if (resolved.canonical === awayProfile.canonical || resolved.name.toLowerCase() === awayProfile.teamName.toLowerCase()) {
+        awaySpread = sp;
+      } else if (resolved.canonical === homeProfile.canonical || resolved.name.toLowerCase() === homeProfile.teamName.toLowerCase()) {
+        homeSpread = sp;
+      }
+    }
+
+    if (awaySpread !== undefined && homeSpread === undefined) {
+      homeSpread = awaySpread === 0 ? 0 : -awaySpread;
+    } else if (homeSpread !== undefined && awaySpread === undefined) {
+      awaySpread = homeSpread === 0 ? 0 : -homeSpread;
+    }
+
+    // 2. Supplement from structured market tool records if slate didn't include spread rows
+    if (awaySpread === undefined || homeSpread === undefined) {
+      const rec = (toolRecords || []).find(r => r && r.tool === 'get_market_movement' && r.eventId === h.eventId);
+      if (rec) {
+        const d = rec.data || {};
+        const latest = typeof d.latest === 'object' && d.latest !== null ? d.latest : {};
+        const opening = typeof d.opening === 'object' && d.opening !== null ? d.opening : {};
+        const snaps = Array.isArray(d.line_snapshots) ? d.line_snapshots : [];
+        const lastSnap = snaps.length > 0 ? snaps[snaps.length - 1] || {} : {};
+        const firstSnap = snaps.length > 0 ? snaps[0] || {} : {};
+
+        const expHome = toFiniteNumber(latest.spread_home ?? d.current_spread_home ?? lastSnap.spread_home ?? opening.spread_home ?? d.opening_spread_home ?? firstSnap.spread_home);
+        const expAway = toFiniteNumber(latest.spread_away ?? d.current_spread_away ?? lastSnap.spread_away ?? opening.spread_away ?? d.opening_spread_away ?? firstSnap.spread_away);
+        if (expHome !== null || expAway !== null) {
+          source = 'tool';
+          homeSpread = expHome !== null ? expHome : (expAway! === 0 ? 0 : -expAway!);
+          awaySpread = expAway !== null ? expAway : (homeSpread === 0 ? 0 : -homeSpread);
+        } else {
+          const parsedSummary = extractSpreadsFromToolSummary(rec.summary || '', h.away, h.home);
+          if (parsedSummary.home !== undefined || parsedSummary.away !== undefined) {
+            source = 'tool';
+            homeSpread = parsedSummary.home ?? (parsedSummary.away! === 0 ? 0 : -parsedSummary.away!);
+            awaySpread = parsedSummary.away ?? (homeSpread === 0 ? 0 : -homeSpread);
+          } else {
+            const bare = toFiniteNumber(latest.spread ?? d.current_spread ?? lastSnap.spread ?? opening.spread ?? d.opening_spread ?? firstSnap.spread);
+            const mlH = toFiniteNumber(latest.ml_home ?? d.current_ml_home ?? d.ml_home ?? lastSnap.ml_home ?? opening.ml_home);
+            const mlA = toFiniteNumber(latest.ml_away ?? d.current_ml_away ?? d.ml_away ?? lastSnap.ml_away ?? opening.ml_away);
+            if (bare !== null && bare !== 0 && mlH !== null && mlA !== null && mlH !== mlA) {
+              source = 'tool';
+              const homeIsFav = mlH < mlA;
+              if ((homeIsFav && bare > 0) || (!homeIsFav && bare < 0)) {
+                homeSpread = -bare;
+                awaySpread = bare;
+              } else {
+                homeSpread = bare;
+                awaySpread = -bare;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // 3. Supplement from toolEvidenceText if still unresolved
+    if ((awaySpread === undefined || homeSpread === undefined) && toolEvidenceText) {
+      const blocks = toolEvidenceText.split(/(?=^EVENT\s+|^\[MARKET MOVEMENT:)/m);
+      const matchingBlock = blocks.find(b => b.includes(h.eventId)) || '';
+      if (matchingBlock) {
+        const parsedBlock = extractSpreadsFromToolSummary(matchingBlock, h.away, h.home);
+        if (parsedBlock.home !== undefined || parsedBlock.away !== undefined) {
+          source = 'tool';
+          homeSpread = parsedBlock.home ?? (parsedBlock.away! === 0 ? 0 : -parsedBlock.away!);
+          awaySpread = parsedBlock.away ?? (homeSpread === 0 ? 0 : -homeSpread);
+        }
+      }
+    }
+
+    if (awaySpread !== undefined) {
+      spreadMap.set(awayProfile.canonical, {
+        ...awayProfile,
+        spread: awaySpread,
+        role: awaySpread < 0 ? 'favorite' : (awaySpread > 0 ? 'underdog' : 'pickem'),
+        eventId: h.eventId,
+        source
+      });
+    }
+    if (homeSpread !== undefined) {
+      spreadMap.set(homeProfile.canonical, {
+        ...homeProfile,
+        spread: homeSpread,
+        role: homeSpread < 0 ? 'favorite' : (homeSpread > 0 ? 'underdog' : 'pickem'),
+        eventId: h.eventId,
+        source
+      });
+    }
+  }
+
+  return spreadMap;
+}
+
+interface ClauseTeamHit {
+  start: number;
+  end: number;
+  matchedText: string;
+  entry: AuthoritativeTeamSpread;
+}
+
+function findTeamHitsInClause(clause: string, spreadMap: Map<string, AuthoritativeTeamSpread>): ClauseTeamHit[] {
+  const hits: ClauseTeamHit[] = [];
+  for (const entry of spreadMap.values()) {
+    for (const alias of entry.aliases) {
+      const rx = new RegExp(`\\b${escapeRegex(alias)}\\b`, 'gi');
+      let m: RegExpExecArray | null;
+      while ((m = rx.exec(clause)) !== null) {
+        hits.push({ start: m.index, end: m.index + m[0].length, matchedText: m[0], entry });
+      }
+    }
+    if (entry.abbr && entry.abbr.length >= 2) {
+      const abbrRx = new RegExp(`\\b${escapeRegex(entry.abbr.toUpperCase())}\\b`, 'g');
+      let m: RegExpExecArray | null;
+      while ((m = abbrRx.exec(clause)) !== null) {
+        hits.push({ start: m.index, end: m.index + m[0].length, matchedText: m[0], entry });
+      }
+    }
+  }
+  hits.sort((a, b) => a.start - b.start || (b.end - b.start) - (a.end - a.start));
+  const deduped: ClauseTeamHit[] = [];
+  for (const h of hits) {
+    const overlaps = deduped.some(prev => !(h.end <= prev.start || h.start >= prev.end));
+    if (!overlaps) deduped.push(h);
+  }
+  return deduped;
+}
+
+interface SpreadSideViolation {
+  reason: string;
+  kind: 'sign_flip' | 'role_flip';
+  entry: AuthoritativeTeamSpread;
+  wrongNumberRaw?: string;
+  wrongNumberStart?: number;
+  wrongNumberEnd?: number;
+}
+
+const STAT_CONTEXT_WORDS = /\b(?:net\s*rating|nrtg|ortg|drtg|margin|diff(?:erential)?|edge|xgf|xg|ppg|gpg|goals|runs|yards|era|pace|delta|move|moved|movement|steam|swing|roi|ev|kelly|units?|u\b)\b/i;
+
+function findSpreadSideViolationInClause(
+  clause: string,
+  spreadMap: Map<string, AuthoritativeTeamSpread>
+): SpreadSideViolation | null {
+  if (!clause || !clause.trim() || spreadMap.size === 0) return null;
+  const teamHits = findTeamHitsInClause(clause, spreadMap);
+  if (teamHits.length === 0) return null;
+
+  // 1. Check explicit signed spread numbers paired with a team in the clause
+  const cleanedForNum = stripNonSpreadParentheses(clause);
+  const numRx = /(?:^|[\s,:(])([+-]\d+(?:\.\d+)?)(?=$|[\s,);.!])/g;
+  let nm: RegExpExecArray | null;
+  while ((nm = numRx.exec(cleanedForNum)) !== null) {
+    const numStr = nm[1];
+    const numOffset = nm.index + nm[0].indexOf(numStr);
+    const val = parseFloat(numStr);
+    if (!Number.isFinite(val) || Math.abs(val) >= 100 || val === 0) continue;
+    // Sports spreads/pucklines/runlines only come in whole or half-point (.0 / .5) increments, never e.g. -0.9 or +1.1 net ratings
+    if (Math.round(Math.abs(val) * 2) !== Math.abs(val) * 2) continue;
+
+    // Skip ML odds explicitly labeled (e.g. ML -11), W-L record parentheticals ("3-7 (-0.9)"), or explicit stat differentials
+    const prefix = clause.slice(Math.max(0, numOffset - 22), numOffset);
+    const suffix = clause.slice(numOffset + numStr.length, Math.min(clause.length, numOffset + numStr.length + 22));
+    if (/\b(?:ml|moneyline|h2h|o\/u|over|under|total)\s*$/i.test(prefix)) continue;
+    if (/\b\d{1,2}-\d{1,2}(?:-\d{1,2})?\s*[,(\s]*$/i.test(prefix)) continue;
+    if (STAT_CONTEXT_WORDS.test(prefix) || STAT_CONTEXT_WORDS.test(suffix)) continue;
+    if (/\b(?:not|never|instead of|rather than|isn't|aren't|wasn't|weren't|vs\.?|versus)\s*(?:a|an|the|listed as)?\s*$/i.test(prefix)) continue;
+
+    // Find nearest preceding team within 45 chars, or nearest immediately following team if none precede
+    const preceding = [...teamHits].reverse().find(t => t.end <= numOffset && numOffset - t.end <= 45);
+    const targetHit = preceding || teamHits.find(t => t.start >= numOffset + numStr.length && t.start - (numOffset + numStr.length) <= 25 && !/[,.]/.test(clause.slice(numOffset + numStr.length, t.start)));
+    if (!targetHit) continue;
+
+    // Skip corrective negations right before the team name: "not Portland -10.5"
+    const beforeTeam = clause.slice(Math.max(0, targetHit.start - 20), targetHit.start);
+    if (/\b(?:not|never|instead of|rather than)\s+$/i.test(beforeTeam)) continue;
+
+    const entry = targetHit.entry;
+    if (entry.spread !== 0 && Math.sign(val) !== Math.sign(entry.spread) && Math.abs(Math.abs(val) - Math.abs(entry.spread)) <= 4) {
+      return {
+        kind: 'sign_flip',
+        entry,
+        wrongNumberRaw: numStr,
+        wrongNumberStart: numOffset,
+        wrongNumberEnd: numOffset + numStr.length,
+        reason: `${entry.teamName} spread sign mismatch: cited ${numStr}, but ${entry.teamName} is ${formatSigned(entry.spread)} (${entry.role}).`
+      };
+    }
+  }
+
+  // 2. Check favorite / underdog role contradictions per team hit
+  const clauseSeparatorRx = /\b(?:while|whereas|although|though|but|and|over|against|vs\.?|versus|facing|at|@)\b|,/gi;
+  for (let i = 0; i < teamHits.length; i++) {
+    const hit = teamHits[i];
+    const entry = hit.entry;
+    if (entry.role === 'pickem') continue;
+    const nextHitStart = i + 1 < teamHits.length ? teamHits[i + 1].start : clause.length;
+    const rawAfter = clause.slice(hit.end, Math.min(nextHitStart, hit.end + 55));
+    const afterSep = rawAfter.search(/\b(?:while|whereas|although|though|but)\b/i);
+    const spanAfter = afterSep >= 0 ? rawAfter.slice(0, afterSep) : rawAfter;
+
+    const rawBeforeStart = Math.max(i > 0 ? teamHits[i - 1].end : 0, hit.start - 35);
+    const rawBefore = clause.slice(rawBeforeStart, hit.start);
+    let lastSepEnd = 0;
+    let sepMatch: RegExpExecArray | null;
+    clauseSeparatorRx.lastIndex = 0;
+    while ((sepMatch = clauseSeparatorRx.exec(rawBefore)) !== null) {
+      lastSepEnd = sepMatch.index + sepMatch[0].length;
+    }
+    // If there's a preceding team and no clause/preposition boundary separated it, words immediately after team[i-1] belong to team[i-1]
+    const spanBefore = (i > 0 && lastSepEnd === 0) ? '' : rawBefore.slice(lastSepEnd);
+
+    if (entry.role === 'underdog') {
+      const favAfter = spanAfter.match(/\b(?:favored|favorite|favorites|chalk)\b/i);
+      const favBefore = spanBefore.match(/\b(?:favored|favorite|favorites|chalk)\b/i);
+      const favMatch = favAfter ? { text: spanAfter, idx: favAfter.index! } : (favBefore ? { text: spanBefore, idx: favBefore.index! } : null);
+      if (favMatch) {
+        const localPre = favMatch.text.slice(Math.max(0, favMatch.idx - 28), favMatch.idx);
+        const isNegated = /\b(?:not|never|hardly|no|isn't|aren't|wasn't|weren't)\b/i.test(localPre);
+        const refersToOpponent = /\b(?:against|vs\.?|versus|facing|over|beat(?:ing)?|upset(?:ting)?|to beat)\b/i.test(localPre);
+        if (!isNegated && !refersToOpponent) {
+          return {
+            kind: 'role_flip',
+            entry,
+            reason: `${entry.teamName} role mismatch: called favorite/favored, but ${entry.teamName} is ${formatSigned(entry.spread)} (underdog).`
+          };
+        }
+      }
+    } else if (entry.role === 'favorite') {
+      const dogAfter = spanAfter.match(/\b(?:underdog|underdogs|the dog|road dog|home dog|getting\s+[+-]?\d+(?:\.\d+)?)\b/i);
+      const dogBefore = spanBefore.match(/\b(?:underdog|underdogs|road dog|home dog)\b/i);
+      const dogMatch = dogAfter ? { text: spanAfter, idx: dogAfter.index! } : (dogBefore ? { text: spanBefore, idx: dogBefore.index! } : null);
+      if (dogMatch) {
+        const localPre = dogMatch.text.slice(Math.max(0, dogMatch.idx - 28), dogMatch.idx);
+        const isNegated = /\b(?:not|never|hardly|no|isn't|aren't|wasn't|weren't)\b/i.test(localPre);
+        const refersToOpponent = /\b(?:against|vs\.?|versus|facing|over|vs)\b/i.test(localPre);
+        if (!isNegated && !refersToOpponent) {
+          return {
+            kind: 'role_flip',
+            entry,
+            reason: `${entry.teamName} role mismatch: called underdog, but ${entry.teamName} is ${formatSigned(entry.spread)} (favorite).`
+          };
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+function splitClausesPreservingDelimiters(text: string): string[] {
+  if (!text) return [];
+  return text.split(/(?<=[.!?\n;])\s+/).filter(Boolean);
+}
+
+function sanitizeSpreadText(text: string, spreadMap: Map<string, AuthoritativeTeamSpread>): { text: string; changed: boolean } {
+  if (!text || spreadMap.size === 0) return { text, changed: false };
+  const clauses = splitClausesPreservingDelimiters(text);
+  const kept: string[] = [];
+  let changed = false;
+
+  for (const rawClause of clauses) {
+    let clause = rawClause;
+    const initialViolation = findSpreadSideViolationInClause(clause, spreadMap);
+    if (!initialViolation) {
+      kept.push(clause);
+      continue;
+    }
+
+    // Attempt deterministic sign fix ONLY when the clause is a clean sign flip (not a role flip or "was a -10.5")
+    if (
+      initialViolation.kind === 'sign_flip' &&
+      initialViolation.wrongNumberRaw &&
+      initialViolation.wrongNumberStart !== undefined &&
+      initialViolation.wrongNumberEnd !== undefined &&
+      !/\b(?:is|are|was|were)\s+a\s+[+-]?\d/i.test(clause)
+    ) {
+      let guard = 0;
+      let candidate = clause;
+      while (guard < 4) {
+        guard++;
+        const v = findSpreadSideViolationInClause(candidate, spreadMap);
+        if (!v) break;
+        if (v.kind === 'sign_flip' && v.wrongNumberStart !== undefined && v.wrongNumberEnd !== undefined) {
+          const rightStr = formatSigned(v.entry.spread);
+          candidate = candidate.slice(0, v.wrongNumberStart) + rightStr + candidate.slice(v.wrongNumberEnd);
+        } else {
+          break;
+        }
+      }
+      if (!findSpreadSideViolationInClause(candidate, spreadMap)) {
+        kept.push(candidate);
+        changed = true;
+        continue;
+      }
+    }
+
+    // Otherwise strip the violating clause so a flipped sign/role never survives in final output
+    changed = true;
+  }
+
+  if (!changed) return { text, changed: false };
+  return { text: kept.join(' ').trim(), changed: true };
+}
+
+function buildSpreadVetoLegTarget(entry: AuthoritativeTeamSpread, reason: string, rowId?: string): MarketVetoLegTarget {
+  return {
+    ...(rowId ? { rowId } : {}),
+    ...(entry.eventId ? { eventId: entry.eventId } : {}),
+    teamLabel: entry.teamName,
+    teamAliases: Array.from(new Set([entry.teamName.toLowerCase(), ...entry.aliases, ...(entry.abbr ? [entry.abbr.toLowerCase()] : [])])),
+    reason: reason.slice(0, 140)
+  };
+}
+
 /**
  * Deterministic Critic audit for:
  *  A) Market coverage (ML is covered when ml_home or ml_away is present; fails if tool checked and market truly absent)
  *  B) Row side binding (each cited R-id must match the team, market type, and line/sign of the picked leg)
+ *  C) Spread side & sign consistency (a negative spread is favorite, positive is underdog; never flip the sign for a team)
  */
 export function auditMarketCoverageAndRowBinding(
   proposal: any,
@@ -699,6 +1213,7 @@ export function auditMarketCoverageAndRowBinding(
   }
 
   const coverageByGame = extractMarketCoverageByGame(toolEvidenceText, boardText, headers, toolRecords);
+  const authoritativeSpreads = extractAuthoritativeTeamSpreads(headers, rowMap, toolEvidenceText, toolRecords);
   const picks = extractProposalPicks(proposal, headers, rowMap);
   const flags: string[] = [];
 
@@ -709,11 +1224,38 @@ export function auditMarketCoverageAndRowBinding(
       const check = checkRowSideBinding(item.rowId, item.sideText, rowEntry, item.marketField);
       if (!check.valid) {
         flags.push('row_side_mismatch');
+        const msg = `Veto: Row side mismatch — ${check.reason}`;
         return {
           pass: false,
-          feedback: `Veto: Row side mismatch — ${check.reason}`,
+          feedback: msg,
           flags
         };
+      }
+    }
+
+    // 1b. Spread side & sign check for rowless or role-contradicted picks
+    if (authoritativeSpreads.size > 0) {
+      const pickViolation = findSpreadSideViolationInClause(item.sideText, authoritativeSpreads);
+      if (pickViolation) {
+        flags.push('spread_side_mismatch');
+        const msg = `Veto: SPREAD SIDE mismatch — ${pickViolation.reason}`;
+        return {
+          pass: false,
+          feedback: msg,
+          flags
+        };
+      }
+      if (typeof item.pick === 'object' && item.pick && typeof item.pick.reason === 'string') {
+        const reasonViolation = findSpreadSideViolationInClause(item.pick.reason, authoritativeSpreads);
+        if (reasonViolation) {
+          flags.push('spread_side_mismatch');
+          const msg = `Veto: SPREAD SIDE mismatch in pick reasoning — ${reasonViolation.reason}`;
+          return {
+            pass: false,
+            feedback: msg,
+            flags
+          };
+        }
       }
     }
 
@@ -778,6 +1320,46 @@ export function auditMarketCoverageAndRowBinding(
     }
   }
 
+  // 3. Check prose fields (summary, analysis, insights, scorecards, components) for spread sign/role flips
+  if (authoritativeSpreads.size > 0 && proposal && typeof proposal === 'object') {
+    const proseTexts: string[] = [];
+    for (const key of ['summary', 'analysis', 'reason', 'rationale', 'conclusion']) {
+      if (typeof proposal[key] === 'string' && proposal[key].trim()) proseTexts.push(proposal[key]);
+    }
+    if (Array.isArray(proposal.insights)) {
+      for (const ins of proposal.insights) {
+        if (typeof ins === 'string' && ins.trim()) proseTexts.push(ins);
+      }
+    }
+    if (Array.isArray(proposal.anomalies)) {
+      for (const anom of proposal.anomalies) {
+        if (typeof anom === 'string' && anom.trim()) proseTexts.push(anom);
+      }
+    }
+    const checkScorecard = (sc: any) => {
+      if (!sc || typeof sc !== 'object') return;
+      if (typeof sc.summary === 'string' && sc.summary.trim()) proseTexts.push(sc.summary);
+      if (typeof sc.analysis === 'string' && sc.analysis.trim()) proseTexts.push(sc.analysis);
+    };
+    if (proposal.scorecard) checkScorecard(proposal.scorecard);
+    if (Array.isArray(proposal.scorecards)) proposal.scorecards.forEach(checkScorecard);
+
+    for (const txt of proseTexts) {
+      for (const clause of splitClausesPreservingDelimiters(txt)) {
+        const violation = findSpreadSideViolationInClause(clause, authoritativeSpreads);
+        if (violation) {
+          flags.push('spread_side_mismatch');
+          const msg = `Veto: SPREAD SIDE mismatch — ${violation.reason}`;
+          return {
+            pass: false,
+            feedback: msg,
+            flags
+          };
+        }
+      }
+    }
+  }
+
   return { pass: true, flags };
 }
 
@@ -804,7 +1386,7 @@ export function isFalseMissingMoneylineCritique(
 
   // Never override if Critic also flagged any other real defect
   if (
-    /\b(?:injur|scratch|rule violation|wrong team|misattribut|row.{0,20}mismatch|opposite side|does not match|away.{0,15}home|fabricat|ungrounded|grounding|relatively healthy|goals allowed|single bet)\b/i.test(
+    /\b(?:injur|scratch|rule violation|wrong team|misattribut|row.{0,20}mismatch|spread.{0,20}(?:mismatch|sign|flip)|favorite.{0,20}underdog|underdog.{0,20}favorite|opposite side|does not match|away.{0,15}home|fabricat|ungrounded|grounding|relatively healthy|goals allowed|single bet)\b/i.test(
       fLower
     )
   ) {
@@ -832,39 +1414,154 @@ export function isFalseMissingMoneylineCritique(
   });
 }
 
+export interface SanitizeMarketRowOptions {
+  toolEvidenceText?: string;
+  toolRecords?: MarketToolRecord[];
+}
+
 /**
- * Strips any picks whose cited row ID conflicts with the picked team/side/line.
+ * Strips any picks whose cited row ID conflicts with the picked team/side/line,
+ * and fixes or strips spread-sign or favorite/underdog role mismatches in picks and prose.
  */
 export function sanitizeRowMismatchedPicks<T extends Record<string, any>>(
   report: T,
   boardSource: unknown,
-  headersInput?: GameHeader[]
+  headersInput?: GameHeader[],
+  options?: SanitizeMarketRowOptions
 ): T {
   if (!report || typeof report !== 'object') return report;
   const headers = headersInput && headersInput.length > 0 ? headersInput : parseGameHeaders(boardSource);
   const rowMap = extractRowOptions([boardSource], headers);
-  if (rowMap.size === 0) return report;
+  const authoritativeSpreads = extractAuthoritativeTeamSpreads(
+    headers,
+    rowMap,
+    options?.toolEvidenceText,
+    options?.toolRecords
+  );
+  if (rowMap.size === 0 && authoritativeSpreads.size === 0) return report;
+
+  const isPickValid = (pk: any): boolean => {
+    if (!pk || typeof pk !== 'object') {
+      const text = String(pk || '');
+      const m = text.match(/\b(R\d+)\b/i);
+      if (m && rowMap.has(m[1].toUpperCase())) {
+        if (!checkRowSideBinding(m[1].toUpperCase(), text, rowMap.get(m[1].toUpperCase())!).valid) return false;
+      }
+      if (authoritativeSpreads.size > 0 && findSpreadSideViolationInClause(text, authoritativeSpreads)) {
+        return false;
+      }
+      return true;
+    }
+    const rowId = typeof pk.row === 'string' && /^R\d+$/i.test(pk.row.trim())
+      ? pk.row.trim().toUpperCase()
+      : (typeof pk.id === 'string' && /^R\d+$/i.test(pk.id.trim()) ? pk.id.trim().toUpperCase() : undefined);
+    const sideText = [pk.side, pk.pick, pk.selection, pk.team, pk.note]
+      .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+      .join(' ')
+      .trim();
+    if (rowId && rowMap.has(rowId)) {
+      if (!checkRowSideBinding(rowId, sideText, rowMap.get(rowId)!, pk.market).valid) return false;
+    }
+    if (authoritativeSpreads.size > 0 && sideText && findSpreadSideViolationInClause(sideText, authoritativeSpreads)) {
+      return false;
+    }
+    return true;
+  };
 
   const rep = report as Record<string, any>;
   if (Array.isArray(rep.picks)) {
-    rep.picks = rep.picks.filter((pk: any) => {
-      if (!pk || typeof pk !== 'object') {
-        const m = String(pk || '').match(/\b(R\d+)\b/i);
-        if (m && rowMap.has(m[1].toUpperCase())) {
-          return checkRowSideBinding(m[1].toUpperCase(), String(pk || ''), rowMap.get(m[1].toUpperCase())!).valid;
+    rep.picks = rep.picks.filter(isPickValid);
+    if (authoritativeSpreads.size > 0) {
+      for (const pk of rep.picks) {
+        if (pk && typeof pk === 'object' && typeof pk.reason === 'string') {
+          const cleaned = sanitizeSpreadText(pk.reason, authoritativeSpreads);
+          if (cleaned.changed) {
+            pk.reason = cleaned.text || 'Line verified against market row.';
+          }
         }
-        return true;
       }
-      const rowId = typeof pk.row === 'string' && /^R\d+$/i.test(pk.row.trim())
-        ? pk.row.trim().toUpperCase()
-        : (typeof pk.id === 'string' && /^R\d+$/i.test(pk.id.trim()) ? pk.id.trim().toUpperCase() : undefined);
-      if (!rowId || !rowMap.has(rowId)) return true;
-      const sideText = [pk.side, pk.pick, pk.selection, pk.team, pk.note]
-        .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
-        .join(' ')
-        .trim();
-      return checkRowSideBinding(rowId, sideText, rowMap.get(rowId)!, pk.market).valid;
-    });
+    }
+  }
+
+  if (rep.scorecard && Array.isArray(rep.scorecard.picks)) {
+    rep.scorecard.picks = rep.scorecard.picks.filter(isPickValid);
+  }
+  if (Array.isArray(rep.scorecards)) {
+    for (const sc of rep.scorecards) {
+      if (sc && Array.isArray(sc.picks)) {
+        sc.picks = sc.picks.filter(isPickValid);
+      }
+    }
+  }
+
+  if (authoritativeSpreads.size > 0) {
+    for (const key of ['summary', 'analysis', 'reason', 'rationale', 'conclusion']) {
+      if (typeof rep[key] === 'string' && rep[key].trim()) {
+        const cleaned = sanitizeSpreadText(rep[key], authoritativeSpreads);
+        if (cleaned.changed) {
+          rep[key] = cleaned.text || 'Analysis updated to match slate spread sides.';
+        }
+      }
+    }
+    for (const arrKey of ['insights', 'anomalies']) {
+      if (Array.isArray(rep[arrKey])) {
+        rep[arrKey] = rep[arrKey]
+          .map((item: any) => (typeof item === 'string' ? sanitizeSpreadText(item, authoritativeSpreads).text : item))
+          .filter((item: any) => typeof item !== 'string' || item.trim().length > 0);
+      }
+    }
+    const cleanScorecardText = (sc: any) => {
+      if (!sc || typeof sc !== 'object') return;
+      for (const k of ['summary', 'analysis']) {
+        if (typeof sc[k] === 'string' && sc[k].trim()) {
+          const cleaned = sanitizeSpreadText(sc[k], authoritativeSpreads);
+          if (cleaned.changed) {
+            sc[k] = cleaned.text || 'Analysis updated to match slate spread sides.';
+          }
+        }
+      }
+    };
+    if (rep.scorecard) cleanScorecardText(rep.scorecard);
+    if (Array.isArray(rep.scorecards)) rep.scorecards.forEach(cleanScorecardText);
+
+    if (Array.isArray(rep.components)) {
+      for (const comp of rep.components) {
+        if (!comp || typeof comp !== 'object' || !comp.props) continue;
+        if (typeof comp.props.subtitle === 'string') {
+          const cleaned = sanitizeSpreadText(comp.props.subtitle, authoritativeSpreads);
+          if (cleaned.changed) comp.props.subtitle = cleaned.text;
+        }
+        if (typeof comp.props.value === 'string') {
+          const cleaned = sanitizeSpreadText(comp.props.value, authoritativeSpreads);
+          if (cleaned.changed) comp.props.value = cleaned.text;
+        }
+        if (Array.isArray(comp.props.insights)) {
+          comp.props.insights = comp.props.insights
+            .map((ins: any) => {
+              if (typeof ins === 'string') return sanitizeSpreadText(ins, authoritativeSpreads).text;
+              if (ins && typeof ins === 'object' && typeof ins.message === 'string') {
+                const cleaned = sanitizeSpreadText(ins.message, authoritativeSpreads);
+                return cleaned.text ? { ...ins, message: cleaned.text } : null;
+              }
+              return ins;
+            })
+            .filter((ins: any) => ins !== null && (typeof ins !== 'string' || ins.trim().length > 0));
+        }
+        if (Array.isArray(comp.props.rows)) {
+          comp.props.rows = comp.props.rows.map((row: any) => {
+            if (!row || typeof row !== 'object') return row;
+            const nextRow = { ...row };
+            for (const rk of Object.keys(nextRow)) {
+              if (typeof nextRow[rk] === 'string') {
+                const cleaned = sanitizeSpreadText(nextRow[rk], authoritativeSpreads);
+                if (cleaned.changed) nextRow[rk] = cleaned.text;
+              }
+            }
+            return nextRow;
+          });
+        }
+      }
+    }
   }
 
   return report;

@@ -179,7 +179,7 @@ export class AnalysisLifecycle {
                 const vetoBlock = vetoLines.length > 0
                     ? `\n\n[VETOED LEGS & CLAIMS — DO NOT INCLUDE]:\n${vetoLines.join('\n')}`
                     : '';
-                executePrompt = `${proposerPrompt}\n\n[Previous Verification Critique & Corrections Required (Attempt ${attempt - 1})]:\n${feedbackSummary}${vetoBlock}${freshBlock}\n\nCRITICAL RETRY RULES:\n1. Output a clean, standalone final JSON response as if writing it for the first time. NEVER mention "a previous error", "this correction", or prior attempts in your summary or analysis.\n2. Fix any factual misstatements (such as Away vs. Home team status in "Away @ Home" headers, or references to teams not in the selected legs) so they strictly match the Game Slate headers and Analyst Reports.\n3. Do NOT flip an analyst's recommended pick side (e.g. keep the analyst's selected team/spread and simply describe its Away/Home status accurately) unless the critic identified a fatal injury on that team.\n4. INJURY ATTRIBUTION RULE: Every injury citation must match the team_id or team name in the tool result or board. Never assign a player to the opposing team.\n5. MARKET AND ROW RULES: Cite the exact row ID matching the picked team, market, and line; never assign a row to the opposite team or opposite side.\n6. GROUNDING: Do not cite a score, goals-allowed, or health claim unless it is in a successful tool result. If key players on that team are OUT, do not call the team relatively healthy. A vetoed leg is removed from picks. Do not rewrite it as a recommended single bet.\n7. PULL BEFORE PASS: Before saying a game has no fundamentals, injuries, or market data, call the tool for that game. If the tool returns data, use it and do not say it was not fetched. If the tool returns empty or errors, then you may say that game has no data. Do not cite a record, score, or L5 form unless it is in a successful tool result. A pass is allowed only after the relevant tools were called, or the tool result was empty.\n8. VETO STICKS: A Critic veto for ungrounded form, missing market, or fatal injury removes that leg. Do not repeat the vetoed claim in a later attempt or in the final analysis. Do not put a vetoed leg back into picks. If every leg is vetoed, the result is a pass.`;
+                executePrompt = `${proposerPrompt}\n\n[Previous Verification Critique & Corrections Required (Attempt ${attempt - 1})]:\n${feedbackSummary}${vetoBlock}${freshBlock}\n\nCRITICAL RETRY RULES:\n1. Output a clean, standalone final JSON response as if writing it for the first time. NEVER mention "a previous error", "this correction", or prior attempts in your summary or analysis.\n2. Fix any factual misstatements (such as Away vs. Home team status in "Away @ Home" headers, or references to teams not in the selected legs) so they strictly match the Game Slate headers and Analyst Reports.\n3. Do NOT flip an analyst's recommended pick side (e.g. keep the analyst's selected team/spread and simply describe its Away/Home status accurately) unless the critic identified a fatal injury on that team.\n4. INJURY ATTRIBUTION RULE: Every injury citation must match the team_id or team name in the tool result or board. Never assign a player to the opposing team.\n5. MARKET AND ROW RULES: Cite the exact row ID matching the picked team, market, and line; never assign a row to the opposite team or opposite side.\n6. GROUNDING: Do not cite a score, goals-allowed, or health claim unless it is in a successful tool result. If key players on that team are OUT, do not call the team relatively healthy. A vetoed leg is removed from picks. Do not rewrite it as a recommended single bet.\n7. PULL BEFORE PASS: Before saying a game has no fundamentals, injuries, or market data, call the tool for that game. If the tool returns data, use it and do not say it was not fetched. If the tool returns empty or errors, then you may say that game has no data. Do not cite a record, score, or L5 form unless it is in a successful tool result. A pass is allowed only after the relevant tools were called, or the tool result was empty.\n8. VETO STICKS: A Critic veto for ungrounded form, missing market, or fatal injury removes that leg. Do not repeat the vetoed claim in a later attempt or in the final analysis. Do not put a vetoed leg back into picks. If every leg is vetoed, the result is a pass.\n9. SPREAD SIDE: Read the sign from the row or the tool. A negative spread is the favorite. A positive spread is the underdog. Do not flip the sign when naming the other team. Portland +10.5 is not Portland -10.5.`;
             } else {
                 executePrompt = proposerPrompt;
             }
@@ -273,10 +273,12 @@ export class AnalysisLifecycle {
                                       ...this.toolOptions,
                                       game: {
                                           event_id: hdr.eventId,
+                                          ...(hdr.sport ? { sport: hdr.sport } : {}),
                                           home_team: hdr.home,
                                           away_team: hdr.away,
                                           home_team_abbr: hdr.home,
-                                          away_team_abbr: hdr.away
+                                          away_team_abbr: hdr.away,
+                                          ...(Array.isArray(hdr.options) && hdr.options.length > 0 ? { options: hdr.options } : {})
                                       }
                                   }
                                 : this.toolOptions;
@@ -560,10 +562,12 @@ export class AnalysisLifecycle {
                                               ...this.toolOptions,
                                               game: {
                                                   event_id: hdr.eventId,
+                                                  ...(hdr.sport ? { sport: hdr.sport } : {}),
                                                   home_team: hdr.home,
                                                   away_team: hdr.away,
                                                   home_team_abbr: hdr.home,
-                                                  away_team_abbr: hdr.away
+                                                  away_team_abbr: hdr.away,
+                                                  ...(Array.isArray(hdr.options) && hdr.options.length > 0 ? { options: hdr.options } : {})
                                               }
                                           }
                                         : this.toolOptions;
