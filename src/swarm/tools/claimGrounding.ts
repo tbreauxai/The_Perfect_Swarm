@@ -76,6 +76,7 @@ function buildCleanEvidenceForNumericCheck(successfulEvidence: string): string {
     .replace(/\bR\d+\b/g, ' ')
     .replace(/\b\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)?\b/g, ' ')
     .replace(/\b(?:W-L|L5|L10|L20|record|ATS)\s*:?\s*\d{1,3}\s*-\s*\d{1,3}(?:\s*-\s*\d{1,3})?\b/gi, ' ')
+    .replace(/\b\d{1,3}\s*-\s*\d{1,3}(?:\s*-\s*\d{1,3})?\s*(?:L\d+|ATS|SU|record|last\s+\d+)\b/gi, ' ')
     .replace(/\bTotal\s*:\s*\d+(?:\.\d+)?\b/gi, ' ')
     .replace(/\(\s*[+-]\d{3,4}\s*\)/g, ' ')
     .replace(/\b(?:ml_home|ml_away)\s*(?:[:=]\s*|[A-Za-z.\s]{0,25}?)[+-]\d{3,4}\b/gi, ' ')
@@ -131,10 +132,215 @@ function isScorePairGrounded(scoreA: string, scoreB: string, cleanEvidence: stri
   return jsonPair.test(cleanEvidence);
 }
 
+interface GroundedRecordSet {
+  allRecords: Set<string>;
+  recordsByTeamKey: Map<string, Set<string>>;
+}
+
+function addGroundedRecordValue(
+  targetSet: Set<string>,
+  wStr: string | number,
+  lStr: string | number,
+  otlStr?: string | number
+): void {
+  const w = String(wStr).trim();
+  const l = String(lStr).trim();
+  if (!w || !l) return;
+  targetSet.add(`${w}-${l}`);
+  if (otlStr !== undefined && otlStr !== null && String(otlStr).trim() !== '') {
+    const otl = String(otlStr).trim();
+    targetSet.add(`${w}-${l}-${otl}`);
+    const lNum = parseInt(l, 10);
+    const otlNum = parseInt(otl, 10);
+    if (Number.isFinite(lNum) && Number.isFinite(otlNum) && otlNum > 0) {
+      targetSet.add(`${w}-${lNum + otlNum}`);
+    }
+  }
+}
+
+function extractRecordsFromSegment(seg: string): Set<string> {
+  const records = new Set<string>();
+  if (!seg) return records;
+  const norm = normalizeText(seg);
+
+  const prefixRx =
+    /\b(?:W-L|L(?:3|5|7|10|15|20)|last[\s_]?(?:3|5|7|10|15|20)|record|ATS|SU|home|away|road|overall|form)\b["']?\s*[:="']?\s*(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?\b/gi;
+  let m: RegExpExecArray | null;
+  while ((m = prefixRx.exec(norm)) !== null) {
+    addGroundedRecordValue(records, m[1], m[2], m[3]);
+  }
+
+  const suffixRx =
+    /\b(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?\s*(?:L(?:3|5|7|10|15|20)|W-L|ATS|SU|record|last\s+\d+)\b/gi;
+  while ((m = suffixRx.exec(norm)) !== null) {
+    addGroundedRecordValue(records, m[1], m[2], m[3]);
+  }
+
+  const jsonWinsFirstRx =
+    /"wins"\s*:\s*(\d{1,3})[^}]{0,80}?"losses"\s*:\s*(\d{1,3})(?:[^}]{0,50}?"(?:otl|ties|ot_losses)"\s*:\s*(\d{1,3}))?/gi;
+  while ((m = jsonWinsFirstRx.exec(norm)) !== null) {
+    addGroundedRecordValue(records, m[1], m[2], m[3]);
+  }
+
+  const jsonLossesFirstRx =
+    /"losses"\s*:\s*(\d{1,3})[^}]{0,80}?"wins"\s*:\s*(\d{1,3})/gi;
+  while ((m = jsonLossesFirstRx.exec(norm)) !== null) {
+    addGroundedRecordValue(records, m[2], m[1]);
+  }
+
+  const jsonRecordStrRx =
+    /"(?:l3|l5|l7|l10|l15|l20|last_5|last_10|record|wl|w_l)"\s*:\s*"(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?"/gi;
+  while ((m = jsonRecordStrRx.exec(norm)) !== null) {
+    addGroundedRecordValue(records, m[1], m[2], m[3]);
+  }
+
+  const recentRx =
+    /(?:\bRecent\s*:?\s*([WLOT](?:\s*[,/\s-]\s*(?:OTL|OT|[WLT]))+)|"recent_results"\s*:\s*\[([^\]]+)\])/gi;
+  while ((m = recentRx.exec(norm)) !== null) {
+    const rawSeq = m[1] || m[2] || '';
+    const tokens = rawSeq.match(/\b(?:OTL|OT|[WLT])\b/gi);
+    if (!tokens || tokens.length === 0) continue;
+    const tally = (slice: string[]) => {
+      let w = 0;
+      let l = 0;
+      let otl = 0;
+      for (const tok of slice) {
+        const up = tok.toUpperCase();
+        if (up === 'W') w++;
+        else if (up === 'L') l++;
+        else otl++;
+      }
+      addGroundedRecordValue(records, w, l, otl > 0 ? otl : undefined);
+    };
+    tally(tokens);
+    if (tokens.length >= 5) {
+      tally(tokens.slice(0, 5));
+      tally(tokens.slice(-5));
+    }
+  }
+
+  return records;
+}
+
+function extractGroundedRecords(
+  successfulEvidence: string,
+  candidates: TeamDescriptor[]
+): GroundedRecordSet {
+  const allRecords = new Set<string>();
+  const recordsByTeamKey = new Map<string, Set<string>>();
+  if (!successfulEvidence) return { allRecords, recordsByTeamKey };
+
+  const bindRecords = (seg: string, teamKeys: string[]) => {
+    const recs = extractRecordsFromSegment(seg);
+    if (recs.size === 0) return;
+    for (const r of recs) allRecords.add(r);
+    if (teamKeys.length === 1) {
+      const k = teamKeys[0];
+      let set = recordsByTeamKey.get(k);
+      if (!set) {
+        set = new Set<string>();
+        recordsByTeamKey.set(k, set);
+      }
+      for (const r of recs) set.add(r);
+    }
+  };
+
+  for (const rawLine of successfulEvidence.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    // Split multi-team lines on "Home (" / "Away (" boundaries first
+    const segments = line.split(/(?=\b(?:Home|Away)\s*\()/i);
+    for (const seg of segments) {
+      // Also check for team-keyed JSON blocks inside snapshot Form lines
+      const jsonTeamBlockRx = /"([A-Za-z0-9_.\s-]{2,30})"\s*:\s*\{/g;
+      let jm: RegExpExecArray | null;
+      const jsonTeamStarts: Array<{ index: number; key: string }> = [];
+      while ((jm = jsonTeamBlockRx.exec(seg)) !== null) {
+        const keyMentions = findTeamMentionsInText(jm[1], candidates);
+        if (keyMentions.length === 1) {
+          jsonTeamStarts.push({ index: jm.index, key: keyMentions[0].team.key });
+        }
+      }
+
+      if (jsonTeamStarts.length >= 2) {
+        for (let i = 0; i < jsonTeamStarts.length; i++) {
+          const start = jsonTeamStarts[i].index;
+          const end = i + 1 < jsonTeamStarts.length ? jsonTeamStarts[i + 1].index : seg.length;
+          bindRecords(seg.slice(start, end), [jsonTeamStarts[i].key]);
+        }
+        continue;
+      }
+
+      const mentions = findTeamMentionsInText(seg, candidates);
+      const uniqueKeys = Array.from(new Set(mentions.map(m => m.team.key)));
+      bindRecords(seg, uniqueKeys);
+    }
+  }
+
+  return { allRecords, recordsByTeamKey };
+}
+
+function findNearestTeamForSpan(
+  clause: string,
+  matchStart: number,
+  matchEnd: number,
+  candidates: TeamDescriptor[],
+  sideHint?: string
+): TeamDescriptor | undefined {
+  if (candidates.length === 0) return undefined;
+  const mentions = findTeamMentionsInText(clause, candidates);
+  if (mentions.length > 0) {
+    const preceding = mentions.filter(m => m.end <= matchStart);
+    if (preceding.length > 0) {
+      preceding.sort((a, b) => (matchStart - a.end) - (matchStart - b.end));
+      return preceding[0].team;
+    }
+    const following = mentions.filter(m => m.start >= matchEnd);
+    if (following.length > 0) {
+      following.sort((a, b) => (a.start - matchEnd) - (b.start - matchEnd));
+      return following[0].team;
+    }
+  }
+  if (sideHint) {
+    const hintMentions = findTeamMentionsInText(sideHint, candidates);
+    if (hintMentions.length > 0) return hintMentions[0].team;
+  }
+  return undefined;
+}
+
+function isRecordGrounded(
+  w: string,
+  l: string,
+  otl: string | undefined,
+  team: TeamDescriptor | undefined,
+  groundedRecords?: GroundedRecordSet
+): boolean {
+  if (!groundedRecords) return false;
+  const fullKey = otl ? `${w}-${l}-${otl}` : `${w}-${l}`;
+  const shortKey = `${w}-${l}`;
+
+  if (team) {
+    const teamSet = groundedRecords.recordsByTeamKey.get(team.key);
+    if (teamSet && teamSet.size > 0) {
+      return teamSet.has(fullKey) || (!otl && teamSet.has(shortKey));
+    }
+  }
+
+  return groundedRecords.allRecords.has(fullKey) || (!otl && groundedRecords.allRecords.has(shortKey));
+}
+
 /**
- * Checks a single clause for ungrounded score / goals-allowed / points-allowed / runs-allowed claims.
+ * Checks a single clause for ungrounded score / goals-allowed / points-allowed / runs-allowed / W-L record claims.
  */
-function findUngroundedFormClaimInClause(clause: string, cleanEvidence: string): string | null {
+function findUngroundedFormClaimInClause(
+  clause: string,
+  cleanEvidence: string,
+  groundedRecords?: GroundedRecordSet,
+  candidates: TeamDescriptor[] = [],
+  hasSportsSignal: boolean = false,
+  sideHint?: string
+): string | null {
   if (!clause || typeof clause !== 'string') return null;
   const norm = normalizeText(clause);
 
@@ -158,7 +364,7 @@ function findUngroundedFormClaimInClause(clause: string, cleanEvidence: string):
   }
 
   const scorePatterns: RegExp[] = [
-    /\b(?:lost|fell|dropped(?:\s+a)?|won|shut\s*out|beat(?:\s+[A-Za-z.]+){0,3}|defeated(?:\s+[A-Za-z.]+){0,3}|final(?:\s+score)?|score(?:d)?\s+of)\s+(?:by\s+)?(\d{1,3})\s*-\s*(\d{1,3})\b/gi,
+    /\b(?:(?:lost|fell|dropped(?:\s+a)?|won|shut\s*out|beat|defeated)(?:\s+(?:(?:(?:to|against|vs\.?)\s+)?[A-Za-z0-9.'-]+(?:\s+[A-Za-z0-9.'-]+){0,2}|at\s+home|on\s+the\s+road|in\s+(?:OT|overtime)))?|final(?:\s+score)?|score(?:d)?\s+of)\s+(?:by\s+)?(\d{1,3})\s*-\s*(\d{1,3})\b/gi,
     /\b(\d{1,3})\s*-\s*(\d{1,3})\s+(?:loss(?!es)|win(?!s|\s+streak)|defeat|victory|blowout|rout|shutout|decision|final)\b/gi
   ];
 
@@ -168,6 +374,27 @@ function findUngroundedFormClaimInClause(clause: string, cleanEvidence: string):
     while ((m = rx.exec(norm)) !== null) {
       if (!isScorePairGrounded(m[1], m[2], cleanEvidence)) {
         return `Ungrounded score claim ("${m[0].trim()}") not found in a successful tool result.`;
+      }
+    }
+  }
+
+  const recordPatterns: RegExp[] = [
+    /\b(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?\s*(?:(?:in\s+(?:their\s+|the\s+)?|over\s+(?:their\s+|the\s+)?)?(?:last|past)\s+\d+|(?:in\s+)?L(?:3|5|7|10|15|20)\b|W-L\b|ATS\b|SU\b|overall\b|record\b|on\s+the\s+(?:season|year|road)\b|at\s+home\b|form\b)/gi,
+    /\b(?:L(?:3|5|7|10|15|20)|(?:last|past)\s+(?:3|5|7|10|15|20)|W-L|record(?:\s+of)?|ATS(?:\s+record)?|recent\s+form|form(?:\s+of)?)\s*(?::|=|is|at|of)?\s*(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?\b/gi
+  ];
+  if (hasSportsSignal) {
+    recordPatterns.push(
+      /\b(?:went|gone|going|sits(?:\s+at)?|stands(?:\s+at)?)\s+(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?(?![\s-]*(?:leg|legs|game|games|unit|units|pt|pts|point|points|goal|goals|run|runs|pick|picks|seat|seats|day|days|%))/gi
+    );
+  }
+
+  for (const rx of recordPatterns) {
+    rx.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = rx.exec(norm)) !== null) {
+      const targetTeam = findNearestTeamForSpan(norm, m.index, m.index + m[0].length, candidates, sideHint);
+      if (!isRecordGrounded(m[1], m[2], m[3], targetTeam, groundedRecords)) {
+        return `Ungrounded record/form claim ("${m[0].trim()}") not found in a successful tool result.`;
       }
     }
   }
@@ -507,7 +734,7 @@ export function extractVetoedLegTargets(
       const trimmed = clause.trim();
       if (!trimmed) continue;
       if (/\brow\s+side\s+mismatch\b|\brow_side_mismatch\b/i.test(trimmed)) continue;
-      if (/^Veto\s*\((?:GROUNDING|INJURY ATTRIBUTION RULE)\):\s*(?:Ungrounded|Contradicted|Injury misattribution)\b/i.test(trimmed) && !/\bmust\s+be\s+removed\b/i.test(trimmed)) {
+      if (/^Veto\s*\((?:GROUNDING|INJURY ATTRIBUTION RULE|PULL BEFORE PASS)\):/i.test(trimmed) && !/\bmust\s+be\s+removed\b/i.test(trimmed)) {
         continue;
       }
       if (!LEG_VETO_SIGNAL_REGEX.test(trimmed)) continue;
@@ -683,6 +910,7 @@ export function auditClaimGrounding(
   const allInjuries = extractAuthoritativeInjuries(successfulEvidence, slateText);
   const outInjuries = allInjuries.filter(inj => /^(?:OUT|IR|INJURED\s+RESERVE|SUSPENDED)$/i.test(inj.status));
   const candidates = buildTeamDescriptors(headers, outInjuries, hasSportsSignal);
+  const groundedRecords = extractGroundedRecords(successfulEvidence, candidates);
   const injuryCoverage = collectSuccessfulInjuryCoverage(successfulEvidence, candidates);
   const vetoedTargets = extractVetoedLegTargets(options?.vetoTexts || [], headers, rowMap, candidates);
 
@@ -713,7 +941,14 @@ export function auditClaimGrounding(
     for (const clause of clauses) {
       if (!clause.trim()) continue;
 
-      const formErr = findUngroundedFormClaimInClause(clause, cleanEvidence);
+      const formErr = findUngroundedFormClaimInClause(
+        clause,
+        cleanEvidence,
+        groundedRecords,
+        candidates,
+        hasSportsSignal,
+        sideHint
+      );
       if (formErr) addViolation('ungrounded_form_claim', formErr);
 
       const healthErr = findHealthViolationInClause(
@@ -840,6 +1075,7 @@ export function sanitizeUngroundedClaims<T extends Record<string, any>>(
   const allInjuries = extractAuthoritativeInjuries(successfulEvidence, slateText);
   const outInjuries = allInjuries.filter(inj => /^(?:OUT|IR|INJURED\s+RESERVE|SUSPENDED)$/i.test(inj.status));
   const candidates = buildTeamDescriptors(headers, outInjuries, hasSportsSignal);
+  const groundedRecords = extractGroundedRecords(successfulEvidence, candidates);
   const injuryCoverage = collectSuccessfulInjuryCoverage(successfulEvidence, candidates);
   const vetoedTargets = extractVetoedLegTargets(options?.vetoTexts || [], headers, rowMap, candidates);
 
@@ -847,7 +1083,14 @@ export function sanitizeUngroundedClaims<T extends Record<string, any>>(
     if (!sentence.trim()) return { hasViolation: false, endsWithVetoedSubject: priorSubWasVetoed };
     const singleRes = findSingleBetRewriteViolationInClause(sentence, vetoedTargets, priorSubWasVetoed);
     const hasViolation = Boolean(
-      findUngroundedFormClaimInClause(sentence, cleanEvidence) ||
+      findUngroundedFormClaimInClause(
+        sentence,
+        cleanEvidence,
+        groundedRecords,
+        candidates,
+        hasSportsSignal,
+        sideHint
+      ) ||
       findHealthViolationInClause(sentence, candidates, outInjuries, headers, injuryCoverage, sideHint) ||
       singleRes.violation
     );

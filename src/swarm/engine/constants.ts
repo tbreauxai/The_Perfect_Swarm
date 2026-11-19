@@ -3,7 +3,8 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import { INJURY_ATTRIBUTION_RULE } from "../tools/injuryAttribution.ts";
 import { MARKET_AND_ROW_RULES } from "../tools/marketRowBinding.ts";
 import { GROUNDING_RULE } from "../tools/claimGrounding.ts";
-export { INJURY_ATTRIBUTION_RULE, MARKET_AND_ROW_RULES, GROUNDING_RULE };
+import { PULL_BEFORE_PASS_RULE } from "../tools/pullBeforePass.ts";
+export { INJURY_ATTRIBUTION_RULE, MARKET_AND_ROW_RULES, GROUNDING_RULE, PULL_BEFORE_PASS_RULE };
 export const RED_TEAM_ANALYST_ROLE = 'RedTeamAnalyst';
 
 export const CRITIC_VERDICT_SYSTEM_INSTRUCTION = `You are the Swarm Risk Critic.
@@ -24,6 +25,8 @@ ${MARKET_AND_ROW_RULES}
 
 ${GROUNDING_RULE}
 
+${PULL_BEFORE_PASS_RULE}
+
 The user's betting or parlay request is in scope. Output only verdict JSON and add no picks of your own.
 Return output strictly as a valid JSON object matching this shape:
 {
@@ -43,6 +46,8 @@ ${INJURY_ATTRIBUTION_RULE}
 ${MARKET_AND_ROW_RULES}
 
 ${GROUNDING_RULE}
+
+${PULL_BEFORE_PASS_RULE}
 
 When analyzing data:
 1. SKEPTICAL SCRUTINY: Actively hunt for unstated assumptions, sampling bias, cherry-picked metrics, survivorship bias, and contradictory evidence.
@@ -73,6 +78,8 @@ ${MARKET_AND_ROW_RULES}
 
 ${GROUNDING_RULE}
 
+${PULL_BEFORE_PASS_RULE}
+
 When given data:
 1. PLAN: Check the token weight of the input metadata. Identify 2-3 specific dimensions to investigate.
 2. REASON: Analyze differences between current inputs and baselines. Keep internal deductions concise and strictly focused on statistical significance.
@@ -97,6 +104,8 @@ ${INJURY_ATTRIBUTION_RULE}
 ${MARKET_AND_ROW_RULES}
 
 ${GROUNDING_RULE}
+
+${PULL_BEFORE_PASS_RULE}
 
 Instead of outputting raw text, you MUST output a Generative UI payload.
 Output strict JSON matching this JSON Schema:

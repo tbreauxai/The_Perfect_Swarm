@@ -10,6 +10,7 @@ export interface DossierSection {
   tool: string;
   parameters: Record<string, any>;
   success: boolean;
+  empty?: boolean;
   summary: string;
   durationMs: number;
   cached: boolean;
@@ -108,6 +109,7 @@ export async function executeToolWithCacheAndTimeout(
       tool: toolName,
       parameters: toolCall.parameters,
       success,
+      ...(rawResult?.empty === true ? { empty: true } : {}),
       summary,
       durationMs,
       cached: isAlreadyCached,

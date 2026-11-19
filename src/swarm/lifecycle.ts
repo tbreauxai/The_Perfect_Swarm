@@ -13,6 +13,13 @@ import {
     isFalseMissingMoneylineCritique,
     type MarketToolRecord
 } from './tools/marketRowBinding.ts';
+import {
+    auditPullBeforePass,
+    isEmptyToolSummary,
+    mergeToolCallTraceEntries,
+    type ToolCallStatus,
+    type ToolCallTraceEntry
+} from './tools/pullBeforePass.ts';
 import type { ToolRegistry } from './tools/registry.ts';
 import { GameQueryCache } from './cache/gameQueryCache.ts';
 import { executeToolWithCacheAndTimeout } from './engine/triageExecutor.ts';
@@ -37,6 +44,7 @@ export interface LifecycleExecutionResult {
     computedRating: number;
     verifiedEventIds?: string[];
     verifiedToolEvidence?: string;
+    verifiedToolTrace?: ToolCallTraceEntry[];
 }
 
 export interface AnalysisLifecycleOptions {
@@ -101,6 +109,10 @@ export class AnalysisLifecycle {
         let feedback = "";
         let lastCombinedToolSummary = "";
         const verifiedEventIdsSet = new Set<string>(coveredEventIds || []);
+        let accumulatedToolTrace: ToolCallTraceEntry[] = Array.isArray((rawData as any)?.toolCallTrace)
+            ? mergeToolCallTraceEntries((rawData as any).toolCallTrace)
+            : [];
+        const freshRetryEvidenceParts: string[] = [];
 
         const effectiveCoveredEventIds: string[] | undefined =
             coveredEventIds || (Array.isArray(rawData?.coveredEventIds) ? rawData.coveredEventIds : undefined);
@@ -119,7 +131,10 @@ export class AnalysisLifecycle {
             let executePrompt: string;
             if (feedback) {
                 const feedbackSummary = feedback.length > 2000 ? `${feedback.slice(0, 2000)}...` : feedback;
-                executePrompt = `${proposerPrompt}\n\n[Previous Verification Critique & Corrections Required (Attempt ${attempt - 1})]:\n${feedbackSummary}\n\nCRITICAL RETRY RULES:\n1. Output a clean, standalone final JSON response as if writing it for the first time. NEVER mention "a previous error", "this correction", or prior attempts in your summary or analysis.\n2. Fix any factual misstatements (such as Away vs. Home team status in "Away @ Home" headers, or references to teams not in the selected legs) so they strictly match the Game Slate headers and Analyst Reports.\n3. Do NOT flip an analyst's recommended pick side (e.g. keep the analyst's selected team/spread and simply describe its Away/Home status accurately) unless the critic identified a fatal injury on that team.\n4. INJURY ATTRIBUTION RULE: Every injury citation must match the team_id or team name in the tool result or board. Never assign a player to the opposing team.\n5. MARKET AND ROW RULES: Cite the exact row ID matching the picked team, market, and line; never assign a row to the opposite team or opposite side.\n6. GROUNDING: Do not cite a score, goals-allowed, or health claim unless it is in a successful tool result. If key players on that team are OUT, do not call the team relatively healthy. A vetoed leg is removed from picks. Do not rewrite it as a recommended single bet.`;
+                const freshBlock = freshRetryEvidenceParts.length > 0
+                    ? `\n\n[Fresh Tool Evidence Pulled Before Retry]:\n${freshRetryEvidenceParts.join('\n\n').slice(0, 2400)}`
+                    : '';
+                executePrompt = `${proposerPrompt}\n\n[Previous Verification Critique & Corrections Required (Attempt ${attempt - 1})]:\n${feedbackSummary}${freshBlock}\n\nCRITICAL RETRY RULES:\n1. Output a clean, standalone final JSON response as if writing it for the first time. NEVER mention "a previous error", "this correction", or prior attempts in your summary or analysis.\n2. Fix any factual misstatements (such as Away vs. Home team status in "Away @ Home" headers, or references to teams not in the selected legs) so they strictly match the Game Slate headers and Analyst Reports.\n3. Do NOT flip an analyst's recommended pick side (e.g. keep the analyst's selected team/spread and simply describe its Away/Home status accurately) unless the critic identified a fatal injury on that team.\n4. INJURY ATTRIBUTION RULE: Every injury citation must match the team_id or team name in the tool result or board. Never assign a player to the opposing team.\n5. MARKET AND ROW RULES: Cite the exact row ID matching the picked team, market, and line; never assign a row to the opposite team or opposite side.\n6. GROUNDING: Do not cite a score, goals-allowed, or health claim unless it is in a successful tool result. If key players on that team are OUT, do not call the team relatively healthy. A vetoed leg is removed from picks. Do not rewrite it as a recommended single bet.\n7. PULL BEFORE PASS: Before saying a game has no fundamentals, injuries, or market data, call the tool for that game. If the tool returns data, use it and do not say it was not fetched. If the tool returns empty or errors, then you may say that game has no data. Do not cite a record, score, or L5 form unless it is in a successful tool result. A pass is allowed only after the relevant tools were called, or the tool result was empty.`;
             } else {
                 executePrompt = proposerPrompt;
             }
@@ -144,7 +159,10 @@ export class AnalysisLifecycle {
                     ? (rawData as any).allHeaders
                     : parseGameHeaders((rawData as any)?.fullBoard || rawData);
                 const originalCount = currentProposal.picks.length;
-                currentProposal.picks = filterPicksByCoverage(currentProposal.picks, effectiveCoveredEventIds, headers);
+                const allowedCoverageIds = verifiedEventIdsSet.size > 0
+                    ? Array.from(verifiedEventIdsSet)
+                    : effectiveCoveredEventIds;
+                currentProposal.picks = filterPicksByCoverage(currentProposal.picks, allowedCoverageIds, headers);
                 if (currentProposal.picks.length === 0 && originalCount > 0) {
                     currentProposal.ui_title = 'Insufficient data';
                     currentProposal.reason = 'no picks with specialist coverage';
@@ -184,6 +202,7 @@ export class AnalysisLifecycle {
                 : allParsedHeaders;
 
             let scopedToolResults = '';
+            let rawPulledText = '';
             const pulledMarketRecords: MarketToolRecord[] = Array.isArray((rawData as any)?.marketToolRecords)
                 ? [...(rawData as any).marketToolRecords]
                 : [];
@@ -227,6 +246,24 @@ export class AnalysisLifecycle {
                                 1500,
                                 opts
                             );
+                            context.addEvent({
+                                agentRole: this.critic.role,
+                                action: `Executed Tool: ${tool}`,
+                                modelName: this.critic.modelName,
+                                prompt: JSON.stringify(params),
+                                tool,
+                                output: res.success ? (res.data ?? res.summary) : { error: res.error },
+                                durationMs: res.durationMs ?? 0
+                            });
+                            const status: ToolCallStatus = !res?.success
+                                ? 'error'
+                                : ((res as any).empty === true || isEmptyToolSummary(res?.summary || '') ? 'empty' : 'data');
+                            accumulatedToolTrace.push({
+                                tool,
+                                eventId: gId,
+                                status,
+                                ...(typeof res?.summary === 'string' && res.summary.trim() ? { summary: res.summary.trim() } : {})
+                            });
                             if (res?.success === true && typeof res.summary === 'string' && res.summary.trim().length > 0) {
                                 pulledItems.push({
                                     tool,
@@ -247,8 +284,9 @@ export class AnalysisLifecycle {
                         })
                     );
                     if (pulledItems.length > 0) {
+                        rawPulledText = pulledItems.map(i => i.summary).join('\n\n');
                         scopedToolResults = buildVerifierEvidence([{ toolEvidenceItems: pulledItems }], rawData)
-                            || pulledItems.map(i => i.summary).join('\n\n');
+                            || rawPulledText;
                         context.addEvent({
                             agentRole: this.critic.role,
                             action: 'Scoped Critic Tool Pulls',
@@ -260,7 +298,10 @@ export class AnalysisLifecycle {
                 }
             }
 
-            const toolResults = scopedToolResults || prePassedToolResults;
+            const baseToolResults = scopedToolResults || prePassedToolResults;
+            const toolResults = freshRetryEvidenceParts.length > 0
+                ? [baseToolResults, ...freshRetryEvidenceParts].filter(Boolean).join('\n\n')
+                : baseToolResults;
             const rawAnalystReports = typeof rawData === 'object' && rawData && 'analystReports' in rawData
                 ? (rawData as any).analystReports
                 : undefined;
@@ -385,7 +426,9 @@ export class AnalysisLifecycle {
                 }
 
                 const boardSourceForAudit = (rawData as any)?.fullBoard || rawData || slateHeaders || fallbackBoardText;
-                const combinedToolSummary = [toolResultsSummary, prePassedToolResults].filter(Boolean).join('\n\n');
+                const combinedToolSummary = [toolResultsSummary, prePassedToolResults, rawPulledText, ...freshRetryEvidenceParts]
+                    .filter(Boolean)
+                    .join('\n\n');
                 if (combinedToolSummary) {
                     lastCombinedToolSummary = combinedToolSummary;
                 }
@@ -417,10 +460,122 @@ export class AnalysisLifecycle {
                     verification.feedback = (injuryAudit.pass && marketRowAudit.pass)
                         ? gMsg
                         : [verification.feedback, gMsg].filter(Boolean).join(' ');
+                }
+
+                accumulatedToolTrace = mergeToolCallTraceEntries(accumulatedToolTrace);
+                const availableSportsTools = this.toolRegistry
+                    ? ['get_matchup_fundamentals', 'get_injury_and_roster_delta', 'get_market_movement'].filter(t => this.toolRegistry!.has(t))
+                    : [];
+                const pullAudit = auditPullBeforePass(
+                    currentProposal,
+                    combinedToolSummary,
+                    boardSourceForAudit,
+                    {
+                        headers: allParsedHeaders,
+                        toolCallTrace: accumulatedToolTrace,
+                        availableTools: availableSportsTools,
+                        marketToolRecords: pulledMarketRecords
+                    }
+                );
+                if (!pullAudit.pass) {
+                    let newlyPulledCount = 0;
+                    if (this.toolRegistry && pullAudit.unqueriedGameIds.length > 0) {
+                        const cache = this.queryCache ?? new GameQueryCache();
+                        const headerById = new Map<string, GameHeader>(allParsedHeaders.map(h => [h.eventId, h]));
+                        const missingCalls: Array<{ tool: string; gId: string }> = [];
+                        for (const gId of pullAudit.unqueriedGameIds.slice(0, 8)) {
+                            const toolsForGame = pullAudit.missingToolsByGame[gId] || availableSportsTools;
+                            for (const tool of toolsForGame) {
+                                if (this.toolRegistry.has(tool)) {
+                                    missingCalls.push({ tool, gId });
+                                }
+                            }
+                        }
+                        if (missingCalls.length > 0) {
+                            const newlyPulled: string[] = [];
+                            await Promise.all(
+                                missingCalls.map(async ({ tool, gId }) => {
+                                    const hdr = headerById.get(gId);
+                                    const opts = hdr
+                                        ? {
+                                              ...this.toolOptions,
+                                              game: {
+                                                  event_id: hdr.eventId,
+                                                  home_team: hdr.home,
+                                                  away_team: hdr.away,
+                                                  home_team_abbr: hdr.home,
+                                                  away_team_abbr: hdr.away
+                                              }
+                                          }
+                                        : this.toolOptions;
+                                    const params: Record<string, unknown> = tool === 'get_market_movement'
+                                        ? { game_id: gId, market_type: 'all' }
+                                        : { game_id: gId };
+                                    const res = await executeToolWithCacheAndTimeout(
+                                        { tool, parameters: params },
+                                        { game_id: gId },
+                                        this.toolRegistry!,
+                                        cache,
+                                        1500,
+                                        opts
+                                    );
+                                    context.addEvent({
+                                        agentRole: this.critic.role,
+                                        action: `Executed Tool: ${tool}`,
+                                        modelName: this.critic.modelName,
+                                        prompt: JSON.stringify(params),
+                                        tool,
+                                        output: res.success ? (res.data ?? res.summary) : { error: res.error },
+                                        durationMs: res.durationMs ?? 0
+                                    });
+                                    const status: ToolCallStatus = !res?.success
+                                        ? 'error'
+                                        : ((res as any).empty === true || isEmptyToolSummary(res?.summary || '') ? 'empty' : 'data');
+                                    accumulatedToolTrace.push({
+                                        tool,
+                                        eventId: gId,
+                                        status,
+                                        ...(typeof res?.summary === 'string' && res.summary.trim() ? { summary: res.summary.trim() } : {})
+                                    });
+                                    if (res?.success === true && typeof res.summary === 'string' && res.summary.trim().length > 0) {
+                                        const cleanSum = res.summary.trim();
+                                        newlyPulled.push(cleanSum);
+                                        verifiedEventIdsSet.add(gId);
+                                        if (tool === 'get_market_movement') {
+                                            pulledMarketRecords.push({
+                                                tool,
+                                                eventId: gId,
+                                                summary: cleanSum,
+                                                ...(res.data !== undefined ? { data: res.data } : {}),
+                                                ...(Array.isArray((res as any).markets_covered) ? { markets_covered: (res as any).markets_covered } : {})
+                                            });
+                                        }
+                                    }
+                                })
+                            );
+                            accumulatedToolTrace = mergeToolCallTraceEntries(accumulatedToolTrace);
+                            if (newlyPulled.length > 0) {
+                                newlyPulledCount = newlyPulled.length;
+                                freshRetryEvidenceParts.push(...newlyPulled);
+                                lastCombinedToolSummary = [lastCombinedToolSummary, ...newlyPulled].filter(Boolean).join('\n\n');
+                            }
+                        }
+                    }
+                    verification.pass = false;
+                    const pMsg = pullAudit.feedback || 'Veto (PULL BEFORE PASS): Tools must be called before passing or claiming missing data.';
+                    const pullNote = newlyPulledCount > 0
+                        ? ' Missing tools were just pulled; use the [Fresh Tool Evidence Pulled Before Retry] above.'
+                        : '';
+                    const allPriorPassed = injuryAudit.pass && marketRowAudit.pass && groundingAudit.pass;
+                    verification.feedback = allPriorPassed
+                        ? `${pMsg}${pullNote}`
+                        : [verification.feedback, `${pMsg}${pullNote}`].filter(Boolean).join(' ');
                 } else if (
                     !verification.pass &&
                     injuryAudit.pass &&
                     marketRowAudit.pass &&
+                    groundingAudit.pass &&
+                    pullAudit.pass &&
                     isFalseMissingMoneylineCritique(
                         verification.feedback,
                         currentProposal,
@@ -480,7 +635,8 @@ export class AnalysisLifecycle {
                     criticFeedback: verification.feedback,
                     computedRating,
                     verifiedEventIds: Array.from(verifiedEventIdsSet),
-                    ...(lastCombinedToolSummary ? { verifiedToolEvidence: lastCombinedToolSummary } : {})
+                    ...(lastCombinedToolSummary ? { verifiedToolEvidence: lastCombinedToolSummary } : {}),
+                    ...(accumulatedToolTrace.length > 0 ? { verifiedToolTrace: mergeToolCallTraceEntries(accumulatedToolTrace) } : {})
                 };
             } else {
                 feedback = verification.feedback || "Proposal failed verification without specific feedback.";
@@ -510,7 +666,8 @@ export class AnalysisLifecycle {
             criticFeedback: feedback,
             computedRating,
             verifiedEventIds: Array.from(verifiedEventIdsSet),
-            ...(lastCombinedToolSummary ? { verifiedToolEvidence: lastCombinedToolSummary } : {})
+            ...(lastCombinedToolSummary ? { verifiedToolEvidence: lastCombinedToolSummary } : {}),
+            ...(accumulatedToolTrace.length > 0 ? { verifiedToolTrace: mergeToolCallTraceEntries(accumulatedToolTrace) } : {})
         };
     }
 }

@@ -41,6 +41,7 @@ import {
 } from "./scorecardManager.ts";
 import { parseGameHeaders, filterPicksByCoverage } from "../context/gameHeaders.ts";
 import { buildVerifierEvidence } from "./verifierEvidence.ts";
+import { mergeToolCallTraceEntries, type ToolCallTraceEntry } from "../tools/pullBeforePass.ts";
 import { isDataRequest } from "../parser/responseGuards.ts";
 import { planTriage, type TriagePlan } from "./triagePlanner.ts";
 import { executeTriage, type CuratedDossier } from "./triageExecutor.ts";
@@ -387,6 +388,9 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     });
                 });
                 const verifierEvidence = buildVerifierEvidence(flatReports as any, profilingResult.rawInput ?? data ?? task);
+                const allToolCallTrace: ToolCallTraceEntry[] = mergeToolCallTraceEntries(
+                    flatReports.flatMap((r: any) => (Array.isArray(r?.toolCallTrace) ? r.toolCallTrace : []))
+                );
 
                 const synthesisResult = blackboard ? emptySynthesisResult() : compileSynthesisPrompt({
                     task,
@@ -402,7 +406,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     context,
                     params,
                     bypassCache,
-                    verifierEvidence
+                    verifierEvidence,
+                    ...(allToolCallTrace.length > 0 ? { toolCallTrace: allToolCallTrace } : {})
                 });
 
                 workflowOriginalPromptTokens += synthesisResult.workflowOriginalPromptTokens;
@@ -524,6 +529,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                 toolRegistry,
                                 queryCache: globalGameQueryCache,
                                 ...(marketToolRecords.length > 0 ? { marketToolRecords } : {}),
+                                ...(allToolCallTrace.length > 0 ? { toolCallTrace: allToolCallTrace } : {}),
                                 ...(stage2CriticVetoes.length > 0 ? { criticVetoes: stage2CriticVetoes } : {}),
                                 ...(verifierToolResults ? { toolResults: verifierToolResults } : {}),
                                 ...(synthesisResult.appComputedCounts ? { appComputedCounts: synthesisResult.appComputedCounts } : {})
@@ -549,7 +555,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                 {
                                     toolResults: verifierToolResults,
                                     criticVetoes: stage2CriticVetoes,
-                                    rawBoard: profilingResult.rawInput
+                                    rawBoard: profilingResult.rawInput,
+                                    ...(allToolCallTrace.length > 0 ? { toolCallTrace: allToolCallTrace } : {})
                                 }
                             );
                         }

@@ -15,6 +15,12 @@ import { executeToolWithCacheAndTimeout } from './triageExecutor.ts';
 import { GameQueryCache } from '../cache/gameQueryCache.ts';
 import type { SwarmContext } from '../context.ts';
 import { parseGameHeaders, type GameHeader } from '../context/gameHeaders.ts';
+import {
+  isEmptyToolSummary,
+  looksLikePassOrMissingDataClaim,
+  type ToolCallStatus,
+  type ToolCallTraceEntry
+} from '../tools/pullBeforePass.ts';
 
 export const PROVIDER_CALL_DEADLINES: Record<string, number> = {
   groq: 20000,
@@ -96,17 +102,27 @@ export interface SeatToolLoopResult {
   toolEvidence: string;
   toolEvidenceItems: ToolEvidenceItem[];
   marketToolRecords?: MarketEvidenceRecord[];
+  toolCallTrace?: ToolCallTraceEntry[];
+}
+
+export function isQuantSeatName(seat: string): boolean {
+  if (isCriticSeatName(seat)) return false;
+  return /(?:^|[\s_-])(?:a1|quant)(?:$|[\s_-])/i.test(String(seat || '').trim());
+}
+
+export function isMarketSeatName(seat: string): boolean {
+  if (isCriticSeatName(seat)) return false;
+  return /(?:^|[\s_-])(?:a2|market)(?:$|[\s_-])/i.test(String(seat || '').trim());
 }
 
 export function getRoleToolNames(seat: string): string[] {
-  const norm = seat.toLowerCase().trim();
-  if (norm === 'a1' || norm === 'quant') {
+  if (isQuantSeatName(seat)) {
     return ['get_matchup_fundamentals', 'get_player_prop_splits'];
   }
-  if (norm === 'a2' || norm === 'market') {
+  if (isMarketSeatName(seat)) {
     return ['get_market_movement'];
   }
-  if (norm === 'critic' || norm === 'risk' || norm === 'risk_critic' || norm.includes('critic') || norm.includes('risk')) {
+  if (isCriticSeatName(seat)) {
     return ['get_injury_and_roster_delta', 'get_market_movement', 'get_matchup_fundamentals', 'get_environment_and_weather'];
   }
   return ['get_matchup_fundamentals', 'get_market_movement'];
@@ -135,10 +151,19 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
   const nativeTools = scopedRegistry.toOpenAiTools();
   const toolSchemasStr = JSON.stringify(nativeTools);
 
+  const isCriticSeat = (s: string) => isCriticSeatName(s);
+  const isBettingRoleSeat = (s: string) => isQuantSeatName(s) || isMarketSeatName(s);
+
+  const gameIds: string[] = (params.gameIds && params.gameIds.length > 0)
+    ? params.gameIds
+    : (gameId && gameId !== 'unknown-game' ? [gameId] : []);
+
+  const willPrefetchBettingSeat = isBettingRoleSeat(seat) && gameIds.length > 0 && hasBaseTools;
+
   // Ensure Round 1 prompt fits budget
   assertPromptFits(agent.provider, {
     systemInstruction,
-    toolSchemas: toolSchemasStr,
+    toolSchemas: willPrefetchBettingSeat ? undefined : toolSchemasStr,
     prompt
   });
 
@@ -227,18 +252,17 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
 
   const executedTools: string[] = [];
   const coveredEventIds = new Set<string>();
+  const attemptedEventIds = new Set<string>();
   const toolEvidenceItems: ToolEvidenceItem[] = [];
   const marketToolRecords: MarketEvidenceRecord[] = [];
+  const toolCallTrace: ToolCallTraceEntry[] = [];
+  const executedEntries: Array<{ targetGameId: string; summary: string }> = [];
   const gameHeaderMap = new Map<string, GameHeader>();
   for (const h of parseGameHeaders(prompt)) {
     if (h.eventId && !gameHeaderMap.has(h.eventId)) {
       gameHeaderMap.set(h.eventId, h);
     }
   }
-
-  const gameIds: string[] = (params.gameIds && params.gameIds.length > 0)
-    ? params.gameIds
-    : (gameId && gameId !== 'unknown-game' ? [gameId] : []);
 
   const buildPrefetchCalls = (tools: string[], targetGamesOverride?: string[], maxCallsOverride?: number) => {
     const calls: { tool: string; parameters: Record<string, unknown> }[] = [];
@@ -315,12 +339,137 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     return calls;
   };
 
+  const jsonOnlySuffix = 'Tool phase complete; do not call any tools or code-execution helpers.';
+
+  const basePromptOverhead = `Tool results:\n\n\n${jsonOnlySuffix} ${finalInstruction}`.length;
+  const promptRoom = systemInstruction
+    ? Math.max(0, budget.maxPromptChars - systemInstruction.length - prompt.length - basePromptOverhead - 16)
+    : budget.maxToolResultChars;
+  const effectiveToolBudget = Math.min(budget.maxToolResultChars, promptRoom);
+
+  const formatToolResultsWithinBudget = (entries: Array<{ targetGameId: string; summary: string }>): string => {
+    const validEntries = entries.filter(e => typeof e.summary === 'string' && e.summary.trim().length > 0);
+    const unfetchedGames = gameIds.filter(gId => !attemptedEventIds.has(gId) && !coveredEventIds.has(gId));
+    const notFetchedLine = unfetchedGames.length > 0
+      ? `[Not Fetched]: ${unfetchedGames.map(g => `${g}: not fetched`).join(', ')}`
+      : '';
+
+    const maxChars = effectiveToolBudget;
+    if (maxChars <= 0) return '';
+
+    const notFetchedReserve = notFetchedLine
+      ? Math.min(notFetchedLine.length + 2, Math.floor(maxChars * 0.25))
+      : 0;
+    const entriesBudget = Math.max(0, maxChars - notFetchedReserve);
+
+    let summaryText = '';
+    if (validEntries.length > 0 && entriesBudget > 0) {
+      const n = validEntries.length;
+      const sepTotal = 2 * (n - 1);
+      const totalChars = validEntries.reduce((acc, e) => acc + e.summary.length, 0) + sepTotal;
+
+      if (totalChars <= entriesBudget) {
+        summaryText = validEntries.map(e => e.summary).join('\n\n');
+        for (const e of validEntries) {
+          if (e.targetGameId && e.targetGameId !== 'unknown-game') {
+            coveredEventIds.add(e.targetGameId);
+          }
+        }
+      } else {
+        // Iterative water-filling fair-share allocation so shorter summaries stay intact
+        // and all fetched games remain represented instead of starving tail games.
+        const used = new Array<number>(n).fill(0);
+        let remaining = Math.max(0, entriesBudget - sepTotal);
+        let active = validEntries.map((_, i) => i);
+
+        while (active.length > 0 && remaining > 0) {
+          const share = Math.floor(remaining / active.length);
+          if (share <= 0) {
+            for (const i of active) {
+              if (remaining <= 0) break;
+              if (used[i] < validEntries[i].summary.length) {
+                used[i]++;
+                remaining--;
+              }
+            }
+            break;
+          }
+          let saturatedCount = 0;
+          const nextActive: number[] = [];
+          for (const i of active) {
+            const need = validEntries[i].summary.length - used[i];
+            if (need <= share) {
+              used[i] += need;
+              remaining -= need;
+              saturatedCount++;
+            } else {
+              nextActive.push(i);
+            }
+          }
+          if (saturatedCount === 0) {
+            for (const i of active) {
+              used[i] += share;
+              remaining -= share;
+            }
+            for (const i of active) {
+              if (remaining <= 0) break;
+              if (used[i] < validEntries[i].summary.length) {
+                used[i]++;
+                remaining--;
+              }
+            }
+            break;
+          }
+          active = nextActive;
+        }
+
+        const parts: string[] = [];
+        for (let i = 0; i < n; i++) {
+          const raw = validEntries[i].summary;
+          const cap = used[i];
+          if (cap <= 0) continue;
+          let text: string;
+          if (cap >= raw.length) {
+            text = raw;
+          } else if (cap >= 16) {
+            text = `${raw.slice(0, cap - 1).trimEnd()}…`;
+          } else {
+            text = raw.slice(0, cap);
+          }
+          if (text) {
+            parts.push(text);
+            const gId = validEntries[i].targetGameId;
+            if (gId && gId !== 'unknown-game') {
+              coveredEventIds.add(gId);
+            }
+          }
+        }
+        summaryText = parts.join('\n\n');
+      }
+    }
+
+    if (notFetchedLine) {
+      const sep = summaryText ? '\n\n' : '';
+      if (summaryText.length + sep.length + notFetchedLine.length <= maxChars) {
+        summaryText += sep + notFetchedLine;
+      } else if (notFetchedLine.length <= maxChars) {
+        const keep = Math.max(0, maxChars - sep.length - notFetchedLine.length);
+        summaryText = (keep > 0 ? summaryText.slice(0, keep) + sep : '') + notFetchedLine;
+      }
+    }
+
+    return summaryText;
+  };
+
   const executeCalls = async (calls: { tool: string; parameters: Record<string, unknown> }[]) => {
     const callsToRun = calls.slice(0, budget.maxToolCalls);
-    const results = await Promise.all(
+    await Promise.all(
       callsToRun.map(async (c) => {
         executedTools.push(c.tool);
         const targetGameId = (c.parameters.game_id as string) || (c.parameters.p_game_id as string) || (c.parameters.id as string) || gameId;
+        if (targetGameId && targetGameId !== 'unknown-game') {
+          attemptedEventIds.add(targetGameId);
+        }
         const hdr = gameHeaderMap.get(targetGameId);
         const toolOptions = hdr
           ? {
@@ -359,6 +508,15 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
             (context.addEvent as any)(actionStr);
           }
         }
+        const traceStatus: ToolCallStatus = !res?.success
+          ? 'error'
+          : ((res as any).empty === true || isEmptyToolSummary(res?.summary || '') ? 'empty' : 'data');
+        toolCallTrace.push({
+          tool: c.tool,
+          eventId: targetGameId,
+          status: traceStatus,
+          ...(typeof res?.summary === 'string' && res.summary.trim() ? { summary: res.summary.trim() } : {})
+        });
         if (res?.success === true && typeof res.summary === 'string' && res.summary.trim().length > 0) {
           toolEvidenceItems.push({
             tool: c.tool,
@@ -375,57 +533,22 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
             });
           }
         }
+        if (typeof res?.summary === 'string' && res.summary.trim().length > 0) {
+          executedEntries.push({ targetGameId, summary: res.summary.trim() });
+        }
         return { res, targetGameId, summary: res.summary };
       })
     );
 
-    let summaryText = '';
-    for (const item of results) {
-      if (!item.summary) continue;
-      const piece = summaryText ? `\n\n${item.summary}` : item.summary;
-      if (summaryText.length + piece.length <= budget.maxToolResultChars) {
-        summaryText += piece;
-        if (item.targetGameId && item.targetGameId !== 'unknown-game') {
-          coveredEventIds.add(item.targetGameId);
-        }
-      } else {
-        const remainingChars = budget.maxToolResultChars - summaryText.length;
-        if (remainingChars > 30) {
-          summaryText += (summaryText ? '\n\n' : '') + item.summary.slice(0, remainingChars - 15) + '\n…[truncated]';
-          if (item.targetGameId && item.targetGameId !== 'unknown-game') {
-            coveredEventIds.add(item.targetGameId);
-          }
-        }
-        break;
-      }
-    }
-    const unfetchedGames = gameIds.filter(gId => !coveredEventIds.has(gId));
-    if (unfetchedGames.length > 0) {
-      const notFetchedLine = `[Not Fetched]: ${unfetchedGames.map(g => `${g}: not fetched`).join(', ')}`;
-      const sep = summaryText ? '\n\n' : '';
-      if (summaryText.length + sep.length + notFetchedLine.length <= budget.maxToolResultChars) {
-        summaryText += sep + notFetchedLine;
-      } else if (notFetchedLine.length <= budget.maxToolResultChars) {
-        const keep = Math.max(0, budget.maxToolResultChars - sep.length - notFetchedLine.length);
-        summaryText = (keep > 0 ? summaryText.slice(0, keep) + sep : '') + notFetchedLine;
-      }
-    }
-    return summaryText;
-  };
-
-  const isCriticSeat = (s: string) => isCriticSeatName(s);
-  const isBettingRoleSeat = (s: string) => {
-    const norm = s.toLowerCase().trim();
-    return norm === 'a1' || norm === 'quant' || norm === 'a2' || norm === 'market';
+    return formatToolResultsWithinBudget(executedEntries);
   };
 
   const getPrefetchToolsForSeat = (): string[] => {
-    const norm = seat.toLowerCase().trim();
-    if (norm === 'a1' || norm === 'quant') {
+    if (isQuantSeatName(seat)) {
       return ['get_matchup_fundamentals', 'get_player_prop_splits']
         .filter(t => registry.has(t));
     }
-    if (norm === 'a2' || norm === 'market') {
+    if (isMarketSeatName(seat)) {
       return ['get_market_movement']
         .filter(t => registry.has(t));
     }
@@ -443,21 +566,30 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     return cfg;
   };
 
-  const jsonOnlySuffix = 'Tool phase complete; do not call any tools or code-execution helpers.';
+  const buildFittedUserPrompt = (toolResultsText: string): string => {
+    const assembled = assertPromptFits(agent.provider, {
+      systemInstruction,
+      prompt,
+      toolResults: toolResultsText
+    });
+    const sysTrimmed = systemInstruction?.trim();
+    if (sysTrimmed && assembled.startsWith(sysTrimmed)) {
+      return assembled.slice(sysTrimmed.length).replace(/^\n+/, '');
+    }
+    return assembled;
+  };
 
-  if (isBettingRoleSeat(seat) && gameIds.length > 0 && hasBaseTools) {
+  if (willPrefetchBettingSeat) {
     // Prefetch role tools server-side into maxToolResultChars budget,
     // then run one JSON round with no tools.
     const prefetchCalls = buildPrefetchCalls(getPrefetchToolsForSeat());
     const toolResultsSummary = prefetchCalls.length > 0 ? await executeCalls(prefetchCalls) : '';
 
-    const prefetchedPrompt = assertPromptFits(agent.provider, {
-      systemInstruction,
-      prompt,
-      toolResults: toolResultsSummary
+    const prefetchedPrompt = buildFittedUserPrompt(
+      toolResultsSummary
         ? `Tool results:\n${toolResultsSummary}\n\n${jsonOnlySuffix} ${finalInstruction}`
         : `${jsonOnlySuffix} ${finalInstruction}`
-    });
+    );
 
     const output = await runAgentWithDeadline(prefetchedPrompt, buildNoToolsConfig());
     return {
@@ -467,7 +599,8 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
       coveredEventIds: Array.from(coveredEventIds),
       toolEvidence: toolResultsSummary,
       toolEvidenceItems,
-      ...(marketToolRecords.length > 0 ? { marketToolRecords } : {})
+      ...(marketToolRecords.length > 0 ? { marketToolRecords } : {}),
+      toolCallTrace
     };
   }
 
@@ -504,13 +637,11 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
       const prefetchCalls = buildPrefetchCalls(getPrefetchToolsForSeat());
       const toolResultsSummary = prefetchCalls.length > 0 ? await executeCalls(prefetchCalls) : '';
 
-      const fallbackPrompt = assertPromptFits(agent.provider, {
-        systemInstruction,
-        prompt,
-        toolResults: toolResultsSummary
+      const fallbackPrompt = buildFittedUserPrompt(
+        toolResultsSummary
           ? `Tool results:\n${toolResultsSummary}\n\n${jsonOnlySuffix} ${finalInstruction}`
           : `${jsonOnlySuffix} ${finalInstruction}`
-      });
+      );
 
       const fallbackOutput = await runAgentWithDeadline(fallbackPrompt, buildNoToolsConfig());
 
@@ -521,7 +652,8 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
         coveredEventIds: Array.from(coveredEventIds),
         toolEvidence: toolResultsSummary,
         toolEvidenceItems,
-        ...(marketToolRecords.length > 0 ? { marketToolRecords } : {})
+        ...(marketToolRecords.length > 0 ? { marketToolRecords } : {}),
+        toolCallTrace
       };
     }
     throw err;
@@ -541,18 +673,23 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
 
   // If no valid tool calls in Round 1:
   // - For Critic with scoped gameIds & tools, automatically fall back to scoped prefetch + Round 2 JSON verdict.
+  // - For non-critic seats attempting to pass or claim missing data without pulling tools, prefetch first.
   // - Otherwise, Round 1 output is final.
   if (toolCalls.length === 0) {
-    if (isCriticSeat(seat) && gameIds.length > 0 && hasBaseTools) {
+    const shouldPrefetchForPass =
+      !isCriticSeat(seat) &&
+      gameIds.length > 0 &&
+      hasBaseTools &&
+      looksLikePassOrMissingDataClaim(round1Output);
+
+    if ((isCriticSeat(seat) && gameIds.length > 0 && hasBaseTools) || shouldPrefetchForPass) {
       const prefetchCalls = buildPrefetchCalls(getPrefetchToolsForSeat());
       const toolResultsSummary = prefetchCalls.length > 0 ? await executeCalls(prefetchCalls) : '';
-      const round2Prompt = assertPromptFits(agent.provider, {
-        systemInstruction,
-        prompt,
-        toolResults: toolResultsSummary
+      const round2Prompt = buildFittedUserPrompt(
+        toolResultsSummary
           ? `Tool results:\n${toolResultsSummary}\n\n${jsonOnlySuffix} ${finalInstruction}`
           : `${jsonOnlySuffix} ${finalInstruction}`
-      });
+      );
       const round2Output = await runAgentWithDeadline(round2Prompt, buildNoToolsConfig());
       return {
         report: round2Output,
@@ -561,7 +698,8 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
         coveredEventIds: Array.from(coveredEventIds),
         toolEvidence: toolResultsSummary,
         toolEvidenceItems,
-        ...(marketToolRecords.length > 0 ? { marketToolRecords } : {})
+        ...(marketToolRecords.length > 0 ? { marketToolRecords } : {}),
+        toolCallTrace
       };
     }
 
@@ -571,32 +709,30 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
       toolCallsExecuted: [],
       coveredEventIds: [],
       toolEvidence: '',
-      toolEvidenceItems: []
+      toolEvidenceItems: [],
+      toolCallTrace: []
     };
   }
 
   // Execute Round 1 tool calls
   let toolResultsSummary = await executeCalls(toolCalls);
 
-  // Top up any analyzer-selected games missed in Critic's Round 1 calls within remaining tool budget
-  if (isCriticSeat(seat) && gameIds.length > 0 && hasBaseTools && executedTools.length < budget.maxToolCalls) {
-    const missingGames = gameIds.filter(gId => !coveredEventIds.has(gId));
+  // Top up any target games missed in Round 1 calls within remaining tool budget
+  if (gameIds.length > 0 && hasBaseTools && executedTools.length < budget.maxToolCalls) {
+    const missingGames = gameIds.filter(gId => !attemptedEventIds.has(gId));
     if (missingGames.length > 0) {
       const remainingBudget = budget.maxToolCalls - executedTools.length;
       const topUpCalls = buildPrefetchCalls(getPrefetchToolsForSeat(), missingGames, remainingBudget);
       if (topUpCalls.length > 0) {
-        await executeCalls(topUpCalls);
-        toolResultsSummary = toolEvidenceItems.map(i => i.summary).join('\n\n');
+        toolResultsSummary = await executeCalls(topUpCalls);
       }
     }
   }
 
   // Round 2: prompt + tool results + final instruction (no tools)
-  const round2Prompt = assertPromptFits(agent.provider, {
-    systemInstruction,
-    prompt,
-    toolResults: `Tool results:\n${toolResultsSummary}\n\n${jsonOnlySuffix} ${finalInstruction}`
-  });
+  const round2Prompt = buildFittedUserPrompt(
+    `Tool results:\n${toolResultsSummary}\n\n${jsonOnlySuffix} ${finalInstruction}`
+  );
 
   const round2Output = await runAgentWithDeadline(round2Prompt, buildNoToolsConfig());
 
@@ -607,6 +743,7 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     coveredEventIds: Array.from(coveredEventIds),
     toolEvidence: toolResultsSummary,
     toolEvidenceItems,
-    ...(marketToolRecords.length > 0 ? { marketToolRecords } : {})
+    ...(marketToolRecords.length > 0 ? { marketToolRecords } : {}),
+    toolCallTrace
   };
 }

@@ -41,6 +41,14 @@ import {
     sanitizeRowMismatchedPicks,
     type MarketToolRecord
 } from '../tools/marketRowBinding.ts';
+import {
+    auditPullBeforePass,
+    isEmptyToolSummary,
+    mergeToolCallTraceEntries,
+    sanitizePullBeforePassClaims,
+    type ToolCallStatus,
+    type ToolCallTraceEntry
+} from '../tools/pullBeforePass.ts';
 
 export interface AnalystExecutorConfig {
     task: string;
@@ -202,6 +210,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
     const sharedQueryCache = new GameQueryCache();
     const sharedInjuryPrefetchMap = new Map<string, Promise<string>>();
     const sharedInjuryItemsByGame = new Map<string, ToolEvidenceItem>();
+    const sharedInjuryTraceByGame = new Map<string, ToolCallTraceEntry>();
 
     const getSharedInjurySummary = (gameIds: string[], activeReg: ToolRegistry, headers?: GameHeader[]): Promise<string> => {
         if (gameIds.length === 0 || !activeReg.has('get_injury_and_roster_delta')) {
@@ -242,6 +251,26 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                             1500,
                             toolOptions
                         );
+                        if (context?.addEvent) {
+                            context.addEvent({
+                                agentRole: 'Shared Injury Prefetch',
+                                action: 'Executed Tool: get_injury_and_roster_delta',
+                                modelName: 'Local/SharedPrefetch',
+                                prompt: JSON.stringify({ game_id: gId }),
+                                tool: 'get_injury_and_roster_delta',
+                                output: res.success ? (res.data ?? res.summary) : { error: res.error },
+                                durationMs: res.durationMs ?? 0
+                            });
+                        }
+                        const status: ToolCallStatus = !res?.success
+                            ? 'error'
+                            : ((res as any).empty === true || isEmptyToolSummary(res?.summary || '') ? 'empty' : 'data');
+                        sharedInjuryTraceByGame.set(gId, {
+                            tool: 'get_injury_and_roster_delta',
+                            eventId: gId,
+                            status,
+                            ...(typeof res?.summary === 'string' && res.summary.trim() ? { summary: res.summary.trim() } : {})
+                        });
                         if (res && res.success && typeof res.summary === 'string' && res.summary.trim()) {
                             sharedInjuryItemsByGame.set(gId, {
                                 tool: 'get_injury_and_roster_delta',
@@ -253,6 +282,11 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                         }
                         return '';
                     } catch {
+                        sharedInjuryTraceByGame.set(gId, {
+                            tool: 'get_injury_and_roster_delta',
+                            eventId: gId,
+                            status: 'error'
+                        });
                         return '';
                     }
                 })
@@ -381,7 +415,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                 allGameIds = Array.from(new Set(proposedAuditContext.targetGameIds.filter(Boolean)));
             }
 
-            const isBettingSeat = /\b(a1|quant|a2|market)\b/i.test(seat.trim()) || /\b(a1|quant|a2|market)\b/i.test(analyst.role.trim());
+            const isBettingSeat = !isCritic && (/\b(a1|quant|a2|market)\b/i.test(seat.trim()) || /\b(a1|quant|a2|market)\b/i.test(analyst.role.trim()));
             let seatPrompt = effectiveAnalystPrompt;
             if (isCritic && proposedAuditContext?.summaryText) {
                 seatPrompt += `\n\nProposed Picks From Specialist Seats (audit these specific legs for fatal injuries or rule violations; do not veto based on unpicked games):\n${proposedAuditContext.summaryText}`;
@@ -483,6 +517,14 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                 }
             }
             (resData as any).toolEvidenceItems = baseEvidenceItems;
+            const seatToolTrace: ToolCallTraceEntry[] = mergeToolCallTraceEntries([
+                ...(Array.isArray((scorecardReport as any)?.toolCallTrace) ? (scorecardReport as any).toolCallTrace : []),
+                ...(Array.isArray(seatLoopRes?.toolCallTrace) ? seatLoopRes.toolCallTrace : []),
+                ...(isBettingSeat ? Array.from(sharedInjuryTraceByGame.values()) : [])
+            ]);
+            if (seatToolTrace.length > 0) {
+                (resData as any).toolCallTrace = seatToolTrace;
+            }
             if (!(resData as any).seat) (resData as any).seat = seat;
             if (!(resData as any).role) (resData as any).role = analyst.role;
 
@@ -529,6 +571,16 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                         { headers: mergedHeadersForRowCheck }
                     );
                 }
+                sanitizePullBeforePassClaims(
+                    resData as any,
+                    successfulToolEvidence,
+                    fullRawSource || renderedHeadersText,
+                    {
+                        headers: mergedHeadersForRowCheck,
+                        toolCallTrace: seatToolTrace,
+                        marketToolRecords
+                    }
+                );
             } else if (isCritic && proposedAuditContext?.summaryText) {
                 let injuryAuditPassed = true;
                 if (combinedInjuryEvidence) {
@@ -609,10 +661,46 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                     for (const f of groundingAudit.flags) {
                         if (!(resData as any).flags.includes(f)) (resData as any).flags.push(f);
                     }
+                }
+
+                const proposerToolTrace: ToolCallTraceEntry[] = Array.isArray(proposedAuditContext.proposerReports)
+                    ? proposedAuditContext.proposerReports.flatMap((r: any) =>
+                          Array.isArray(r?.toolCallTrace) ? r.toolCallTrace : []
+                      )
+                    : [];
+                const unionToolTrace = mergeToolCallTraceEntries([...proposerToolTrace, ...seatToolTrace]);
+                const availableSportsTools = [
+                    'get_matchup_fundamentals',
+                    'get_injury_and_roster_delta',
+                    'get_market_movement'
+                ].filter(t => activeRegistry.has(t));
+                const pullAudit = auditPullBeforePass(
+                    groundingTargetProposal,
+                    criticGroundingEvidence,
+                    fullRawSource || renderedHeadersText,
+                    {
+                        headers: mergedHeadersForRowCheck,
+                        toolCallTrace: unionToolTrace,
+                        availableTools: availableSportsTools,
+                        marketToolRecords
+                    }
+                );
+                if (!pullAudit.pass) {
+                    (resData as any).pass = false;
+                    const pMsg = pullAudit.feedback || 'Veto (PULL BEFORE PASS): Tools must be called before passing or claiming missing data.';
+                    const hasPriorVeto = !injuryAuditPassed || !marketRowAudit.pass || !groundingAuditPassed;
+                    const nextSummary = hasPriorVeto ? `${(resData as any).summary} ${pMsg}`.trim() : pMsg;
+                    (resData as any).summary = nextSummary;
+                    (resData as any).analysis = nextSummary;
+                    if (!Array.isArray((resData as any).flags)) (resData as any).flags = [];
+                    for (const f of pullAudit.flags) {
+                        if (!(resData as any).flags.includes(f)) (resData as any).flags.push(f);
+                    }
                 } else if (
                     (resData as any).pass === false &&
                     injuryAuditPassed &&
                     marketRowAudit.pass &&
+                    groundingAuditPassed &&
                     isFalseMissingMoneylineCritique(
                         String((resData as any).verdict || (resData as any).summary || (resData as any).analysis || ''),
                         auditTargetProposal,
