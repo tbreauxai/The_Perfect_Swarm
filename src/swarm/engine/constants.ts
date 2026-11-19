@@ -2,7 +2,8 @@ import { AnalystResponseSchema, ManagerResponseSchema } from "../schemas.ts";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { INJURY_ATTRIBUTION_RULE } from "../tools/injuryAttribution.ts";
 import { MARKET_AND_ROW_RULES } from "../tools/marketRowBinding.ts";
-export { INJURY_ATTRIBUTION_RULE, MARKET_AND_ROW_RULES };
+import { GROUNDING_RULE } from "../tools/claimGrounding.ts";
+export { INJURY_ATTRIBUTION_RULE, MARKET_AND_ROW_RULES, GROUNDING_RULE };
 export const RED_TEAM_ANALYST_ROLE = 'RedTeamAnalyst';
 
 export const CRITIC_VERDICT_SYSTEM_INSTRUCTION = `You are the Swarm Risk Critic.
@@ -21,6 +22,8 @@ ${INJURY_ATTRIBUTION_RULE}
 
 ${MARKET_AND_ROW_RULES}
 
+${GROUNDING_RULE}
+
 The user's betting or parlay request is in scope. Output only verdict JSON and add no picks of your own.
 Return output strictly as a valid JSON object matching this shape:
 {
@@ -38,6 +41,8 @@ Team names in Game Slate are authoritative; never rename or flag them.
 ${INJURY_ATTRIBUTION_RULE}
 
 ${MARKET_AND_ROW_RULES}
+
+${GROUNDING_RULE}
 
 When analyzing data:
 1. SKEPTICAL SCRUTINY: Actively hunt for unstated assumptions, sampling bias, cherry-picked metrics, survivorship bias, and contradictory evidence.
@@ -66,6 +71,8 @@ ${INJURY_ATTRIBUTION_RULE}
 
 ${MARKET_AND_ROW_RULES}
 
+${GROUNDING_RULE}
+
 When given data:
 1. PLAN: Check the token weight of the input metadata. Identify 2-3 specific dimensions to investigate.
 2. REASON: Analyze differences between current inputs and baselines. Keep internal deductions concise and strictly focused on statistical significance.
@@ -88,6 +95,8 @@ SPORTS CONTEXT REQUIREMENT: Always resolve and use supplied game context (injuri
 ${INJURY_ATTRIBUTION_RULE}
 
 ${MARKET_AND_ROW_RULES}
+
+${GROUNDING_RULE}
 
 Instead of outputting raw text, you MUST output a Generative UI payload.
 Output strict JSON matching this JSON Schema:

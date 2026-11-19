@@ -16,6 +16,7 @@ import { parseGameHeaders, renderHeaders, filterPicksByCoverage } from '../conte
 import { partitionTaskAndContract } from './analystExecution.ts';
 import { sanitizeMisattributedPicksAndText } from '../tools/injuryAttribution.ts';
 import { sanitizeRowMismatchedPicks } from '../tools/marketRowBinding.ts';
+import { sanitizeUngroundedClaims } from '../tools/claimGrounding.ts';
 
 export interface SynthesisPipelineParams {
     task: string;
@@ -430,6 +431,12 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
     };
 }
 
+function extractToolEvidenceSection(promptText: string): string {
+    if (!promptText) return '';
+    const match = /(?:^|\n)Tool evidence:\s*\n([\s\S]*?)(?=\n\n(?:Analyst Reports:|Specialist Coverage:)|$)/i.exec(promptText);
+    return match ? match[1].trim() : '';
+}
+
 export async function executeManagerSynthesis(
     managerAgent: Agent,
     effectiveDynamicPrompt: string,
@@ -437,7 +444,8 @@ export async function executeManagerSynthesis(
     activeVariant?: AgentVariantConfig,
     bypassCache: boolean = false,
     settings?: SwarmEngineSettings,
-    coveredEventIds?: string[]
+    coveredEventIds?: string[],
+    groundingContext?: { toolResults?: string; criticVetoes?: string[]; rawBoard?: string }
 ): Promise<any> {
     const managerInstruction = (settings as any)?.managerInstruction
         || (settings as any)?.systemPrompts?.[managerAgent.id || managerAgent.role]
@@ -494,6 +502,20 @@ export async function executeManagerSynthesis(
     if (finalResult && typeof finalResult === 'object') {
         sanitizeMisattributedPicksAndText(finalResult, safeDynamicPrompt, safeDynamicPrompt);
         sanitizeRowMismatchedPicks(finalResult, safeDynamicPrompt);
+        const slateSourceForGrounding = groundingContext?.rawBoard || safeDynamicPrompt;
+        const toolEvidenceForGrounding = groundingContext?.toolResults !== undefined
+            ? groundingContext.toolResults
+            : extractToolEvidenceSection(safeDynamicPrompt);
+        const criticVetoes = groundingContext?.criticVetoes || [];
+        if (
+            parseGameHeaders(slateSourceForGrounding).length > 0 ||
+            Boolean(toolEvidenceForGrounding) ||
+            criticVetoes.length > 0
+        ) {
+            sanitizeUngroundedClaims(finalResult, toolEvidenceForGrounding, slateSourceForGrounding, {
+                vetoTexts: criticVetoes
+            });
+        }
     }
 
     if (coveredEventIds && Array.isArray(finalResult?.picks)) {

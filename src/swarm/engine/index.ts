@@ -417,6 +417,29 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 };
                 const criticReports = flatReports.filter(isCriticSeat);
                 const nonCriticReports = flatReports.filter(r => !isCriticSeat(r));
+                const stage2CriticVetoes: string[] = [];
+                for (const cr of criticReports) {
+                    if (cr && cr.pass === false) {
+                        const parts = [
+                            typeof cr.feedback === 'string' ? cr.feedback : '',
+                            typeof cr.verdict === 'string' ? cr.verdict : '',
+                            typeof cr.summary === 'string' ? cr.summary : '',
+                            typeof cr.analysis === 'string' ? cr.analysis : '',
+                            Array.isArray(cr.flags) && cr.flags.length > 0 ? cr.flags.join(', ') : ''
+                        ].filter(Boolean);
+                        if (parts.length > 0) stage2CriticVetoes.push(parts.join(' | '));
+                    }
+                }
+                const paramCriticRes = (params as any)?.criticResult || (params as any)?.criticFeedback || (settings as any)?.criticResult;
+                if (paramCriticRes) {
+                    if (typeof paramCriticRes === 'string' && paramCriticRes.trim()) {
+                        stage2CriticVetoes.push(paramCriticRes.trim());
+                    } else if (typeof paramCriticRes === 'object' && paramCriticRes.pass === false) {
+                        const parts = [paramCriticRes.feedback, paramCriticRes.verdict, paramCriticRes.summary]
+                            .filter((x): x is string => typeof x === 'string' && Boolean(x.trim()));
+                        if (parts.length > 0) stage2CriticVetoes.push(parts.join(' | '));
+                    }
+                }
                 const allPlaceholderOrDataRequest = flatReports.length > 0 && nonCriticReports.every(r =>
                     ((r as any)._placeholder === true && !(Array.isArray((r as any).picks) && (r as any).picks.length > 0))
                     || isDataRequest(r)
@@ -501,6 +524,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                 toolRegistry,
                                 queryCache: globalGameQueryCache,
                                 ...(marketToolRecords.length > 0 ? { marketToolRecords } : {}),
+                                ...(stage2CriticVetoes.length > 0 ? { criticVetoes: stage2CriticVetoes } : {}),
                                 ...(verifierToolResults ? { toolResults: verifierToolResults } : {}),
                                 ...(synthesisResult.appComputedCounts ? { appComputedCounts: synthesisResult.appComputedCounts } : {})
                             });
@@ -521,7 +545,12 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                 activeVariant,
                                 bypassCache,
                                 settings,
-                                coveredEventIdsList
+                                coveredEventIdsList,
+                                {
+                                    toolResults: verifierToolResults,
+                                    criticVetoes: stage2CriticVetoes,
+                                    rawBoard: profilingResult.rawInput
+                                }
                             );
                         }
 

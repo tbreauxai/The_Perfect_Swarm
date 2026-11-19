@@ -770,7 +770,7 @@ export function isFalseMissingMoneylineCritique(
 
   // Never override if Critic also flagged any other real defect
   if (
-    /\b(?:injur|scratch|rule violation|wrong team|misattribut|row.{0,20}mismatch|opposite side|does not match|away.{0,15}home|fabricat)/i.test(
+    /\b(?:injur|scratch|rule violation|wrong team|misattribut|row.{0,20}mismatch|opposite side|does not match|away.{0,15}home|fabricat|ungrounded|grounding|relatively healthy|goals allowed|single bet)\b/i.test(
       fLower
     )
   ) {

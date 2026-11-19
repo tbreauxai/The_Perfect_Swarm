@@ -7,6 +7,7 @@ import { seatBudget } from './context/promptBudget.ts';
 import { parseGameHeaders, renderHeaders, filterPicksByCoverage, type GameHeader } from './context/gameHeaders.ts';
 import { resolveSelectedGameIds, filterHeadersByEventIds } from './context/selectedGames.ts';
 import { auditInjuryAttribution } from './tools/injuryAttribution.ts';
+import { auditClaimGrounding } from './tools/claimGrounding.ts';
 import {
     auditMarketCoverageAndRowBinding,
     isFalseMissingMoneylineCritique,
@@ -35,6 +36,7 @@ export interface LifecycleExecutionResult {
     criticFeedback?: string;
     computedRating: number;
     verifiedEventIds?: string[];
+    verifiedToolEvidence?: string;
 }
 
 export interface AnalysisLifecycleOptions {
@@ -97,6 +99,7 @@ export class AnalysisLifecycle {
         let attempt = 0;
         let currentProposal: any = null;
         let feedback = "";
+        let lastCombinedToolSummary = "";
         const verifiedEventIdsSet = new Set<string>(coveredEventIds || []);
 
         const effectiveCoveredEventIds: string[] | undefined =
@@ -116,7 +119,7 @@ export class AnalysisLifecycle {
             let executePrompt: string;
             if (feedback) {
                 const feedbackSummary = feedback.length > 2000 ? `${feedback.slice(0, 2000)}...` : feedback;
-                executePrompt = `${proposerPrompt}\n\n[Previous Verification Critique & Corrections Required (Attempt ${attempt - 1})]:\n${feedbackSummary}\n\nCRITICAL RETRY RULES:\n1. Output a clean, standalone final JSON response as if writing it for the first time. NEVER mention "a previous error", "this correction", or prior attempts in your summary or analysis.\n2. Fix any factual misstatements (such as Away vs. Home team status in "Away @ Home" headers, or references to teams not in the selected legs) so they strictly match the Game Slate headers and Analyst Reports.\n3. Do NOT flip an analyst's recommended pick side (e.g. keep the analyst's selected team/spread and simply describe its Away/Home status accurately) unless the critic identified a fatal injury on that team.\n4. INJURY ATTRIBUTION RULE: Every injury citation must match the team_id or team name in the tool result or board. Never assign a player to the opposing team.\n5. MARKET AND ROW RULES: Cite the exact row ID matching the picked team, market, and line; never assign a row to the opposite team or opposite side.`;
+                executePrompt = `${proposerPrompt}\n\n[Previous Verification Critique & Corrections Required (Attempt ${attempt - 1})]:\n${feedbackSummary}\n\nCRITICAL RETRY RULES:\n1. Output a clean, standalone final JSON response as if writing it for the first time. NEVER mention "a previous error", "this correction", or prior attempts in your summary or analysis.\n2. Fix any factual misstatements (such as Away vs. Home team status in "Away @ Home" headers, or references to teams not in the selected legs) so they strictly match the Game Slate headers and Analyst Reports.\n3. Do NOT flip an analyst's recommended pick side (e.g. keep the analyst's selected team/spread and simply describe its Away/Home status accurately) unless the critic identified a fatal injury on that team.\n4. INJURY ATTRIBUTION RULE: Every injury citation must match the team_id or team name in the tool result or board. Never assign a player to the opposing team.\n5. MARKET AND ROW RULES: Cite the exact row ID matching the picked team, market, and line; never assign a row to the opposite team or opposite side.\n6. GROUNDING: Do not cite a score, goals-allowed, or health claim unless it is in a successful tool result. If key players on that team are OUT, do not call the team relatively healthy. A vetoed leg is removed from picks. Do not rewrite it as a recommended single bet.`;
             } else {
                 executePrompt = proposerPrompt;
             }
@@ -383,6 +386,9 @@ export class AnalysisLifecycle {
 
                 const boardSourceForAudit = (rawData as any)?.fullBoard || rawData || slateHeaders || fallbackBoardText;
                 const combinedToolSummary = [toolResultsSummary, prePassedToolResults].filter(Boolean).join('\n\n');
+                if (combinedToolSummary) {
+                    lastCombinedToolSummary = combinedToolSummary;
+                }
                 const marketRowAudit = auditMarketCoverageAndRowBinding(
                     currentProposal,
                     combinedToolSummary,
@@ -393,9 +399,28 @@ export class AnalysisLifecycle {
                 if (!marketRowAudit.pass) {
                     verification.pass = false;
                     verification.feedback = marketRowAudit.feedback || 'Veto: Row side mismatch or missing market coverage.';
+                }
+
+                const vetoTexts = [
+                    ...(Array.isArray((rawData as any)?.criticVetoes) ? (rawData as any).criticVetoes : []),
+                    ...(attempt > 1 && feedback ? [feedback] : [])
+                ].filter((x): x is string => typeof x === 'string' && x.trim().length > 0);
+                const groundingAudit = auditClaimGrounding(
+                    currentProposal,
+                    combinedToolSummary,
+                    boardSourceForAudit,
+                    { headers: allParsedHeaders, vetoTexts }
+                );
+                if (!groundingAudit.pass) {
+                    verification.pass = false;
+                    const gMsg = groundingAudit.feedback || 'Veto (GROUNDING): Ungrounded claim or vetoed leg rewrite.';
+                    verification.feedback = (injuryAudit.pass && marketRowAudit.pass)
+                        ? gMsg
+                        : [verification.feedback, gMsg].filter(Boolean).join(' ');
                 } else if (
                     !verification.pass &&
                     injuryAudit.pass &&
+                    marketRowAudit.pass &&
                     isFalseMissingMoneylineCritique(
                         verification.feedback,
                         currentProposal,
@@ -454,7 +479,8 @@ export class AnalysisLifecycle {
                     finalProposal: currentProposal,
                     criticFeedback: verification.feedback,
                     computedRating,
-                    verifiedEventIds: Array.from(verifiedEventIdsSet)
+                    verifiedEventIds: Array.from(verifiedEventIdsSet),
+                    ...(lastCombinedToolSummary ? { verifiedToolEvidence: lastCombinedToolSummary } : {})
                 };
             } else {
                 feedback = verification.feedback || "Proposal failed verification without specific feedback.";
@@ -483,7 +509,8 @@ export class AnalysisLifecycle {
             finalProposal: currentProposal,
             criticFeedback: feedback,
             computedRating,
-            verifiedEventIds: Array.from(verifiedEventIdsSet)
+            verifiedEventIds: Array.from(verifiedEventIdsSet),
+            ...(lastCombinedToolSummary ? { verifiedToolEvidence: lastCombinedToolSummary } : {})
         };
     }
 }

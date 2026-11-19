@@ -1,0 +1,971 @@
+import { parseGameHeaders, getEventIdForPick, type GameHeader } from '../context/gameHeaders.ts';
+import {
+  ESPN_TEAMS,
+  extractAuthoritativeInjuries,
+  matchTeamByLabel,
+  normalizeSportHint,
+  type AuthoritativeInjury,
+  type EspnTeamEntry
+} from './injuryAttribution.ts';
+import { extractRowOptions, type RowOptionEntry } from './marketRowBinding.ts';
+
+export const GROUNDING_RULE = `GROUNDING:
+- Do not cite a score, goals-allowed, or health claim unless it is in a successful tool result.
+- If key players on that team are OUT, do not call the team relatively healthy.
+- A vetoed leg is removed from picks. Do not rewrite it as a recommended single bet.`;
+
+export interface GroundingAuditResult {
+  pass: boolean;
+  violations: string[];
+  flags: string[];
+  feedback?: string;
+}
+
+export interface VetoedLegTarget {
+  rowId?: string;
+  eventId?: string;
+  teamLabel?: string;
+  teamAliases: string[];
+  reason: string;
+}
+
+interface TeamDescriptor {
+  key: string;
+  label: string;
+  abbr?: string;
+  nameAliases: string[];
+  abbrAliases: string[];
+  allAliases: string[];
+  eventIds: string[];
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizeText(value: string): string {
+  return value.replace(/[\u2018\u2019]/g, "'").replace(/[\u201C\u201D]/g, '"').replace(/[\u2013\u2014]/g, '-');
+}
+
+/**
+ * Keeps only successful tool output lines, stripping error/timeout/not-fetched lines.
+ */
+export function extractSuccessfulEvidenceText(rawEvidence: string): string {
+  if (!rawEvidence || typeof rawEvidence !== 'string') return '';
+  const failedLineRegex =
+    /^\s*(?:\[[^\]]+\]:?\s*)?Error(?:\s+fetching\b[^:\n]*)?:|^\s*\[Not Fetched\]:|^\s*\[TOOL_(?:ERROR|TIMEOUT):|\b(?:rpc_failed(?:_\d+)?|rpc_network_error|supabase_not_configured|invalid_game_id|unresolved_game_id|tool_error|status=failed|success\s*:\s*false|"success"\s*:\s*false)\b|\[tool evidence omitted:\s*over budget\]/i;
+  const kept: string[] = [];
+  for (const rawLine of rawEvidence.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    if (failedLineRegex.test(line)) continue;
+    const cleaned = line
+      .replace(/\|\s*\[Not Fetched\]:.*$/i, '')
+      .replace(/\|\s*Error(?:\s+fetching\b[^:\n]*)?:.*$/i, '')
+      .trim();
+    if (cleaned) kept.push(cleaned);
+  }
+  return kept.join('\n');
+}
+
+function buildCleanEvidenceForNumericCheck(successfulEvidence: string): string {
+  if (!successfulEvidence) return '';
+  return normalizeText(successfulEvidence)
+    .replace(/event_id\s*=\s*[a-z0-9-]+/gi, ' ')
+    .replace(/\b(?:nhl|nba|nfl|mlb|ncaab|ncaaf|wnba|epl|mls)-[a-z0-9-]+\b/gi, ' ')
+    .replace(/\bR\d+\b/g, ' ')
+    .replace(/\b\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)?\b/g, ' ')
+    .replace(/\b(?:W-L|L5|L10|L20|record|ATS)\s*:?\s*\d{1,3}\s*-\s*\d{1,3}(?:\s*-\s*\d{1,3})?\b/gi, ' ')
+    .replace(/\bTotal\s*:\s*\d+(?:\.\d+)?\b/gi, ' ')
+    .replace(/\(\s*[+-]\d{3,4}\s*\)/g, ' ')
+    .replace(/\b(?:ml_home|ml_away)\s*(?:[:=]\s*|[A-Za-z.\s]{0,25}?)[+-]\d{3,4}\b/gi, ' ')
+    .replace(/\b(?:spread|puckline|runline)\s*(?:[:=]?\s*[A-Za-z.\s]{0,20})?[+-]\d+(?:\.\d+)?\b/gi, ' ')
+    .replace(/\b(?:team_id|player_id|game_id)\s*[:=]\s*["']?\d+["']?\b/gi, ' ')
+    .replace(/\bconf(?:idence)?\s*:?\s*\d+(?:\.\d+)?%?\b/gi, ' ');
+}
+
+const STAT_CONTEXT_KEYWORD_REGEX =
+  /(?:^|[^a-zA-Z0-9])(?:goals?|points?|pts|runs?|allowed|against|conceded|surrendered|scored|scoring|pf\/pa|pf|pa|ga|gf|ra|rf|gaa|ga\/g|ppg|oppg|opp_pts|last_game|score|team_score|opponent_score|home_score|away_score|h2h|boxscore|recent_scores)(?:$|[^a-zA-Z0-9])/i;
+
+function isNumericStatGrounded(valueStr: string, cleanEvidence: string): boolean {
+  if (!cleanEvidence) return false;
+  const escapedVal = escapeRegex(valueStr);
+  const tokenRegex = new RegExp(`(?<![\\d.])${escapedVal}(?![\\d.])`, 'g');
+  let m: RegExpExecArray | null;
+  while ((m = tokenRegex.exec(cleanEvidence)) !== null) {
+    const start = Math.max(0, m.index - 45);
+    const end = Math.min(cleanEvidence.length, m.index + valueStr.length + 45);
+    const window = cleanEvidence.slice(start, end);
+    if (STAT_CONTEXT_KEYWORD_REGEX.test(window)) {
+      return true;
+    }
+  }
+
+  // Remaining score pairs (e.g. H2H: ANA vs COL 2-8 (L) — W-L records were stripped)
+  const scorePairRegex = /\b(\d{1,3})\s*-\s*(\d{1,3})\b/g;
+  while ((m = scorePairRegex.exec(cleanEvidence)) !== null) {
+    if (m[1] === valueStr || m[2] === valueStr) return true;
+  }
+
+  // Slash average pairs (e.g. PF/PA 2.2 / 3.9)
+  const slashPairRegex = /\b(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)\b/g;
+  while ((m = slashPairRegex.exec(cleanEvidence)) !== null) {
+    if (m[1] === valueStr || m[2] === valueStr) return true;
+  }
+
+  return false;
+}
+
+function isScorePairGrounded(scoreA: string, scoreB: string, cleanEvidence: string): boolean {
+  if (!cleanEvidence) return false;
+  const aEsc = escapeRegex(scoreA);
+  const bEsc = escapeRegex(scoreB);
+  const directPair = new RegExp(`\\b(?:${aEsc}\\s*-\\s*${bEsc}|${bEsc}\\s*-\\s*${aEsc})\\b`);
+  if (directPair.test(cleanEvidence)) return true;
+
+  const jsonPair = new RegExp(
+    `(?:team_score|home_score)["']?\\s*[:=]\\s*${aEsc}[^\\n}]{0,60}(?:opponent_score|away_score)["']?\\s*[:=]\\s*${bEsc}|` +
+      `(?:team_score|home_score)["']?\\s*[:=]\\s*${bEsc}[^\\n}]{0,60}(?:opponent_score|away_score)["']?\\s*[:=]\\s*${aEsc}`,
+    'i'
+  );
+  return jsonPair.test(cleanEvidence);
+}
+
+/**
+ * Checks a single clause for ungrounded score / goals-allowed / points-allowed / runs-allowed claims.
+ */
+function findUngroundedFormClaimInClause(clause: string, cleanEvidence: string): string | null {
+  if (!clause || typeof clause !== 'string') return null;
+  const norm = normalizeText(clause);
+
+  const numberPatterns: RegExp[] = [
+    /\b(\d+(?:\.\d+)?)\s+(?:goals?|points?|pts|runs?)\s+(?:allowed|against|conceded|surrendered|given\s+up)\b/gi,
+    /\b(?:allowed|allowing|allows|gave\s+up|giving\s+up|gives\s+up|surrendered|surrendering|surrenders|conceded|conceding|concedes|yielded|yielding|yields)\s+(\d+(?:\.\d+)?)\s+(?:goals?|points?|pts|runs?)\b/gi,
+    /\b(?:scored|scoring|scores|netted|tallied|put\s+up|posted|held\s+to)\s+(\d+(?:\.\d+)?)\s+(?:goals?|points?|pts|runs?)\b/gi,
+    /\b(\d+(?:\.\d+)?)\s+(?:goals?|points?|pts|runs?)\s+(?:per\s+game|last\s+game|last\s+night|last\s+outing)\b/gi,
+    /\b(\d+(?:\.\d+)?)\s+(?:GAA|GA\/G|goals\s+against\s+avg)\b/gi
+  ];
+
+  for (const rx of numberPatterns) {
+    rx.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = rx.exec(norm)) !== null) {
+      const val = m[1];
+      if (!isNumericStatGrounded(val, cleanEvidence)) {
+        return `Ungrounded form/score claim ("${m[0].trim()}") not found in a successful tool result.`;
+      }
+    }
+  }
+
+  const scorePatterns: RegExp[] = [
+    /\b(?:lost|fell|dropped(?:\s+a)?|won|shut\s*out|beat(?:\s+[A-Za-z.]+){0,3}|defeated(?:\s+[A-Za-z.]+){0,3}|final(?:\s+score)?|score(?:d)?\s+of)\s+(?:by\s+)?(\d{1,3})\s*-\s*(\d{1,3})\b/gi,
+    /\b(\d{1,3})\s*-\s*(\d{1,3})\s+(?:loss(?!es)|win(?!s|\s+streak)|defeat|victory|blowout|rout|shutout|decision|final)\b/gi
+  ];
+
+  for (const rx of scorePatterns) {
+    rx.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = rx.exec(norm)) !== null) {
+      if (!isScorePairGrounded(m[1], m[2], cleanEvidence)) {
+        return `Ungrounded score claim ("${m[0].trim()}") not found in a successful tool result.`;
+      }
+    }
+  }
+
+  return null;
+}
+
+const POSITIVE_HEALTH_CLAIM_REGEX =
+  /\b(?:(?:relatively|mostly|largely|fairly|pretty|generally|completely|fully|entirely|remarkably|notably|comparatively)\s+healthy|healthy\s+at\s+(?:forward|forwards|defense|defensemen|guard|guards|wing|wings|center|goalie|goaltending|offense|backcourt|frontcourt|lineup|roster|skill\s+positions)|healthy\s+(?:roster|lineup|core|rotation|forward\s+group|forwards|defense|backcourt|frontcourt|starting\s+five|starting\s+lineup)|clean\s+bill\s+of\s+health|at\s+full\s+strength|full\s+health|injury[- ]free|no\s+(?:major|significant|key|notable)\s+injuries|intact\s+(?:roster|lineup|forward\s+group|core))\b/gi;
+
+const NEGATED_OR_POLICY_HEALTH_PREFIX_REGEX =
+  /\b(?:not|never|hardly|barely|far\s+from|isn't|aren't|is\s+not|are\s+not|no\s+longer|do\s+not\s+call|don't\s+call|cannot\s+be\s+called|can't\s+be\s+called)\b[^.;,]{0,30}$/i;
+
+const SPORTS_CONTEXT_REGEX =
+  /\b(?:forward|forwards|defense|defensemen|guard|guards|wing|wings|center|goalie|goaltending|netminder|qb|quarterback|backcourt|frontcourt|roster|lineup|starting\s+five|injur(?:y|ies|ed)|matchup|slate|parlay|moneyline|puckline|spread|nhl|nba|nfl|mlb|team|teams|game|games|bet|bets|leg|legs|pick|picks)\b/i;
+
+function descriptorFromEntry(entry: EspnTeamEntry, eventIds: string[] = []): TeamDescriptor {
+  const nameAliases = Array.from(
+    new Set(
+      [
+        entry.name.toLowerCase(),
+        entry.city.toLowerCase(),
+        entry.nickname.toLowerCase(),
+        ...entry.aliases.filter(a => a.length >= 4)
+      ].filter(Boolean)
+    )
+  );
+  const abbrAliases = Array.from(new Set([entry.abbr.toUpperCase()].filter(Boolean)));
+  return {
+    key: `${entry.sport}:${entry.abbr}`.toLowerCase(),
+    label: `${entry.name} (${entry.abbr})`,
+    abbr: entry.abbr,
+    nameAliases,
+    abbrAliases,
+    allAliases: Array.from(new Set([...nameAliases, entry.abbr.toLowerCase()])),
+    eventIds
+  };
+}
+
+function descriptorFromLabel(rawLabel: string, sportHint?: string, eventIds: string[] = []): TeamDescriptor | null {
+  const clean = rawLabel.trim();
+  if (!clean || /^(away|home|unknown|tbd)$/i.test(clean)) return null;
+  const entry = matchTeamByLabel(clean, sportHint);
+  if (entry) return descriptorFromEntry(entry, eventIds);
+  const lower = clean.toLowerCase();
+  const nameAliases = Array.from(new Set([lower, ...lower.split(/\s+/).filter(t => t.length >= 4)]));
+  const abbrMatch = clean.match(/\b([A-Z]{2,4})\b/);
+  return {
+    key: `raw:${lower}`,
+    label: clean,
+    abbr: abbrMatch ? abbrMatch[1] : undefined,
+    nameAliases,
+    abbrAliases: abbrMatch ? [abbrMatch[1]] : [],
+    allAliases: Array.from(new Set([...nameAliases, ...(abbrMatch ? [abbrMatch[1].toLowerCase()] : [])])),
+    eventIds
+  };
+}
+
+function buildTeamDescriptors(
+  headers: GameHeader[],
+  injuries: AuthoritativeInjury[],
+  hasSportsSignal: boolean
+): TeamDescriptor[] {
+  const map = new Map<string, TeamDescriptor>();
+  const addDesc = (desc: TeamDescriptor | null) => {
+    if (!desc) return;
+    const existing = map.get(desc.key);
+    if (!existing) {
+      map.set(desc.key, desc);
+      return;
+    }
+    for (const ev of desc.eventIds) {
+      if (ev && !existing.eventIds.includes(ev)) existing.eventIds.push(ev);
+    }
+  };
+
+  for (const h of headers) {
+    addDesc(descriptorFromLabel(h.away, h.sport, h.eventId ? [h.eventId] : []));
+    addDesc(descriptorFromLabel(h.home, h.sport, h.eventId ? [h.eventId] : []));
+  }
+  for (const inj of injuries) {
+    if (inj.teamEntry) {
+      addDesc(descriptorFromEntry(inj.teamEntry, inj.eventId ? [inj.eventId] : []));
+    } else {
+      addDesc(descriptorFromLabel(inj.teamLabel, inj.sport, inj.eventId ? [inj.eventId] : []));
+    }
+  }
+
+  if (map.size === 0 && hasSportsSignal) {
+    for (const entry of ESPN_TEAMS) {
+      addDesc(descriptorFromEntry(entry));
+    }
+  }
+  return Array.from(map.values());
+}
+
+interface TeamMentionMatch {
+  team: TeamDescriptor;
+  start: number;
+  end: number;
+}
+
+function findTeamMentionsInText(text: string, candidates: TeamDescriptor[]): TeamMentionMatch[] {
+  const mentions: TeamMentionMatch[] = [];
+  for (const team of candidates) {
+    for (const alias of team.nameAliases) {
+      if (alias.length < 3) continue;
+      const rx = new RegExp(`(?<![a-zA-Z0-9])${escapeRegex(alias)}(?![a-zA-Z0-9])`, 'gi');
+      let m: RegExpExecArray | null;
+      while ((m = rx.exec(text)) !== null) {
+        mentions.push({ team, start: m.index, end: m.index + m[0].length });
+      }
+    }
+    for (const abbr of team.abbrAliases) {
+      const rx = new RegExp(`(?<![a-zA-Z0-9])${escapeRegex(abbr)}(?![a-zA-Z0-9])`, 'g');
+      let m: RegExpExecArray | null;
+      while ((m = rx.exec(text)) !== null) {
+        mentions.push({ team, start: m.index, end: m.index + m[0].length });
+      }
+    }
+  }
+  return mentions;
+}
+
+function collectSuccessfulInjuryCoverage(successfulEvidence: string, candidates: TeamDescriptor[]): {
+  coveredEventIds: Set<string>;
+  coveredTeamKeys: Set<string>;
+  hasGlobalCoverage: boolean;
+} {
+  const coveredEventIds = new Set<string>();
+  const coveredTeamKeys = new Set<string>();
+  let hasGlobalCoverage = false;
+  if (!successfulEvidence) {
+    return { coveredEventIds, coveredTeamKeys, hasGlobalCoverage };
+  }
+
+  let currentEventId: string | undefined;
+  const lines = successfulEvidence.split(/\r?\n/);
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    const evMatch =
+      line.match(/^EVENT\s+([a-z0-9-]+)/i) ||
+      line.match(/^([a-z]{2,5}-\d+):/i);
+    if (evMatch) {
+      currentEventId = evMatch[1].trim();
+    }
+
+    const bracketInjuryMatch = line.match(/\[INJURY(?:\s*&\s*ROSTER\s*DELTA)?:\s*([a-z0-9-]+)[^\]]*\]/i);
+    if (bracketInjuryMatch) {
+      coveredEventIds.add(bracketInjuryMatch[1].trim());
+      for (const hit of findTeamMentionsInText(line, candidates)) {
+        coveredTeamKeys.add(hit.team.key);
+      }
+      continue;
+    }
+
+    if (/^(?:INJ:|Injuries:|-\s*\*\*Injury\s*\/\s*Roster\s*Delta\*\*:|\[INJURY\b)/i.test(line)) {
+      if (currentEventId) {
+        coveredEventIds.add(currentEventId);
+      } else {
+        hasGlobalCoverage = true;
+      }
+      for (const hit of findTeamMentionsInText(line, candidates)) {
+        coveredTeamKeys.add(hit.team.key);
+      }
+    }
+  }
+
+  return { coveredEventIds, coveredTeamKeys, hasGlobalCoverage };
+}
+
+function teamHasInjuryCoverage(
+  team: TeamDescriptor,
+  headers: GameHeader[],
+  coverage: { coveredEventIds: Set<string>; coveredTeamKeys: Set<string>; hasGlobalCoverage: boolean }
+): boolean {
+  if (coverage.coveredTeamKeys.has(team.key)) return true;
+  if (team.eventIds.some(id => coverage.coveredEventIds.has(id))) return true;
+  if (coverage.hasGlobalCoverage && headers.length <= 1) return true;
+  return false;
+}
+
+function getOutInjuriesForTeam(team: TeamDescriptor, outInjuries: AuthoritativeInjury[]): AuthoritativeInjury[] {
+  return outInjuries.filter(inj => {
+    if (inj.teamEntry && `${inj.teamEntry.sport}:${inj.teamEntry.abbr}`.toLowerCase() === team.key) {
+      return true;
+    }
+    if (team.abbr && inj.teamEntry?.abbr.toUpperCase() === team.abbr.toUpperCase()) {
+      return true;
+    }
+    return inj.teamAliases.some(a => team.allAliases.includes(a));
+  });
+}
+
+function findHealthViolationInClause(
+  clause: string,
+  candidates: TeamDescriptor[],
+  outInjuries: AuthoritativeInjury[],
+  headers: GameHeader[],
+  coverage: { coveredEventIds: Set<string>; coveredTeamKeys: Set<string>; hasGlobalCoverage: boolean },
+  selectedSideHint?: string
+): { flag: 'contradicted_health_claim' | 'ungrounded_health_claim'; reason: string } | null {
+  const norm = normalizeText(clause);
+  const subClauses = norm
+    .split(/(?<=[.!?])\s+|\n+|;\s+|\s+--\s+|,\s*(?=(?:while|whereas|but|although|though|yet)\b)|\s+(?=(?:while|whereas|but|although|though)\b)/i)
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  for (const sub of subClauses) {
+    POSITIVE_HEALTH_CLAIM_REGEX.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = POSITIVE_HEALTH_CLAIM_REGEX.exec(sub)) !== null) {
+      const matchIdx = m.index;
+      const matchEnd = matchIdx + m[0].length;
+      const prefix = sub.slice(Math.max(0, matchIdx - 45), matchIdx);
+      if (NEGATED_OR_POLICY_HEALTH_PREFIX_REGEX.test(prefix)) {
+        continue;
+      }
+
+      const mentions = findTeamMentionsInText(sub, candidates);
+      let targetTeams: TeamDescriptor[] = [];
+
+      if (/\bboth\s+teams\b|\bboth\s+sides\b|\beither\s+team\b/i.test(sub)) {
+        const uniq = new Map<string, TeamDescriptor>();
+        for (const hit of mentions) uniq.set(hit.team.key, hit.team);
+        if (uniq.size === 0 && headers.length === 1) {
+          for (const td of candidates) {
+            if (td.eventIds.includes(headers[0].eventId)) uniq.set(td.key, td);
+          }
+        }
+        targetTeams = Array.from(uniq.values());
+      } else if (mentions.length > 0) {
+        let best: TeamMentionMatch | null = null;
+        let bestScore = Infinity;
+        for (const hit of mentions) {
+          let score: number;
+          if (hit.end <= matchIdx) {
+            score = matchIdx - hit.end;
+          } else {
+            const between = sub.slice(matchEnd, hit.start);
+            const isDirectPrep = /^\s*(?:for|on|at|with)\s+(?:the\s+)?$/i.test(between);
+            score = (hit.start - matchEnd) + (isDirectPrep ? 0 : 40);
+          }
+          if (score < bestScore) {
+            bestScore = score;
+            best = hit;
+          }
+        }
+        if (best) targetTeams = [best.team];
+      } else if (selectedSideHint) {
+        const sideMentions = findTeamMentionsInText(selectedSideHint, candidates);
+        if (sideMentions.length > 0) {
+          targetTeams = [sideMentions[0].team];
+        }
+      }
+
+      if (targetTeams.length === 0) continue;
+
+      for (const team of targetTeams) {
+        const teamOuts = getOutInjuriesForTeam(team, outInjuries);
+        if (teamOuts.length > 0) {
+          const players = teamOuts.slice(0, 3).map(o => o.playerName).join(', ');
+          return {
+            flag: 'contradicted_health_claim',
+            reason: `Contradicted health claim ("${m[0].trim()}") for ${team.label}: ${players} ${teamOuts.length === 1 ? 'is' : 'are'} OUT.`
+          };
+        }
+        if (!teamHasInjuryCoverage(team, headers, coverage)) {
+          return {
+            flag: 'ungrounded_health_claim',
+            reason: `Ungrounded health claim ("${m[0].trim()}") for ${team.label}: no successful injury tool result covers this team.`
+          };
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+const LEG_VETO_SIGNAL_REGEX =
+  /\b(?:veto(?:ed|ing)?(?:\s+leg)?|reject(?:ed|ing)?(?:\s+leg)?|remov(?:ed|e)(?:\s+leg)?|drop(?:ped)?(?:\s+leg)?|disqualif(?:ied|y)|exclud(?:ed|e)|do\s+not\s+(?:bet|play|back|pick|recommend)|cannot\s+(?:bet|play|back|pick|recommend)|must\s+be\s+removed|fatal\s+injury|critical\s+roster\s+scratch|missing_(?:moneyline|spread|total)_coverage|missing\s+(?:moneyline|spread|total)\s+coverage)\b/i;
+
+const PURE_APPROVAL_CLAUSE_REGEX =
+  /\b(?:verified|approved|passed|valid|clean)\b/i;
+
+const SINGLE_BET_REC_REGEX =
+  /\b(?:single\s+(?:bet|play|wager|unit|leg|ticket)|as\s+a\s+single|standalone\s+(?:bet|play|wager|pick|single)|straight\s+(?:bet|play|wager)|recommended\s+single)\b/i;
+
+const NEGATED_SINGLE_BET_REGEX =
+  /\b(?:do\s+not|don't|never|avoid|skip|pass\s+on|no|not\s+(?:recommend(?:ed)?|play|bet|back|take|rewrite))\b[^.;]{0,45}\b(?:single\s+(?:bet|play|wager)|as\s+a\s+single|standalone|straight\s+(?:bet|play)|recommended\s+single)\b|\b(?:single\s+(?:bet|play|wager)|standalone\s+(?:bet|play))\b[^.;]{0,25}\b(?:not\s+recommended|avoided|rejected|removed|off\s+the\s+card)\b/i;
+
+const INLINE_VETO_REF_REGEX =
+  /\b(?:vetoed|rejected|dropped|removed|disqualified|excluded)\s+(?:leg|pick|side|parlay\s+leg)?\b/i;
+
+const EXPLICIT_VETO_PRONOUN_REGEX =
+  /\b(?:the|that)\s+(?:vetoed|dropped|rejected|removed)\s+leg\b/i;
+
+const VETO_PRONOUN_REF_REGEX =
+  /\b(?:it|that\s+leg|same\s+leg)\b/i;
+
+function resolveRowTeamDescriptor(
+  rowEntry: RowOptionEntry,
+  candidates: TeamDescriptor[]
+): TeamDescriptor | undefined {
+  const rowText = rowEntry.text;
+  const scoped = rowEntry.eventId
+    ? candidates.filter(c => c.eventIds.length === 0 || c.eventIds.includes(rowEntry.eventId!))
+    : candidates;
+  const hits = findTeamMentionsInText(rowText, scoped.length > 0 ? scoped : candidates);
+  if (hits.length > 0) return hits[0].team;
+  return undefined;
+}
+
+/**
+ * Extracts vetoed leg targets (row IDs and team aliases) from Critic veto messages.
+ */
+export function extractVetoedLegTargets(
+  vetoTexts: string[],
+  headers: GameHeader[],
+  rowMap: Map<string, RowOptionEntry>,
+  candidates?: TeamDescriptor[]
+): VetoedLegTarget[] {
+  if (!Array.isArray(vetoTexts) || vetoTexts.length === 0) return [];
+  const teamPool = candidates || buildTeamDescriptors(headers, [], true);
+  const targets: VetoedLegTarget[] = [];
+  const seenKeys = new Set<string>();
+
+  for (const rawVeto of vetoTexts) {
+    if (!rawVeto || typeof rawVeto !== 'string') continue;
+    const clauses = normalizeText(rawVeto).split(
+      /(?<=[.!?])\s+|\n+|;\s+|,\s*(?=(?:while|whereas|but)\b)/i
+    );
+    for (const clause of clauses) {
+      const trimmed = clause.trim();
+      if (!trimmed) continue;
+      if (/\brow\s+side\s+mismatch\b|\brow_side_mismatch\b/i.test(trimmed)) continue;
+      if (/^Veto\s*\((?:GROUNDING|INJURY ATTRIBUTION RULE)\):\s*(?:Ungrounded|Contradicted|Injury misattribution)\b/i.test(trimmed) && !/\bmust\s+be\s+removed\b/i.test(trimmed)) {
+        continue;
+      }
+      if (!LEG_VETO_SIGNAL_REGEX.test(trimmed)) continue;
+      if (PURE_APPROVAL_CLAUSE_REGEX.test(trimmed) && !/\b(?:veto|reject|remove|drop|fatal|missing)\b/i.test(trimmed)) {
+        continue;
+      }
+
+      const rowMatches = trimmed.match(/\bR\d+\b/gi) || [];
+      const rowIds = Array.from(new Set(rowMatches.map(r => r.toUpperCase())));
+      if (rowIds.length > 0) {
+        for (const rowId of rowIds) {
+          const rowEntry = rowMap.get(rowId);
+          const team = rowEntry ? resolveRowTeamDescriptor(rowEntry, teamPool) : undefined;
+          const key = `row:${rowId}`;
+          if (seenKeys.has(key)) continue;
+          seenKeys.add(key);
+          targets.push({
+            rowId,
+            eventId: rowEntry?.eventId,
+            teamLabel: team?.label,
+            teamAliases: team ? team.allAliases : [],
+            reason: trimmed.slice(0, 140)
+          });
+        }
+        continue;
+      }
+
+      // No row ID: ignore trailing opponent after ", not <Opp>" / "vs <Opp>" / "@ <Opp>"
+      const primarySpan = trimmed.split(/,\s*not\s+|\binstead\s+of\b|\b(?:vs\.?|versus|@|against)\b/i)[0] || trimmed;
+      const mentions = findTeamMentionsInText(primarySpan, teamPool);
+      const uniqueTeams = new Map<string, TeamDescriptor>();
+      for (const m of mentions) uniqueTeams.set(m.team.key, m.team);
+      for (const team of uniqueTeams.values()) {
+        const key = `team:${team.key}`;
+        if (seenKeys.has(key)) continue;
+        seenKeys.add(key);
+        targets.push({
+          eventId: team.eventIds[0],
+          teamLabel: team.label,
+          teamAliases: team.allAliases,
+          reason: trimmed.slice(0, 140)
+        });
+      }
+    }
+  }
+
+  return targets;
+}
+
+function textMatchesAliases(text: string, aliases: string[]): boolean {
+  for (const alias of aliases) {
+    if (alias.length <= 4 && /^[a-z]+$/.test(alias)) {
+      const upperRx = new RegExp(`(?<![a-zA-Z0-9])${escapeRegex(alias.toUpperCase())}(?![a-zA-Z0-9])`);
+      if (upperRx.test(text)) return true;
+      if (alias.length === 4) {
+        const rx = new RegExp(`(?<![a-zA-Z0-9])${escapeRegex(alias)}(?![a-zA-Z0-9])`, 'i');
+        if (rx.test(text)) return true;
+      }
+    } else {
+      const rx = new RegExp(`(?<![a-zA-Z0-9])${escapeRegex(alias)}(?![a-zA-Z0-9])`, 'i');
+      if (rx.test(text)) return true;
+    }
+  }
+  return false;
+}
+
+function pickMatchesVetoedTarget(pick: any, target: VetoedLegTarget): boolean {
+  const rowId = typeof pick?.row === 'string' && /^R\d+$/i.test(pick.row.trim())
+    ? pick.row.trim().toUpperCase()
+    : (typeof pick?.id === 'string' && /^R\d+$/i.test(pick.id.trim()) ? pick.id.trim().toUpperCase() : undefined);
+  const sideText = [pick?.side, pick?.pick, pick?.selection, pick?.team, pick?.note, typeof pick === 'string' ? pick : '']
+    .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+    .join(' ')
+    .trim();
+
+  if (target.rowId) {
+    if (rowId && rowId === target.rowId) return true;
+    if (new RegExp(`\\b${escapeRegex(target.rowId)}\\b`, 'i').test(sideText)) return true;
+    if (!rowId && target.teamAliases.length > 0 && textMatchesAliases(sideText, target.teamAliases)) {
+      return true;
+    }
+    return false;
+  }
+
+  if (target.teamAliases.length > 0 && textMatchesAliases(sideText, target.teamAliases)) {
+    return true;
+  }
+  return false;
+}
+
+function findSingleBetRewriteViolationInClause(
+  clause: string,
+  vetoedTargets: VetoedLegTarget[],
+  priorSubWasVetoedSubject: boolean
+): { violation: string | null; endsWithVetoedSubject: boolean } {
+  const norm = normalizeText(clause);
+  const subClauses = norm
+    .split(/,\s*(?=(?:so|leaving|making|which\s+leaves|instead|after|while|whereas)\b)|\s+(?:after|because|since|while|whereas)\s+|;\s+/i)
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  let lastSubWasVetoed = priorSubWasVetoedSubject;
+  for (const sub of subClauses) {
+    const subHasVetoTarget = vetoedTargets.some(
+      t =>
+        (t.rowId && new RegExp(`\\b${escapeRegex(t.rowId)}\\b`, 'i').test(sub)) ||
+        (t.teamAliases.length > 0 && textMatchesAliases(sub, t.teamAliases))
+    );
+    const subHasInlineVeto = INLINE_VETO_REF_REGEX.test(sub);
+    const subIsSingleBetRec = SINGLE_BET_REC_REGEX.test(sub) && !NEGATED_SINGLE_BET_REGEX.test(sub);
+
+    if (subIsSingleBetRec) {
+      if (subHasVetoTarget) {
+        const matchedTarget = vetoedTargets.find(
+          t =>
+            (t.rowId && new RegExp(`\\b${escapeRegex(t.rowId)}\\b`, 'i').test(sub)) ||
+            (t.teamAliases.length > 0 && textMatchesAliases(sub, t.teamAliases))
+        );
+        const label = matchedTarget?.rowId || matchedTarget?.teamLabel || 'vetoed leg';
+        return {
+          violation: `Vetoed leg (${label}) was rewritten as a recommended single bet.`,
+          endsWithVetoedSubject: true
+        };
+      }
+
+      if (subHasInlineVeto || EXPLICIT_VETO_PRONOUN_REGEX.test(sub) || (lastSubWasVetoed && VETO_PRONOUN_REF_REGEX.test(sub))) {
+        return {
+          violation: `Vetoed leg was rewritten as a recommended single bet ("${sub.slice(0, 100)}").`,
+          endsWithVetoedSubject: true
+        };
+      }
+    }
+
+    if (subHasVetoTarget || subHasInlineVeto) {
+      lastSubWasVetoed = true;
+    } else if (!VETO_PRONOUN_REF_REGEX.test(sub)) {
+      lastSubWasVetoed = false;
+    }
+  }
+
+  return { violation: null, endsWithVetoedSubject: lastSubWasVetoed };
+}
+
+/**
+ * Deterministically audits a proposal or analyst report for:
+ *  1) Ungrounded score / goals-allowed claims not in successful tool results
+ *  2) Contradicted or ungrounded positive team health claims
+ *  3) Vetoed legs retained in picks or rewritten as recommended single bets
+ */
+export function auditClaimGrounding(
+  proposal: any,
+  evidenceText: string,
+  slateText?: string,
+  options?: { headers?: GameHeader[]; vetoTexts?: string[] }
+): GroundingAuditResult {
+  if (!proposal) return { pass: true, violations: [], flags: [] };
+
+  const headers = options?.headers && options.headers.length > 0
+    ? options.headers
+    : parseGameHeaders(slateText);
+  const rowMap = extractRowOptions([slateText], headers);
+
+  const successfulEvidence = extractSuccessfulEvidenceText(evidenceText);
+  const cleanEvidence = buildCleanEvidenceForNumericCheck(successfulEvidence);
+
+  const rawProposalText = typeof proposal === 'string' ? proposal : JSON.stringify(proposal);
+  const hasSportsSignal =
+    headers.length > 0 ||
+    SPORTS_CONTEXT_REGEX.test(rawProposalText) ||
+    SPORTS_CONTEXT_REGEX.test(slateText || '') ||
+    Boolean(successfulEvidence);
+
+  const allInjuries = extractAuthoritativeInjuries(successfulEvidence, slateText);
+  const outInjuries = allInjuries.filter(inj => /^(?:OUT|IR|INJURED\s+RESERVE|SUSPENDED)$/i.test(inj.status));
+  const candidates = buildTeamDescriptors(headers, outInjuries, hasSportsSignal);
+  const injuryCoverage = collectSuccessfulInjuryCoverage(successfulEvidence, candidates);
+  const vetoedTargets = extractVetoedLegTargets(options?.vetoTexts || [], headers, rowMap, candidates);
+
+  const violations: string[] = [];
+  const flags: string[] = [];
+  const addViolation = (flag: string, msg: string) => {
+    if (!flags.includes(flag)) flags.push(flag);
+    if (!violations.includes(msg)) violations.push(msg);
+  };
+
+  if (typeof proposal === 'object' && Array.isArray(proposal.picks) && vetoedTargets.length > 0) {
+    for (const pk of proposal.picks) {
+      const matched = vetoedTargets.find(t => pickMatchesVetoedTarget(pk, t));
+      if (matched) {
+        addViolation(
+          'vetoed_leg_kept',
+          `Vetoed leg (${matched.rowId || matched.teamLabel || 'pick'}) must be removed from picks.`
+        );
+      }
+    }
+  }
+
+  let priorSubWasVetoed = false;
+  const checkText = (text: unknown, sideHint?: string) => {
+    if (typeof text !== 'string' || !text.trim()) return;
+    priorSubWasVetoed = false;
+    const clauses = text.split(/(?<=[.!?])\s+|\n+|;\s+/);
+    for (const clause of clauses) {
+      if (!clause.trim()) continue;
+
+      const formErr = findUngroundedFormClaimInClause(clause, cleanEvidence);
+      if (formErr) addViolation('ungrounded_form_claim', formErr);
+
+      const healthErr = findHealthViolationInClause(
+        clause,
+        candidates,
+        outInjuries,
+        headers,
+        injuryCoverage,
+        sideHint
+      );
+      if (healthErr) addViolation(healthErr.flag, healthErr.reason);
+
+      const singleBetRes = findSingleBetRewriteViolationInClause(clause, vetoedTargets, priorSubWasVetoed);
+      priorSubWasVetoed = singleBetRes.endsWithVetoedSubject;
+      if (singleBetRes.violation) addViolation('vetoed_leg_rewritten', singleBetRes.violation);
+    }
+  };
+
+  if (typeof proposal === 'string') {
+    checkText(proposal);
+  } else if (typeof proposal === 'object') {
+    checkText(proposal.summary);
+    checkText(proposal.analysis);
+    checkText(proposal.reason);
+    checkText(proposal.rationale);
+    checkText(proposal.conclusion);
+
+    if (Array.isArray(proposal.insights)) {
+      for (const ins of proposal.insights) checkText(ins);
+    }
+    if (Array.isArray(proposal.anomalies)) {
+      for (const anom of proposal.anomalies) checkText(anom);
+    }
+    if (Array.isArray(proposal.picks)) {
+      for (const pk of proposal.picks) {
+        if (!pk || typeof pk !== 'object') {
+          checkText(pk);
+          continue;
+        }
+        const sideHint = String(pk.side || pk.pick || pk.selection || pk.team || '');
+        checkText(pk.reason, sideHint);
+        checkText(pk.rationale, sideHint);
+        checkText(pk.edge, sideHint);
+        checkText(pk.note, sideHint);
+        checkText(pk.description, sideHint);
+        checkText(pk.claim, sideHint);
+        if (Array.isArray(pk.reasons)) {
+          for (const r of pk.reasons) checkText(r, sideHint);
+        }
+      }
+    }
+    if (Array.isArray(proposal.scorecards)) {
+      for (const sc of proposal.scorecards) {
+        if (!sc || typeof sc !== 'object') continue;
+        const sideHint = String(sc.pick || sc.side || '');
+        checkText(sc.note, sideHint);
+        checkText(sc.reason, sideHint);
+        checkText(sc.summary, sideHint);
+        if (Array.isArray(sc.reasons)) {
+          for (const r of sc.reasons) checkText(r, sideHint);
+        }
+      }
+    }
+    if (proposal.scorecard && typeof proposal.scorecard === 'object') {
+      const sc = proposal.scorecard;
+      const sideHint = String(sc.pick || sc.side || '');
+      checkText(sc.note, sideHint);
+      checkText(sc.reason, sideHint);
+      checkText(sc.summary, sideHint);
+    }
+    if (Array.isArray(proposal.components)) {
+      for (const comp of proposal.components) {
+        if (!comp || typeof comp !== 'object' || !comp.props) continue;
+        if (comp.type === 'InsightList' && Array.isArray(comp.props.insights)) {
+          for (const ins of comp.props.insights) {
+            checkText(typeof ins === 'string' ? ins : ins?.message);
+          }
+        } else if (comp.type === 'MetricCard' && typeof comp.props.subtitle === 'string') {
+          checkText(comp.props.subtitle);
+        }
+      }
+    }
+  }
+
+  if (violations.length > 0) {
+    return {
+      pass: false,
+      violations,
+      flags,
+      feedback: `Veto (GROUNDING): ${violations.join(' ')}`
+    };
+  }
+
+  return { pass: true, violations: [], flags: [] };
+}
+
+/**
+ * Deterministically removes vetoed legs from picks/scorecards and strips ungrounded form/score/health
+ * claims and vetoed single-bet rewrites from report prose fields.
+ */
+export function sanitizeUngroundedClaims<T extends Record<string, any>>(
+  report: T,
+  evidenceText: string,
+  slateText?: string,
+  options?: { headers?: GameHeader[]; vetoTexts?: string[] }
+): T {
+  if (!report || typeof report !== 'object') return report;
+
+  const headers = options?.headers && options.headers.length > 0
+    ? options.headers
+    : parseGameHeaders(slateText);
+  const rowMap = extractRowOptions([slateText], headers);
+
+  const successfulEvidence = extractSuccessfulEvidenceText(evidenceText);
+  const cleanEvidence = buildCleanEvidenceForNumericCheck(successfulEvidence);
+
+  const rawReportText = JSON.stringify(report);
+  const hasSportsSignal =
+    headers.length > 0 ||
+    SPORTS_CONTEXT_REGEX.test(rawReportText) ||
+    SPORTS_CONTEXT_REGEX.test(slateText || '') ||
+    Boolean(successfulEvidence);
+
+  const allInjuries = extractAuthoritativeInjuries(successfulEvidence, slateText);
+  const outInjuries = allInjuries.filter(inj => /^(?:OUT|IR|INJURED\s+RESERVE|SUSPENDED)$/i.test(inj.status));
+  const candidates = buildTeamDescriptors(headers, outInjuries, hasSportsSignal);
+  const injuryCoverage = collectSuccessfulInjuryCoverage(successfulEvidence, candidates);
+  const vetoedTargets = extractVetoedLegTargets(options?.vetoTexts || [], headers, rowMap, candidates);
+
+  const sentenceHasViolation = (sentence: string, sideHint?: string, priorSubWasVetoed: boolean = false): { hasViolation: boolean; endsWithVetoedSubject: boolean } => {
+    if (!sentence.trim()) return { hasViolation: false, endsWithVetoedSubject: priorSubWasVetoed };
+    const singleRes = findSingleBetRewriteViolationInClause(sentence, vetoedTargets, priorSubWasVetoed);
+    const hasViolation = Boolean(
+      findUngroundedFormClaimInClause(sentence, cleanEvidence) ||
+      findHealthViolationInClause(sentence, candidates, outInjuries, headers, injuryCoverage, sideHint) ||
+      singleRes.violation
+    );
+    return { hasViolation, endsWithVetoedSubject: singleRes.endsWithVetoedSubject };
+  };
+
+  const cleanTextField = (text: string, sideHint?: string): string => {
+    const sentences = text.split(/(?<=[.!?])\s+|\n+/);
+    const kept: string[] = [];
+    let priorSubWasVetoed = false;
+    for (const s of sentences) {
+      const checkRes = sentenceHasViolation(s, sideHint, priorSubWasVetoed);
+      const prevVetoFlag = priorSubWasVetoed;
+      priorSubWasVetoed = checkRes.endsWithVetoedSubject;
+      if (!checkRes.hasViolation) {
+        kept.push(s);
+        continue;
+      }
+      // Try removing an offending parenthetical or contrast sub-clause first
+      const withoutParen = s.replace(/\s*\([^)]*\)/g, '').replace(/\s{2,}/g, ' ').trim();
+      if (withoutParen && withoutParen !== s.trim() && !sentenceHasViolation(withoutParen, sideHint, prevVetoFlag).hasViolation) {
+        kept.push(withoutParen);
+        continue;
+      }
+      // Try dropping only offending comma/semicolon sub-clauses
+      const subParts = s.split(/;\s+|,\s*(?=(?:while|whereas|but|although|though|so|yet)\b)/i);
+      if (subParts.length > 1) {
+        let subPrior = prevVetoFlag;
+        const cleanSubs: string[] = [];
+        for (const part of subParts) {
+          const partRes = sentenceHasViolation(part, sideHint, subPrior);
+          subPrior = partRes.endsWithVetoedSubject;
+          if (!partRes.hasViolation) cleanSubs.push(part);
+        }
+        const rejoined = cleanSubs.join(', ').trim();
+        if (rejoined && !sentenceHasViolation(rejoined, sideHint, prevVetoFlag).hasViolation) {
+          kept.push(rejoined);
+        }
+      }
+    }
+    return kept.join(' ').trim();
+  };
+
+  const rep = report as Record<string, any>;
+
+  if (Array.isArray(rep.picks)) {
+    if (vetoedTargets.length > 0) {
+      rep.picks = rep.picks.filter((pk: any) => !vetoedTargets.some(t => pickMatchesVetoedTarget(pk, t)));
+    }
+    for (const pk of rep.picks) {
+      if (!pk || typeof pk !== 'object') continue;
+      const sideHint = String(pk.side || pk.pick || pk.selection || pk.team || '');
+      for (const field of ['reason', 'rationale', 'edge', 'note', 'description', 'claim'] as const) {
+        if (typeof pk[field] === 'string' && pk[field].trim()) {
+          pk[field] = cleanTextField(pk[field], sideHint);
+        }
+      }
+      if (Array.isArray(pk.reasons)) {
+        pk.reasons = pk.reasons
+          .map((r: any) => (typeof r === 'string' ? cleanTextField(r, sideHint) : r))
+          .filter((r: any) => typeof r !== 'string' || r.trim().length > 0);
+      }
+    }
+  }
+
+  if (Array.isArray(rep.scorecards)) {
+    if (vetoedTargets.length > 0) {
+      rep.scorecards = rep.scorecards.filter((sc: any) => !vetoedTargets.some(t => pickMatchesVetoedTarget(sc, t)));
+    }
+    for (const sc of rep.scorecards) {
+      if (!sc || typeof sc !== 'object') continue;
+      const sideHint = String(sc.pick || sc.side || '');
+      for (const field of ['note', 'reason', 'summary'] as const) {
+        if (typeof sc[field] === 'string' && sc[field].trim()) {
+          sc[field] = cleanTextField(sc[field], sideHint);
+        }
+      }
+    }
+  }
+
+  for (const field of ['summary', 'analysis', 'reason', 'rationale', 'conclusion'] as const) {
+    if (typeof rep[field] === 'string' && rep[field].trim()) {
+      rep[field] = cleanTextField(rep[field]);
+    }
+  }
+
+  if (Array.isArray(rep.insights)) {
+    rep.insights = rep.insights
+      .map((ins: any) => (typeof ins === 'string' ? cleanTextField(ins) : ins))
+      .filter((ins: any) => typeof ins !== 'string' || ins.trim().length > 0);
+  }
+  if (Array.isArray(rep.anomalies)) {
+    rep.anomalies = rep.anomalies
+      .map((anom: any) => (typeof anom === 'string' ? cleanTextField(anom) : anom))
+      .filter((anom: any) => typeof anom !== 'string' || anom.trim().length > 0);
+  }
+  if (Array.isArray(rep.components)) {
+    for (const comp of rep.components) {
+      if (!comp || typeof comp !== 'object' || !comp.props) continue;
+      if (comp.type === 'InsightList' && Array.isArray(comp.props.insights)) {
+        comp.props.insights = comp.props.insights
+          .map((ins: any) => {
+            if (typeof ins === 'string') return cleanTextField(ins);
+            if (ins && typeof ins === 'object' && typeof ins.message === 'string') {
+              return { ...ins, message: cleanTextField(ins.message) };
+            }
+            return ins;
+          })
+          .filter((ins: any) => {
+            if (typeof ins === 'string') return ins.trim().length > 0;
+            if (ins && typeof ins === 'object' && typeof ins.message === 'string') return ins.message.trim().length > 0;
+            return true;
+          });
+      } else if (comp.type === 'MetricCard' && typeof comp.props.subtitle === 'string') {
+        comp.props.subtitle = cleanTextField(comp.props.subtitle);
+      }
+    }
+  }
+
+  return report;
+}

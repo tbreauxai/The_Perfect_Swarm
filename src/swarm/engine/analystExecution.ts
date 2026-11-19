@@ -34,6 +34,7 @@ import { GameQueryCache } from '../cache/gameQueryCache.ts';
 import { executeToolWithCacheAndTimeout } from './triageExecutor.ts';
 import { seatBudget } from '../context/promptBudget.ts';
 import { auditInjuryAttribution, sanitizeMisattributedPicksAndText } from '../tools/injuryAttribution.ts';
+import { auditClaimGrounding, sanitizeUngroundedClaims } from '../tools/claimGrounding.ts';
 import {
     auditMarketCoverageAndRowBinding,
     isFalseMissingMoneylineCritique,
@@ -508,11 +509,26 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                 (resData as any).marketToolRecords = marketToolRecords;
             }
 
+            const successfulToolEvidence = [
+                prefetchedInjurySummary,
+                ...baseEvidenceItems.map(e => e.summary),
+                ...(scorecardReport && typeof (resData as any).toolEvidence === 'string' ? [(resData as any).toolEvidence] : []),
+                config.curatedDossier || ''
+            ].filter(Boolean).join('\n');
+
             if (!isCritic && combinedInjuryEvidence) {
                 sanitizeMisattributedPicksAndText(resData as any, combinedInjuryEvidence, renderedHeadersText);
             }
             if (!isCritic) {
                 sanitizeRowMismatchedPicks(resData as any, fullRawSource || renderedHeadersText, mergedHeadersForRowCheck);
+                if (mergedHeadersForRowCheck.length > 0 || Boolean(successfulToolEvidence)) {
+                    sanitizeUngroundedClaims(
+                        resData as any,
+                        successfulToolEvidence,
+                        fullRawSource || renderedHeadersText,
+                        { headers: mergedHeadersForRowCheck }
+                    );
+                }
             } else if (isCritic && proposedAuditContext?.summaryText) {
                 let injuryAuditPassed = true;
                 if (combinedInjuryEvidence) {
@@ -538,6 +554,24 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                     }
                     : { summary: proposedAuditContext.summaryText };
 
+                const proposerSuccessfulEvidence = Array.isArray(proposedAuditContext.proposerReports)
+                    ? proposedAuditContext.proposerReports
+                        .flatMap((r: any) => Array.isArray(r?.toolEvidenceItems) ? r.toolEvidenceItems.map((item: any) => item?.summary || '') : [])
+                        .filter(Boolean)
+                        .join('\n')
+                    : '';
+                const criticGroundingEvidence = [successfulToolEvidence, proposerSuccessfulEvidence].filter(Boolean).join('\n');
+                const groundingTargetProposal = Array.isArray(proposedAuditContext.proposerReports) && proposedAuditContext.proposerReports.length > 0
+                    ? {
+                        ...auditTargetProposal,
+                        analysis: proposedAuditContext.proposerReports
+                            .map((r: any) => (typeof r?.analysis === 'string' ? r.analysis : ''))
+                            .filter(Boolean)
+                            .join(' '),
+                        insights: proposedAuditContext.proposerReports.flatMap((r: any) => Array.isArray(r?.insights) ? r.insights : [])
+                    }
+                    : auditTargetProposal;
+
                 const marketRowAudit = auditMarketCoverageAndRowBinding(
                     auditTargetProposal,
                     marketEvidenceText,
@@ -548,15 +582,37 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                 if (!marketRowAudit.pass) {
                     (resData as any).pass = false;
                     const msg = marketRowAudit.feedback || 'Veto: Row side mismatch or missing market coverage.';
-                    (resData as any).summary = msg;
-                    (resData as any).analysis = msg;
+                    const nextSummary = injuryAuditPassed ? msg : `${(resData as any).summary} ${msg}`.trim();
+                    (resData as any).summary = nextSummary;
+                    (resData as any).analysis = nextSummary;
                     if (!Array.isArray((resData as any).flags)) (resData as any).flags = [];
                     for (const f of marketRowAudit.flags) {
+                        if (!(resData as any).flags.includes(f)) (resData as any).flags.push(f);
+                    }
+                }
+
+                const groundingAudit = auditClaimGrounding(
+                    groundingTargetProposal,
+                    criticGroundingEvidence,
+                    fullRawSource || renderedHeadersText,
+                    { headers: mergedHeadersForRowCheck }
+                );
+                const groundingAuditPassed = groundingAudit.pass;
+                if (!groundingAuditPassed) {
+                    (resData as any).pass = false;
+                    const gMsg = groundingAudit.feedback || 'Veto (GROUNDING): Ungrounded form or health claim.';
+                    const hasPriorVeto = !injuryAuditPassed || !marketRowAudit.pass;
+                    const nextSummary = hasPriorVeto ? `${(resData as any).summary} ${gMsg}`.trim() : gMsg;
+                    (resData as any).summary = nextSummary;
+                    (resData as any).analysis = nextSummary;
+                    if (!Array.isArray((resData as any).flags)) (resData as any).flags = [];
+                    for (const f of groundingAudit.flags) {
                         if (!(resData as any).flags.includes(f)) (resData as any).flags.push(f);
                     }
                 } else if (
                     (resData as any).pass === false &&
                     injuryAuditPassed &&
+                    marketRowAudit.pass &&
                     isFalseMissingMoneylineCritique(
                         String((resData as any).verdict || (resData as any).summary || (resData as any).analysis || ''),
                         auditTargetProposal,
