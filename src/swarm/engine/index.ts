@@ -479,6 +479,13 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                 onStage: params.onStage
                             });
                         } else if (deepAnalysisRequested && (analysts.length > 0 || dedicatedCriticAgent)) {
+                            const marketToolRecords = flatReports
+                                .flatMap((r: any) =>
+                                    Array.isArray(r?.marketToolRecords) && r.marketToolRecords.length > 0
+                                        ? r.marketToolRecords
+                                        : (Array.isArray(r?.toolEvidenceItems) ? r.toolEvidenceItems : [])
+                                )
+                                .filter((item: any) => item && item.tool === 'get_market_movement' && item.eventId);
                             const verificationResult = await runDeepAnalysisVerification({
                                 task,
                                 rawInput: profilingResult.rawInput,
@@ -493,6 +500,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                 coveredEventIds: coveredEventIdsList,
                                 toolRegistry,
                                 queryCache: globalGameQueryCache,
+                                ...(marketToolRecords.length > 0 ? { marketToolRecords } : {}),
                                 ...(verifierToolResults ? { toolResults: verifierToolResults } : {}),
                                 ...(synthesisResult.appComputedCounts ? { appComputedCounts: synthesisResult.appComputedCounts } : {})
                             });

@@ -15,6 +15,7 @@ import { seatBudget } from '../context/promptBudget.ts';
 import { parseGameHeaders, renderHeaders, filterPicksByCoverage } from '../context/gameHeaders.ts';
 import { partitionTaskAndContract } from './analystExecution.ts';
 import { sanitizeMisattributedPicksAndText } from '../tools/injuryAttribution.ts';
+import { sanitizeRowMismatchedPicks } from '../tools/marketRowBinding.ts';
 
 export interface SynthesisPipelineParams {
     task: string;
@@ -492,6 +493,7 @@ export async function executeManagerSynthesis(
 
     if (finalResult && typeof finalResult === 'object') {
         sanitizeMisattributedPicksAndText(finalResult, safeDynamicPrompt, safeDynamicPrompt);
+        sanitizeRowMismatchedPicks(finalResult, safeDynamicPrompt);
     }
 
     if (coveredEventIds && Array.isArray(finalResult?.picks)) {

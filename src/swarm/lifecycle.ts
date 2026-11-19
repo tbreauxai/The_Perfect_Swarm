@@ -4,9 +4,14 @@ import { parseJsonSafe, guardVerificationResult } from './parser.ts';
 import { redactForLog } from './parser/responseGuards.ts';
 import { groqPromptCharCap } from './providers/groq.ts';
 import { seatBudget } from './context/promptBudget.ts';
-import { parseGameHeaders, renderHeaders, filterPicksByCoverage } from './context/gameHeaders.ts';
+import { parseGameHeaders, renderHeaders, filterPicksByCoverage, type GameHeader } from './context/gameHeaders.ts';
 import { resolveSelectedGameIds, filterHeadersByEventIds } from './context/selectedGames.ts';
 import { auditInjuryAttribution } from './tools/injuryAttribution.ts';
+import {
+    auditMarketCoverageAndRowBinding,
+    isFalseMissingMoneylineCritique,
+    type MarketToolRecord
+} from './tools/marketRowBinding.ts';
 import type { ToolRegistry } from './tools/registry.ts';
 import { GameQueryCache } from './cache/gameQueryCache.ts';
 import { executeToolWithCacheAndTimeout } from './engine/triageExecutor.ts';
@@ -111,7 +116,7 @@ export class AnalysisLifecycle {
             let executePrompt: string;
             if (feedback) {
                 const feedbackSummary = feedback.length > 2000 ? `${feedback.slice(0, 2000)}...` : feedback;
-                executePrompt = `${proposerPrompt}\n\n[Previous Verification Critique & Corrections Required (Attempt ${attempt - 1})]:\n${feedbackSummary}\n\nCRITICAL RETRY RULES:\n1. Output a clean, standalone final JSON response as if writing it for the first time. NEVER mention "a previous error", "this correction", or prior attempts in your summary or analysis.\n2. Fix any factual misstatements (such as Away vs. Home team status in "Away @ Home" headers, or references to teams not in the selected legs) so they strictly match the Game Slate headers and Analyst Reports.\n3. Do NOT flip an analyst's recommended pick side (e.g. keep the analyst's selected team/spread and simply describe its Away/Home status accurately) unless the critic identified a fatal injury on that team.\n4. INJURY ATTRIBUTION RULE: Every injury citation must match the team_id or team name in the tool result or board. Never assign a player to the opposing team.`;
+                executePrompt = `${proposerPrompt}\n\n[Previous Verification Critique & Corrections Required (Attempt ${attempt - 1})]:\n${feedbackSummary}\n\nCRITICAL RETRY RULES:\n1. Output a clean, standalone final JSON response as if writing it for the first time. NEVER mention "a previous error", "this correction", or prior attempts in your summary or analysis.\n2. Fix any factual misstatements (such as Away vs. Home team status in "Away @ Home" headers, or references to teams not in the selected legs) so they strictly match the Game Slate headers and Analyst Reports.\n3. Do NOT flip an analyst's recommended pick side (e.g. keep the analyst's selected team/spread and simply describe its Away/Home status accurately) unless the critic identified a fatal injury on that team.\n4. INJURY ATTRIBUTION RULE: Every injury citation must match the team_id or team name in the tool result or board. Never assign a player to the opposing team.\n5. MARKET AND ROW RULES: Cite the exact row ID matching the picked team, market, and line; never assign a row to the opposite team or opposite side.`;
             } else {
                 executePrompt = proposerPrompt;
             }
@@ -132,7 +137,9 @@ export class AnalysisLifecycle {
             currentProposal = parseJsonSafe(proposalRaw, { rawText: proposalRaw, error: "Failed to parse JSON" });
 
             if (effectiveCoveredEventIds && currentProposal && Array.isArray(currentProposal.picks)) {
-                const headers = parseGameHeaders(rawData);
+                const headers = Array.isArray((rawData as any)?.allHeaders) && (rawData as any).allHeaders.length > 0
+                    ? (rawData as any).allHeaders
+                    : parseGameHeaders((rawData as any)?.fullBoard || rawData);
                 const originalCount = currentProposal.picks.length;
                 currentProposal.picks = filterPicksByCoverage(currentProposal.picks, effectiveCoveredEventIds, headers);
                 if (currentProposal.picks.length === 0 && originalCount > 0) {
@@ -165,13 +172,18 @@ export class AnalysisLifecycle {
                 ? toSampleText((rawData as any).toolResults)
                 : '';
 
-            const allParsedHeaders = parseGameHeaders(rawData);
+            const allParsedHeaders: GameHeader[] = Array.isArray((rawData as any)?.allHeaders) && (rawData as any).allHeaders.length > 0
+                ? ((rawData as any).allHeaders as GameHeader[])
+                : parseGameHeaders((rawData as any)?.fullBoard || rawData);
             const selectedGameIds = resolveSelectedGameIds(currentProposal, allParsedHeaders);
             const scopedHeaders = selectedGameIds.length > 0
                 ? filterHeadersByEventIds(allParsedHeaders, selectedGameIds)
                 : allParsedHeaders;
 
             let scopedToolResults = '';
+            const pulledMarketRecords: MarketToolRecord[] = Array.isArray((rawData as any)?.marketToolRecords)
+                ? [...(rawData as any).marketToolRecords]
+                : [];
             if (this.toolRegistry && selectedGameIds.length > 0) {
                 const criticTools = [
                     'get_market_movement',
@@ -181,7 +193,7 @@ export class AnalysisLifecycle {
                 ].filter(t => this.toolRegistry!.has(t));
                 if (criticTools.length > 0) {
                     const cache = this.queryCache ?? new GameQueryCache();
-                    const headerById = new Map(allParsedHeaders.map(h => [h.eventId, h]));
+                    const headerById = new Map<string, GameHeader>(allParsedHeaders.map(h => [h.eventId, h]));
                     const pullCalls = selectedGameIds.flatMap(gId =>
                         criticTools.map(tool => ({ tool, gId }))
                     );
@@ -213,7 +225,20 @@ export class AnalysisLifecycle {
                                 opts
                             );
                             if (res?.success === true && typeof res.summary === 'string' && res.summary.trim().length > 0) {
-                                pulledItems.push({ tool, eventId: gId, summary: res.summary.trim() });
+                                pulledItems.push({
+                                    tool,
+                                    eventId: gId,
+                                    summary: res.summary.trim()
+                                });
+                                if (tool === 'get_market_movement') {
+                                    pulledMarketRecords.push({
+                                        tool,
+                                        eventId: gId,
+                                        summary: res.summary.trim(),
+                                        ...(res.data !== undefined ? { data: res.data } : {}),
+                                        ...(Array.isArray((res as any).markets_covered) ? { markets_covered: (res as any).markets_covered } : {})
+                                    });
+                                }
                                 verifiedEventIdsSet.add(gId);
                             }
                         })
@@ -353,6 +378,34 @@ export class AnalysisLifecycle {
                 if (!injuryAudit.pass) {
                     verification.pass = false;
                     verification.feedback = injuryAudit.feedback || 'Veto: Proposal attributed an injury to the wrong team.';
+                }
+
+                const boardSourceForAudit = (rawData as any)?.fullBoard || rawData || slateHeaders || fallbackBoardText;
+                const combinedToolSummary = [toolResultsSummary, prePassedToolResults].filter(Boolean).join('\n\n');
+                const marketRowAudit = auditMarketCoverageAndRowBinding(
+                    currentProposal,
+                    combinedToolSummary,
+                    boardSourceForAudit,
+                    allParsedHeaders,
+                    pulledMarketRecords
+                );
+                if (!marketRowAudit.pass) {
+                    verification.pass = false;
+                    verification.feedback = marketRowAudit.feedback || 'Veto: Row side mismatch or missing market coverage.';
+                } else if (
+                    !verification.pass &&
+                    injuryAudit.pass &&
+                    isFalseMissingMoneylineCritique(
+                        verification.feedback,
+                        currentProposal,
+                        combinedToolSummary,
+                        boardSourceForAudit,
+                        allParsedHeaders,
+                        pulledMarketRecords
+                    )
+                ) {
+                    verification.pass = true;
+                    verification.feedback = 'Verified: moneyline covered by ml_home/ml_away in market tool result.';
                 }
 
                 if (verification.pass) {

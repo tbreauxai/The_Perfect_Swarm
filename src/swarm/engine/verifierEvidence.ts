@@ -30,9 +30,36 @@ function compactInjurySummary(summary: string): string {
   return (keptTeams.length > 0 ? keptTeams.join(' | ') : lines.join(' | ')).replace(/\s+/g, ' ').trim();
 }
 
+function compactMarketSummary(summary: string): string {
+  const lines = summary
+    .split(/\r?\n/)
+    .map(l => l.trim())
+    .filter(l => l && !/^\[MARKET MOVEMENT\b/i.test(l));
+  if (lines.length === 0) return summary.replace(/\s+/g, ' ').trim().slice(0, 220);
+
+  const mlAndTotal = lines.filter(l => /^(?:ML|Total):/i.test(l) || /\b(?:ml_home|ml_away)\b/i.test(l));
+  const primary = lines.filter(l => !mlAndTotal.includes(l) && !/^Steam:\s*neutral\s*\([^)]*\)\s*\|\s*Divergence:\s*none$/i.test(l));
+  const ordered = [...primary, ...mlAndTotal];
+  const joined = ordered.join(' | ').replace(/\s+/g, ' ').trim();
+  if (joined.length <= 240) return joined;
+
+  // Keep ML/Total intact even if primary Open/Current is verbose
+  const mlPart = mlAndTotal.join(' | ').replace(/\s+/g, ' ').trim();
+  if (mlPart && mlPart.length < 220) {
+    const rem = 240 - mlPart.length - 3;
+    const primJoined = primary.join(' | ').replace(/\s+/g, ' ').trim();
+    const primCut = rem > 20 ? `${primJoined.slice(0, rem - 1).trimEnd()}…` : '';
+    return primCut ? `${primCut} | ${mlPart}` : mlPart;
+  }
+  return `${joined.slice(0, 237).trimEnd()}…`;
+}
+
 function compactToolLine(tool: string, summary: string): string {
   if (tool === 'get_injury_and_roster_delta') {
     return `INJ: ${compactInjurySummary(summary)}`;
+  }
+  if (tool === 'get_market_movement') {
+    return `MKT: ${compactMarketSummary(summary)}`;
   }
   const stripped = summary
     .split(/\r?\n/)
@@ -44,7 +71,6 @@ function compactToolLine(tool: string, summary: string): string {
   const body = stripped || summary.replace(/\s+/g, ' ').trim();
   const cut = body.length > 140 ? `${body.slice(0, 137).trimEnd()}…` : body;
   if (tool === 'get_matchup_fundamentals') return `FUND: ${cut}`;
-  if (tool === 'get_market_movement') return `MKT: ${cut}`;
   return `${tool}: ${cut}`;
 }
 

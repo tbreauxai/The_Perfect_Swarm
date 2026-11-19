@@ -14,6 +14,7 @@ export interface DossierSection {
   durationMs: number;
   cached: boolean;
   data?: any;
+  markets_covered?: string[];
   error?: string;
 }
 
@@ -111,6 +112,7 @@ export async function executeToolWithCacheAndTimeout(
       durationMs,
       cached: isAlreadyCached,
       data: rawResult?.data ?? rawResult,
+      ...(Array.isArray(rawResult?.markets_covered) ? { markets_covered: rawResult.markets_covered } : {}),
       error: rawResult?.error
     };
   } catch (err: any) {

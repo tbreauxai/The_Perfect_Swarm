@@ -675,7 +675,8 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
 
                 const proposedAuditContext = {
                     summaryText: summaryLines.join('\n').slice(0, 900),
-                    targetGameIds: resolveSelectedGameIds(auditProposerReports, parsedChunkHeaders)
+                    targetGameIds: resolveSelectedGameIds(auditProposerReports, parsedChunkHeaders),
+                    proposerReports: auditProposerReports
                 };
 
                 // Stage 2: Execute Risk Critic seat(s) with Stage 1 proposed picks context

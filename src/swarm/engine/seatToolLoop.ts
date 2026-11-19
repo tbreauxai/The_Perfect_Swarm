@@ -65,6 +65,14 @@ export interface ToolEvidenceItem {
   summary: string;
 }
 
+export interface MarketEvidenceRecord {
+  tool: string;
+  eventId: string;
+  summary: string;
+  data?: any;
+  markets_covered?: string[];
+}
+
 export interface SeatToolLoopResult {
   report: string;
   rounds: number;
@@ -72,6 +80,7 @@ export interface SeatToolLoopResult {
   coveredEventIds: string[];
   toolEvidence: string;
   toolEvidenceItems: ToolEvidenceItem[];
+  marketToolRecords?: MarketEvidenceRecord[];
 }
 
 export function getRoleToolNames(seat: string): string[] {
@@ -191,6 +200,7 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
   const executedTools: string[] = [];
   const coveredEventIds = new Set<string>();
   const toolEvidenceItems: ToolEvidenceItem[] = [];
+  const marketToolRecords: MarketEvidenceRecord[] = [];
   const gameHeaderMap = new Map<string, GameHeader>();
   for (const h of parseGameHeaders(prompt)) {
     if (h.eventId && !gameHeaderMap.has(h.eventId)) {
@@ -324,6 +334,15 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
             eventId: targetGameId,
             summary: res.summary.trim()
           });
+          if (c.tool === 'get_market_movement') {
+            marketToolRecords.push({
+              tool: c.tool,
+              eventId: targetGameId,
+              summary: res.summary.trim(),
+              ...(res.data !== undefined ? { data: res.data } : {}),
+              ...(Array.isArray((res as any).markets_covered) ? { markets_covered: (res as any).markets_covered } : {})
+            });
+          }
         }
         return { res, targetGameId, summary: res.summary };
       })
@@ -412,7 +431,8 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
       toolCallsExecuted: executedTools,
       coveredEventIds: Array.from(coveredEventIds),
       toolEvidence: toolResultsSummary,
-      toolEvidenceItems
+      toolEvidenceItems,
+      ...(marketToolRecords.length > 0 ? { marketToolRecords } : {})
     };
   }
 
@@ -465,7 +485,8 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
         toolCallsExecuted: executedTools,
         coveredEventIds: Array.from(coveredEventIds),
         toolEvidence: toolResultsSummary,
-        toolEvidenceItems
+        toolEvidenceItems,
+        ...(marketToolRecords.length > 0 ? { marketToolRecords } : {})
       };
     }
     throw err;
@@ -508,6 +529,7 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     toolCallsExecuted: executedTools,
     coveredEventIds: Array.from(coveredEventIds),
     toolEvidence: toolResultsSummary,
-    toolEvidenceItems
+    toolEvidenceItems,
+    ...(marketToolRecords.length > 0 ? { marketToolRecords } : {})
   };
 }

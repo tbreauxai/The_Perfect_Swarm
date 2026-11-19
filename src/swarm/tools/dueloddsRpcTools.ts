@@ -835,56 +835,188 @@ export const getMarketMovementTool: SwarmTool = {
         summary: `Error: Game ID '${gameId}' could not be resolved to canonical event.`
       };
     }
-    const snapshotsTracked = typeof d.snapshots_tracked === 'number' ? d.snapshots_tracked : Number(d.snapshots_tracked) || 0;
+    const lineSnapshots = Array.isArray(d.line_snapshots) ? d.line_snapshots : [];
+    const sortedSnapshots = lineSnapshots.length > 0
+      ? [...lineSnapshots].sort((a: any, b: any) => {
+          const ta = a?.snapshot_at ? Date.parse(String(a.snapshot_at)) : NaN;
+          const tb = b?.snapshot_at ? Date.parse(String(b.snapshot_at)) : NaN;
+          if (Number.isFinite(ta) && Number.isFinite(tb)) return ta - tb;
+          return 0;
+        })
+      : [];
+    const firstSnap = sortedSnapshots[0] || {};
+    const lastSnap = sortedSnapshots[sortedSnapshots.length - 1] || {};
+
+    const opening = typeof d.opening === 'object' && d.opening !== null ? d.opening : {};
+    const latest = typeof d.latest === 'object' && d.latest !== null ? d.latest : {};
+
+    const hasVal = (v: unknown): boolean => v !== null && v !== undefined && v !== '';
+    const pickFirst = (...vals: unknown[]) => vals.find(hasVal);
+
+    const normMarket = marketType.toLowerCase();
+    const isMlRequested = normMarket === 'ml' || normMarket === 'moneyline' || normMarket === 'h2h';
+    const isTotalRequested = normMarket === 'total' || normMarket === 'totals';
+    const isSpreadRequested = normMarket === 'spread' || normMarket === 'spreads';
+
+    const openSpreadHome = pickFirst(opening.spread_home, opening.spread, d.opening_spread, firstSnap.spread_home, firstSnap.spread);
+    const currSpreadHome = pickFirst(latest.spread_home, latest.spread, d.current_spread, lastSnap.spread_home, lastSnap.spread);
+    const openSpreadAway = pickFirst(opening.spread_away, d.opening_spread_away, firstSnap.spread_away);
+    const currSpreadAway = pickFirst(latest.spread_away, d.current_spread_away, lastSnap.spread_away);
+
+    const openTotal = pickFirst(opening.total, d.opening_total, firstSnap.total);
+    const currTotal = pickFirst(latest.total, d.current_total, lastSnap.total);
+
+    const openMlHome = pickFirst(
+      opening.ml_home,
+      d.opening_ml_home,
+      firstSnap.ml_home,
+      sortedSnapshots.find((s: any) => hasVal(s?.ml_home))?.ml_home,
+      d.ml_home
+    );
+    const currMlHome = pickFirst(
+      latest.ml_home,
+      d.current_ml_home,
+      lastSnap.ml_home,
+      [...sortedSnapshots].reverse().find((s: any) => hasVal(s?.ml_home))?.ml_home,
+      d.ml_home
+    );
+    const openMlAway = pickFirst(
+      opening.ml_away,
+      d.opening_ml_away,
+      firstSnap.ml_away,
+      sortedSnapshots.find((s: any) => hasVal(s?.ml_away))?.ml_away,
+      d.ml_away
+    );
+    const currMlAway = pickFirst(
+      latest.ml_away,
+      d.current_ml_away,
+      lastSnap.ml_away,
+      [...sortedSnapshots].reverse().find((s: any) => hasVal(s?.ml_away))?.ml_away,
+      d.ml_away
+    );
+
+    const hasAnyOddsData = hasVal(openSpreadHome) || hasVal(currSpreadHome) || hasVal(openTotal) || hasVal(currTotal)
+      || hasVal(openMlHome) || hasVal(currMlHome) || hasVal(openMlAway) || hasVal(currMlAway)
+      || hasVal(opening.line) || hasVal(latest.line) || hasVal(d.open_line) || hasVal(d.current_line);
+
+    const rawTracked = typeof d.snapshots_tracked === 'number'
+      ? d.snapshots_tracked
+      : (d.snapshots_tracked !== undefined && d.snapshots_tracked !== null ? Number(d.snapshots_tracked) : NaN);
+    const snapshotsTracked = Number.isFinite(rawTracked)
+      ? (rawTracked > 0 ? rawTracked : (lineSnapshots.length > 0 ? lineSnapshots.length : 0))
+      : (lineSnapshots.length || (hasAnyOddsData ? 1 : 0));
+
     if (!snapshotsTracked || snapshotsTracked === 0) {
       return {
         success: true,
         empty: true,
         game_id: gameId,
         market_type: marketType,
+        markets_covered: [],
         data: d,
         summary: `[MARKET MOVEMENT: ${gameId} | ${marketType}] no FanDuel snapshots tracked (0 snapshots).`
       };
     }
 
-    const opening = typeof d.opening === 'object' && d.opening !== null ? d.opening : {};
-    const latest = typeof d.latest === 'object' && d.latest !== null ? d.latest : {};
-
-    const openLine = opening.spread_home ?? opening.spread ?? opening.total ?? opening.ml_home ?? opening.line ?? d.open_line ?? d.opening_spread ?? d.opening_total ?? d.opening_line ?? 'N/A';
-    const openPrice = opening.price ?? d.open_price ?? d.opening_price ?? 'N/A';
-    const currLine = latest.spread_home ?? latest.spread ?? latest.total ?? latest.ml_home ?? latest.line ?? d.current_line ?? d.current_spread ?? d.current_total ?? 'N/A';
-    const currPrice = latest.price ?? d.current_price ?? 'N/A';
+    const marketsCovered: string[] = [];
+    if (hasVal(openSpreadHome) || hasVal(currSpreadHome)) marketsCovered.push('spread');
+    if (hasVal(openTotal) || hasVal(currTotal)) marketsCovered.push('total');
+    if (hasVal(openMlHome) || hasVal(currMlHome) || hasVal(openMlAway) || hasVal(currMlAway)) marketsCovered.push('ml');
 
     const homeLabel = d.home_team_abbr ?? d.home_team ?? (context as any)?.game?.home_team_abbr ?? (context as any)?.game?.home_team ?? 'HOME';
     const awayLabel = d.away_team_abbr ?? d.away_team ?? (context as any)?.game?.away_team_abbr ?? (context as any)?.game?.away_team ?? 'AWAY';
-    const isSpreadMarket = marketType === 'spread' || opening.spread_home !== undefined || latest.spread_home !== undefined || opening.spread !== undefined || latest.spread !== undefined || d.opening_spread !== undefined || d.current_spread !== undefined;
     const fmtSigned = (n: number): string => (n > 0 ? `+${n}` : `${n}`);
+    const fmtOddsOrLine = (v: unknown): string => {
+      if (!hasVal(v)) return 'N/A';
+      if (typeof v === 'number' && Number.isFinite(v)) return fmtSigned(v);
+      const parsed = Number(v);
+      if (Number.isFinite(parsed) && String(v).trim() !== '') return fmtSigned(parsed);
+      return String(v);
+    };
+    const formatMlPair = (homeVal: unknown, awayVal: unknown): string => {
+      const parts: string[] = [];
+      if (hasVal(homeVal)) parts.push(`ml_home ${homeLabel} ${fmtOddsOrLine(homeVal)}`);
+      if (hasVal(awayVal)) parts.push(`ml_away ${awayLabel} ${fmtOddsOrLine(awayVal)}`);
+      return parts.length > 0 ? parts.join(' / ') : 'N/A';
+    };
+
+    const openPrice = opening.price ?? d.open_price ?? d.opening_price ?? 'N/A';
+    const currPrice = latest.price ?? d.current_price ?? 'N/A';
+
+    let openLine: unknown;
+    let currLine: unknown;
+    let isSpreadPrimary = false;
+
+    if (isMlRequested) {
+      openLine = hasVal(openMlHome) || hasVal(openMlAway) ? formatMlPair(openMlHome, openMlAway) : (opening.line ?? d.open_line ?? 'N/A');
+      currLine = hasVal(currMlHome) || hasVal(currMlAway) ? formatMlPair(currMlHome, currMlAway) : (latest.line ?? d.current_line ?? 'N/A');
+    } else if (isTotalRequested) {
+      openLine = openTotal ?? opening.line ?? d.open_line ?? 'N/A';
+      currLine = currTotal ?? latest.line ?? d.current_line ?? 'N/A';
+    } else if (isSpreadRequested || hasVal(openSpreadHome) || hasVal(currSpreadHome)) {
+      isSpreadPrimary = isSpreadRequested || hasVal(openSpreadHome) || hasVal(currSpreadHome);
+      openLine = openSpreadHome ?? opening.line ?? d.open_line ?? 'N/A';
+      currLine = currSpreadHome ?? latest.line ?? d.current_line ?? 'N/A';
+    } else if (hasVal(openTotal) || hasVal(currTotal)) {
+      openLine = openTotal ?? 'N/A';
+      currLine = currTotal ?? 'N/A';
+    } else if (hasVal(openMlHome) || hasVal(currMlHome) || hasVal(openMlAway) || hasVal(currMlAway)) {
+      openLine = formatMlPair(openMlHome, openMlAway);
+      currLine = formatMlPair(currMlHome, currMlAway);
+    } else {
+      openLine = opening.line ?? d.open_line ?? 'N/A';
+      currLine = latest.line ?? d.current_line ?? 'N/A';
+    }
+
     const formatLineValue = (homeVal: unknown, awayVal: unknown): string => {
-      if (isSpreadMarket && typeof homeVal === 'number' && Number.isFinite(homeVal)) {
+      if (isSpreadPrimary && typeof homeVal === 'number' && Number.isFinite(homeVal)) {
         const awayNum = typeof awayVal === 'number' && Number.isFinite(awayVal) ? awayVal : (homeVal === 0 ? 0 : -homeVal);
         return `home ${homeLabel} ${fmtSigned(homeVal)} / away ${awayLabel} ${fmtSigned(awayNum)}`;
       }
       return String(homeVal);
     };
 
-    const openDisplay = formatLineValue(openLine, opening.spread_away ?? d.opening_spread_away);
-    const currDisplay = formatLineValue(currLine, latest.spread_away ?? d.current_spread_away);
+    const openDisplay = formatLineValue(openLine, openSpreadAway);
+    const currDisplay = formatLineValue(currLine, currSpreadAway);
+
+    // When requesting 'all' (or when multiple markets exist alongside spread/total), emit Total and ML explicitly
+    const extraMarketParts: string[] = [];
+    if (!isSpreadRequested && !isTotalRequested && !isMlRequested) {
+      if (isSpreadPrimary && (hasVal(openTotal) || hasVal(currTotal))) {
+        const totalStr = hasVal(openTotal) && hasVal(currTotal) && openTotal !== currTotal
+          ? `${openTotal} -> ${currTotal}`
+          : String(currTotal ?? openTotal);
+        extraMarketParts.push(`Total: ${totalStr}`);
+      }
+      if ((hasVal(currMlHome) || hasVal(openMlHome) || hasVal(currMlAway) || hasVal(openMlAway)) && !(openDisplay.includes('ml_home') || currDisplay.includes('ml_home'))) {
+        const currMlStr = formatMlPair(currMlHome ?? openMlHome, currMlAway ?? openMlAway);
+        const openMlStr = (hasVal(openMlHome) || hasVal(openMlAway)) ? formatMlPair(openMlHome, openMlAway) : '';
+        const mlStr = openMlStr && currMlStr !== openMlStr
+          ? `${currMlStr} (open ${openMlStr})`
+          : currMlStr;
+        extraMarketParts.push(`ML: ${mlStr}`);
+      }
+    }
 
     if (snapshotsTracked === 1 || snapshotsTracked < 2) {
       const lineDisplay = currLine !== 'N/A' || currPrice !== 'N/A'
         ? `Current: ${currDisplay} (${currPrice})`
         : `Line: ${openDisplay} (${openPrice})`;
-      const summary = [
+      const summaryLines = [
         `[MARKET MOVEMENT: ${gameId} | ${marketType}] 1 snapshot, no history.`,
         lineDisplay
-      ].join('\n');
+      ];
+      if (extraMarketParts.length > 0) {
+        summaryLines.push(extraMarketParts.join(' | '));
+      }
 
       return {
         success: true,
         game_id: gameId,
         market_type: marketType,
+        markets_covered: marketsCovered,
         data: d,
-        summary
+        summary: summaryLines.join('\n')
       };
     }
 
@@ -897,18 +1029,22 @@ export const getMarketMovementTool: SwarmTool = {
     const steamMag = d.steam_magnitude ?? (typeof delta === 'number' ? Math.abs(delta) : 'N/A');
     const divergence = d.cross_book_divergence || d.divergence || 'none';
 
-    const summary = [
+    const summaryLines = [
       `[MARKET MOVEMENT: ${gameId} | ${marketType}]`,
-      `Open: ${openDisplay} (${openPrice}) -> Current: ${currDisplay} (${currPrice}) | Delta: ${delta}`,
-      `Steam: ${steamDir} (${steamMag} pts) | Divergence: ${divergence}`
-    ].join('\n');
+      `Open: ${openDisplay} (${openPrice}) -> Current: ${currDisplay} (${currPrice}) | Delta: ${delta}`
+    ];
+    if (extraMarketParts.length > 0) {
+      summaryLines.push(extraMarketParts.join(' | '));
+    }
+    summaryLines.push(`Steam: ${steamDir} (${steamMag} pts) | Divergence: ${divergence}`);
 
     return {
       success: true,
       game_id: gameId,
       market_type: marketType,
+      markets_covered: marketsCovered,
       data: d,
-      summary
+      summary: summaryLines.join('\n')
     };
   }
 };

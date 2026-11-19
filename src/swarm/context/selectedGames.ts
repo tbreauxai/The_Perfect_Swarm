@@ -3,13 +3,18 @@ import type { GameHeader } from './gameHeaders.ts';
 function matchHeadersInText(text: string, headers: GameHeader[], out: Set<string>): void {
   if (!text || !headers.length) return;
   const lower = text.toLowerCase();
+  const hasExplicitOptions = headers.some(h => Array.isArray(h.options) && h.options.length > 0);
   for (let i = 0; i < headers.length; i++) {
     const h = headers[i];
     if (!h?.eventId) continue;
-    const rowRegex = new RegExp(`\\bR${i + 1}\\b`, 'i');
+    const matchedOptionRow = (h.options || []).some(o =>
+      new RegExp(`\\b${o.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(text)
+    );
+    const fallbackRowMatch = !hasExplicitOptions && new RegExp(`\\bR${i + 1}\\b`, 'i').test(text);
     if (
       text.includes(h.eventId) ||
-      rowRegex.test(text) ||
+      matchedOptionRow ||
+      fallbackRowMatch ||
       (h.home && lower.includes(h.home.toLowerCase())) ||
       (h.away && lower.includes(h.away.toLowerCase()))
     ) {

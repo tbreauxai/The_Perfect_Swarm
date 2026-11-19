@@ -34,6 +34,12 @@ import { GameQueryCache } from '../cache/gameQueryCache.ts';
 import { executeToolWithCacheAndTimeout } from './triageExecutor.ts';
 import { seatBudget } from '../context/promptBudget.ts';
 import { auditInjuryAttribution, sanitizeMisattributedPicksAndText } from '../tools/injuryAttribution.ts';
+import {
+    auditMarketCoverageAndRowBinding,
+    isFalseMissingMoneylineCritique,
+    sanitizeRowMismatchedPicks,
+    type MarketToolRecord
+} from '../tools/marketRowBinding.ts';
 
 export interface AnalystExecutorConfig {
     task: string;
@@ -102,6 +108,7 @@ export function fitChunkToProvider(chunk: string, provider: string, total: numbe
 export interface ProposedPicksAuditContext {
     summaryText: string;
     targetGameIds: string[];
+    proposerReports?: any[];
 }
 
 const CONTRACT_MARKER_REGEX = /(?:\r?\n\s*|\b)(?:Output one top-level JSON object|REQUIRED RISK CRITIC|FILTERED DATA TOOL RULE:|PICK OUTPUT CONTRACT|Each slate row has an id\b)/i;
@@ -307,7 +314,10 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
         analyst.setSystemInstruction(baseInstruction);
 
         const { userTask: cappedTask, contractBlock } = partitionTaskAndContract(task);
+        const fullRawSource = (chunks && chunks.length > 0 ? chunks.join('\n') : '') || chunk || (config as any)?.rawBoard;
+        const fullSlateHeaders = parseGameHeaders(fullRawSource, (config as any)?.eventIds);
         const allParsedHeaders = parseGameHeaders(chunk || (config as any)?.rawBoard, (config as any)?.eventIds);
+        const mergedHeadersForRowCheck = fullSlateHeaders.length >= allParsedHeaders.length ? fullSlateHeaders : allParsedHeaders;
         const parsedHeaders = (isCritic && proposedAuditContext?.targetGameIds && proposedAuditContext.targetGameIds.length > 0)
             ? filterHeadersByEventIds(allParsedHeaders, proposedAuditContext.targetGameIds)
             : allParsedHeaders;
@@ -481,17 +491,87 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                 ...baseEvidenceItems.filter(e => e.tool === 'get_injury_and_roster_delta').map(e => e.summary)
             ].filter(Boolean).join('\n');
 
+            const marketEvidenceText = [
+                (resData as any).toolEvidence || '',
+                ...baseEvidenceItems.filter(e => e.tool === 'get_market_movement').map(e => e.summary)
+            ].filter(Boolean).join('\n');
+            const marketToolRecords: MarketToolRecord[] = Array.isArray(seatLoopRes?.marketToolRecords) && seatLoopRes.marketToolRecords.length > 0
+                ? seatLoopRes.marketToolRecords
+                : baseEvidenceItems
+                    .filter(e => e.tool === 'get_market_movement' && e.eventId)
+                    .map(e => ({
+                        tool: e.tool,
+                        eventId: e.eventId,
+                        summary: e.summary
+                    }));
+            if (marketToolRecords.length > 0) {
+                (resData as any).marketToolRecords = marketToolRecords;
+            }
+
             if (!isCritic && combinedInjuryEvidence) {
                 sanitizeMisattributedPicksAndText(resData as any, combinedInjuryEvidence, renderedHeadersText);
-            } else if (isCritic && proposedAuditContext?.summaryText && combinedInjuryEvidence) {
-                const audit = auditInjuryAttribution(proposedAuditContext.summaryText, combinedInjuryEvidence, renderedHeadersText);
-                if (!audit.pass) {
+            }
+            if (!isCritic) {
+                sanitizeRowMismatchedPicks(resData as any, fullRawSource || renderedHeadersText, mergedHeadersForRowCheck);
+            } else if (isCritic && proposedAuditContext?.summaryText) {
+                let injuryAuditPassed = true;
+                if (combinedInjuryEvidence) {
+                    const audit = auditInjuryAttribution(proposedAuditContext.summaryText, combinedInjuryEvidence, renderedHeadersText);
+                    if (!audit.pass) {
+                        injuryAuditPassed = false;
+                        (resData as any).pass = false;
+                        const msg = audit.feedback || 'Veto: Proposed pick attributed an injury to the wrong team.';
+                        (resData as any).summary = msg;
+                        (resData as any).analysis = msg;
+                        if (!Array.isArray((resData as any).flags)) (resData as any).flags = [];
+                        (resData as any).flags.push('injury_misattribution');
+                    }
+                }
+
+                const auditTargetProposal = Array.isArray(proposedAuditContext.proposerReports) && proposedAuditContext.proposerReports.length > 0
+                    ? {
+                        picks: proposedAuditContext.proposerReports.flatMap((r: any) => Array.isArray(r?.picks) ? r.picks : []),
+                        scorecards: proposedAuditContext.proposerReports.flatMap((r: any) =>
+                            Array.isArray(r?.scorecards) ? r.scorecards : (r?.scorecard ? [r.scorecard] : [])
+                        ),
+                        summary: proposedAuditContext.summaryText
+                    }
+                    : { summary: proposedAuditContext.summaryText };
+
+                const marketRowAudit = auditMarketCoverageAndRowBinding(
+                    auditTargetProposal,
+                    marketEvidenceText,
+                    fullRawSource || renderedHeadersText,
+                    mergedHeadersForRowCheck,
+                    marketToolRecords
+                );
+                if (!marketRowAudit.pass) {
                     (resData as any).pass = false;
-                    const msg = audit.feedback || 'Veto: Proposed pick attributed an injury to the wrong team.';
+                    const msg = marketRowAudit.feedback || 'Veto: Row side mismatch or missing market coverage.';
                     (resData as any).summary = msg;
                     (resData as any).analysis = msg;
                     if (!Array.isArray((resData as any).flags)) (resData as any).flags = [];
-                    (resData as any).flags.push('injury_misattribution');
+                    for (const f of marketRowAudit.flags) {
+                        if (!(resData as any).flags.includes(f)) (resData as any).flags.push(f);
+                    }
+                } else if (
+                    (resData as any).pass === false &&
+                    injuryAuditPassed &&
+                    isFalseMissingMoneylineCritique(
+                        String((resData as any).verdict || (resData as any).summary || (resData as any).analysis || ''),
+                        auditTargetProposal,
+                        marketEvidenceText,
+                        fullRawSource || renderedHeadersText,
+                        mergedHeadersForRowCheck,
+                        marketToolRecords
+                    )
+                ) {
+                    (resData as any).pass = true;
+                    const okMsg = 'Verified: moneyline covered by ml_home/ml_away in market tool result.';
+                    (resData as any).verdict = okMsg;
+                    (resData as any).summary = okMsg;
+                    (resData as any).analysis = okMsg;
+                    (resData as any).flags = [];
                 }
             }
             if (scorecardReport) {
