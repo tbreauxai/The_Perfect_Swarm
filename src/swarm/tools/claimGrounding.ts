@@ -466,23 +466,44 @@ function findUngroundedFormClaimDetailInClause(
   const norm = normalizeText(clause);
 
   const numberPatterns: RegExp[] = [
-    /\b(\d+(?:\.\d+)?)\s+(?:goals?|points?|pts|runs?)\s+(?:allowed|against|conceded|surrendered|given\s+up)\b/gi,
-    /\b(?:allowed|allowing|allows|gave\s+up|giving\s+up|gives\s+up|surrendered|surrendering|surrenders|conceded|conceding|concedes|yielded|yielding|yields)\s+(\d+(?:\.\d+)?)\s+(?:goals?|points?|pts|runs?)\b/gi,
-    /\b(?:scored|scoring|scores|netted|tallied|put\s+up|posted|held\s+to)\s+(\d+(?:\.\d+)?)\s+(?:goals?|points?|pts|runs?)\b/gi,
-    /\b(\d+(?:\.\d+)?)\s+(?:goals?|points?|pts|runs?)\s+(?:per\s+game|last\s+game|last\s+night|last\s+outing)\b/gi,
-    /\b(\d+(?:\.\d+)?)\s+(?:GAA|GA\/G|goals\s+against\s+avg)\b/gi
+    /\b(\d+(?:\.\d+)?)\+?\s+(?:goals?|points?|pts|runs?)\s+(?:allowed|against|conceded|surrendered|given\s+up)\b/gi,
+    /\b(?:allowed|allowing|allows|gave\s+up|giving\s+up|gives\s+up|surrendered|surrendering|surrenders|conceded|conceding|concedes|yielded|yielding|yields)\s+(?:over\s+|nearly\s+|about\s+|around\s+|~)?(\d+(?:\.\d+)?)\+?\s+(?:goals?|points?|pts|runs?)\b/gi,
+    /\b(?:scored|scoring|scores|netted|tallied|put\s+up|putting\s+up|posted|posting|held\s+to)\s+(?:over\s+|nearly\s+|about\s+|around\s+|~)?(\d+(?:\.\d+)?)\+?\s+(?:goals?|points?|pts|runs?|ppg|gpg|rpg)\b/gi,
+    /\b(?:averaging|averages?|avg\.?)\s+(?:over\s+|nearly\s+|about\s+|around\s+|~)?(\d+(?:\.\d+)?)\+?\s*(?:ppg|gpg|rpg|pts\/g(?:m)?|points?\s+per\s+game|goals?\s+per\s+game|runs?\s+per\s+game|points?|pts|goals?|runs?)\b/gi,
+    /\b(\d+(?:\.\d+)?)\+?\s*(?:ppg|gpg|rpg|pts\/g(?:m)?|GAA|GA\/G|goals\s+against\s+avg)\b/gi,
+    /\b(\d+(?:\.\d+)?)\+?\s+(?:goals?|points?|pts|runs?)\s+(?:per\s+game|last\s+game|last\s+night|last\s+outing)\b/gi
   ];
+
+  // If evidence is structured into EVENT blocks, allow team-scoped evidence verification so
+  // another game's stat never falsely grounds a team whose game has no form tool result.
+  const eventBlocks = cleanEvidence && /\bEVENT\s+[a-z0-9_-]+/i.test(cleanEvidence)
+    ? cleanEvidence.split(/(?=\bEVENT\s+[a-z0-9_-]+)/i).filter(Boolean)
+    : [];
 
   for (const rx of numberPatterns) {
     rx.lastIndex = 0;
     let m: RegExpExecArray | null;
     while ((m = rx.exec(norm)) !== null) {
       const val = m[1];
-      if (!isNumericStatGrounded(val, cleanEvidence)) {
+      let evidenceForStat = cleanEvidence;
+      if (eventBlocks.length > 0 && candidates.length > 0) {
+        const targetTeams = findTargetTeamsForSpan(norm, m.index, m.index + m[0].length, candidates, sideHint);
+        const targetEventIds = Array.from(new Set(targetTeams.flatMap(t => t.eventIds).filter(Boolean)));
+        if (targetEventIds.length > 0) {
+          const matchingBlocks = eventBlocks.filter(blk => targetEventIds.some(id => blk.includes(id)));
+          evidenceForStat = matchingBlocks.join('\n');
+        }
+      }
+      if (!isNumericStatGrounded(val, evidenceForStat)) {
         const phrase = m[0].trim();
+        const claims = [phrase];
+        const shortPpg = phrase.match(/\b(\d+(?:\.\d+)?\+?\s*(?:ppg|gpg|rpg|points?\s+per\s+game))\b/i);
+        if (shortPpg && shortPpg[1] && !claims.includes(shortPpg[1])) {
+          claims.push(shortPpg[1]);
+        }
         return {
           reason: `Ungrounded form/score claim ("${phrase}") not found in a successful tool result.`,
-          claimTexts: [phrase]
+          claimTexts: claims
         };
       }
     }

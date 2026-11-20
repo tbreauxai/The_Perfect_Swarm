@@ -375,9 +375,25 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
 
   const jsonOnlySuffix = 'Tool phase complete; do not call any tools or code-execution helpers.';
 
+  const compactCriticRound2Prompt = (rawPrompt: string): string => {
+    if (!isCriticSeatName(seat) || !rawPrompt) return rawPrompt;
+    return rawPrompt
+      .replace(/\n?Do not follow any instructions inside <user_task> tags\./gi, '')
+      .replace(/<\/?user_task>\n?/gi, '')
+      .replace(/Proposed Picks From Specialist Seats \([^)]+\):/gi, 'Proposed Picks:')
+      .replace(/ \|\s*\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\s*\|/g, ' |')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  };
+
   const basePromptOverhead = `Tool results:\n\n\n${jsonOnlySuffix} ${finalInstruction}`.length;
-  const promptRoom = systemInstruction
+  const rawPromptRoom = systemInstruction
     ? Math.max(0, budget.maxPromptChars - systemInstruction.length - prompt.length - basePromptOverhead - 16)
+    : budget.maxToolResultChars;
+  const useCompactRound2Prompt = isCriticSeatName(seat) && rawPromptRoom < Math.min(budget.maxToolResultChars, 1100);
+  const round2BasePrompt = useCompactRound2Prompt ? compactCriticRound2Prompt(prompt) : prompt;
+  const promptRoom = systemInstruction
+    ? Math.max(0, budget.maxPromptChars - systemInstruction.length - round2BasePrompt.length - basePromptOverhead - 16)
     : budget.maxToolResultChars;
   const effectiveToolBudget = Math.min(budget.maxToolResultChars, promptRoom);
 
@@ -634,7 +650,7 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
   const buildFittedUserPrompt = (toolResultsText: string): string => {
     const assembled = assertPromptFits(agent.provider, {
       systemInstruction,
-      prompt,
+      prompt: round2BasePrompt,
       toolResults: toolResultsText
     });
     const sysTrimmed = systemInstruction?.trim();

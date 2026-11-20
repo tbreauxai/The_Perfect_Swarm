@@ -160,6 +160,13 @@ function buildHeaderAliasMap(headers: GameHeader[]): Array<{ eventId: string; ro
       const nameAliases = new Set<string>();
       const abbrAliases = new Set<string>();
 
+      const collegeStop = new Set([
+        'state', 'tech', 'university', 'college', 'north', 'south', 'east', 'west',
+        'central', 'western', 'eastern', 'northern', 'southern', 'golden', 'blue',
+        'red', 'green', 'black', 'white', 'crimson', 'city', 'team', 'new', 'san',
+        'saint', 'santa', 'los', 'las', 'el', 'la', 'de', 'of', 'the', 'at'
+      ]);
+
       const addTeam = (raw: string, entry?: EspnTeamEntry) => {
         const clean = String(raw || '').trim().toLowerCase();
         if (clean && !/^(away|home|unknown|tbd)$/i.test(clean)) {
@@ -179,6 +186,18 @@ function buildHeaderAliasMap(headers: GameHeader[]): Array<{ eventId: string; ro
           }
           if (entry.abbr && entry.abbr.length >= 2) {
             abbrAliases.add(entry.abbr.toUpperCase());
+          }
+        } else if (clean && !/^(away|home|unknown|tbd)$/i.test(clean)) {
+          const words = clean.split(/\s+/).filter(Boolean);
+          if (words.length >= 2) {
+            const schoolPhrase = words.slice(0, words.length - 1).join(' ');
+            if (schoolPhrase.length >= 4 && !collegeStop.has(schoolPhrase)) {
+              nameAliases.add(schoolPhrase);
+            }
+            const mascot = words[words.length - 1];
+            if (mascot.length >= 4 && !collegeStop.has(mascot)) {
+              nameAliases.add(mascot);
+            }
           }
         }
       };

@@ -24,6 +24,7 @@ import {
     type ToolCallTraceEntry
 } from '../tools/pullBeforePass.ts';
 import { CRITIC_EVIDENCE_RULE } from '../tools/criticEvidence.ts';
+import { CRITIC_AUDIT_RULE, enforceCriticAuditOnFinalAnalysis } from '../tools/criticAudit.ts';
 import type { ToolEvidenceItem } from './seatToolLoop.ts';
 import type { ToolRegistry } from '../tools/registry.ts';
 import type { GameQueryCache } from '../cache/gameQueryCache.ts';
@@ -49,6 +50,7 @@ export interface VerificationPipelineParams {
     criticVetoes?: string[];
     vetoedLegs?: VetoedLegTarget[];
     vetoedClaims?: string[];
+    hadProposedPicks?: boolean;
     appComputedCounts?: string;
     toolRegistry?: ToolRegistry;
     queryCache?: GameQueryCache;
@@ -84,10 +86,10 @@ export async function runDeepAnalysisVerification(
 
     const isMorningJudge = (settings as any)?.responseSchema === 'morning_judge';
     if (isMorningJudge) {
-        criticAgent.setSystemInstruction(`You are the Swarm Verification Critic for Sports Betting Pre-game Judgment. Audit the proposed prediction strictly against the raw data, odds, injuries, and specialist reports. Ensure winProbHome (0.01-0.99), fairSpread, and likelyWinner are logically sound and formatted properly. Team names in Game Slate are authoritative; never rename or flag them.\n\n${CRITIC_EVIDENCE_RULE}\n\n${INJURY_ATTRIBUTION_RULE}\n\n${MARKET_AND_ROW_RULES}\n\n${SPREAD_SIDE_RULE}\n\n${GROUNDING_RULE}
+        criticAgent.setSystemInstruction(`You are the Swarm Verification Critic for Sports Betting Pre-game Judgment. Audit the proposed prediction strictly against the raw data, odds, injuries, and specialist reports. Ensure winProbHome (0.01-0.99), fairSpread, and likelyWinner are logically sound and formatted properly. Team names in Game Slate are authoritative; never rename or flag them.\n\n${CRITIC_EVIDENCE_RULE}\n\n${CRITIC_AUDIT_RULE}\n\n${INJURY_ATTRIBUTION_RULE}\n\n${MARKET_AND_ROW_RULES}\n\n${SPREAD_SIDE_RULE}\n\n${GROUNDING_RULE}
 ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
     } else {
-        criticAgent.setSystemInstruction(`You are the Swarm Verification Critic. Audit proposed analyses strictly against the raw data, historical baselines, and analyst reports. Systematically evaluate and attempt to refute hypotheses formulated by specialists. Flag discrepancies, missed anomalies, ungrounded assumptions, or schema violations. VETO POLICY: Only fail ("pass": false) a betting proposal when a recommended pick leg itself has a fatal injury, fabricated stat/odds, missing coverage on that leg, or direct rule violation; do not veto valid proposed picks just because other unpicked games on the slate have heavy injuries or incomplete roster data. Team names in Game Slate are authoritative; never rename or flag them.\n\nCRITIC SCOPE:\n- You may call tools to verify evidence.\n- Only pull evidence for the games/legs the analyzers proposed.\n- Do not scan the full slate.\n- A leg fails only if no successful tool result from this run (including your own pulls) supports the cited market or injury.\n- Do not reject a leg solely because a prior evidence bundle was incomplete.\n- Never call shell, bash, python, or built-in code execution tools; when scoped evidence is already supplied below, output verdict JSON directly.\n\n${CRITIC_EVIDENCE_RULE}\n\n${INJURY_ATTRIBUTION_RULE}\n\n${MARKET_AND_ROW_RULES}\n\n${SPREAD_SIDE_RULE}\n\n${GROUNDING_RULE}
+        criticAgent.setSystemInstruction(`You are the Swarm Verification Critic. Audit proposed analyses strictly against the raw data, historical baselines, and analyst reports. Systematically evaluate and attempt to refute hypotheses formulated by specialists. Flag discrepancies, missed anomalies, ungrounded assumptions, or schema violations. VETO POLICY: Only fail ("pass": false) a betting proposal when a recommended pick leg itself has a fatal injury, fabricated stat/odds, missing coverage on that leg, or direct rule violation; do not veto valid proposed picks just because other unpicked games on the slate have heavy injuries or incomplete roster data. Team names in Game Slate are authoritative; never rename or flag them.\n\nCRITIC SCOPE:\n- You may call tools to verify evidence.\n- Only pull evidence for the games/legs the analyzers proposed.\n- Do not scan the full slate.\n- A leg fails only if no successful tool result from this run (including your own pulls) supports the cited market or injury.\n- Do not reject a leg solely because a prior evidence bundle was incomplete.\n- Never call shell, bash, python, or built-in code execution tools; when scoped evidence is already supplied below, output verdict JSON directly.\n\n${CRITIC_EVIDENCE_RULE}\n\n${CRITIC_AUDIT_RULE}\n\n${INJURY_ATTRIBUTION_RULE}\n\n${MARKET_AND_ROW_RULES}\n\n${SPREAD_SIDE_RULE}\n\n${GROUNDING_RULE}
 ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
     }
 
@@ -215,8 +217,23 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
 
         const survivingPickCount = Array.isArray(finalAnalysis.picks) ? finalAnalysis.picks.length : 0;
         const hadVetoedLegs = combinedVetoedLegs.length > 0 || initialPickCount > survivingPickCount;
+        const criticAuditFailed = lifecycleResult?.criticAuditFailed === true;
+        const unauditedLegs = Array.isArray(lifecycleResult?.unauditedLegs) ? lifecycleResult.unauditedLegs : [];
+        const hadProposedPicks = Boolean(p.hadProposedPicks || lifecycleResult?.hadProposedPicks || initialPickCount > 0);
 
-        if (lifecycleResult.success === false) {
+        if (criticAuditFailed) {
+            finalAnalysis.verification = {
+                success: false,
+                attempts: lifecycleResult.attempts,
+                rating: lifecycleResult.computedRating
+            };
+            enforceCriticAuditOnFinalAnalysis(finalAnalysis, {
+                criticAuditFailed: true,
+                unauditedLegs,
+                hadProposedPicks,
+                auditNote: lifecycleResult?.criticFeedback
+            });
+        } else if (lifecycleResult.success === false) {
             finalAnalysis.verified = false;
             finalAnalysis.verification = {
                 success: false,
@@ -237,6 +254,11 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
                     : (typeof finalAnalysis.reason === 'string' && finalAnalysis.reason.trim() ? finalAnalysis.reason.trim() : 'Verification failed.');
                 finalAnalysis.summary = /^\[unverified\]/i.test(rawSummary) ? rawSummary : `[UNVERIFIED] ${rawSummary}`;
             }
+            enforceCriticAuditOnFinalAnalysis(finalAnalysis, {
+                criticAuditFailed: false,
+                unauditedLegs,
+                hadProposedPicks
+            });
         } else {
             finalAnalysis.verified = true;
             finalAnalysis.verification = {
@@ -249,6 +271,11 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
                 initialPickCount,
                 hadVetoedLegs || combinedVetoTexts.length > 0
             );
+            enforceCriticAuditOnFinalAnalysis(finalAnalysis, {
+                criticAuditFailed: false,
+                unauditedLegs,
+                hadProposedPicks
+            });
         }
     }
 

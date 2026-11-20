@@ -33,6 +33,13 @@ import {
     type ToolCallStatus,
     type ToolCallTraceEntry
 } from './tools/pullBeforePass.ts';
+import {
+    CRITIC_AUDIT_RULE,
+    buildCriticAuditReprompt,
+    evaluateCriticAuditCoverage,
+    extractProposedPickSummaries,
+    isNoPicksToEvaluateText
+} from './tools/criticAudit.ts';
 import type { ToolRegistry } from './tools/registry.ts';
 import { GameQueryCache } from './cache/gameQueryCache.ts';
 import { executeToolWithCacheAndTimeout } from './engine/triageExecutor.ts';
@@ -61,6 +68,9 @@ export interface LifecycleExecutionResult {
     vetoedLegs?: VetoedLegTarget[];
     vetoedClaims?: string[];
     accumulatedVetoes?: string[];
+    criticAuditFailed?: boolean;
+    unauditedLegs?: VetoedLegTarget[];
+    hadProposedPicks?: boolean;
 }
 
 export interface AnalysisLifecycleOptions {
@@ -124,6 +134,9 @@ export class AnalysisLifecycle {
         let currentProposal: any = null;
         let feedback = "";
         let lastCombinedToolSummary = "";
+        let lastAttemptCriticAuditFailed = false;
+        let lastAttemptUnauditedLegs: VetoedLegTarget[] = [];
+        let anyAttemptHadProposedPicks = false;
         const verifiedEventIdsSet = new Set<string>(coveredEventIds || []);
         let accumulatedToolTrace: ToolCallTraceEntry[] = Array.isArray((rawData as any)?.toolCallTrace)
             ? mergeToolCallTraceEntries((rawData as any).toolCallTrace)
@@ -192,7 +205,7 @@ export class AnalysisLifecycle {
                 const vetoBlock = vetoLines.length > 0
                     ? `\n\n[VETOED LEGS & CLAIMS — DO NOT INCLUDE]:\n${vetoLines.join('\n')}`
                     : '';
-                executePrompt = `${proposerPrompt}\n\n[Previous Verification Critique & Corrections Required (Attempt ${attempt - 1})]:\n${feedbackSummary}${vetoBlock}${freshBlock}\n\nCRITICAL RETRY RULES:\n1. Output a clean, standalone final JSON response as if writing it for the first time. NEVER mention "a previous error", "this correction", or prior attempts in your summary or analysis.\n2. Fix any factual misstatements (such as Away vs. Home team status in "Away @ Home" headers, or references to teams not in the selected legs) so they strictly match the Game Slate headers and Analyst Reports.\n3. Do NOT flip an analyst's recommended pick side (e.g. keep the analyst's selected team/spread and simply describe its Away/Home status accurately) unless the critic identified a fatal injury on that team.\n4. INJURY ATTRIBUTION RULE: Every injury citation must match the team_id or team name in the tool result or board. Never assign a player to the opposing team.\n5. MARKET AND ROW RULES: Cite the exact row ID matching the picked team, market, and line; never assign a row to the opposite team or opposite side.\n6. GROUNDING: Do not cite a score, goals-allowed, or health claim unless it is in a successful tool result. If key players on that team are OUT, do not call the team relatively healthy. A vetoed leg is removed from picks. Do not rewrite it as a recommended single bet. Do not cite a record, L2, or score unless it is in a successful tool result for that team. If you did not call the form tool, do not invent the record. If a tool returned data, do not say fundamentals or market data are missing. A pass is fine. Do not pad it with ungrounded form.\n7. PULL BEFORE PASS: Before saying a game has no fundamentals, injuries, or market data, call the tool for that game. If the tool returns data, use it and do not say it was not fetched. If the tool returns empty or errors, then you may say that game has no data. Do not cite a record, score, or L5 form unless it is in a successful tool result. A pass is allowed only after the relevant tools were called, or the tool result was empty.\n8. VETO STICKS: A Critic veto for ungrounded form, missing market, or fatal injury removes that leg. Do not repeat the vetoed claim in a later attempt or in the final analysis. Do not put a vetoed leg back into picks. If every leg is vetoed, the result is a pass.\n9. SPREAD SIDE: Read the sign from the row or the tool. A negative spread is the favorite. A positive spread is the underdog. Do not flip the sign when naming the other team. Portland +10.5 is not Portland -10.5.`;
+                executePrompt = `${proposerPrompt}\n\n[Previous Verification Critique & Corrections Required (Attempt ${attempt - 1})]:\n${feedbackSummary}${vetoBlock}${freshBlock}\n\nCRITICAL RETRY RULES:\n1. Output a clean, standalone final JSON response as if writing it for the first time. NEVER mention "a previous error", "this correction", or prior attempts in your summary or analysis.\n2. Fix any factual misstatements (such as Away vs. Home team status in "Away @ Home" headers, or references to teams not in the selected legs) so they strictly match the Game Slate headers and Analyst Reports.\n3. Do NOT flip an analyst's recommended pick side (e.g. keep the analyst's selected team/spread and simply describe its Away/Home status accurately) unless the critic identified a fatal injury on that team.\n4. INJURY ATTRIBUTION RULE: Every injury citation must match the team_id or team name in the tool result or board. Never assign a player to the opposing team.\n5. MARKET AND ROW RULES: Cite the exact row ID matching the picked team, market, and line; never assign a row to the opposite team or opposite side.\n6. GROUNDING: Do not cite a score, goals-allowed, or health claim unless it is in a successful tool result. If key players on that team are OUT, do not call the team relatively healthy. A vetoed leg is removed from picks. Do not rewrite it as a recommended single bet. Do not cite a record, L2, or score unless it is in a successful tool result for that team. If you did not call the form tool, do not invent the record. If a tool returned data, do not say fundamentals or market data are missing. A pass is fine. Do not pad it with ungrounded form.\n7. PULL BEFORE PASS: Before saying a game has no fundamentals, injuries, or market data, call the tool for that game. If the tool returns data, use it and do not say it was not fetched. If the tool returns empty or errors, then you may say that game has no data. Do not cite a record, score, or L5 form unless it is in a successful tool result. A pass is allowed only after the relevant tools were called, or the tool result was empty.\n8. VETO STICKS: A Critic veto for ungrounded form, missing market, or fatal injury removes that leg. Do not repeat the vetoed claim in a later attempt or in the final analysis. Do not put a vetoed leg back into picks. If every leg is vetoed, the result is a pass.\n9. SPREAD SIDE: Read the sign from the row or the tool. A negative spread is the favorite. A positive spread is the underdog. Do not flip the sign when naming the other team. Portland +10.5 is not Portland -10.5.\n10. ${CRITIC_AUDIT_RULE}`;
             } else {
                 executePrompt = proposerPrompt;
             }
@@ -567,10 +580,61 @@ export class AnalysisLifecycle {
                 timeoutMs: 45000
             });
             
-            const verification: VerificationResult = guardVerificationResult(verificationRaw);
+            let verification: VerificationResult = guardVerificationResult(verificationRaw);
             if (verification.parseFailed) {
                 console.warn(`[Critic] unparsed verification output (attempt ${attempt}): ${redactForLog(String(verificationRaw)).slice(0, 300)}`);
             }
+
+            const boardSourceForEarlyAudit = (rawData as any)?.fullBoard || rawData || '';
+            const proposedLegsThisAttempt = extractProposedPickSummaries(
+                currentProposal,
+                allParsedHeaders,
+                boardSourceForEarlyAudit
+            );
+            if (proposedLegsThisAttempt.length > 0) {
+                anyAttemptHadProposedPicks = true;
+            }
+
+            // CRITIC AUDIT: "No picks to evaluate" is invalid when picks are non-empty.
+            // Re-prompt the Verification Critic once on the same attempt with the explicit pick list.
+            if (proposedLegsThisAttempt.length > 0 && isNoPicksToEvaluateText(verification.feedback)) {
+                const repromptDirective = buildCriticAuditReprompt(proposedLegsThisAttempt, 'lifecycle');
+                const evHead = evidenceSection ? `\n\n${evidenceSection}` : '';
+                const maxEvForReprompt = Math.max(0, CAP - repromptDirective.length - trailer.length - 40);
+                const clippedEv = evHead && maxEvForReprompt > 60 ? evHead.slice(0, maxEvForReprompt) : '';
+                const repromptVerify = `${repromptDirective}${clippedEv}${trailer}`.slice(0, CAP);
+                try {
+                    const initialFb = verification.feedback;
+                    const repromptRaw = await this.critic.run(repromptVerify, context, {
+                        responseMimeType: 'application/json',
+                        bypassCache: true,
+                        timeoutMs: 45000
+                    });
+                    verification = guardVerificationResult(repromptRaw);
+                    context.addEvent({
+                        agentRole: this.critic.role,
+                        action: 'Re-prompted Verification Critic (Invalid "No picks to evaluate")',
+                        modelName: this.critic.modelName,
+                        prompt: `attempt=${attempt}, proposedLegs=${proposedLegsThisAttempt.length}`,
+                        output: {
+                            initialFeedback: initialFb,
+                            revisedPass: verification.pass,
+                            revisedFeedback: verification.feedback
+                        }
+                    });
+                } catch {
+                    // Fall through to audit coverage check below
+                }
+            }
+
+            const llmAuditCoverage = evaluateCriticAuditCoverage({
+                proposedLegs: proposedLegsThisAttempt,
+                criticResponseText: verification.feedback || '',
+                criticParseFailed: verification.parseFailed,
+                criticPass: verification.pass
+            });
+            lastAttemptCriticAuditFailed = llmAuditCoverage.criticSkippedAudit;
+            lastAttemptUnauditedLegs = llmAuditCoverage.unauditedLegs;
 
             // Deterministic Critic Check: A claim that cites no field in the game slate or tool results,
             // or attributes an injury to the wrong team (INJURY ATTRIBUTION RULE), is a veto.
@@ -837,6 +901,21 @@ export class AnalysisLifecycle {
                         }
                     }
                 }
+                if (llmAuditCoverage.criticSkippedAudit) {
+                    verification.pass = false;
+                    const auditFailMsg = llmAuditCoverage.auditNote || 'Veto (CRITIC AUDIT): Critic did not evaluate proposed picks.';
+                    const existingNonSkip = verification.feedback && !isNoPicksToEvaluateText(verification.feedback)
+                        ? verification.feedback
+                        : '';
+                    verification.feedback = existingNonSkip
+                        ? `${existingNonSkip} ${auditFailMsg}`.trim()
+                        : auditFailMsg;
+                } else if (proposedLegsThisAttempt.length > 0 && isNoPicksToEvaluateText(verification.feedback)) {
+                    verification.feedback = verification.pass
+                        ? 'Verified proposed picks against tool evidence and slate rows.'
+                        : 'Veto (CRITIC AUDIT): Proposed picks failed verification.';
+                }
+
                 if (!verification.pass && verification.feedback) {
                     if (!accumulatedVetoTexts.includes(verification.feedback)) {
                         accumulatedVetoTexts.push(verification.feedback);
@@ -874,7 +953,9 @@ export class AnalysisLifecycle {
                     ...(accumulatedToolTrace.length > 0 ? { verifiedToolTrace: mergeToolCallTraceEntries(accumulatedToolTrace) } : {}),
                     ...(accumulatedVetoedLegs.length > 0 ? { vetoedLegs: accumulatedVetoedLegs } : {}),
                     ...(accumulatedVetoedClaims.length > 0 ? { vetoedClaims: accumulatedVetoedClaims } : {}),
-                    ...(accumulatedVetoTexts.length > 0 ? { accumulatedVetoes: accumulatedVetoTexts } : {})
+                    ...(accumulatedVetoTexts.length > 0 ? { accumulatedVetoes: accumulatedVetoTexts } : {}),
+                    criticAuditFailed: false,
+                    ...(anyAttemptHadProposedPicks ? { hadProposedPicks: true } : {})
                 };
             } else {
                 feedback = verification.feedback || "Proposal failed verification without specific feedback.";
@@ -909,7 +990,10 @@ export class AnalysisLifecycle {
             ...(accumulatedToolTrace.length > 0 ? { verifiedToolTrace: mergeToolCallTraceEntries(accumulatedToolTrace) } : {}),
             ...(accumulatedVetoedLegs.length > 0 ? { vetoedLegs: accumulatedVetoedLegs } : {}),
             ...(accumulatedVetoedClaims.length > 0 ? { vetoedClaims: accumulatedVetoedClaims } : {}),
-            ...(accumulatedVetoTexts.length > 0 ? { accumulatedVetoes: accumulatedVetoTexts } : {})
+            ...(accumulatedVetoTexts.length > 0 ? { accumulatedVetoes: accumulatedVetoTexts } : {}),
+            ...(lastAttemptCriticAuditFailed ? { criticAuditFailed: true } : {}),
+            ...(lastAttemptUnauditedLegs.length > 0 ? { unauditedLegs: lastAttemptUnauditedLegs } : {}),
+            ...(anyAttemptHadProposedPicks ? { hadProposedPicks: true } : {})
         };
     }
 }

@@ -434,7 +434,25 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 const stage2CriticVetoes: string[] = [];
                 let stage2VetoedLegs: VetoedLegTarget[] = [];
                 let stage2VetoedClaims: string[] = [];
+                let stage2CriticAuditFailed = false;
+                let stage2UnauditedLegs: VetoedLegTarget[] = [];
+                let stage2AuditNote: string | undefined;
+                const stage1HadProposedPicks = nonCriticReports.some(r =>
+                    (Array.isArray((r as any)?.picks) && (r as any).picks.length > 0) ||
+                    Boolean((r as any)?.scorecard?.pick) ||
+                    (Array.isArray((r as any)?.scorecards) && (r as any).scorecards.some((s: any) => s?.pick || (Array.isArray(s?.picks) && s.picks.length > 0)))
+                );
                 for (const cr of criticReports) {
+                    const auditMeta = (cr as any)?.criticAudit;
+                    if (auditMeta && auditMeta.criticSkippedAudit === true) {
+                        stage2CriticAuditFailed = true;
+                        if (Array.isArray(auditMeta.unauditedLegs) && auditMeta.unauditedLegs.length > 0) {
+                            stage2UnauditedLegs = mergeVetoedLegTargets(stage2UnauditedLegs, auditMeta.unauditedLegs);
+                        }
+                        if (typeof auditMeta.auditNote === 'string' && auditMeta.auditNote.trim()) {
+                            stage2AuditNote = auditMeta.auditNote.trim();
+                        }
+                    }
                     if (cr && cr.pass === false) {
                         const parts = [
                             typeof cr.feedback === 'string' ? cr.feedback : '',
@@ -557,6 +575,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                 ...(stage2CriticVetoes.length > 0 ? { criticVetoes: stage2CriticVetoes } : {}),
                                 ...(stage2VetoedLegs.length > 0 ? { vetoedLegs: stage2VetoedLegs } : {}),
                                 ...(stage2VetoedClaims.length > 0 ? { vetoedClaims: stage2VetoedClaims } : {}),
+                                ...(stage1HadProposedPicks ? { hadProposedPicks: true } : {}),
                                 ...(verifierToolResults ? { toolResults: verifierToolResults } : {}),
                                 ...(allToolEvidenceItems.length > 0 ? { toolEvidenceItems: allToolEvidenceItems } : {}),
                                 ...(synthesisResult.appComputedCounts ? { appComputedCounts: synthesisResult.appComputedCounts } : {})
@@ -588,6 +607,10 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                     criticVetoes: stage2CriticVetoes,
                                     ...(stage2VetoedLegs.length > 0 ? { vetoedLegs: stage2VetoedLegs } : {}),
                                     ...(stage2VetoedClaims.length > 0 ? { vetoedClaims: stage2VetoedClaims } : {}),
+                                    ...(stage2CriticAuditFailed ? { criticAuditFailed: true } : {}),
+                                    ...(stage2UnauditedLegs.length > 0 ? { unauditedLegs: stage2UnauditedLegs } : {}),
+                                    ...(stage1HadProposedPicks ? { hadProposedPicks: true } : {}),
+                                    ...(stage2AuditNote ? { auditNote: stage2AuditNote } : {}),
                                     rawBoard: profilingResult.rawInput,
                                     ...(allToolCallTrace.length > 0 ? { toolCallTrace: allToolCallTrace } : {}),
                                     ...(availableTools && availableTools.length > 0 ? { availableTools } : {})

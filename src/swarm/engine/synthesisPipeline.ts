@@ -28,6 +28,7 @@ import {
     sanitizePullBeforePassClaims,
     type ToolCallTraceEntry
 } from '../tools/pullBeforePass.ts';
+import { enforceCriticAuditOnFinalAnalysis } from '../tools/criticAudit.ts';
 
 export interface SynthesisPipelineParams {
     task: string;
@@ -470,6 +471,10 @@ export async function executeManagerSynthesis(
         rawBoard?: string;
         toolCallTrace?: ToolCallTraceEntry[];
         availableTools?: string[];
+        criticAuditFailed?: boolean;
+        unauditedLegs?: VetoedLegTarget[];
+        hadProposedPicks?: boolean;
+        auditNote?: string;
     }
 ): Promise<any> {
     const managerInstruction = (settings as any)?.managerInstruction
@@ -570,6 +575,12 @@ export async function executeManagerSynthesis(
         }
         const hadVetoes = criticVetoes.length > 0 || vetoedLegs.length > 0 || vetoedClaims.length > 0;
         normalizePassIfAllLegsVetoed(finalResult, initialPickCount, hadVetoes);
+        enforceCriticAuditOnFinalAnalysis(finalResult, {
+            criticAuditFailed: groundingContext?.criticAuditFailed === true,
+            unauditedLegs: groundingContext?.unauditedLegs,
+            hadProposedPicks: Boolean(groundingContext?.hadProposedPicks || initialPickCount > 0),
+            auditNote: groundingContext?.auditNote
+        });
     }
 
     if (coveredEventIds && Array.isArray(finalResult?.picks)) {

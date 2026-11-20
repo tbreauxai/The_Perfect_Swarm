@@ -59,6 +59,13 @@ import {
     collectSuccessfulEvidenceItems,
     isFalseHallucinationCritique
 } from '../tools/criticEvidence.ts';
+import {
+    buildCriticAuditReprompt,
+    evaluateCriticAuditCoverage,
+    extractProposedPickSummaries,
+    isNoPicksToEvaluateText,
+    scrubNoPicksToEvaluateText
+} from '../tools/criticAudit.ts';
 import { buildVerifierEvidence } from './verifierEvidence.ts';
 
 export interface AnalystExecutorConfig {
@@ -129,6 +136,7 @@ export interface ProposedPicksAuditContext {
     summaryText: string;
     targetGameIds: string[];
     proposerReports?: any[];
+    proposedPicks?: any[];
 }
 
 const CONTRACT_MARKER_REGEX = /(?:\r?\n\s*|\b)(?:Output one top-level JSON object|REQUIRED RISK CRITIC|FILTERED DATA TOOL RULE:|PICK OUTPUT CONTRACT|Each slate row has an id\b)/i;
@@ -562,6 +570,13 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                     scorecardReport = scorecardToAnalystReport(seatResult, analyst.role);
                     rawOutput = scorecardReport;
                 } else {
+                    const stage1ProposedLegs = isCritic
+                        ? extractProposedPickSummaries(
+                              proposedAuditContext?.proposerReports || (proposedAuditContext?.proposedPicks ? [{ picks: proposedAuditContext.proposedPicks }] : []),
+                              mergedHeadersForRowCheck,
+                              fullRawSource || renderedHeadersText
+                          )
+                        : [];
                     seatLoopRes = await runSeatWithTools({
                         agent: analyst,
                         seat,
@@ -570,7 +585,9 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                         registry: activeRegistry,
                         context,
                         finalInstruction: isCritic
-                            ? 'Review the other seats\' proposed picks and emit only verdict JSON {"pass": boolean, "verdict": string, "flags": string[]}, adding no picks of your own. Only set "pass": false if a proposed pick leg has a fatal injury or rule violation.'
+                            ? (stage1ProposedLegs.length > 0
+                                ? `Audit all ${stage1ProposedLegs.length} proposed leg(s) against tool evidence ("No picks to evaluate" is invalid). Emit only verdict JSON {"pass":boolean,"verdict":string,"flags":string[]}.`
+                                : 'Review proposed picks and emit only verdict JSON {"pass":boolean,"verdict":string,"flags":string[]}, adding no picks. Only set "pass":false for fatal injury or rule violation.')
                             : 'Provide your specialist analysis now in JSON format.',
                         gameId: allGameIds[0] || parsedHeaders[0]?.eventId,
                         gameIds: allGameIds,
@@ -708,7 +725,85 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                         ),
                         summary: proposedAuditContext.summaryText
                     }
-                    : { summary: proposedAuditContext.summaryText };
+                    : {
+                        ...(Array.isArray(proposedAuditContext.proposedPicks) ? { picks: proposedAuditContext.proposedPicks } : {}),
+                        summary: proposedAuditContext.summaryText
+                    };
+
+                const proposedLegsForAudit = extractProposedPickSummaries(
+                    Array.isArray(proposedAuditContext.proposerReports) && proposedAuditContext.proposerReports.length > 0
+                        ? proposedAuditContext.proposerReports
+                        : [auditTargetProposal],
+                    mergedHeadersForRowCheck,
+                    fullRawSource || renderedHeadersText
+                );
+
+                // CRITIC AUDIT: "No picks to evaluate" is invalid when picks were proposed.
+                // Re-prompt the Risk Critic once with the explicit proposed pick list.
+                const initialCriticVerdictText = String(
+                    (resData as any).verdict || (resData as any).summary || (resData as any).analysis || ''
+                ).trim();
+                if (proposedLegsForAudit.length > 0 && isNoPicksToEvaluateText(initialCriticVerdictText)) {
+                    const repromptDirective = buildCriticAuditReprompt(proposedLegsForAudit, 'stage2');
+                    const priorEvDigest = baseEvidenceItems.length > 0
+                        ? buildVerifierEvidence([{ toolEvidenceItems: baseEvidenceItems }], fullRawSource, allGameIds)
+                        : '';
+                    const repromptBudget = Math.max(400, criticBudget.maxPromptChars - baseInstruction.length - 40);
+                    const evSliceBudget = Math.max(0, repromptBudget - repromptDirective.length - 40);
+                    const evSnippet = priorEvDigest && evSliceBudget > 60
+                        ? `\n\n[Tool Evidence]:\n${priorEvDigest.slice(0, evSliceBudget)}`
+                        : '';
+                    const repromptBody = `${repromptDirective}${evSnippet}`.slice(0, repromptBudget);
+                    try {
+                        const repromptRaw = await analyst.run(repromptBody, context, {
+                            ...analystRunConfig,
+                            bypassCache: true,
+                            systemInstruction: baseInstruction
+                        });
+                        const repromptParsed = guardAnalystResponse(repromptRaw, analyst.role);
+                        if (repromptParsed && typeof repromptParsed === 'object') {
+                            if (typeof (repromptParsed as any).pass === 'boolean') {
+                                (resData as any).pass = (repromptParsed as any).pass;
+                            }
+                            const nextText = String(
+                                (repromptParsed as any).verdict ||
+                                (repromptParsed as any).summary ||
+                                (repromptParsed as any).analysis ||
+                                ''
+                            ).trim();
+                            if (nextText) {
+                                (resData as any).verdict = nextText;
+                                (resData as any).summary = nextText;
+                                (resData as any).analysis = nextText;
+                            }
+                            if (Array.isArray((repromptParsed as any).flags)) {
+                                (resData as any).flags = (repromptParsed as any).flags;
+                            }
+                        }
+                        context.addEvent({
+                            agentRole: analyst.role,
+                            action: 'Re-prompted Risk Critic (Invalid "No picks to evaluate")',
+                            modelName: analyst.modelName,
+                            prompt: `proposedLegs=${proposedLegsForAudit.length}`,
+                            output: {
+                                initialVerdict: initialCriticVerdictText,
+                                revisedVerdict: (resData as any).verdict || (resData as any).summary,
+                                revisedPass: (resData as any).pass
+                            }
+                        });
+                    } catch {
+                        // Fall through to deterministic audit and unaudited-leg enforcement below
+                    }
+                }
+
+                const llmPostRepromptText = String(
+                    (resData as any).verdict || (resData as any).summary || (resData as any).analysis || ''
+                ).trim();
+                const llmAuditCoverage = evaluateCriticAuditCoverage({
+                    proposedLegs: proposedLegsForAudit,
+                    criticResponseText: llmPostRepromptText,
+                    criticPass: (resData as any).pass
+                });
 
                 const proposerSuccessfulEvidence = Array.isArray(proposedAuditContext.proposerReports)
                     ? proposedAuditContext.proposerReports
@@ -735,6 +830,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                         injuryAuditPassed = false;
                         (resData as any).pass = false;
                         const msg = audit.feedback || 'Veto: Proposed pick attributed an injury to the wrong team.';
+                        (resData as any).verdict = msg;
                         (resData as any).summary = msg;
                         (resData as any).analysis = msg;
                         if (!Array.isArray((resData as any).flags)) (resData as any).flags = [];
@@ -756,6 +852,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                     (resData as any).pass = false;
                     const msg = marketRowAudit.feedback || 'Veto: Row side mismatch or missing market coverage.';
                     const nextSummary = injuryAuditPassed ? msg : `${(resData as any).summary} ${msg}`.trim();
+                    (resData as any).verdict = nextSummary;
                     (resData as any).summary = nextSummary;
                     (resData as any).analysis = nextSummary;
                     if (!Array.isArray((resData as any).flags)) (resData as any).flags = [];
@@ -779,6 +876,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                     const gMsg = groundingAudit.feedback || 'Veto (GROUNDING): Ungrounded form or health claim.';
                     const hasPriorVeto = !injuryAuditPassed || !marketRowAudit.pass;
                     const nextSummary = hasPriorVeto ? `${(resData as any).summary} ${gMsg}`.trim() : gMsg;
+                    (resData as any).verdict = nextSummary;
                     (resData as any).summary = nextSummary;
                     (resData as any).analysis = nextSummary;
                     if (!Array.isArray((resData as any).flags)) (resData as any).flags = [];
@@ -873,6 +971,25 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                     (resData as any).flags = [];
                     stage2VetoedLegs = [];
                     stage2VetoedClaims = [];
+                }
+
+                (resData as any).criticAudit = llmAuditCoverage;
+
+                if (llmAuditCoverage.criticSkippedAudit) {
+                    (resData as any).pass = false;
+                    const skipMsg = llmAuditCoverage.auditNote || 'Veto (CRITIC AUDIT): Critic did not evaluate proposed picks.';
+                    const currentSummary = String((resData as any).summary || (resData as any).verdict || '').trim();
+                    const existingNonSkip = !isNoPicksToEvaluateText(currentSummary) ? currentSummary : '';
+                    const nextSummary = existingNonSkip ? `${existingNonSkip} ${skipMsg}`.trim() : skipMsg;
+                    (resData as any).verdict = nextSummary;
+                    (resData as any).summary = nextSummary;
+                    (resData as any).analysis = nextSummary;
+                    if (!Array.isArray((resData as any).flags)) (resData as any).flags = [];
+                    if (!(resData as any).flags.includes('critic_did_not_audit')) {
+                        (resData as any).flags.push('critic_did_not_audit');
+                    }
+                } else if (proposedLegsForAudit.length > 0) {
+                    scrubNoPicksToEvaluateText(resData as any);
                 }
 
                 if ((resData as any).pass === false) {

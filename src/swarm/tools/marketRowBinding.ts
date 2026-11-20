@@ -166,7 +166,7 @@ export function extractRowOptions(sources: unknown[], preParsedHeaders?: GameHea
   return rowMap;
 }
 
-function resolveTeamFromText(
+export function resolveTeamFromText(
   text: string,
   sportHint?: string,
   contextTeams?: string[]
@@ -229,6 +229,36 @@ function resolveTeamFromText(
       const sharedCity = matchedEntries.filter(m => m.entry?.city.toLowerCase() === cityLower).length > 1;
       if (!sharedCity && new RegExp(`\\b${escapeRegex(cityLower)}\\b`, 'i').test(cleaned)) {
         return { canonical: `${entry.sport}:${entry.abbr}`, name: entry.name };
+      }
+    }
+    // Check college / non-ESPN team school phrases & mascot tokens (e.g. "New Mexico" or "Lobos" for "New Mexico Lobos")
+    for (const { raw, entry } of matchedEntries) {
+      if (entry) continue;
+      const lowerRaw = raw.toLowerCase().trim();
+      const words = lowerRaw.split(/\s+/).filter(Boolean);
+      const candidates: string[] = [];
+      if (words.length >= 2) {
+        const schoolPhrase = words.slice(0, words.length - 1).join(' ');
+        if (schoolPhrase.length >= 4 && !COLLEGE_ALIAS_STOP_TOKENS.has(schoolPhrase)) {
+          candidates.push(schoolPhrase);
+        }
+        const mascot = words[words.length - 1];
+        if (mascot.length >= 4 && !COLLEGE_ALIAS_STOP_TOKENS.has(mascot)) {
+          candidates.push(mascot);
+        }
+      }
+      for (const w of words) {
+        if (w.length >= 5 && !COLLEGE_ALIAS_STOP_TOKENS.has(w) && !candidates.includes(w)) {
+          candidates.push(w);
+        }
+      }
+      for (const cand of candidates) {
+        const otherHasCand = matchedEntries.some(
+          m => m.raw !== raw && new RegExp(`\\b${escapeRegex(cand)}\\b`, 'i').test(m.raw.toLowerCase())
+        );
+        if (!otherHasCand && new RegExp(`\\b${escapeRegex(cand)}\\b`, 'i').test(cleaned)) {
+          return { canonical: `raw:${lowerRaw}`, name: raw };
+        }
       }
     }
   }
@@ -328,7 +358,7 @@ export function checkRowSideBinding(
   pickSideText: string,
   rowEntry: RowOptionEntry,
   marketField?: string
-): { valid: boolean; reason?: string } {
+): { valid: boolean; reason?: string; isSignFlipOnly?: boolean; isValueMismatch?: boolean } {
   const side = pickSideText.trim();
   if (!side || !rowEntry?.text) return { valid: true };
 
@@ -401,8 +431,13 @@ export function checkRowSideBinding(
   }
 
   if (rowSpread !== null && pickSpread !== null && rowSpread !== pickSpread) {
+    const isSignFlipOnly =
+      Math.abs(Math.abs(rowSpread) - Math.abs(pickSpread)) < 0.01 &&
+      Math.sign(rowSpread) !== Math.sign(pickSpread);
     return {
       valid: false,
+      isSignFlipOnly,
+      isValueMismatch: !isSignFlipOnly,
       reason: `Row ${rowId} is "${rowBody}" (${formatSigned(rowSpread)}), does not match "${sideWithoutRow}" (${formatSigned(pickSpread)}).`
     };
   }
@@ -702,12 +737,19 @@ export interface AuthoritativeTeamSpread {
 }
 
 const STOPWORD_ALIASES = new Set(['as', 'no', 'was', 'in', 'or', 'at', 'by', 'to', 'on', 'of', 'la', 'ny', 'sa', 'sd', 'sf', 'gb', 'kc', 'lv', 'ne', 'tb']);
+const COLLEGE_ALIAS_STOP_TOKENS = new Set([
+  'state', 'tech', 'university', 'college', 'north', 'south', 'east', 'west',
+  'central', 'western', 'eastern', 'northern', 'southern', 'golden', 'blue',
+  'red', 'green', 'black', 'white', 'crimson', 'city', 'team', 'new', 'san',
+  'saint', 'santa', 'los', 'las', 'el', 'la', 'de', 'of', 'the', 'at'
+]);
 
 function buildSafeTeamAliases(
   rawTeamLabel: string,
   sportHint: string | undefined,
   sharedCityCollision: Set<string>,
-  sharedSlateCities: Set<string>
+  sharedSlateCities: Set<string>,
+  sharedCollegeTokens?: Set<string>
 ): { canonical: string; teamName: string; aliases: string[]; abbr?: string } {
   const entry = matchTeamByLabel(rawTeamLabel, sportHint);
   const canonical = entry ? `${entry.sport}:${entry.abbr}` : `raw:${rawTeamLabel.toLowerCase().trim()}`;
@@ -728,6 +770,31 @@ function buildSafeTeamAliases(
       if (STOPWORD_ALIASES.has(al)) continue;
       if (al === cityLower && (sharedCityCollision.has(cityLower) || sharedSlateCities.has(cityLower))) continue;
       aliasSet.add(al);
+    }
+  } else {
+    // College / non-ESPN teams (e.g. "New Mexico Lobos" -> "new mexico", "lobos")
+    const lowerRaw = rawTeamLabel.toLowerCase().trim();
+    const words = lowerRaw.split(/\s+/).filter(Boolean);
+    if (words.length >= 2) {
+      const schoolPhrase = words.slice(0, words.length - 1).join(' ');
+      if (
+        schoolPhrase.length >= 4 &&
+        !COLLEGE_ALIAS_STOP_TOKENS.has(schoolPhrase) &&
+        !sharedCityCollision.has(schoolPhrase) &&
+        !sharedSlateCities.has(schoolPhrase) &&
+        !sharedCollegeTokens?.has(schoolPhrase)
+      ) {
+        aliasSet.add(schoolPhrase);
+      }
+      const mascot = words[words.length - 1];
+      if (
+        mascot.length >= 4 &&
+        !COLLEGE_ALIAS_STOP_TOKENS.has(mascot) &&
+        !STOPWORD_ALIASES.has(mascot) &&
+        !sharedCollegeTokens?.has(mascot)
+      ) {
+        aliasSet.add(mascot);
+      }
     }
   }
 
@@ -827,8 +894,9 @@ function extractSpreadsFromToolSummary(
     if (resolved) return resolved;
   }
 
-  // Fallback: check if bare spread + ml_home / ml_away appear together in summary
-  const bareMatch = targetLine.match(/\bspread\s+([+-]\d+(?:\.\d+)?)\b/i);
+  // Fallback: check if bare spread (signed or unsigned, e.g. "spread 7.5, ml_away -290") + ml_home / ml_away appear together in summary
+  const bareMatch = targetLine.match(/\bspread\s*[:=]?\s*([+-]?\d+(?:\.\d+)?)\b/i)
+    || text.match(/\bspread\s*[:=]?\s*([+-]?\d+(?:\.\d+)?)\b/i);
   if (bareMatch) {
     const bare = parseFloat(bareMatch[1]);
     const mlHomeMatch = text.match(/\bml_home\b[^\n+-]*?([+-]\d{3,4})/i);
@@ -877,8 +945,9 @@ export function extractAuthoritativeTeamSpreads(
 ): Map<string, AuthoritativeTeamSpread> {
   const spreadMap = new Map<string, AuthoritativeTeamSpread>();
 
-  // Detect any cities shared across DIFFERENT teams in the current slate so bare city names remain unambiguous
+  // Detect any cities or college school/mascot tokens shared across DIFFERENT teams in the current slate
   const cityToCanonicals = new Map<string, Set<string>>();
+  const collegeTokenToCanonicals = new Map<string, Set<string>>();
   for (const h of headers || []) {
     for (const rawTeam of [h.away, h.home]) {
       const e = matchTeamByLabel(rawTeam, h.sport);
@@ -886,12 +955,27 @@ export function extractAuthoritativeTeamSpreads(
         const cl = e.city.toLowerCase();
         if (!cityToCanonicals.has(cl)) cityToCanonicals.set(cl, new Set());
         cityToCanonicals.get(cl)!.add(`${e.sport}:${e.abbr}`);
+      } else if (rawTeam && rawTeam.trim()) {
+        const lowerRaw = rawTeam.toLowerCase().trim();
+        const canonicalKey = `raw:${lowerRaw}`;
+        const words = lowerRaw.split(/\s+/).filter(Boolean);
+        if (words.length >= 2) {
+          for (const tok of [words.slice(0, words.length - 1).join(' '), words[words.length - 1]]) {
+            if (!tok || tok.length < 4 || COLLEGE_ALIAS_STOP_TOKENS.has(tok)) continue;
+            if (!collegeTokenToCanonicals.has(tok)) collegeTokenToCanonicals.set(tok, new Set());
+            collegeTokenToCanonicals.get(tok)!.add(canonicalKey);
+          }
+        }
       }
     }
   }
   const sharedSlateCities = new Set<string>();
   for (const [city, set] of cityToCanonicals.entries()) {
     if (set.size > 1) sharedSlateCities.add(city);
+  }
+  const sharedCollegeTokens = new Set<string>();
+  for (const [tok, set] of collegeTokenToCanonicals.entries()) {
+    if (set.size > 1) sharedCollegeTokens.add(tok);
   }
 
   for (const h of headers || []) {
@@ -903,8 +987,8 @@ export function extractAuthoritativeTeamSpreads(
       sharedInGame.add(awayEntry.city.toLowerCase());
     }
 
-    const awayProfile = buildSafeTeamAliases(h.away, h.sport, sharedInGame, sharedSlateCities);
-    const homeProfile = buildSafeTeamAliases(h.home, h.sport, sharedInGame, sharedSlateCities);
+    const awayProfile = buildSafeTeamAliases(h.away, h.sport, sharedInGame, sharedSlateCities, sharedCollegeTokens);
+    const homeProfile = buildSafeTeamAliases(h.home, h.sport, sharedInGame, sharedSlateCities, sharedCollegeTokens);
 
     let awaySpread: number | undefined;
     let homeSpread: number | undefined;
@@ -1060,7 +1144,7 @@ function findTeamHitsInClause(clause: string, spreadMap: Map<string, Authoritati
 
 interface SpreadSideViolation {
   reason: string;
-  kind: 'sign_flip' | 'role_flip';
+  kind: 'sign_flip' | 'value_mismatch' | 'role_flip';
   entry: AuthoritativeTeamSpread;
   wrongNumberRaw?: string;
   wrongNumberStart?: number;
@@ -1068,7 +1152,7 @@ interface SpreadSideViolation {
 }
 
 const DIRECT_STAT_PREFIX_RX = /\b(?:net\s*rating|nrtg|ortg|drtg|point\s*diff(?:erential)?|goal\s*diff(?:erential)?|run\s*diff(?:erential)?|diff(?:erential)?|xgf|xg|ppg|gpg|era|pace|delta|roi|ev|kelly|(?:moved|move|steam(?:ed)?|swing)\s+(?:by|of)|margin\s+of|edge\s+of)\s*[:=of\s]*$/i;
-const DIRECT_STAT_SUFFIX_RX = /^\s*(?:%|pts?\s+(?:move|delta|swing|diff|margin)|units?\b|u\b|net\s*rating\b|nrtg\b|ortg\b|drtg\b|diff(?:erential)?\b|ppg\b|gpg\b|goals?\b|runs?\b|yards?\b|era\b|roi\b|ev\b)/i;
+const DIRECT_STAT_SUFFIX_RX = /^\s*(?:%|(?:spread|line|total|pts?|points?)\s+(?:move|delta|swing|diff|margin|shift)\b|(?:(?:l\d+|last\s*\d+)\s+)?(?:net\s*)?margin\b|units?\b|u\b|net\s*rating\b|nrtg\b|ortg\b|drtg\b|diff(?:erential)?\b|delta\b|swing\b|ppg\b|gpg\b|goals?\b|runs?\b|yards?\b|era\b|roi\b|ev\b)/i;
 
 function findSpreadSideViolationInClause(
   clause: string,
@@ -1080,7 +1164,7 @@ function findSpreadSideViolationInClause(
 
   // 1. Check explicit signed spread numbers paired with a team in the clause
   const cleanedForNum = stripNonSpreadParentheses(clause);
-  const numRx = /(?:^|[\s,:(\["'/])([+-]\d+(?:\.\d+)?)(?=$|[\s,);.!?:\]"'/—–])/g;
+  const numRx = /(?:^|[\s,:(\["'/])([+-]\d+(?:\.\d+)?)(?=$|[\s,);!?:\]"'/—–]|\.(?!\d))/g;
   let nm: RegExpExecArray | null;
   while ((nm = numRx.exec(cleanedForNum)) !== null) {
     const numStr = nm[1];
@@ -1119,6 +1203,25 @@ function findSpreadSideViolationInClause(
         wrongNumberStart: numOffset,
         wrongNumberEnd: numOffset + numStr.length,
         reason: `${entry.teamName} spread sign mismatch: cited ${numStr}, but ${entry.teamName} is ${formatSigned(entry.spread)} (${entry.role}).`
+      };
+    }
+    // Reject spread value/magnitude mismatch (e.g. Lobos -8.5 when tool/row spread is -7.5)
+    // Skip explicit opening/movement context like "opened at -8.5", "moved from -8.5 to -7.5", "fair spread -8.5"
+    const isMovementOrFairContext =
+      /\b(?:open(?:ed|ing)?|prev(?:ious)?|prior|earlier|fair(?:\s+spread)?|proj(?:ected)?|model(?:ed)?|line\s+moved\s+from|moved\s+from|down\s+from|up\s+from|from)\s*(?:at|of)?\s*$/i.test(prefix) ||
+      /^\s*(?:to|->|→)\s*[+-]\d/i.test(suffix);
+    if (
+      !isMovementOrFairContext &&
+      Math.abs(val - entry.spread) > 0.01 &&
+      Math.abs(val - entry.spread) <= 25
+    ) {
+      return {
+        kind: 'value_mismatch',
+        entry,
+        wrongNumberRaw: numStr,
+        wrongNumberStart: numOffset,
+        wrongNumberEnd: numOffset + numStr.length,
+        reason: `${entry.teamName} spread mismatch: cited ${numStr}, but authoritative tool/row spread is ${formatSigned(entry.spread)}.`
       };
     }
   }
@@ -1280,7 +1383,25 @@ export function auditMarketCoverageAndRowBinding(
       const check = checkRowSideBinding(item.rowId, item.sideText, rowEntry, item.marketField);
       if (!check.valid) {
         flags.push('row_side_mismatch');
+        if (check.isValueMismatch) flags.push('spread_value_mismatch');
         const msg = `Veto: Row side mismatch — ${check.reason}`;
+        if (check.isValueMismatch) {
+          const contextTeams = [rowEntry.away, rowEntry.home].filter((t): t is string => Boolean(t));
+          const resolved = resolveTeamFromText(item.sideText || rowEntry.text, rowEntry.sport, contextTeams);
+          const target: MarketVetoLegTarget = {
+            rowId: item.rowId,
+            ...(item.eventId ? { eventId: item.eventId } : (rowEntry.eventId ? { eventId: rowEntry.eventId } : {})),
+            ...(resolved?.name ? { teamLabel: resolved.name } : {}),
+            teamAliases: resolved ? [resolved.name.toLowerCase()] : [],
+            reason: msg.slice(0, 140)
+          };
+          return {
+            pass: false,
+            feedback: msg,
+            flags,
+            vetoedLegs: [target]
+          };
+        }
         return {
           pass: false,
           feedback: msg,
@@ -1289,27 +1410,41 @@ export function auditMarketCoverageAndRowBinding(
       }
     }
 
-    // 1b. Spread side & sign check for rowless or role-contradicted picks
+    // 1b. Spread side, sign & value check for rowless or role-contradicted picks
     if (authoritativeSpreads.size > 0) {
       const pickViolation = findSpreadSideViolationInClause(item.sideText, authoritativeSpreads);
       if (pickViolation) {
-        flags.push('spread_side_mismatch');
-        const msg = `Veto: SPREAD SIDE mismatch — ${pickViolation.reason}`;
+        const flagName = pickViolation.kind === 'value_mismatch' ? 'spread_value_mismatch' : 'spread_side_mismatch';
+        flags.push(flagName);
+        if (!flags.includes('spread_side_mismatch')) flags.push('spread_side_mismatch');
+        const msg = pickViolation.kind === 'value_mismatch'
+          ? `Veto: CRITIC AUDIT spread mismatch — ${pickViolation.reason}`
+          : `Veto: SPREAD SIDE mismatch — ${pickViolation.reason}`;
         return {
           pass: false,
           feedback: msg,
-          flags
+          flags,
+          ...(pickViolation.kind === 'value_mismatch'
+            ? { vetoedLegs: [buildSpreadVetoLegTarget(pickViolation.entry, msg, item.rowId)] }
+            : {})
         };
       }
       if (typeof item.pick === 'object' && item.pick && typeof item.pick.reason === 'string') {
         const reasonViolation = findSpreadSideViolationInClause(item.pick.reason, authoritativeSpreads);
         if (reasonViolation) {
-          flags.push('spread_side_mismatch');
-          const msg = `Veto: SPREAD SIDE mismatch in pick reasoning — ${reasonViolation.reason}`;
+          const flagName = reasonViolation.kind === 'value_mismatch' ? 'spread_value_mismatch' : 'spread_side_mismatch';
+          flags.push(flagName);
+          if (!flags.includes('spread_side_mismatch')) flags.push('spread_side_mismatch');
+          const msg = reasonViolation.kind === 'value_mismatch'
+            ? `Veto: CRITIC AUDIT spread mismatch in pick reasoning — ${reasonViolation.reason}`
+            : `Veto: SPREAD SIDE mismatch in pick reasoning — ${reasonViolation.reason}`;
           return {
             pass: false,
             feedback: msg,
-            flags
+            flags,
+            ...(reasonViolation.kind === 'value_mismatch'
+              ? { vetoedLegs: [buildSpreadVetoLegTarget(reasonViolation.entry, msg, item.rowId)] }
+              : {})
           };
         }
       }
@@ -1426,8 +1561,12 @@ export function auditMarketCoverageAndRowBinding(
       for (const clause of splitClausesPreservingDelimiters(txt)) {
         const violation = findSpreadSideViolationInClause(clause, authoritativeSpreads);
         if (violation) {
-          flags.push('spread_side_mismatch');
-          const msg = `Veto: SPREAD SIDE mismatch — ${violation.reason}`;
+          const flagName = violation.kind === 'value_mismatch' ? 'spread_value_mismatch' : 'spread_side_mismatch';
+          flags.push(flagName);
+          if (!flags.includes('spread_side_mismatch')) flags.push('spread_side_mismatch');
+          const msg = violation.kind === 'value_mismatch'
+            ? `Veto: CRITIC AUDIT spread mismatch — ${violation.reason}`
+            : `Veto: SPREAD SIDE mismatch — ${violation.reason}`;
           return {
             pass: false,
             feedback: msg,

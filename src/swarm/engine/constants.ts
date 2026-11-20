@@ -5,7 +5,8 @@ import { MARKET_AND_ROW_RULES, SPREAD_SIDE_RULE } from "../tools/marketRowBindin
 import { GROUNDING_RULE, FORM_GROUNDING_BULLETS, FORM_GROUNDING_RULE, VETO_STICKS_RULE } from "../tools/claimGrounding.ts";
 import { PULL_BEFORE_PASS_RULE } from "../tools/pullBeforePass.ts";
 import { CRITIC_EVIDENCE_RULE } from "../tools/criticEvidence.ts";
-export { INJURY_ATTRIBUTION_RULE, MARKET_AND_ROW_RULES, SPREAD_SIDE_RULE, GROUNDING_RULE, FORM_GROUNDING_BULLETS, FORM_GROUNDING_RULE, VETO_STICKS_RULE, PULL_BEFORE_PASS_RULE, CRITIC_EVIDENCE_RULE };
+import { CRITIC_AUDIT_RULE } from "../tools/criticAudit.ts";
+export { INJURY_ATTRIBUTION_RULE, MARKET_AND_ROW_RULES, SPREAD_SIDE_RULE, GROUNDING_RULE, FORM_GROUNDING_BULLETS, FORM_GROUNDING_RULE, VETO_STICKS_RULE, PULL_BEFORE_PASS_RULE, CRITIC_EVIDENCE_RULE, CRITIC_AUDIT_RULE };
 export const RED_TEAM_ANALYST_ROLE = 'RedTeamAnalyst';
 
 export const CRITIC_VERDICT_SYSTEM_INSTRUCTION = `You are the Swarm Risk Critic.
@@ -21,6 +22,8 @@ CRITIC SCOPE:
 - Never call shell, bash, python, or built-in code execution tools; use only attached filtered data tools, or if evidence is already provided with no tools attached, output verdict JSON directly.
 
 ${CRITIC_EVIDENCE_RULE}
+
+${CRITIC_AUDIT_RULE}
 
 ${INJURY_ATTRIBUTION_RULE}
 
@@ -62,6 +65,8 @@ ${VETO_STICKS_RULE}
 
 ${PULL_BEFORE_PASS_RULE}
 
+${CRITIC_AUDIT_RULE}
+
 When analyzing data:
 1. SKEPTICAL SCRUTINY: Actively hunt for unstated assumptions, sampling bias, cherry-picked metrics, survivorship bias, and contradictory evidence.
 2. FALSIFICATION: Formulate explicit counter-hypotheses that challenge the consensus or obvious interpretation.
@@ -98,6 +103,8 @@ ${VETO_STICKS_RULE}
 
 ${PULL_BEFORE_PASS_RULE}
 
+${CRITIC_AUDIT_RULE}
+
 When given data:
 1. PLAN: Check the token weight of the input metadata. Identify 2-3 specific dimensions to investigate.
 2. REASON: Analyze differences between current inputs and baselines. Keep internal deductions concise and strictly focused on statistical significance.
@@ -129,6 +136,8 @@ ${FORM_GROUNDING_BULLETS}
 ${VETO_STICKS_RULE}
 
 ${PULL_BEFORE_PASS_RULE}
+
+${CRITIC_AUDIT_RULE}
 
 Instead of outputting raw text, you MUST output a Generative UI payload.
 Output strict JSON matching this JSON Schema:

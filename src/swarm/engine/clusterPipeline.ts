@@ -645,7 +645,9 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
 
                 // Build proposed picks audit context from Stage 1 proposer outputs
                 const auditProposerReports: any[] = [];
-                const summaryLines: string[] = [];
+                const pickSummaryLines: string[] = [];
+                const otherSummaryLines: string[] = [];
+                const collectedProposedPicks: any[] = [];
 
                 for (const { analyst, idx } of proposerEntries) {
                     const rep = allAnalystReports[idx]?.[0];
@@ -653,6 +655,7 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
                     auditProposerReports.push(rep);
                     const picks = Array.isArray(rep.picks) ? rep.picks : [];
                     if (picks.length > 0) {
+                        for (const pk of picks) collectedProposedPicks.push(pk);
                         const pickDescs = picks.map((pk: any) => {
                             const evId = pk.event_id || pk.eventId || pk.game_id || '';
                             const reasonStr = typeof pk.reason === 'string' && pk.reason.trim()
@@ -662,25 +665,40 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
                                 .filter(Boolean)
                                 .join(' ');
                         }).filter(Boolean);
-                        summaryLines.push(`- [${analyst.role}] Proposed ${picks.length} leg(s): ${pickDescs.join(' | ')}`);
+                        pickSummaryLines.push(`- [${analyst.role}] Proposed ${picks.length} leg(s): ${pickDescs.join(' | ')}`);
                     } else if (rep.scorecard && rep.scorecard.pick) {
                         const sc = rep.scorecard;
+                        collectedProposedPicks.push({
+                            row: sc.row,
+                            event_id: sc.event_id,
+                            pick: sc.pick,
+                            reason: sc.summary || sc.reason
+                        });
                         const desc = `${sc.row || ''} ${sc.pick} (${sc.verdict || 'lean'})`.trim();
-                        summaryLines.push(`- [${analyst.role}] Scorecard pick: ${desc}`);
+                        pickSummaryLines.push(`- [${analyst.role}] Scorecard pick: ${desc}`);
                     } else {
-                        const text = String(rep.analysis || rep.summary || (Array.isArray(rep.insights) ? rep.insights.join('; ') : '')).slice(0, 260);
-                        summaryLines.push(`- [${analyst.role}]: ${text || 'No picks proposed'}`);
+                        const text = String(rep.analysis || rep.summary || (Array.isArray(rep.insights) ? rep.insights.join('; ') : '')).slice(0, 220);
+                        otherSummaryLines.push(`- [${analyst.role}]: ${text || 'No picks proposed'}`);
                     }
                 }
+
+                const orderedSummaryLines = [
+                    ...(collectedProposedPicks.length > 0
+                        ? [`Total Proposed Picks To Audit: ${collectedProposedPicks.length} ("No picks to evaluate" is INVALID)`]
+                        : []),
+                    ...pickSummaryLines,
+                    ...otherSummaryLines
+                ];
 
                 const proposerEvidencePreview = auditProposerReports
                     .flatMap((r: any) => Array.isArray(r?.toolEvidenceItems) ? r.toolEvidenceItems.map((i: any) => i?.summary || '') : [])
                     .filter(Boolean)
                     .join('\n');
                 const proposedAuditContext = {
-                    summaryText: summaryLines.join('\n').slice(0, 900),
+                    summaryText: orderedSummaryLines.join('\n').slice(0, 1200),
                     targetGameIds: resolveDiscussedGameIds(auditProposerReports, parsedChunkHeaders, proposerEvidencePreview),
-                    proposerReports: auditProposerReports
+                    proposerReports: auditProposerReports,
+                    proposedPicks: collectedProposedPicks
                 };
 
                 // Stage 2: Execute Risk Critic seat(s) with Stage 1 proposed picks context
