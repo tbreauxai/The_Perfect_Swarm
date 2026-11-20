@@ -25,6 +25,7 @@ import {
     auditMarketCoverageAndRowBinding,
     extractRowOptions,
     isFalseMissingMoneylineCritique,
+    scrubFalseMissingMarketClause,
     sanitizeRowMismatchedPicks,
     type MarketToolRecord
 } from './tools/marketRowBinding.ts';
@@ -955,7 +956,6 @@ export class AnalysisLifecycle {
                         ? `${pMsg}${pullNote}`
                         : [verification.feedback, `${pMsg}${pullNote}`].filter(Boolean).join(' ');
                 } else if (
-                    !verification.pass &&
                     !injuryVetoTriggered &&
                     !marketVetoTriggered &&
                     !groundingVetoTriggered &&
@@ -969,8 +969,9 @@ export class AnalysisLifecycle {
                         pulledMarketRecords
                     )
                 ) {
+                    const scrubbed = scrubFalseMissingMarketClause(verification.feedback || '');
                     verification.pass = true;
-                    verification.feedback = 'Verified: moneyline covered by ml_home/ml_away in market tool result.';
+                    verification.feedback = scrubbed || 'Verified: moneyline covered by ml_home/ml_away in market tool result.';
                 } else if (
                     !verification.pass &&
                     !injuryVetoTriggered &&

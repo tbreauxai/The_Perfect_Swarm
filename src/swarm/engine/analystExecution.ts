@@ -44,6 +44,7 @@ import {
 import {
     auditMarketCoverageAndRowBinding,
     isFalseMissingMoneylineCritique,
+    scrubFalseMissingMarketClause,
     sanitizeRowMismatchedPicks,
     type MarketToolRecord
 } from '../tools/marketRowBinding.ts';
@@ -937,7 +938,6 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                         if (!(resData as any).flags.includes(f)) (resData as any).flags.push(f);
                     }
                 } else if (
-                    (resData as any).pass === false &&
                     injuryAuditPassed &&
                     marketRowAudit.pass &&
                     groundingAuditPassed &&
@@ -950,11 +950,14 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                         marketToolRecords
                     )
                 ) {
+                    const fallbackMsg = 'Verified: moneyline covered by ml_home/ml_away in market tool result.';
+                    const scrubbedVerdict = scrubFalseMissingMarketClause(String((resData as any).verdict || ''));
+                    const scrubbedSummary = scrubFalseMissingMarketClause(String((resData as any).summary || ''));
+                    const scrubbedAnalysis = scrubFalseMissingMarketClause(String((resData as any).analysis || ''));
                     (resData as any).pass = true;
-                    const okMsg = 'Verified: moneyline covered by ml_home/ml_away in market tool result.';
-                    (resData as any).verdict = okMsg;
-                    (resData as any).summary = okMsg;
-                    (resData as any).analysis = okMsg;
+                    (resData as any).verdict = scrubbedVerdict || fallbackMsg;
+                    (resData as any).summary = scrubbedSummary || scrubbedVerdict || fallbackMsg;
+                    (resData as any).analysis = scrubbedAnalysis || scrubbedSummary || fallbackMsg;
                     (resData as any).flags = [];
                     stage2VetoedLegs = [];
                     stage2VetoedClaims = [];

@@ -1585,6 +1585,16 @@ export function auditMarketCoverageAndRowBinding(
  * Detects false-negative Critic rejections that claim a moneyline leg is "spread only" /
  * "missing moneyline" when ml_home or ml_away WAS actually returned for every ML leg.
  */
+const FALSE_MISSING_ML_REGEX =
+  /only shows a spread|spread[- ]only|missing (?:a )?(?:moneyline|\bml\b)|no (?:moneyline|\bml\b) (?:market|odds|coverage|data|available)|(?:moneyline|\bml\b)[^.]{0,40}(?:not (?:present|found|covered|available|supported|returned)|missing|uncovered|unavailable)|lack(?:s|ing)?(?:\s+of)?(?:\s+verified)?\s+market\s+data|no\s+market\s+(?:data|pricing)/i;
+
+export function scrubFalseMissingMarketClause(text: string): string {
+  if (!text) return '';
+  const sentences = text.split(/(?<=[.!?])\s+|\n+/);
+  const kept = sentences.filter(s => s.trim() && !FALSE_MISSING_ML_REGEX.test(s));
+  return kept.join(' ').replace(/\s{2,}/g, ' ').trim();
+}
+
 export function isFalseMissingMoneylineCritique(
   feedback: string,
   proposal: any,
@@ -1596,10 +1606,7 @@ export function isFalseMissingMoneylineCritique(
   if (!feedback || !proposal || typeof proposal !== 'object') return false;
   const fLower = feedback.toLowerCase();
 
-  const claimsMissingML =
-    /only shows a spread|spread[- ]only|missing (?:a )?(?:moneyline|\bml\b)|no (?:moneyline|\bml\b) (?:market|odds|coverage|data|available)|(?:moneyline|\bml\b)[^.]{0,40}(?:not (?:present|found|covered|available|supported|returned)|missing|uncovered|unavailable)/i.test(
-      fLower
-    );
+  const claimsMissingML = FALSE_MISSING_ML_REGEX.test(fLower);
   if (!claimsMissingML) return false;
 
   // Never override if Critic also flagged any other real defect
