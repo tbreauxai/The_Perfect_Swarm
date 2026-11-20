@@ -37,6 +37,35 @@ export interface OpenAiCompatibleConfig {
     formatGenericError?: (status: number, errorText: string, providerLabel: string) => string;
 }
 
+function trySalvageToolUseFailed(errorText: string, resolvedTools: any[]): string | null {
+    if (!errorText) return null;
+    try {
+        const parsed = JSON.parse(errorText);
+        const errObj = parsed?.error && typeof parsed.error === 'object' ? parsed.error : parsed;
+        if (errObj?.code !== 'tool_use_failed' || typeof errObj?.failed_generation !== 'string') {
+            return null;
+        }
+        const gen = JSON.parse(errObj.failed_generation.trim());
+        if (!gen || typeof gen !== 'object' || typeof gen.name !== 'string') {
+            return null;
+        }
+        if (!gen.arguments || typeof gen.arguments !== 'object' || Array.isArray(gen.arguments)) {
+            return null;
+        }
+        const toolNames = new Set(
+            (resolvedTools || [])
+                .map((t: any) => String(t?.function?.name ?? t?.name ?? '').trim())
+                .filter(Boolean)
+        );
+        if (gen.name.toLowerCase() === 'json' || !toolNames.has(gen.name)) {
+            return JSON.stringify(gen.arguments);
+        }
+    } catch {
+        return null;
+    }
+    return null;
+}
+
 /**
  * Shared executor for OpenAI-compatible REST endpoints.
  * Handles:
@@ -123,6 +152,10 @@ export async function executeOpenAiCompatibleChat(
         if (options.onHeaders && response?.headers) options.onHeaders(response.headers);
         if (!response.ok && response.status === 400 && activeJson) {
             const peekError = await response.clone().text().catch(() => '');
+            if (trySalvageToolUseFailed(peekError, resolvedTools) !== null) {
+                const salvaged = trySalvageToolUseFailed(peekError, resolvedTools)!;
+                return salvaged;
+            }
             const isFormatRejection = !peekError ||
                 peekError.toLowerCase().includes('response_format') ||
                 peekError.toLowerCase().includes('format') ||
@@ -170,6 +203,12 @@ export async function executeOpenAiCompatibleChat(
 
     if (!response.ok) {
         const errorText = await response.text();
+        if (response.status === 400) {
+            const salvaged = trySalvageToolUseFailed(errorText, resolvedTools);
+            if (salvaged !== null) {
+                return salvaged;
+            }
+        }
         const retryAfter = response.headers?.get ? response.headers.get('retry-after') : null;
 
         if (response.status === 429) {
