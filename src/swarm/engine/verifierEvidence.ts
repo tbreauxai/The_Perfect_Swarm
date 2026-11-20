@@ -64,7 +64,7 @@ function compactMarketSummary(summary: string): string {
   return `${joined.slice(0, 237).trimEnd()}…`;
 }
 
-function compactToolLine(tool: string, summary: string): string {
+export function compactToolLine(tool: string, summary: string): string {
   const normTool = normalizeEvidenceToolName(tool);
   if (normTool === 'get_injury_and_roster_delta') {
     return `INJ: ${compactInjurySummary(summary)}`;

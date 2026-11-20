@@ -15,6 +15,7 @@ import { executeToolWithCacheAndTimeout } from './triageExecutor.ts';
 import { GameQueryCache } from '../cache/gameQueryCache.ts';
 import type { SwarmContext } from '../context.ts';
 import { parseGameHeaders, type GameHeader } from '../context/gameHeaders.ts';
+import { compactToolLine } from './verifierEvidence.ts';
 import {
   isEmptyToolSummary,
   looksLikePassOrMissingDataClaim,
@@ -395,15 +396,16 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
   const promptRoom = systemInstruction
     ? Math.max(0, budget.maxPromptChars - systemInstruction.length - round2BasePrompt.length - basePromptOverhead - 16)
     : budget.maxToolResultChars;
-  const effectiveToolBudget = Math.min(budget.maxToolResultChars, promptRoom);
+  const effectiveToolBudget = Math.min(budget.maxToolResultChars, Math.max(600, promptRoom));
 
   const formatToolResultsWithinBudget = (entries: Array<{ tool?: string; targetGameId: string; summary: string }>): string => {
     const combinedEntries: Array<{ targetGameId: string; summary: string }> = [];
     const seenKeys = new Map<string, number>();
 
     const upsertEntry = (tool: string | undefined, targetGameId: string, summary: string) => {
-      const clean = typeof summary === 'string' ? summary.trim() : '';
-      if (!clean) return;
+      const rawClean = typeof summary === 'string' ? summary.trim() : '';
+      if (!rawClean) return;
+      const clean = tool ? compactToolLine(tool, rawClean) : rawClean;
       if (tool && targetGameId && targetGameId !== 'unknown-game') {
         const key = normalizeToolKey(tool, targetGameId);
         const idx = seenKeys.get(key);

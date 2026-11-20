@@ -137,4 +137,66 @@ describe('Seat Tool Loop (PS2 Role-Scoped 2-Round Execution)', () => {
       { tool: 'get_injury_and_roster_delta', eventId: 'nba-2', summary: 'inj:nba-2' }
     ]);
   });
+
+  it('compacts 9 market entries via compactToolLine within 1100 chars keeping MKT: and ML for each game', async () => {
+    const gameIds = Array.from({ length: 9 }, (_, i) => `nba-${i + 1}`);
+    const registry = new ToolRegistry([
+      {
+        name: 'get_market_movement',
+        description: 'mkt',
+        parameters: { game_id: { type: 'string', description: 'id', required: true } },
+        execute: vi.fn(async ({ game_id }: any) => ({
+          success: true,
+          summary: [
+            `[MARKET MOVEMENT: ${game_id} | all]`,
+            'Open: -3.5 | Current: -4.5',
+            'Steam: neutral (no sharp move) | Divergence: none',
+            `ML: -180 / +155 (${game_id})`,
+            'Total: 221.5'
+          ].join('\n')
+        }))
+      }
+    ]);
+
+    let capturedRound2Prompt = '';
+    const mockAgent: any = {
+      id: 'critic',
+      role: 'Risk Critic',
+      provider: 'openrouter',
+      run: vi.fn(async (p: string, _ctx: any, opts: any) => {
+        if (opts?.tools?.length) {
+          return JSON.stringify({
+            toolCalls: gameIds.map(id => ({ name: 'get_market_movement', args: { game_id: id } }))
+          });
+        }
+        capturedRound2Prompt = p;
+        return JSON.stringify({ pass: true, verdict: 'ok', flags: [] });
+      })
+    };
+
+    const longSystem = 'S'.repeat(12650);
+    await runSeatWithTools({
+      agent: mockAgent,
+      seat: 'critic',
+      prompt: 'Audit picks',
+      systemInstruction: longSystem,
+      gameIds,
+      priorEvidenceItems: [
+        {
+          tool: 'get_market_movement',
+          eventId: 'nba-9',
+          summary: '[MARKET MOVEMENT: nba-9 | all]\nOpen: -3.5 | Current: -4.5\nSteam: neutral (no sharp move) | Divergence: none\nML: -180 / +155 (nba-9)\nTotal: 221.5'
+        }
+      ],
+      registry
+    });
+
+    const toolSection = capturedRound2Prompt.split('Tool results:\n')[1] || '';
+    const mktLines = toolSection.split('\n').filter(l => l.startsWith('MKT:'));
+    expect(mktLines.length).toBe(9);
+    for (const line of mktLines) {
+      expect(line).toContain('ML:');
+    }
+    expect(toolSection.length).toBeLessThanOrEqual(1100);
+  });
 });
