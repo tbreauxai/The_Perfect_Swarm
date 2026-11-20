@@ -493,7 +493,10 @@ export class AnalysisLifecycle {
                     evidenceSection = fullEv;
                 } else {
                     const groups = toolResults.split(/\n\n+/).filter(Boolean);
-                    const selectedSet = new Set(selectedGameIds);
+                    const protectedIds = selectedGameIds.length > 0
+                        ? selectedGameIds
+                        : resolveDiscussedGameIds(currentProposal, allParsedHeaders);
+                    const selectedSet = new Set(protectedIds);
                     const isSelectedGroup = (g: string): boolean => {
                         if (selectedSet.size === 0) return false;
                         const firstLine = g.split(/\r?\n/)[0] || '';
@@ -503,8 +506,10 @@ export class AnalysisLifecycle {
                         return false;
                     };
 
-                    // 1. First drop any trailing non-discussed game groups so discussed games stay intact
-                    let keptGroups = [...groups];
+                    // 1. Keep protected/discussed game groups first, then drop trailing non-discussed game groups
+                    const protectedGroups = groups.filter(isSelectedGroup);
+                    const otherGroups = groups.filter(g => !isSelectedGroup(g));
+                    let keptGroups = protectedGroups.length > 0 ? [...protectedGroups, ...otherGroups] : [...groups];
                     let droppedCount = 0;
                     while (keptGroups.length > 0 && !isSelectedGroup(keptGroups[keptGroups.length - 1])) {
                         const suffix = droppedCount > 0 ? `\n\n[evidence truncated: ${droppedCount} games]` : '';
