@@ -51,7 +51,7 @@ describe('runNov20 repros', () => {
     it('test2: critic prompt includes team names and FanDuel lines for cited games at groq budget', async () => {
         const twelveGames = Array.from({ length: 12 }, (_, i) => {
             const idx = i + 1;
-            return `event_id=nba-g${idx} | sport=nba | AwayTeam${idx} @ HomeTeam${idx} | FanDuel: HomeTeam${idx} -${idx}.5 (-110) / Total ${210 + idx}.5 | options: R${idx} HomeTeam${idx} -${idx}.5`;
+            return `event_id=nba-g${idx} | sport=nba | AwayTeam${idx} @ HomeTeam${idx} | options: R${idx} HomeTeam${idx} -${idx}.5 (-110)`;
         }).join('\n');
 
         const registry = new ToolRegistry([
@@ -89,7 +89,8 @@ describe('runNov20 repros', () => {
             context: new SwarmContext(),
             complexity: 'complex',
             settings: { appId: 'duelodds' },
-            toolRegistry: registry
+            toolRegistry: registry,
+            analystClusterMap: new Map()
         });
 
         await executeAnalyst(criticAgent, twelveGames, 0, {
@@ -101,9 +102,9 @@ describe('runNov20 repros', () => {
 
         expect(capturedPrompt.length).toBeLessThanOrEqual(5600);
         expect(capturedPrompt).toContain('AwayTeam2 @ HomeTeam2');
-        expect(capturedPrompt).toContain('FanDuel: HomeTeam2 -2.5');
+        expect(capturedPrompt).toContain('R2 HomeTeam2 -2.5 (-110)');
         expect(capturedPrompt).toContain('AwayTeam9 @ HomeTeam9');
-        expect(capturedPrompt).toContain('FanDuel: HomeTeam9 -9.5');
+        expect(capturedPrompt).toContain('R9 HomeTeam9 -9.5 (-110)');
         expect(capturedPrompt).not.toContain('HomeTeam1 ');
         expect(capturedPrompt).not.toContain('HomeTeam12');
     });

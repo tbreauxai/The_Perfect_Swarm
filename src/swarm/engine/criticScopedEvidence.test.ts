@@ -161,4 +161,120 @@ describe('Critic Scoped Evidence Pulls (Goal 2 & Goal 3)', () => {
     expect(verifyPrompt).not.toContain('nfl-kc');
     expect(verifyPrompt.length).toBeLessThanOrEqual(5600);
   });
+
+  it('2 cited of 12 games: critic prompt and tool calls name only those 2', async () => {
+    const twelveGames = Array.from({ length: 12 }, (_, i) => {
+      const idx = i + 1;
+      return `event_id=nba-g${idx} | sport=nba | Away${idx} @ Home${idx} | options: R${idx} Home${idx} -${idx}.5 (-110)`;
+    }).join('\n');
+
+    const pulledByTool: Array<{ tool: string; gameId: string }> = [];
+    const mkTool = (name: string) => ({
+      name,
+      description: name,
+      parameters: { game_id: { type: 'string' as const, description: 'id', required: true } },
+      execute: vi.fn(async ({ game_id }: any) => {
+        pulledByTool.push({ tool: name, gameId: game_id });
+        return { success: true, summary: `[${name}: ${game_id}] ok` };
+      })
+    });
+
+    const registry = new ToolRegistry([
+      mkTool('get_injury_and_roster_delta'),
+      mkTool('get_market_movement'),
+      mkTool('get_matchup_fundamentals'),
+      mkTool('get_environment_and_weather')
+    ]);
+
+    let capturedPrompt = '';
+    const criticAgent: any = {
+      id: 'critic',
+      role: 'Risk Critic',
+      provider: 'groq',
+      setSystemInstruction: vi.fn(),
+      run: vi.fn(async (p: string) => {
+        capturedPrompt = p;
+        return JSON.stringify({ pass: true, verdict: 'Verified 2 cited games', flags: [] });
+      })
+    };
+
+    const executeAnalyst = createAnalystExecutor({
+      task: 'Audit 2 cited games',
+      historicalContext: '',
+      chunks: [twelveGames],
+      context: new SwarmContext(),
+      complexity: 'complex',
+      settings: { appId: 'duelodds' },
+      toolRegistry: registry,
+      analystClusterMap: new Map()
+    });
+
+    await executeAnalyst(criticAgent, twelveGames, 0, {
+      summaryText: 'Proposed: Home3 -3.5, Home10 -10.5',
+      targetGameIds: ['nba-g3', 'nba-g10'],
+      proposerReports: [],
+      proposedPicks: []
+    });
+
+    const pulledIds = new Set(pulledByTool.map(p => p.gameId));
+    expect(pulledIds).toEqual(new Set(['nba-g3', 'nba-g10']));
+    expect(capturedPrompt).toContain('Away3 @ Home3');
+    expect(capturedPrompt).toContain('Away10 @ Home10');
+    expect(capturedPrompt).not.toContain('nba-g1 ');
+    expect(capturedPrompt).not.toContain('nba-g12');
+    expect(capturedPrompt.length).toBeLessThanOrEqual(5600);
+  });
+
+  it('0 cited games: no Game Slate, no tool pulls, critic confirms pass/no-picks', async () => {
+    const pulledByTool: Array<{ tool: string; gameId: string }> = [];
+    const mkTool = (name: string) => ({
+      name,
+      description: name,
+      parameters: { game_id: { type: 'string' as const, description: 'id', required: true } },
+      execute: vi.fn(async ({ game_id }: any) => {
+        pulledByTool.push({ tool: name, gameId: game_id });
+        return { success: true, summary: `[${name}: ${game_id}] ok` };
+      })
+    });
+
+    const registry = new ToolRegistry([
+      mkTool('get_injury_and_roster_delta'),
+      mkTool('get_market_movement')
+    ]);
+
+    let capturedPrompt = '';
+    const criticAgent: any = {
+      id: 'critic',
+      role: 'Risk Critic',
+      provider: 'groq',
+      setSystemInstruction: vi.fn(),
+      run: vi.fn(async (p: string) => {
+        capturedPrompt = p;
+        return JSON.stringify({ pass: true, verdict: 'No picks proposed', flags: [] });
+      })
+    };
+
+    const executeAnalyst = createAnalystExecutor({
+      task: 'Audit slate',
+      historicalContext: '',
+      chunks: [SLATE],
+      context: new SwarmContext(),
+      complexity: 'complex',
+      settings: { appId: 'duelodds' },
+      toolRegistry: registry,
+      analystClusterMap: new Map()
+    });
+
+    await executeAnalyst(criticAgent, SLATE, 0, {
+      summaryText: 'No picks proposed',
+      targetGameIds: [],
+      proposerReports: [],
+      proposedPicks: []
+    });
+
+    expect(pulledByTool).toHaveLength(0);
+    expect(capturedPrompt).not.toContain('Game Slate:');
+    expect(capturedPrompt).not.toContain('nba-lal');
+    expect(capturedPrompt).toContain('Confirm pass/no-picks');
+  });
 });

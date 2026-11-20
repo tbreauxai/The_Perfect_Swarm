@@ -5,7 +5,7 @@ import type { SwarmEngineSettings } from '../types.ts';
 import type { AgentVariantConfig } from '../experiment.ts';
 import { ToolRegistry } from '../tools/index.ts';
 import { parseGameHeaders, renderHeaders } from '../context/gameHeaders.ts';
-import { resolveDiscussedGameIds } from '../tools/criticEvidence.ts';
+import { resolveSelectedGameIds } from '../context/selectedGames.ts';
 import {
     globalHierarchicalMessageBus,
     type ClusterDigest,
@@ -690,13 +690,9 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
                     ...otherSummaryLines
                 ];
 
-                const proposerEvidencePreview = auditProposerReports
-                    .flatMap((r: any) => Array.isArray(r?.toolEvidenceItems) ? r.toolEvidenceItems.map((i: any) => i?.summary || '') : [])
-                    .filter(Boolean)
-                    .join('\n');
                 const proposedAuditContext = {
                     summaryText: orderedSummaryLines.join('\n').slice(0, 1200),
-                    targetGameIds: resolveDiscussedGameIds(auditProposerReports, parsedChunkHeaders, proposerEvidencePreview),
+                    targetGameIds: resolveSelectedGameIds(auditProposerReports, parsedChunkHeaders),
                     proposerReports: auditProposerReports,
                     proposedPicks: collectedProposedPicks
                 };
