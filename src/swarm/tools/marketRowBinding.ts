@@ -149,8 +149,9 @@ export function extractRowOptions(sources: unknown[], preParsedHeaders?: GameHea
         const cells = line.split('|').map(c => c.trim()).filter(Boolean);
         if (cells.length >= 2 && /^R\d+$/i.test(cells[0])) {
           const rowId = cells[0].toUpperCase();
+          const eventId = /^[a-z-]+-\d+$/i.test(cells[1]) ? cells[1] : undefined;
           const body = cells.slice(1).join(' | ');
-          addEntry({ rowId, text: body });
+          addEntry({ rowId, text: body, ...(eventId ? { eventId } : {}) });
           continue;
         }
       }
