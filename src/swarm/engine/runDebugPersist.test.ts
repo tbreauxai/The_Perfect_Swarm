@@ -129,7 +129,7 @@ describe('runDebugPersist (S0 / S2)', () => {
       }
     } as any);
 
-    const fetchSpy = vi.fn(async () => new Response('', { status: 201 }));
+    const fetchSpy = vi.fn(async (_url: string, _init?: RequestInit) => new Response('', { status: 201 }));
     vi.stubGlobal('fetch', fetchSpy);
 
     const baseSettings = {
