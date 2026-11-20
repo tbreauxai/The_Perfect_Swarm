@@ -741,17 +741,19 @@ export class AnalysisLifecycle {
                 const availableSportsTools = this.toolRegistry
                     ? ['get_matchup_fundamentals', 'get_injury_and_roster_delta', 'get_market_movement'].filter(t => this.toolRegistry!.has(t))
                     : [];
-                const pullAudit = auditPullBeforePass(
-                    currentProposal,
-                    combinedToolSummary,
-                    boardSourceForAudit,
-                    {
-                        headers: allParsedHeaders,
-                        toolCallTrace: accumulatedToolTrace,
-                        availableTools: availableSportsTools,
-                        marketToolRecords: pulledMarketRecords
-                    }
-                );
+                const pullAudit = hasEmptyPicks
+                    ? { pass: true, violations: [], flags: [], unqueriedGameIds: [], missingToolsByGame: {} }
+                    : auditPullBeforePass(
+                          currentProposal,
+                          combinedToolSummary,
+                          boardSourceForAudit,
+                          {
+                              headers: allParsedHeaders,
+                              toolCallTrace: accumulatedToolTrace,
+                              availableTools: availableSportsTools,
+                              marketToolRecords: pulledMarketRecords
+                          }
+                      );
                 if (!pullAudit.pass) {
                     let newlyPulledCount = 0;
                     if (this.toolRegistry && pullAudit.unqueriedGameIds.length > 0) {

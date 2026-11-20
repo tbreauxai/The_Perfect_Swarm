@@ -436,9 +436,6 @@ const FUNDAMENTALS_MISSING_REGEX = new RegExp(
 const INJURY_MISSING_REGEX =
   /\b(?:no\s+(?:injury|injuries|roster\s+delta)\s+(?:data|reports?|info)\s+(?:was|were)?\s*(?:fetched|pulled|available|found|provided|returned)|(?:injury|injuries|roster\s+delta)\s+(?:data|reports?|info)\s+(?:is|are|was|were)?\s*(?:missing|unavailable|not\s+(?:fetched|pulled|available|found|provided|returned)|absent)|(?:missing|lack(?:ing)?|without)\s+(?:any\s+)?(?:injury|injuries|roster\s+delta)\s+(?:data|reports?))\b/i;
 
-const PASS_INTENT_REGEX =
-  /\b(?:pass(?:ing)?\s+on|take\s+a\s+pass|no[\s_-]?play|insufficient\s+data|cannot\s+(?:build|recommend|form|construct|place)|decline\s+to|skip(?:ping)?\s+(?:the\s+)?(?:slate|parlay|bet|card)|no\s+(?:actionable\s+)?(?:picks|bets|plays|parlay))\b/i;
-
 interface ClauseAuditFinding {
   flag: 'false_market_not_fetched' | 'false_missing_data_claim' | 'unqueried_missing_data_claim';
   violation: string;
@@ -750,70 +747,7 @@ export function auditPullBeforePass(
     }
   }
 
-  // Check C: Premature pass without calling relevant tools
-  const hasEmptyOrNoPicks =
-    typeof proposal === 'string' ||
-    !Array.isArray(proposal.picks) ||
-    proposal.picks.length === 0;
-  const fullText = [
-    ...snippets,
-    typeof proposal === 'object' ? String(proposal.ui_title || '') : '',
-    typeof proposal === 'object' ? String(proposal.status || '') : ''
-  ]
-    .filter(Boolean)
-    .join(' ');
-  const isPassProposal =
-    hasEmptyOrNoPicks &&
-    (PASS_INTENT_REGEX.test(fullText) ||
-      (typeof proposal === 'object' &&
-        (proposal.status === 'no_play' ||
-          /^insufficient data$/i.test(String(proposal.ui_title || '').trim()))));
-
-  if (isPassProposal && headers.length > 0) {
-    const coreToolsAvailable = CORE_SPORTS_TOOLS.filter(t => {
-      if (hasExplicitAvailableTools) return availableToolsSet.has(t);
-      if (options?.requireAllSlateToolsOnPass) return true;
-      return ledger.toolsSeen.has(t);
-    });
-
-    if (coreToolsAvailable.length > 0) {
-      const mentionedAnywhere = findMentionedGameIds(fullText, mentionEntries);
-      const isSlateWideOrParlayPass =
-        mentionedAnywhere.length === 0 ||
-        /\b(?:\d+-leg|parlay|slate|all\s+\d+\s+games|remaining\s+games)\b/i.test(fullText);
-
-      const slateSlice = headers
-        .slice(0, headers.length <= 8 ? headers.length : 6)
-        .map(h => h.eventId)
-        .filter(Boolean);
-
-      const checkGameIds = isSlateWideOrParlayPass
-        ? Array.from(new Set([...mentionedAnywhere, ...slateSlice]))
-        : mentionedAnywhere;
-
-      const missingPairs: string[] = [];
-      for (const gId of checkGameIds) {
-        for (const tool of coreToolsAvailable) {
-          const status = ledger.byEvent.get(gId)?.get(tool);
-          if (status === undefined) {
-            unqueriedSet.add(gId);
-            if (!missingByGame[gId]) missingByGame[gId] = [];
-            if (!missingByGame[gId].includes(tool)) missingByGame[gId].push(tool);
-            missingPairs.push(`${gId}:${tool}`);
-          }
-        }
-      }
-
-      if (missingPairs.length > 0) {
-        const missingGameList = Object.keys(missingByGame).filter(id => checkGameIds.includes(id));
-        addViolation(
-          'premature_pass_without_tools',
-          `Pass is premature: relevant tools were not called for ${missingGameList.length} game(s) (${missingPairs.slice(0, 8).join(', ')}).`
-        );
-      }
-    }
-  }
-
+  // Empty-picks passes do not trigger Check C (premature_pass_without_tools) or top-up pulls.
   const unqueriedGameIds = Array.from(unqueriedSet);
   if (violations.length > 0) {
     return {
