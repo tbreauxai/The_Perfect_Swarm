@@ -247,7 +247,10 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
             }
             if (seatHasRealSummary) parsedSeats++;
         }
-        appComputedCountsLine = `App-computed counts: games=${parsedHeaders.length}, covered=${coveredSet.size}, picks=${picksCount}, seats_parsed=${parsedSeats}/${analysts.length}`;
+        const agreementPart = workflowConsensus
+            ? `, agreement=${workflowConsensus.agreementLevel} ${Math.round(workflowConsensus.consensusScore * 100)}%`
+            : '';
+        appComputedCountsLine = `App-computed counts: games=${parsedHeaders.length}, covered=${coveredSet.size}, picks=${picksCount}, seats_parsed=${parsedSeats}/${analysts.length}${agreementPart}`;
         const toolStatusLine = Array.isArray(p.toolCallTrace) && p.toolCallTrace.length > 0
             ? buildToolCoverageSummaryLine(p.toolCallTrace, parsedHeaders)
             : '';
@@ -454,6 +457,36 @@ function extractToolEvidenceSection(promptText: string): string {
     return match ? match[1].trim() : '';
 }
 
+function stripSeatAgreementText(text: string): string {
+    return text
+        .replace(/\b\d+\s*\/\s*\d+\s+seats?\s+agree(?:d|s|ment)?\b[^.;\n]*[.;]?/gi, '')
+        .replace(/\s{2,}/g, ' ')
+        .replace(/\s+([,.;:])/g, '$1')
+        .trim();
+}
+
+export function sanitizeDivergentSeatAgreement(result: any): void {
+    if (!result || typeof result !== 'object') return;
+    if (Array.isArray(result)) {
+        for (let i = 0; i < result.length; i++) {
+            if (typeof result[i] === 'string') {
+                result[i] = stripSeatAgreementText(result[i]);
+            } else if (result[i] && typeof result[i] === 'object') {
+                sanitizeDivergentSeatAgreement(result[i]);
+            }
+        }
+        return;
+    }
+    for (const key of Object.keys(result)) {
+        const val = result[key];
+        if (typeof val === 'string') {
+            result[key] = stripSeatAgreementText(val);
+        } else if (val && typeof val === 'object') {
+            sanitizeDivergentSeatAgreement(val);
+        }
+    }
+}
+
 export async function executeManagerSynthesis(
     managerAgent: Agent,
     effectiveDynamicPrompt: string,
@@ -475,6 +508,7 @@ export async function executeManagerSynthesis(
         unauditedLegs?: VetoedLegTarget[];
         hadProposedPicks?: boolean;
         auditNote?: string;
+        agreementLevel?: 'strong' | 'moderate' | 'divergent';
     }
 ): Promise<any> {
     const managerInstruction = (settings as any)?.managerInstruction
@@ -581,6 +615,12 @@ export async function executeManagerSynthesis(
             hadProposedPicks: Boolean(groundingContext?.hadProposedPicks || initialPickCount > 0),
             auditNote: groundingContext?.auditNote
         });
+        const isDivergentRun = groundingContext?.agreementLevel === 'divergent'
+            || /\bagreement=divergent\b/i.test(safeDynamicPrompt)
+            || /\bLevel:\s*divergent\b/i.test(safeDynamicPrompt);
+        if (isDivergentRun) {
+            sanitizeDivergentSeatAgreement(finalResult);
+        }
     }
 
     if (coveredEventIds && Array.isArray(finalResult?.picks)) {

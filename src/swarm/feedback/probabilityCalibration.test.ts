@@ -6,6 +6,7 @@ import {
   formatCalibrationBrief,
   type ProbabilityObservation
 } from './probabilityCalibration.ts';
+import { sanitizeUngroundedClaims } from '../tools/claimGrounding.ts';
 
 function row(predictedProbability: number, outcome: 0 | 1, sportKey = 'baseball_mlb'): ProbabilityObservation {
   return {
@@ -53,6 +54,21 @@ describe('swarm probability calibration', () => {
       expect(point.rawBaselineBrier).toBeGreaterThanOrEqual(0);
       expect(point.historicalBaselineBrier).toBe(0.25);
     }
+  });
+
+  it('prefixes calibration brief and avoids invented-claim flags when included in verifier evidence', () => {
+    const fit = fitCalibration(Array.from({ length: 10 }, () => row(0.65, 0)));
+    const brief = formatCalibrationBrief(fit, 'duelodds');
+    expect(brief.startsWith('Cite only verbatim; not an App-computed count; never a pick edge.')).toBe(true);
+
+    const report = {
+      summary: 'Swarm-owned win calibration for duelodds from 10 graded predictions.',
+      insights: ['Stated 65.0% vs hit 0.0% (overconfident, -65.0 pp).']
+    };
+    const res: any = sanitizeUngroundedClaims(report, brief, 'event_id=nba-1 | sport=nba | NYK @ BOS');
+    expect(res?.strippedClaims ?? []).toHaveLength(0);
+    expect(report.summary).toContain('10 graded predictions');
+    expect(report.insights[0]).toContain('65.0%');
   });
 });
 

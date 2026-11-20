@@ -96,13 +96,16 @@ export function calibrateProbability(raw: number, fit: CalibrationFit, sportKey?
   return Number(clampProbability(sigmoid(logit(raw) + bias)).toFixed(4));
 }
 
+const CALIBRATION_BRIEF_PREFIX = 'Cite only verbatim; not an App-computed count; never a pick edge.';
+
 export function formatCalibrationBrief(fit: CalibrationFit, appId: string): string {
   if (fit.sampleSize < 8) {
-    return `Swarm win model for ${appId} has ${fit.sampleSize} graded predictions (need 8). Do not invent a higher win probability than the no-vig board.`;
+    return `${CALIBRATION_BRIEF_PREFIX}\nSwarm win model for ${appId} has ${fit.sampleSize} graded predictions (need 8). Do not invent a higher win probability than the no-vig board.`;
   }
   const gap = (fit.meanActual - fit.meanPredicted) * 100;
   const direction = gap < -1 ? 'overconfident' : gap > 1 ? 'underconfident' : 'roughly calibrated';
   return [
+    CALIBRATION_BRIEF_PREFIX,
     `Swarm-owned win calibration for ${appId} from ${fit.sampleSize} graded predictions.`,
     `Stated ${(fit.meanPredicted * 100).toFixed(1)}% vs hit ${(fit.meanActual * 100).toFixed(1)}% (${direction}, ${gap >= 0 ? '+' : ''}${gap.toFixed(1)} pp). Brier ${fit.brier.toFixed(3)}. Logit bias ${fit.globalBias.toFixed(3)}.`,
     'Start from the calibrated probability. Do not add win probability back to manufacture edge.',

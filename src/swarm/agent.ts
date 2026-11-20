@@ -24,6 +24,46 @@ export { DEFAULT_PROVIDER_MODELS } from './server/modelsProvider.ts';
  * - Multi-provider failover cascades on free-tier rate limits (429), timeouts, and 5xx errors
  * - Robust reasoning model sanitization (<think> tag stripping)
  */
+function checkTargetLimits(
+    target: { provider: string; modelName?: string },
+    defaultModelName: string,
+    prompt: string,
+    systemInstruction: string | undefined,
+    maxBudgetWait: number,
+    groqMode?: 'chat' | 'morning'
+): { ok: boolean; targetModel: string; reason?: string; needsBudgetWait?: boolean; estimatedTokens: number } {
+    const targetModel = target.modelName || defaultModelName;
+    const knownSkip = globalProviderLimiter.getSkipReason(String(target.provider), targetModel);
+    const promptCharCap = target.provider === 'groq' ? groqPromptCharCap(groqMode) : prompt.length;
+    const effectivePrompt = target.provider === 'groq' && prompt.length > promptCharCap
+        ? prompt.slice(0, promptCharCap)
+        : prompt;
+    const payloadToEstimate = systemInstruction
+        ? `${systemInstruction}\n${effectivePrompt}`
+        : effectivePrompt;
+    const estimatedTokens = estimateTokens(payloadToEstimate);
+    const budgetWait = globalProviderLimiter.budgetWaitMs(String(target.provider), estimatedTokens);
+    if (knownSkip || budgetWait > maxBudgetWait) {
+        return {
+            ok: false,
+            targetModel,
+            reason: knownSkip || `token budget needs ${Math.ceil(budgetWait)}ms`,
+            needsBudgetWait: false,
+            estimatedTokens
+        };
+    }
+    if (!globalTokenBudgetManager.canAllocate(target.provider as any, estimatedTokens)) {
+        return {
+            ok: false,
+            targetModel,
+            reason: `token budget remaining ${globalTokenBudgetManager.getRemainingBudget(target.provider as any)} < ${estimatedTokens}; shifting seat`,
+            needsBudgetWait: true,
+            estimatedTokens
+        };
+    }
+    return { ok: true, targetModel, estimatedTokens };
+}
+
 export class Agent {
     public role: string;
     public modelName: string;
@@ -127,32 +167,39 @@ export class Agent {
             const maxBudgetWait = config?.interactive
                 ? INTERACTIVE_MAX_BUDGET_WAIT_MS
                 : (config?.maxBudgetWaitMs ?? DEFAULT_STRICT_BUDGET_WAIT_MS);
-            const knownSkip = globalProviderLimiter.getSkipReason(String(currentTarget.provider), targetModel);
-            const promptCharCap = currentTarget.provider === 'groq' ? groqPromptCharCap(config?.groqMode) : prompt.length;
-            const effectivePrompt = currentTarget.provider === 'groq' && prompt.length > promptCharCap
-                ? prompt.slice(0, promptCharCap)
-                : prompt;
-            const payloadToEstimate = this.systemInstruction
-                ? `${this.systemInstruction}\n${effectivePrompt}`
-                : effectivePrompt;
-            const budgetWait = globalProviderLimiter.budgetWaitMs(String(currentTarget.provider), estimateTokens(payloadToEstimate));
-            if (knownSkip || budgetWait > maxBudgetWait) {
-                lastFailedProvider = String(currentTarget.provider);
-                lastFailedModel = targetModel;
-                lastError = new Error(knownSkip || `token budget needs ${Math.ceil(budgetWait)}ms`);
-                continue;
-            }
+            const preCheck = checkTargetLimits(currentTarget, this.modelName, prompt, this.systemInstruction, maxBudgetWait, config?.groqMode);
+            if (!preCheck.ok) {
+                if (!preCheck.needsBudgetWait) {
+                    const skipReason = preCheck.reason || 'skipped by limiter/budget';
+                    lastFailedProvider = String(currentTarget.provider);
+                    lastFailedModel = preCheck.targetModel;
+                    lastError = new Error(skipReason);
+                    context.addEvent({
+                        agentRole: this.role,
+                        action: 'Provider Skipped',
+                        modelName: `${currentTarget.provider}/${preCheck.targetModel}`,
+                        prompt: `Skipped provider target: ${skipReason}`,
+                        output: { provider: currentTarget.provider, model: preCheck.targetModel, reason: skipReason }
+                    });
+                    continue;
+                }
 
-            const estimatedTokens = estimateTokens(payloadToEstimate);
-            if (!globalTokenBudgetManager.canAllocate(currentTarget.provider, estimatedTokens)) {
-                const waitMs = Math.min(60000, globalProviderLimiter.budgetWaitMs(String(currentTarget.provider), estimatedTokens));
+                const waitMs = Math.min(60000, globalProviderLimiter.budgetWaitMs(String(currentTarget.provider), preCheck.estimatedTokens));
                 if (Number.isFinite(waitMs) && waitMs > 0) {
                     await new Promise(resolve => setTimeout(resolve, waitMs));
                 }
-                if (!globalTokenBudgetManager.canAllocate(currentTarget.provider, estimatedTokens)) {
+                if (!globalTokenBudgetManager.canAllocate(currentTarget.provider, preCheck.estimatedTokens)) {
+                    const reason = `token budget remaining ${globalTokenBudgetManager.getRemainingBudget(currentTarget.provider)} < ${preCheck.estimatedTokens}; shifting seat`;
                     lastFailedProvider = String(currentTarget.provider);
-                    lastFailedModel = targetModel;
-                    lastError = new Error(`token budget remaining ${globalTokenBudgetManager.getRemainingBudget(currentTarget.provider)} < ${estimatedTokens}; shifting seat`);
+                    lastFailedModel = preCheck.targetModel;
+                    lastError = new Error(reason);
+                    context.addEvent({
+                        agentRole: this.role,
+                        action: 'Provider Skipped',
+                        modelName: `${currentTarget.provider}/${preCheck.targetModel}`,
+                        prompt: `Skipped provider target: ${reason}`,
+                        output: { provider: currentTarget.provider, model: preCheck.targetModel, reason }
+                    });
                     continue;
                 }
             }
@@ -454,23 +501,32 @@ export class Agent {
 
                     // If eligible for failover and a backup provider is ready, failover immediately without waiting
                     if ((isFailoverEligible || isFatal || isTransientRateLimitOrSkip) && hasNextProvider) {
-                        const nextTarget = targetChain[targetIdx + 1];
-                        context.addEvent({
-                            agentRole: this.role,
-                            action: 'Provider Failover Triggered',
-                            modelName: `${currentTarget.provider} -> ${nextTarget.provider}`,
-                            prompt: `Cascading to backup provider due to error: ${errMsg}`,
-                            output: {
-                                failedProvider: currentTarget.provider,
-                                fallbackProvider: nextTarget.provider,
-                                reason: errMsg
-                            },
-                            failover: {
-                                fromProvider: String(currentTarget.provider),
-                                toProvider: String(nextTarget.provider),
-                                reason: errMsg
+                        let realFallback: typeof currentTarget | undefined;
+                        for (let j = targetIdx + 1; j < targetChain.length; j++) {
+                            const cand = targetChain[j];
+                            if (checkTargetLimits(cand, this.modelName, prompt, this.systemInstruction, maxBudgetWait, config?.groqMode).ok) {
+                                realFallback = cand;
+                                break;
                             }
-                        });
+                        }
+                        if (realFallback) {
+                            context.addEvent({
+                                agentRole: this.role,
+                                action: 'Provider Failover Triggered',
+                                modelName: `${currentTarget.provider} -> ${realFallback.provider}`,
+                                prompt: `Cascading to backup provider due to error: ${errMsg}`,
+                                output: {
+                                    failedProvider: currentTarget.provider,
+                                    fallbackProvider: realFallback.provider,
+                                    reason: errMsg
+                                },
+                                failover: {
+                                    fromProvider: String(currentTarget.provider),
+                                    toProvider: String(realFallback.provider),
+                                    reason: errMsg
+                                }
+                            });
+                        }
                         break; // Exit retry loop to advance to next target in chain
                     }
 

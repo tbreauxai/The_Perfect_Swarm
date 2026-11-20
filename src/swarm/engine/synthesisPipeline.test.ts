@@ -105,4 +105,60 @@ describe('Adaptive Manager Synthesis & Context Ceiling Protection (synthesisPipe
         expect(interceptedTokens).toBeLessThanOrEqual(6000);
         expect(interceptedPrompt).toContain('[trimmed for manager context ceiling]');
     });
+
+    it('appends agreement=<level> <score%> to App-computed counts and strips "N/N seats agree" when divergent', async () => {
+        const manager = createMockAgent('Executive Manager', 'groq', 'llama-3.3-70b-versatile');
+        const analysts = [
+            createMockAgent('Quant Analyst', 'groq'),
+            createMockAgent('Market Analyst', 'groq'),
+            createMockAgent('Risk Critic', 'groq')
+        ];
+        const context = new SwarmContext();
+
+        const compiled = compileSynthesisPrompt({
+            task: 'Evaluate NBA slate',
+            rawInput: 'event_id=nba-1 | sport=nba | NYK @ BOS | options: R1 BOS -4.5 (-110)',
+            analysts,
+            managerAgent: manager,
+            allAnalystReports: [
+                [{ role: 'Quant Analyst', summary: 'Lean BOS', coveredEventIds: ['nba-1'], picks: [] }],
+                [{ role: 'Market Analyst', summary: 'Lean NYK', coveredEventIds: ['nba-1'], picks: [] }],
+                [{ role: 'Risk Critic', summary: 'Pass', coveredEventIds: ['nba-1'], picks: [] }]
+            ],
+            clusterDigests: {},
+            historicalContext: '',
+            context,
+            params: { task: 'Evaluate NBA slate', isBettingRun: true } as any,
+            settings: { responseSchema: 'betting_card' } as any,
+            bypassCache: false,
+            workflowConsensus: {
+                agreementLevel: 'divergent',
+                consensusScore: 0.33,
+                confidenceScore: 0.4,
+                unanimousFindings: [],
+                majorityFindings: [],
+                conflictingViews: [],
+                dissentingOpinions: [],
+                disagreements: ['Quant vs Market']
+            } as any
+        });
+
+        expect(compiled.appComputedCounts).toContain('agreement=divergent 33%');
+        expect(compiled.effectiveDynamicPrompt).toContain('agreement=divergent 33%');
+
+        vi.spyOn(manager, 'run').mockResolvedValue({
+            ui_title: 'BOS -4.5 (3/3 seats agree)',
+            summary: '3/3 seats agree on Boston Celtics. Edge looks solid.',
+            insights: ['3/3 seats agree that BOS covers', 'Market line steady']
+        });
+
+        const finalResult = await executeManagerSynthesis(
+            manager,
+            compiled.effectiveDynamicPrompt,
+            context
+        );
+
+        expect(JSON.stringify(finalResult)).not.toMatch(/3\/3\s+seats\s+agree/i);
+        expect(finalResult.summary).toContain('Edge looks solid.');
+    });
 });

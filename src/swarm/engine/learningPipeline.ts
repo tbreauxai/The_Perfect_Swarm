@@ -447,8 +447,9 @@ export async function runLearningPipeline(p: LearningPipelineParams): Promise<Le
                 policyUpdated: fbResult.policyUpdated
             };
 
+            const hasEmptyPicks = Array.isArray(finalAnalysis?.picks) && finalAnalysis.picks.length === 0;
             // Feed reinforcement learning reward into load balancer for failover priority weighting
-            if (fbResult.reward?.compositeReward !== undefined) {
+            if (!hasEmptyPicks && fbResult.reward?.compositeReward !== undefined) {
                 for (const analyst of analysts) {
                     globalLoadBalancer.recordReward(analyst.provider, fbResult.reward.compositeReward);
                 }
@@ -499,9 +500,12 @@ export async function runLearningPipeline(p: LearningPipelineParams): Promise<Le
     } | undefined;
 
     if (coordinationEnabled) {
-        const extrinsic = workflowLifecycleResult?.computedRating
-            ? workflowLifecycleResult.computedRating
-            : (isSuccess ? 0.90 : 0.35);
+        const hasEmptyPicks = Array.isArray(finalAnalysis?.picks) && finalAnalysis.picks.length === 0;
+        const extrinsic = hasEmptyPicks
+            ? 0.5
+            : (workflowLifecycleResult?.computedRating
+                ? workflowLifecycleResult.computedRating
+                : (isSuccess ? 0.90 : 0.35));
 
         if (coordinationSettings?.rewardShaping !== false) {
             const noveltyScore = Math.max(0, 1.0 - (p.workflowTieredCacheHit?.similarity ?? 0));

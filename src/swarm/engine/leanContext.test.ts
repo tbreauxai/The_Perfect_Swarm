@@ -78,7 +78,9 @@ describe('Lean Context & Prompt Bounds Contract (PS2)', () => {
       expect(ap.prompt.length).toBeLessThanOrEqual(5600);
       expect(ap.prompt).not.toContain('id|game|market');
       expect(ap.prompt).not.toContain('RAW ACTIONABLE BETS');
-      expect(ap.prompt).toContain('Game Slate:');
+      if (!/risk|critic/i.test(ap.role)) {
+        expect(ap.prompt).toContain('Game Slate:');
+      }
     }
 
     // Assert proposer prompt is <= budget

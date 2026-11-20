@@ -219,4 +219,41 @@ describe("Agent fallback order (PS3 preserveFallbackOrder)", () => {
     canAllocateSpy.mockRestore();
     waitSpy.mockRestore();
   });
+
+  it("emits Provider Skipped for skipped targets and names the real fallback in Provider Failover Triggered", async () => {
+    const skipSpy = vi.spyOn(globalProviderLimiter, "getSkipReason").mockImplementation((provider: string) => {
+      return provider === "order-a-mock" ? "cooldown active" : null;
+    });
+
+    const ctx = new SwarmContext();
+    const agent = new Agent(
+      "Manager Node",
+      "m",
+      "order-dead-mock" as any,
+      "k",
+      undefined,
+      fallbacks,
+    );
+    agent.preserveFallbackOrder = true;
+
+    const result = await agent.run("prompt", ctx, {
+      responseMimeType: "application/json",
+      bypassCache: true,
+    });
+
+    expect(result.source).toBe("order-b-mock");
+
+    const failoverEv = ctx.events.find((e) => e.action === "Provider Failover Triggered" && e.output?.fallbackProvider);
+    expect(failoverEv).toBeDefined();
+    expect(failoverEv?.modelName).toBe("order-dead-mock -> order-b-mock");
+    expect(failoverEv?.output?.fallbackProvider).toBe("order-b-mock");
+    expect(failoverEv?.failover?.toProvider).toBe("order-b-mock");
+
+    const skippedEv = ctx.events.find((e) => e.action === "Provider Skipped");
+    expect(skippedEv).toBeDefined();
+    expect(skippedEv?.output?.provider).toBe("order-a-mock");
+    expect(skippedEv?.output?.reason).toBe("cooldown active");
+
+    skipSpy.mockRestore();
+  });
 });
