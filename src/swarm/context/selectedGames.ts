@@ -1,23 +1,35 @@
 import type { GameHeader } from './gameHeaders.ts';
+import { buildHeaderAliasMap, escapeRegex } from './headerAliases.ts';
 
-function matchHeadersInText(text: string, headers: GameHeader[], out: Set<string>): void {
+function matchHeadersInText(text: string, headers: GameHeader[], out: Set<string>, aliases = false): void {
   if (!text || !headers.length) return;
   const lower = text.toLowerCase();
   const hasExplicitOptions = headers.some(h => Array.isArray(h.options) && h.options.length > 0);
+  const aliasByEventId = aliases
+    ? new Map(buildHeaderAliasMap(headers).map(entry => [entry.eventId, entry]))
+    : null;
   for (let i = 0; i < headers.length; i++) {
     const h = headers[i];
     if (!h?.eventId) continue;
     const matchedOptionRow = (h.options || []).some(o =>
       Boolean(o.id && o.id.trim()) &&
-      new RegExp(`\\b${o.id.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(text)
+      new RegExp(`\\b${escapeRegex(o.id.trim())}\\b`, 'i').test(text)
     );
     const fallbackRowMatch = !hasExplicitOptions && new RegExp(`\\bR${i + 1}\\b`, 'i').test(text);
+    const aliasEntry = aliasByEventId?.get(h.eventId);
+    const matchedAlias = Boolean(
+      aliasEntry && (
+        aliasEntry.nameAliases.some(alias => new RegExp(`(?<![a-zA-Z0-9])${escapeRegex(alias)}(?![a-zA-Z0-9])`, 'i').test(text)) ||
+        aliasEntry.abbrAliases.some(abbr => new RegExp(`(?<![a-zA-Z0-9])${escapeRegex(abbr)}(?![a-zA-Z0-9])`).test(text))
+      )
+    );
     if (
       text.includes(h.eventId) ||
       matchedOptionRow ||
       fallbackRowMatch ||
       (h.home && lower.includes(h.home.toLowerCase())) ||
-      (h.away && lower.includes(h.away.toLowerCase()))
+      (h.away && lower.includes(h.away.toLowerCase())) ||
+      matchedAlias
     ) {
       out.add(h.eventId);
     }
@@ -39,7 +51,7 @@ function extractFromObject(obj: any, headers: GameHeader[], out: Set<string>): b
     if (!pk || typeof pk !== 'object') {
       if (typeof pk === 'string') {
         const before = out.size;
-        matchHeadersInText(pk, headers, out);
+        matchHeadersInText(pk, headers, out, true);
         if (out.size > before) foundExplicit = true;
       }
       continue;
@@ -64,7 +76,7 @@ function extractFromObject(obj: any, headers: GameHeader[], out: Set<string>): b
       .map(String)
       .join(' ');
     const before = out.size;
-    matchHeadersInText(pkText, headers, out);
+    matchHeadersInText(pkText, headers, out, true);
     if (out.size > before) foundExplicit = true;
   }
 
@@ -77,7 +89,7 @@ function extractFromObject(obj: any, headers: GameHeader[], out: Set<string>): b
     }
     const scText = [sc.row, sc.pick, sc.selection, sc.game, sc.match].filter(Boolean).map(String).join(' ');
     const before = out.size;
-    matchHeadersInText(scText, headers, out);
+    matchHeadersInText(scText, headers, out, true);
     if (out.size > before) foundExplicit = true;
   }
 
@@ -88,7 +100,7 @@ function extractFromObject(obj: any, headers: GameHeader[], out: Set<string>): b
     .join(' ');
   if (singleText) {
     const before = out.size;
-    matchHeadersInText(singleText, headers, out);
+    matchHeadersInText(singleText, headers, out, true);
     if (out.size > before) foundExplicit = true;
   }
 
