@@ -85,9 +85,9 @@ describe('runNov20c repros (wf-1795203442644)', () => {
         const spySetA = makeToolSpies();
         const proposerA = makeAgent('Manager Node', 'gemini', () =>
             JSON.stringify({
-                ui_title: 'Pass',
+                ui_title: 'Slate Review',
                 summary:
-                    'Passing on Orlando Magic @ Brooklyn Nets, Washington Wizards @ Chicago Bulls, and Houston Rockets @ Denver Nuggets.',
+                    'Slate review covering Orlando Magic @ Brooklyn Nets, Washington Wizards @ Chicago Bulls, and Houston Rockets @ Denver Nuggets.',
                 picks: []
             })
         );

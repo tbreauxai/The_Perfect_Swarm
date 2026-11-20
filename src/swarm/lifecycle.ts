@@ -5,11 +5,10 @@ import { redactForLog } from './parser/responseGuards.ts';
 import { groqPromptCharCap } from './providers/groq.ts';
 import { seatBudget } from './context/promptBudget.ts';
 import { parseGameHeaders, renderHeaders, filterPicksByCoverage, type GameHeader } from './context/gameHeaders.ts';
-import { filterHeadersByEventIds } from './context/selectedGames.ts';
+import { filterHeadersByEventIds, resolveSelectedGameIds } from './context/selectedGames.ts';
 import {
     isFalseHallucinationCritique,
-    mergeScopedToolEvidence,
-    resolveDiscussedGameIds
+    mergeScopedToolEvidence
 } from './tools/criticEvidence.ts';
 import { auditInjuryAttribution } from './tools/injuryAttribution.ts';
 import {
@@ -271,7 +270,15 @@ export class AnalysisLifecycle {
             const allParsedHeaders: GameHeader[] = Array.isArray((rawData as any)?.allHeaders) && (rawData as any).allHeaders.length > 0
                 ? ((rawData as any).allHeaders as GameHeader[])
                 : parseGameHeaders((rawData as any)?.fullBoard || rawData);
-            const selectedGameIds = resolveDiscussedGameIds(currentProposal, allParsedHeaders, prePassedToolResults);
+            const hasEmptyPicks = Boolean(
+                currentProposal &&
+                typeof currentProposal === 'object' &&
+                Array.isArray((currentProposal as any).picks) &&
+                (currentProposal as any).picks.length === 0
+            );
+            const selectedGameIds = hasEmptyPicks
+                ? []
+                : resolveSelectedGameIds([currentProposal], allParsedHeaders);
             const scopedHeaders = selectedGameIds.length > 0
                 ? filterHeadersByEventIds(allParsedHeaders, selectedGameIds)
                 : allParsedHeaders;
@@ -412,12 +419,7 @@ export class AnalysisLifecycle {
             const retryContextLine = attempt > 1 && feedback
                 ? `\n[Prior Critique From Attempt ${attempt - 1}]: ${feedback.slice(0, 280)}\nIf the revised [Proposal] resolved the prior critique and its recommended picks are grounded in the Game Slate and Analyst Reports, return {"pass":true,"feedback":"Verified after revision."}.`
                 : '';
-            const isExplicitEmptyPicksPass = Boolean(
-                currentProposal &&
-                typeof currentProposal === 'object' &&
-                Array.isArray((currentProposal as any).picks) &&
-                (currentProposal as any).picks.length === 0
-            );
+            const isExplicitEmptyPicksPass = hasEmptyPicks;
             const emptyPicksNote = isExplicitEmptyPicksPass
                 ? '\nNote: If the [Proposal] recommends passing with an empty picks array (picks: []), that is a valid NO-BET / PASS; return {"pass":true,"feedback":"Valid pass / no-bet recommendation."} unless it contains ungrounded claims.'
                 : '';

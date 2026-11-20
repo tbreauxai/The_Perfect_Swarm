@@ -91,7 +91,8 @@ function extractFromObject(obj: any, headers: GameHeader[], out: Set<string>): b
     if (out.size > before) foundExplicit = true;
   }
 
-  if (!foundExplicit) {
+  const hasExplicitEmptyPicks = Array.isArray(obj.picks) && obj.picks.length === 0;
+  if (!foundExplicit && !hasExplicitEmptyPicks) {
     const fallbackText = [
       typeof obj.analysis === 'string' ? obj.analysis : '',
       typeof obj.summary === 'string' ? obj.summary : '',
