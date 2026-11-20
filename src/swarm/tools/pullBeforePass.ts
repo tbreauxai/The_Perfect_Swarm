@@ -72,7 +72,7 @@ export function isEmptyToolSummary(summary: string): boolean {
 const FUNDAMENTALS_MOD =
   '(?:(?:any|specific|clear|detailed|supporting|underlying|verified|available|full|additional|further|game|matchup|team|form)\\s+){0,3}';
 const MARKET_MOD =
-  '(?:(?:any|specific|detailed|supporting|fresh|live|current)\\s+){0,2}';
+  '(?:(?:any|specific|detailed|supporting|fresh|live|current|verified|confirmed|reliable|available|actual)\\s+){0,2}';
 
 export function looksLikePassOrMissingDataClaim(text: string): boolean {
   if (!text || typeof text !== 'string') return false;

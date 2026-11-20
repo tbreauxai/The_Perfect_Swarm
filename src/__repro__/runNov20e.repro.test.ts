@@ -62,7 +62,7 @@ describe('runNov20e repros (wf-1795209358320)', () => {
         expect(selected).toEqual(['nba-401909306']);
     });
 
-    it('I: "lack of verified market data" evades auditPullBeforePass when MARKET_MOD lacks verified (pre-fix)', () => {
+    it('I: "lack of verified market data" returns pass:false and sanitize strips it', () => {
         const board =
             'event_id=nba-401909306 | sport=nba | Orlando Magic @ Brooklyn Nets | options: R1 Orlando Magic ML (-190)';
         const headers = parseGameHeaders(board);
@@ -83,12 +83,13 @@ describe('runNov20e repros (wf-1795209358320)', () => {
             headers,
             toolCallTrace: trace
         });
-        expect(audit.pass).toBe(true);
+        expect(audit.pass).toBe(false);
         const sanitized = sanitizePullBeforePassClaims({ ...proposal }, 'ml_home=165, ml_away=-190', board, {
             headers,
             toolCallTrace: trace
         });
-        expect(sanitized.summary).toContain('lack of verified market data');
+        expect(sanitized.summary).not.toMatch(/lack of verified market data/i);
+        expect(sanitized.summary).toContain('Holding cash tonight.');
     });
 
     it('J: wrong-team gap phrasing ("Brooklyn\'s frontcourt depth ... Paolo Banchero") evades patA-D (pre-fix)', () => {
