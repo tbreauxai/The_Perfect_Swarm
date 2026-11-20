@@ -337,8 +337,8 @@ export function buildCriticAuditReprompt(
 ): string {
   const listText = formatProposedLegsForPrompt(legs, 700);
   const schemaReminder = mode === 'stage2'
-    ? 'Reply ONLY with valid JSON: {"pass": boolean, "verdict": string, "flags": string[]}.'
-    : 'Reply ONLY with valid JSON: {"pass": boolean, "feedback": string}.';
+    ? 'Do not call any tools or emit tool/search arguments. Reply ONLY with valid JSON: {"pass": boolean, "verdict": string, "flags": string[]}.'
+    : 'Do not call any tools or emit tool/search arguments. Reply ONLY with valid JSON: {"pass": boolean, "feedback": string}.';
 
   return `CORRECTION — CRITIC AUDIT REQUIRED:
 You answered "No picks to evaluate", which is INVALID because ${legs.length} pick(s) WERE proposed.

@@ -412,7 +412,16 @@ export class AnalysisLifecycle {
             const retryContextLine = attempt > 1 && feedback
                 ? `\n[Prior Critique From Attempt ${attempt - 1}]: ${feedback.slice(0, 280)}\nIf the revised [Proposal] resolved the prior critique and its recommended picks are grounded in the Game Slate and Analyst Reports, return {"pass":true,"feedback":"Verified after revision."}.`
                 : '';
-            const promptHeader = `${VERIFICATION_OUTPUT_CONTRACT}\n\n${criticPrompt}${countsLine}${retryContextLine}\n\nEvaluate the [Proposal] below against the [Tool Evidence] and [Analyst Reports Sample].`;
+            const isExplicitEmptyPicksPass = Boolean(
+                currentProposal &&
+                typeof currentProposal === 'object' &&
+                Array.isArray((currentProposal as any).picks) &&
+                (currentProposal as any).picks.length === 0
+            );
+            const emptyPicksNote = isExplicitEmptyPicksPass
+                ? '\nNote: If the [Proposal] recommends passing with an empty picks array (picks: []), that is a valid NO-BET / PASS; return {"pass":true,"feedback":"Valid pass / no-bet recommendation."} unless it contains ungrounded claims.'
+                : '';
+            const promptHeader = `${VERIFICATION_OUTPUT_CONTRACT}\n\n${criticPrompt}${countsLine}${retryContextLine}${emptyPicksNote}\n\nEvaluate the [Proposal] below against the [Tool Evidence] and [Analyst Reports Sample].`;
             let effectiveProposalSample = proposalSample;
             let proposalSection = `\n\n[Proposal]:\n${effectiveProposalSample}`;
             const trailer = `\n\n${REMINDER}`;
@@ -593,6 +602,15 @@ export class AnalysisLifecycle {
             );
             if (proposedLegsThisAttempt.length > 0) {
                 anyAttemptHadProposedPicks = true;
+            } else if (
+                !verification.pass &&
+                /\b(?:no\s+(?:specific\s+)?picks|picks\s+array\s+is\s+empty|no\s+legs\s+to\s+audit|fails?\s+to\s+include\s+(?:any\s+)?(?:specific\s+)?picks|required\s+pick\s+objects\s+were\s+not\s+provided|no\s+picks\s+to\s+evaluate)\b/i.test(verification.feedback || '')
+            ) {
+                verification = {
+                    ...verification,
+                    pass: true,
+                    feedback: 'Verified valid no-bet / pass recommendation (empty picks).'
+                };
             }
 
             // CRITIC AUDIT: "No picks to evaluate" is invalid when picks are non-empty.
