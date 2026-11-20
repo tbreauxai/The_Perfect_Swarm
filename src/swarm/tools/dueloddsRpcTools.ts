@@ -425,7 +425,11 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
       return 3;
     };
 
-    const sportHint = String(d.sport || ctxAny?.game?.sport || gameId || '');
+    const sportHint = String(
+      [d.sport, ctxAny?.game?.sport, gameId].find(
+        (s) => s && !/^unknown$/i.test(String(s).trim()) && Boolean(String(s).trim())
+      ) || ''
+    );
     const matchupTeams = [
       d.away_team,
       d.home_team,

@@ -6,6 +6,7 @@ import { GameQueryCache } from '../swarm/cache/gameQueryCache.ts';
 import { auditPullBeforePass } from '../swarm/tools/pullBeforePass.ts';
 import { compileSynthesisPrompt } from '../swarm/engine/synthesisPipeline.ts';
 import { executeOpenAiCompatibleChat } from '../swarm/providers/baseOpenAi.ts';
+import { getInjuryAndRosterDeltaTool } from '../swarm/tools/dueloddsRpcTools.ts';
 
 const SLATE_3_GAMES = [
     'event_id=nba-401909306 | sport=basketball_nba | Orlando Magic @ Brooklyn Nets | commence=2026-11-20T23:30:00Z | options: R1 Orlando Magic ML (-110), R4 Brooklyn Nets ML (-110)',
@@ -595,5 +596,43 @@ describe('runNov20c repros (wf-1795203442644)', () => {
             arguments: verdictArgs
         });
         expect(JSON.parse(salvaged)).toEqual(verdictArgs);
+    });
+
+    it('S8: unknown sportHint falls back to gameId prefix so numeric team_id keeps injury rows', async () => {
+        const rpcPayload = {
+            game_id: 'nba-401909307',
+            sport: 'unknown',
+            injuries: [
+                {
+                    team_id: '5',
+                    player_name: 'Evan Mobley',
+                    position: 'PF',
+                    status: 'out'
+                }
+            ]
+        };
+        const fetchFn = vi.fn(async () =>
+            new Response(JSON.stringify(rpcPayload), {
+                status: 200,
+                headers: { 'content-type': 'application/json' }
+            })
+        );
+
+        const res = await getInjuryAndRosterDeltaTool.execute(
+            { game_id: 'nba-401909307' },
+            {
+                fetchFn: fetchFn as unknown as typeof fetch,
+                env: {
+                    SUPABASE_URL: 'https://example.supabase.co',
+                    SUPABASE_ANON_KEY: 'test-anon-key'
+                },
+                game: { sport: 'unknown' }
+            } as any
+        );
+
+        expect(res.success).toBe(true);
+        expect(res.data?.injuries).toHaveLength(1);
+        expect(res.data?.injuries[0].team_abbr).toBe('CLE');
+        expect(res.summary).toContain('Evan Mobley');
     });
 });
