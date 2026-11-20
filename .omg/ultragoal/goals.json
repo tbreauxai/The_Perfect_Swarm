@@ -1,94 +1,38 @@
 {
-  "activeGoalId": "goal-s0-repro-nov20d",
+  "activeGoalId": "goal-persist-s0-test",
   "goals": [
     {
-      "id": "goal-s0-repro-nov20d",
-      "title": "S0: Add src/__repro__/runNov20d.repro.test.ts (A-F)",
-      "description": "Add src/__repro__/runNov20d.repro.test.ts covering repro cases A-F; flip asserts as each step lands.",
+      "id": "goal-persist-s0-test",
+      "title": "S0: Add failing src/swarm/engine/runDebugPersist.test.ts",
+      "description": "Failing test first: flag off -> no fetch; flag on -> one upsert to swarm_run_debug {workflow_id, created_at, payload} mirroring RunDebugRecord; no key-like strings; delete for created_at < now()-7d sent; fetch error never throws.",
       "status": "in-progress",
-      "verificationCriteria": "src/__repro__/runNov20d.repro.test.ts runs and reproduces A-F."
+      "verificationCriteria": "src/swarm/engine/runDebugPersist.test.ts runs red."
     },
     {
-      "id": "goal-s1-gameheaders-sp-ml-tot",
-      "title": "S1: Parse sp/ml/tot & sport prefix in context/gameHeaders.ts",
-      "description": "In context/gameHeaders.ts:66-95 event_id= branch: parse sp X (home spread), ml H/A (home/away), tot T into options 'AWAY ML a / HOME ML h', 'HOME sp / AWAY -sp', 'O/U t' (skip n/a); infer sport from id prefix when no sport=.",
+      "id": "goal-persist-s1-migration",
+      "title": "S1: Add supabase/migrations/20261120_swarm_run_debug.sql",
+      "description": "Additive migration with header '-- DON'T APPLY FROM IDE (Tyler approves in Code Auditor's chat)', create table public.swarm_run_debug, index on created_at, RLS enabled, revoke all from anon/authenticated, grant all to service_role.",
       "status": "todo",
-      "verificationCriteria": "Repro A flips, F flips (HOU 'home favorite' fails)."
+      "verificationCriteria": "Migration file created and reviewed; not applied."
     },
     {
-      "id": "goal-s2-marketrow-pipe-eventid",
-      "title": "S2: Pipe row eventId from cells[1] in tools/marketRowBinding.ts",
-      "description": "In tools/marketRowBinding.ts:147-155 pipe row: if cells[1] matches /^[a-z-]+-\\d+$/i set eventId=cells[1].",
+      "id": "goal-persist-s2-module",
+      "title": "S2: Implement src/swarm/engine/runDebugPersist.ts",
+      "description": "Export isRunDebugPersistEnabled() and persistRunDebugRecord(workflowId): read getRunDebugRecord, re-scrub, cap payload ~200KB (trim toolResultsSent first with '[trimmed]'), POST rest/v1/swarm_run_debug with Prefer: resolution=merge-duplicates via getSupabaseConfig(), then DELETE created_at=lt.<now-7d>. Fire-and-forget, catch all, 1500ms timeout.",
       "status": "todo",
-      "verificationCriteria": "Repro B R2->nba-401909306 flips."
+      "verificationCriteria": "S0 test (runDebugPersist.test.ts) passes."
     },
     {
-      "id": "goal-s3-missing-ml-scrub-pass",
-      "title": "S3: Extend claimsMissingML & scrub/pass=true when coverage exists",
-      "description": "In tools/marketRowBinding.ts:1598 + engine/analystExecution.ts:940 + lifecycle.ts: claimsMissingML also matches lack(s|ing)?( of)?( verified)? market data|no market (data|pricing); run check whatever pass is, and when coverage exists scrub clause from verdict/summary and set pass=true.",
+      "id": "goal-persist-s3-hook",
+      "title": "S3: Wire void persistRunDebugRecord(workflowId) on run completion",
+      "description": "Call void persistRunDebugRecord(workflowId) once per run on the run-completion path (only when enabled, no await on response path).",
       "status": "todo",
-      "verificationCriteria": "Repro C flips."
+      "verificationCriteria": "Unit test: enabled run calls it once; disabled never."
     },
     {
-      "id": "goal-s4-seat-tool-loop-compact",
-      "title": "S4: Compact tool summaries & floor tool budget in seatToolLoop.ts",
-      "description": "Export compactToolLine from engine/verifierEvidence.ts:67; in engine/seatToolLoop.ts:400-430 map entry summaries through compactToolLine before fair-share fill; floor tool budget at 600 chars.",
-      "status": "todo",
-      "verificationCriteria": "Unit test: 9 entries in 1100 chars keep 'MKT:' with ML for each game."
-    },
-    {
-      "id": "goal-s5-pull-before-pass-lack",
-      "title": "S5: Add lack(s|ing)? of to pullBeforePass.ts & conditional correction push",
-      "description": "In tools/pullBeforePass.ts:426-437 + lifecycle.ts:852-858: add lack(?:s|ing)?(?:\\s+of)? to MARKET/FUNDAMENTALS/INJURY missing regexes; push correction only if JSON.stringify(proposal) changed.",
-      "status": "todo",
-      "verificationCriteria": "Repro D flips."
-    },
-    {
-      "id": "goal-s6-injury-role-words",
-      "title": "S6: Expand roleWords in tools/injuryAttribution.ts:718",
-      "description": "In tools/injuryAttribution.ts:718: roleWords += frontcourt|backcourt|rotation|lineup|depth|bench.",
-      "status": "todo",
-      "verificationCriteria": "Repro E flips."
-    },
-    {
-      "id": "goal-s7-home-away-role-flip",
-      "title": "S7: Home/away role_flip check in tools/marketRowBinding.ts:1229",
-      "description": "In tools/marketRowBinding.ts:1229: team hit plus home|at home|hosting when header has it away (road|away for home) -> role_flip.",
-      "status": "todo",
-      "verificationCriteria": "Test 'Houston are home favorites' vetoed."
-    },
-    {
-      "id": "goal-s8-claim-grounding-strips",
-      "title": "S8: Strip combined/parlay odds & ungrounded off/def metrics in claimGrounding.ts",
-      "description": "In tools/claimGrounding.ts:1389/1646: strip combined/parlay odds claims (contract rule 4); strip (offensive|defensive) (metrics|efficiency|rating) unless in tool text.",
-      "status": "todo",
-      "verificationCriteria": "Unit test passes."
-    },
-    {
-      "id": "goal-s9-lifecycle-protected-ids",
-      "title": "S9: Protected ordering IDs in lifecycle.ts:495-515",
-      "description": "In lifecycle.ts:495-515: protected ids = selectedGameIds.length ? selectedGameIds : resolveDiscussedGameIds(currentProposal, allParsedHeaders) (ordering only, no pulls).",
-      "status": "todo",
-      "verificationCriteria": "0-pick test keeps the IND@CLE block."
-    },
-    {
-      "id": "goal-s10-zero-pick-consensus",
-      "title": "S10 (optional): All non-critic seats picks=[] -> agreementLevel 'strong'",
-      "description": "In engine/consensusPipeline.ts:353: all non-critic seats picks=[] -> agreementLevel 'strong'.",
-      "status": "todo",
-      "verificationCriteria": "Unit test passes."
-    },
-    {
-      "id": "goal-s11-run-debug-record",
-      "title": "S11: In-memory RunDebugRecord + GET /api/debug/runs/:workflowId",
-      "description": "Create src/swarm/engine/runDebugRecord.ts + hooks in analystExecution.ts, lifecycle.ts, synthesisPipeline.ts, agent.ts + GET /api/debug/runs/:workflowId behind appAuth (off unless SWARM_RUN_DEBUG=1; ring of 10; no keys/headers/env).",
-      "status": "todo",
-      "verificationCriteria": "Unit test: flag off records nothing; flag on records chars/limit, dropped block, sanitizer edit; 11th evicts 1st; no key-like strings."
-    },
-    {
-      "id": "goal-s12-verify-and-push",
-      "title": "VERIFY & PUSH: Repro tests, npm test, tsc, smoke-start, push main",
-      "description": "Run npx vitest run src/__repro__/runNov20d.repro.test.ts src/__repro__/runNov20c.repro.test.ts; npm test; npx tsc --noEmit; node scripts/smoke-start.mjs; verify git log/diff and git push origin main.",
+      "id": "goal-persist-s4-verify-push",
+      "title": "VERIFY & PUSH: tsc, full vitest, smoke-start, push main",
+      "description": "Run npx tsc --noEmit, npx vitest run, node scripts/smoke-start.mjs with flag unset; verify git log/diff; push origin main.",
       "status": "todo",
       "verificationCriteria": "All checks pass and origin/main pushed."
     }

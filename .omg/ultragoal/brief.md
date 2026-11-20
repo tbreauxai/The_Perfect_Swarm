@@ -1,11 +1,10 @@
-# Ultragoal Brief: Implement S0–S11 from todo.md (Base 7576cb2c, main)
+# Ultragoal Brief: Persist RunDebugRecord to Supabase (S0–S3, Base ff2a06ab)
 
-- **Objective:** Implement S0–S11 from `todo.md` on `main` (base `7576cb2c`), one commit per step, then run full `VERIFY` (`runNov20d.repro.test.ts`, `runNov20c.repro.test.ts`, `npm test`, `npx tsc --noEmit`, `node scripts/smoke-start.mjs`) and push `origin main`.
-- **Base Commit:** `7576cb2c` (`main`)
+- **Objective:** Implement S0–S3 from `todo.md` on `main` (base `ff2a06ab`), one commit per step, then run `VERIFY` (`npx tsc --noEmit`, `npx vitest run`, `node scripts/smoke-start.mjs`) and push `origin main`.
+- **Base Commit:** `ff2a06ab` (`main`)
 - **Constraints:**
   - Node 22 strip-only TS (no parameter properties, enums, namespaces, `import=require`, decorators).
-  - Keep budgets (groq 5600, slate 2000).
-  - No DB/KV writes, flags, crons, or live calls.
-  - With 0 picks: no critic pulls, no veto.
+  - Budgets unchanged. No new deps. Free tier only. Never log or store keys.
+  - PREP ONLY: do NOT apply the migration, run SQL against prod, or set any env var (Render or Supabase).
   - Explicit `git add <files>` (never `-A`); no reset/restore/clean/rebase/squash/force-push.
-  - Note: `todo.md` has local uncommitted edits (`M todo.md`), and `/workspace/sw_n20e/src/__repro__/` is not present on this Windows host, so S0 authors `src/__repro__/runNov20d.repro.test.ts` (A–F).
+  - Note: `todo.md` has local uncommitted edits (`M todo.md`).
