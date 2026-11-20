@@ -1639,6 +1639,19 @@ export function auditClaimGrounding(
   return { pass: true, violations: [], flags: [] };
 }
 
+function hasForbiddenParlayOddsOrMetricClaim(sentence: string, successfulEvidence: string): boolean {
+  if (!sentence) return false;
+  if (/\b(?:combined|parlay|total)\s+(?:odds|payout|implied\s+probability)\b[^.\n]{0,30}[+-]?\d|\bparlay\s+pays\s+/i.test(sentence)) {
+    return true;
+  }
+  const metricMatch = sentence.match(/\b(offensive|defensive)\s+(metrics|efficiency|rating)\b/i);
+  if (metricMatch) {
+    const inTool = new RegExp(`\\b${metricMatch[1]}\\s+${metricMatch[2]}\\b`, 'i').test(successfulEvidence);
+    if (!inTool) return true;
+  }
+  return false;
+}
+
 /**
  * Deterministically removes vetoed legs from picks/scorecards/Recommended Bets tables and strips
  * ungrounded/vetoed form/score/health claims and vetoed leg recommendations from report prose fields.
@@ -1709,6 +1722,7 @@ export function sanitizeUngroundedClaims<T extends Record<string, any>>(
       ) ||
       findHealthViolationInClause(sentence, candidates, outInjuries, headers, injuryCoverage, sideHint) ||
       findRepeatedVetoedClaimInClause(sentence, vetoedClaims) ||
+      hasForbiddenParlayOddsOrMetricClaim(sentence, successfulEvidence) ||
       singleRes.violation ||
       legRecViolation
     );
