@@ -10,7 +10,7 @@ import {
     isFalseHallucinationCritique,
     mergeScopedToolEvidence
 } from './tools/criticEvidence.ts';
-import { auditInjuryAttribution } from './tools/injuryAttribution.ts';
+import { auditInjuryAttribution, sanitizeMisattributedPicksAndText } from './tools/injuryAttribution.ts';
 import {
     auditClaimGrounding,
     extractQuotedVetoedClaims,
@@ -682,14 +682,30 @@ export class AnalysisLifecycle {
                     ? rawData
                     : (rawData?.rawBoard || rawData?.dataSample || JSON.stringify(rawData || ''));
 
+                const injuryEvidence = `${combinedToolSummary}\n${analystReports}`;
+                const injurySlate = slateHeaders || fallbackBoardText;
                 const injuryAudit = auditInjuryAttribution(
                     currentProposal,
-                    `${combinedToolSummary}\n${analystReports}`,
-                    slateHeaders || fallbackBoardText
+                    injuryEvidence,
+                    injurySlate
                 );
+                let injuryVetoTriggered = false;
+                let effectiveInjuryVetoedLegs: VetoedLegTarget[] | undefined;
                 if (!injuryAudit.pass) {
-                    verification.pass = false;
-                    verification.feedback = injuryAudit.feedback || 'Veto: Proposal attributed an injury to the wrong team.';
+                    const proposalPicks = Array.isArray((currentProposal as any)?.picks)
+                        ? (currentProposal as any).picks
+                        : [];
+                    const pickInjuryAudit = proposalPicks.length > 0
+                        ? auditInjuryAttribution({ picks: proposalPicks }, injuryEvidence, injurySlate)
+                        : { pass: true, violations: [], vetoedLegs: undefined, feedback: undefined };
+                    if (proposalPicks.length > 0 && !pickInjuryAudit.pass) {
+                        injuryVetoTriggered = true;
+                        effectiveInjuryVetoedLegs = pickInjuryAudit.vetoedLegs ?? injuryAudit.vetoedLegs;
+                        verification.pass = false;
+                        verification.feedback = pickInjuryAudit.feedback || injuryAudit.feedback || 'Veto: Proposal attributed an injury to the wrong team.';
+                    } else if (currentProposal && typeof currentProposal === 'object') {
+                        sanitizeMisattributedPicksAndText(currentProposal, injuryEvidence, injurySlate);
+                    }
                 }
 
                 const boardSourceForAudit = (rawData as any)?.fullBoard || rawData || slateHeaders || fallbackBoardText;
@@ -720,7 +736,7 @@ export class AnalysisLifecycle {
                 if (!groundingAudit.pass) {
                     verification.pass = false;
                     const gMsg = groundingAudit.feedback || 'Veto (GROUNDING): Ungrounded claim or vetoed leg rewrite.';
-                    verification.feedback = (injuryAudit.pass && marketRowAudit.pass)
+                    verification.feedback = (!injuryVetoTriggered && marketRowAudit.pass)
                         ? gMsg
                         : [verification.feedback, gMsg].filter(Boolean).join(' ');
                 }
@@ -728,7 +744,7 @@ export class AnalysisLifecycle {
                 // Merge structured veto targets from deterministic audits immediately into the cumulative ledger
                 accumulatedVetoedLegs = mergeVetoedLegTargets(
                     accumulatedVetoedLegs,
-                    injuryAudit.vetoedLegs,
+                    effectiveInjuryVetoedLegs,
                     marketRowAudit.vetoedLegs,
                     groundingAudit.vetoedLegs
                 );
@@ -845,13 +861,13 @@ export class AnalysisLifecycle {
                     const pullNote = newlyPulledCount > 0
                         ? ' Missing tools were just pulled; use the [Fresh Tool Evidence Pulled Before Retry] above.'
                         : '';
-                    const allPriorPassed = injuryAudit.pass && marketRowAudit.pass && groundingAudit.pass;
+                    const allPriorPassed = !injuryVetoTriggered && marketRowAudit.pass && groundingAudit.pass;
                     verification.feedback = allPriorPassed
                         ? `${pMsg}${pullNote}`
                         : [verification.feedback, `${pMsg}${pullNote}`].filter(Boolean).join(' ');
                 } else if (
                     !verification.pass &&
-                    injuryAudit.pass &&
+                    !injuryVetoTriggered &&
                     marketRowAudit.pass &&
                     groundingAudit.pass &&
                     pullAudit.pass &&
@@ -868,7 +884,7 @@ export class AnalysisLifecycle {
                     verification.feedback = 'Verified: moneyline covered by ml_home/ml_away in market tool result.';
                 } else if (
                     !verification.pass &&
-                    injuryAudit.pass &&
+                    !injuryVetoTriggered &&
                     marketRowAudit.pass &&
                     groundingAudit.pass &&
                     pullAudit.pass &&
