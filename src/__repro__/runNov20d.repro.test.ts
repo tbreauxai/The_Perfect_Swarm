@@ -64,14 +64,15 @@ describe('runNov20d repros (wf-1795206176838 / wf-1795205597957)', () => {
         const board = 'event_id=nba-401909312 | sport=nba | Houston Rockets @ Denver Nuggets | options: R1 Denver Nuggets -1.5 (-110)';
         const headers = parseGameHeaders(board);
         const trace: any[] = [
-            { tool: 'get_market_movement', gameId: 'nba-401909312', status: 'data', summary: 'spread=-1.5' },
-            { tool: 'get_matchup_fundamentals', gameId: 'nba-401909312', status: 'data', summary: 'form ok' },
-            { tool: 'get_injury_and_roster_delta', gameId: 'nba-401909312', status: 'data', summary: 'injuries ok' }
+            { tool: 'get_market_movement', eventId: 'nba-401909312', status: 'data', summary: 'spread=-1.5' },
+            { tool: 'get_matchup_fundamentals', eventId: 'nba-401909312', status: 'data', summary: 'form ok' },
+            { tool: 'get_injury_and_roster_delta', eventId: 'nba-401909312', status: 'data', summary: 'injuries ok' }
         ];
         const res = auditPullBeforePass(
             { summary: 'Denver Nuggets @ Houston Rockets lacks of market data and lack of fundamentals data.' },
-            trace,
-            headers
+            'spread=-1.5 | form ok | injuries ok',
+            board,
+            { headers, toolCallTrace: trace }
         );
         expect(res.pass).toBe(false);
     });

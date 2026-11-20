@@ -850,13 +850,16 @@ export class AnalysisLifecycle {
                 );
                 let pullVetoTriggered = false;
                 if (!pullAudit.pass && hasEmptyPicks && typeof currentProposal === 'object') {
+                    const beforePullSanitize = JSON.stringify(currentProposal);
                     sanitizePullBeforePassClaims(currentProposal, combinedToolSummary, boardSourceForAudit, {
                         headers: allParsedHeaders,
                         toolCallTrace: accumulatedToolTrace,
                         availableTools: availableSportsTools,
                         marketToolRecords: pulledMarketRecords
                     });
-                    zeroPickCorrections.push('removed inaccurate missing-data statement');
+                    if (JSON.stringify(currentProposal) !== beforePullSanitize) {
+                        zeroPickCorrections.push('removed inaccurate missing-data statement');
+                    }
                 } else if (!pullAudit.pass) {
                     pullVetoTriggered = true;
                     let newlyPulledCount = 0;

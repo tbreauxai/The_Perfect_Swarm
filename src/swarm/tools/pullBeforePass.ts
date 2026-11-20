@@ -424,17 +424,17 @@ const POLICY_ECHO_OR_NEGATED_REGEX =
   /\b(?:before\s+saying\s+a\s+game\s+has\s+no|do\s+not\s+say\s+(?:it\s+was\s+not\s+fetched|fundamentals\s+or\s+market\s+data|market\s+data)|pull\s+before\s+pass|no\s+missing\s+(?:fundamentals|injur|market)|(?<!\bno\s+|\bwithout\s+|\blacking\s+|\bno\s+\w+\s+)fundamentals\s+(?:are\s+|were\s+|is\s+|was\s+)?(?:present|available|complete|fetched|pulled)|(?<!\bno\s+|\bwithout\s+|\blacking\s+|\bno\s+\w+\s+)market\s+(?:movement|data)\s+(?:was|were|is|are)\s+(?:fetched|pulled|available|present))\b/i;
 
 const MARKET_MISSING_REGEX = new RegExp(
-  `\\b(?:no\\s+${MARKET_MOD}(?:market\\s+(?:movement|data)|line\\s+movement)(?:\\s+(?:or|and)\\s+(?:prop|props|player\\s+prop)\\s+data)?\\s+(?:was|were|has\\s+been)?\\s*(?:fetched|pulled|available|found|provided|returned)|${MARKET_MOD}(?:market\\s+(?:movement|data)|line\\s+movement)(?:\\s+(?:or|and)\\s+(?:prop|props)\\s+data)?\\s+(?:was|were|is|are)?\\s*(?:not\\s+(?:fetched|pulled|available|found|provided|returned)|missing|unavailable|absent)|(?:missing|lacking|without|no)\\s+${MARKET_MOD}(?:market\\s+(?:movement|data)|line\\s+movement))\\b`,
+  `\\b(?:no\\s+${MARKET_MOD}(?:market\\s+(?:movement|data)|line\\s+movement)(?:\\s+(?:or|and)\\s+(?:prop|props|player\\s+prop)\\s+data)?\\s+(?:was|were|has\\s+been)?\\s*(?:fetched|pulled|available|found|provided|returned)|${MARKET_MOD}(?:market\\s+(?:movement|data)|line\\s+movement)(?:\\s+(?:or|and)\\s+(?:prop|props)\\s+data)?\\s+(?:was|were|is|are)?\\s*(?:not\\s+(?:fetched|pulled|available|found|provided|returned)|missing|unavailable|absent)|(?:missing|lack(?:s|ing)?(?:\\s+of)?|without|no)\\s+${MARKET_MOD}(?:market\\s+(?:movement|data)|line\\s+movement))\\b`,
   'i'
 );
 
 const FUNDAMENTALS_MISSING_REGEX = new RegExp(
-  `\\b(?:${FUNDAMENTALS_MOD}fundamentals\\s+(?:are|were|is|was)?\\s*(?:missing|unavailable|not\\s+(?:fetched|pulled|available|found|provided|returned)|absent|incomplete)|(?:missing|no|lack(?:ing)?|without)\\s+${FUNDAMENTALS_MOD}fundamentals(?:\\s+data)?|no\\s+${FUNDAMENTALS_MOD}fundamentals\\s+(?:data\\s+)?(?:was|were)?\\s*(?:fetched|pulled|available|found|returned))\\b`,
+  `\\b(?:${FUNDAMENTALS_MOD}fundamentals\\s+(?:are|were|is|was)?\\s*(?:missing|unavailable|not\\s+(?:fetched|pulled|available|found|provided|returned)|absent|incomplete)|(?:missing|no|lack(?:s|ing)?(?:\\s+of)?|without)\\s+${FUNDAMENTALS_MOD}fundamentals(?:\\s+data)?|no\\s+${FUNDAMENTALS_MOD}fundamentals\\s+(?:data\\s+)?(?:was|were)?\\s*(?:fetched|pulled|available|found|returned))\\b`,
   'i'
 );
 
 const INJURY_MISSING_REGEX =
-  /\b(?:no\s+(?:injury|injuries|roster\s+delta)\s+(?:data|reports?|info)\s+(?:was|were)?\s*(?:fetched|pulled|available|found|provided|returned)|(?:injury|injuries|roster\s+delta)\s+(?:data|reports?|info)\s+(?:is|are|was|were)?\s*(?:missing|unavailable|not\s+(?:fetched|pulled|available|found|provided|returned)|absent)|(?:missing|lack(?:ing)?|without)\s+(?:any\s+)?(?:injury|injuries|roster\s+delta)\s+(?:data|reports?))\b/i;
+  /\b(?:no\s+(?:injury|injuries|roster\s+delta)\s+(?:data|reports?|info)\s+(?:was|were)?\s*(?:fetched|pulled|available|found|provided|returned)|(?:injury|injuries|roster\s+delta)\s+(?:data|reports?|info)\s+(?:is|are|was|were)?\s*(?:missing|unavailable|not\s+(?:fetched|pulled|available|found|provided|returned)|absent)|(?:missing|lack(?:s|ing)?(?:\s+of)?|without)\s+(?:any\s+)?(?:injury|injuries|roster\s+delta)\s+(?:data|reports?))\b/i;
 
 interface ClauseAuditFinding {
   flag: 'false_market_not_fetched' | 'false_missing_data_claim' | 'unqueried_missing_data_claim';
