@@ -31,7 +31,7 @@ function checkTargetLimits(
     systemInstruction: string | undefined,
     maxBudgetWait: number,
     groqMode?: 'chat' | 'morning'
-): { ok: true; targetModel: string; estimatedTokens: number } | { ok: false; targetModel: string; reason: string; needsBudgetWait: boolean; estimatedTokens: number } {
+): { ok: boolean; targetModel: string; reason?: string; needsBudgetWait?: boolean; estimatedTokens: number } {
     const targetModel = target.modelName || defaultModelName;
     const knownSkip = globalProviderLimiter.getSkipReason(String(target.provider), targetModel);
     const promptCharCap = target.provider === 'groq' ? groqPromptCharCap(groqMode) : prompt.length;
@@ -170,15 +170,16 @@ export class Agent {
             const preCheck = checkTargetLimits(currentTarget, this.modelName, prompt, this.systemInstruction, maxBudgetWait, config?.groqMode);
             if (!preCheck.ok) {
                 if (!preCheck.needsBudgetWait) {
+                    const skipReason = preCheck.reason || 'skipped by limiter/budget';
                     lastFailedProvider = String(currentTarget.provider);
                     lastFailedModel = preCheck.targetModel;
-                    lastError = new Error(preCheck.reason);
+                    lastError = new Error(skipReason);
                     context.addEvent({
                         agentRole: this.role,
                         action: 'Provider Skipped',
                         modelName: `${currentTarget.provider}/${preCheck.targetModel}`,
-                        prompt: `Skipped provider target: ${preCheck.reason}`,
-                        output: { provider: currentTarget.provider, model: preCheck.targetModel, reason: preCheck.reason }
+                        prompt: `Skipped provider target: ${skipReason}`,
+                        output: { provider: currentTarget.provider, model: preCheck.targetModel, reason: skipReason }
                     });
                     continue;
                 }
