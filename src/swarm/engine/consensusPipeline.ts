@@ -351,15 +351,30 @@ export function extractAnalystConsensus(
     const evidenceWeightedScore = Math.min(1.0, Number((normalizedConsensus + citationBoost).toFixed(3)));
 
     const nonCriticReports: any[] = [];
+    let hasCriticSeat = false;
     for (let i = 0; i < activeAnalystCount; i++) {
         const role = String(analysts[i]?.role || '').toLowerCase();
-        if (role.includes('critic') || role.includes('risk')) continue;
+        if (role.includes('critic') || role.includes('risk')) {
+            hasCriticSeat = true;
+            continue;
+        }
         for (const r of allAnalystReports[i] || []) {
             if (r && typeof r === 'object') nonCriticReports.push(r);
         }
     }
-    const allNonCriticZeroPicks = nonCriticReports.length > 0 &&
-        nonCriticReports.every(r => Array.isArray(r.picks) && r.picks.length === 0);
+    const reportHasZeroPicks = (r: any): boolean => {
+        if (Array.isArray(r.picks)) return r.picks.length === 0;
+        if (Array.isArray(r.scorecard?.picks) && r.scorecard.picks.length > 0) return false;
+        if (Array.isArray(r.scorecards) && r.scorecards.some((s: any) => Array.isArray(s?.picks) && s.picks.length > 0)) return false;
+        return true;
+    };
+    const isPickWorkflowContext =
+        nonCriticReports.some(r => Array.isArray(r.picks)) ||
+        hasCriticSeat;
+    const allNonCriticZeroPicks =
+        isPickWorkflowContext &&
+        nonCriticReports.length > 0 &&
+        nonCriticReports.every(reportHasZeroPicks);
 
     let agreementLevel: 'strong' | 'moderate' | 'divergent';
     if (allNonCriticZeroPicks || normalizedConsensus >= 0.60 || unanimousFindings.length >= 2) {

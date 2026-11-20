@@ -187,4 +187,46 @@ describe('Consensus Pipeline & Disagreement Arbitration', () => {
 
         expect(digest.agreementLevel).toBe('strong');
     });
+
+    it('counts non-critic reports without a picks key as 0 picks in pick workflows without breaking divergent non-pick runs', () => {
+        const quant = new Agent('Quant Proposer', 'm1', 'groq' as any, 'k1');
+        const market = new Agent('Market Proposer', 'm2', 'openrouter' as any, 'k2');
+        const critic = new Agent('Risk Critic', 'm3', 'groq' as any, 'k3');
+
+        // Case 1: one seat returns picks: [], other seat omits picks key
+        const mixedZero = extractAnalystConsensus(
+            [
+                [{ summary: 'Passing on Magic due to thin edge.', picks: [], insights: [] }],
+                [{ summary: 'Passing on Nuggets tonight.', insights: ['Stale market'] }],
+                [{ pass: true, verdict: 'No picks proposed', flags: [] }]
+            ],
+            [quant, market, critic],
+            'Build parlay'
+        );
+        expect(mixedZero.agreementLevel).toBe('strong');
+
+        // Case 2: both non-critic seats omit picks key alongside a Risk Critic seat
+        const allOmitted = extractAnalystConsensus(
+            [
+                [{ summary: 'No edge on Magic', insights: ['Thin edge on Orlando Magic ML'] }],
+                [{ summary: 'Passing tonight', insights: ['No playable line value in Denver'] }],
+                [{ pass: true, verdict: 'Valid pass', flags: [] }]
+            ],
+            [quant, market, critic],
+            'Build parlay'
+        );
+        expect(allOmitted.agreementLevel).toBe('strong');
+
+        // Case 3: one seat has an active pick while another omits picks -> NOT zero-pick consensus
+        const oneActivePick = extractAnalystConsensus(
+            [
+                [{ summary: 'Magic ML', picks: [{ row: 'R1', side: 'Orlando Magic ML' }], insights: ['Take Orlando Magic ML'] }],
+                [{ summary: 'Hold', insights: ['Severe injury concern in Denver frontcourt'] }],
+                [{ pass: true, verdict: 'Ok', flags: [] }]
+            ],
+            [quant, market, critic],
+            'Build parlay'
+        );
+        expect(oneActivePick.agreementLevel).not.toBe('strong');
+    });
 });
