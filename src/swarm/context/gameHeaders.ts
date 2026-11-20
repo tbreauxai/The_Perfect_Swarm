@@ -110,7 +110,7 @@ export function parseGameHeaders(data: unknown, fallbackEventIds?: string[]): Ga
             const mlParts = mlRaw.split('/').map(s => s.trim());
             if (mlParts.length === 2 && mlParts[0] && mlParts[1] && !/^n\/a$/i.test(mlParts[0]) && !/^n\/a$/i.test(mlParts[1])) {
               options.push({
-                id: `R${options.length + 1}`,
+                id: '',
                 text: `${away} ML ${mlParts[1]} / ${home} ML ${mlParts[0]}`
               });
             }
@@ -122,14 +122,14 @@ export function parseGameHeaders(data: unknown, fallbackEventIds?: string[]): Ga
               const awayNum = -spNum;
               const awaySp = awayNum > 0 ? `+${awayNum}` : `${awayNum}`;
               options.push({
-                id: `R${options.length + 1}`,
+                id: '',
                 text: `${home} ${homeSp} / ${away} ${awaySp}`
               });
             }
           }
           if (totRaw && !/^n\/a$/i.test(totRaw)) {
             options.push({
-              id: `R${options.length + 1}`,
+              id: '',
               text: `O/U ${totRaw}`
             });
           }
@@ -208,7 +208,7 @@ export function renderHeaders(headers: GameHeader[], maxChars: number = 1600): s
 
   const formatLine = (h: GameHeader, maxOpts: number): string => {
     const opts = (h.options || []).slice(0, maxOpts);
-    const optsStr = opts.length > 0 ? ` | options: ${opts.map(o => `${o.id} ${o.text}`).join(', ')}` : '';
+    const optsStr = opts.length > 0 ? ` | options: ${opts.map(o => `${o.id ? o.id + ' ' : ''}${o.text}`).join(', ')}` : '';
     const commenceStr = h.commence ? ` | ${h.commence}` : '';
     return `event_id=${h.eventId} | ${h.sport} | ${h.away} @ ${h.home}${commenceStr}${optsStr}`;
   };
@@ -249,8 +249,8 @@ export function getEventIdForPick(pick: any, headers: GameHeader[]): string | un
   if (pick.eventId) return String(pick.eventId);
 
   const rowId = pick.row || pick.id;
-  if (typeof rowId === 'string') {
-    const matchingHeader = headers.find(h => (h.options || []).some(o => o.id === rowId));
+  if (typeof rowId === 'string' && rowId.trim()) {
+    const matchingHeader = headers.find(h => (h.options || []).some(o => Boolean(o.id) && o.id === rowId));
     if (matchingHeader) return matchingHeader.eventId;
   }
 

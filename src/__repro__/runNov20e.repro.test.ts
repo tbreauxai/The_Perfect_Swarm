@@ -12,7 +12,7 @@ import {
 import { auditInjuryAttribution } from '../swarm/tools/injuryAttribution.ts';
 
 describe('runNov20e repros (wf-1795209358320)', () => {
-    it('G: board R2 collides with synthetic spread option on sp/ml/tot header (pre-fix)', () => {
+    it('G: synthetic sp/ml/tot options use empty id so board R2 binds to Orlando Magic -190 and passes row audit', () => {
         const compactLine =
             'event_id=nba-401909306 | Orlando Magic @ Brooklyn Nets | sp 4.5 | ml 165/-190 | tot 220.5';
         const board = [
@@ -21,9 +21,11 @@ describe('runNov20e repros (wf-1795209358320)', () => {
         ].join('\n');
 
         const headers = parseGameHeaders(board);
-        const rowMap = extractRowOptions([board], headers);
+        expect(headers[0].options.every(o => o.id === '')).toBe(true);
 
-        expect(rowMap.get('R2')?.text).toBe('Brooklyn Nets +4.5 / Orlando Magic -4.5');
+        const rowMap = extractRowOptions([board], headers);
+        expect(rowMap.get('R2')?.text).toBe('nba-401909306 | h2h | Orlando Magic | -190');
+        expect(rowMap.get('R2')?.eventId).toBe('nba-401909306');
 
         const audit = auditMarketCoverageAndRowBinding(
             {
@@ -39,8 +41,10 @@ describe('runNov20e repros (wf-1795209358320)', () => {
             board,
             headers
         );
-        expect(audit.pass).toBe(false);
-        expect(renderHeaders(headers)).toContain('R2 ');
+        expect(audit.pass).toBe(true);
+        const rendered = renderHeaders(headers);
+        expect(rendered).toContain('options: Orlando Magic ML -190 / Brooklyn Nets ML 165,');
+        expect(rendered).not.toMatch(/options: R\d+ /);
     });
 
     it('H: resolveSelectedGameIds matches synthetic R2 across all 3 games (pre-fix)', () => {

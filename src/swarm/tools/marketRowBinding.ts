@@ -95,6 +95,7 @@ export function extractRowOptions(sources: unknown[], preParsedHeaders?: GameHea
 
   for (const h of preParsedHeaders || []) {
     for (const opt of h.options || []) {
+      if (!opt.id || !opt.id.trim()) continue;
       addEntry({
         rowId: opt.id,
         text: opt.text,
@@ -110,6 +111,7 @@ export function extractRowOptions(sources: unknown[], preParsedHeaders?: GameHea
     if (!src) continue;
     for (const h of parseGameHeaders(src)) {
       for (const opt of h.options || []) {
+        if (!opt.id || !opt.id.trim()) continue;
         addEntry({
           rowId: opt.id,
           text: opt.text,
