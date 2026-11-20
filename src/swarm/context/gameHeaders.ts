@@ -39,6 +39,21 @@ export function parseGameHeaders(data: unknown, fallbackEventIds?: string[]): Ga
     ].join('\n');
   }
 
+  const parseOptionsSegment = (segment: string, options: GameHeaderOption[]) => {
+    const rawOpts = segment.replace(/^options:\s*/i, '').trim();
+    // Options format: "R1 KC -3.5 (-110), R2 BUF +3.5 (-110)" or semicolon delimited
+    const optItems = rawOpts.split(/[,;]\s*(?=R\d+)/);
+    for (const item of optItems) {
+      const match = item.trim().match(/^(R\d+)\s*(.*)$/);
+      if (match) {
+        options.push({
+          id: match[1],
+          text: match[2]?.trim() || match[1]
+        });
+      }
+    }
+  };
+
   if (text) {
     const lines = text.split('\n');
     for (const rawLine of lines) {
@@ -71,23 +86,52 @@ export function parseGameHeaders(data: unknown, fallbackEventIds?: string[]): Ga
               home = teams[1];
             }
           } else if (p.toLowerCase().startsWith('options:')) {
-            const rawOpts = p.replace(/^options:\s*/i, '').trim();
-            // Options format: "R1 KC -3.5 (-110), R2 BUF +3.5 (-110)" or semicolon delimited
-            const optItems = rawOpts.split(/[,;]\s*(?=R\d+)/);
-            for (const item of optItems) {
-              const match = item.trim().match(/^(R\d+)\s*(.*)$/);
-              if (match) {
-                options.push({
-                  id: match[1],
-                  text: match[2]?.trim() || match[1]
-                });
-              }
-            }
+            parseOptionsSegment(p, options);
           }
         }
 
         if (eventId) {
           headers.push({ eventId, sport, away, home, commence, options });
+        }
+      } else if (line.includes('|') && line.includes('@')) {
+        const parts = line.split('|').map(p => p.trim());
+        if (parts.length >= 2 && /^[a-z][a-z0-9_-]*-\d+$/i.test(parts[0])) {
+          const eventId = parts[0];
+          const prefixMatch = eventId.match(/^([a-z][a-z0-9_]*)-/i);
+          let sport = prefixMatch ? prefixMatch[1].toLowerCase() : 'unknown';
+          let away = 'Away';
+          let home = 'Home';
+          let commence: string | undefined = undefined;
+          const options: GameHeaderOption[] = [];
+          let foundMatchup = false;
+
+          for (const p of parts.slice(1)) {
+            if (p.startsWith('sport=')) {
+              const explicitSport = p.replace('sport=', '').trim();
+              if (explicitSport && !/^unknown$/i.test(explicitSport)) {
+                sport = explicitSport;
+              }
+            } else if (/^[a-z][a-z0-9_]+$/i.test(p) && !/^unknown$/i.test(p) && !p.includes('@') && !/^options:/i.test(p)) {
+              sport = p.toLowerCase();
+            } else if (p.startsWith('commence=')) {
+              commence = p.replace('commence=', '').trim();
+            } else if (/^\d{4}-\d{2}-\d{2}T\S+$/.test(p)) {
+              commence = p;
+            } else if (p.includes('@')) {
+              const teams = p.split('@').map(t => t.trim());
+              if (teams.length === 2 && teams[0] && teams[1]) {
+                away = teams[0];
+                home = teams[1];
+                foundMatchup = true;
+              }
+            } else if (p.toLowerCase().startsWith('options:')) {
+              parseOptionsSegment(p, options);
+            }
+          }
+
+          if (foundMatchup) {
+            headers.push({ eventId, sport, away, home, commence, options });
+          }
         }
       }
     }

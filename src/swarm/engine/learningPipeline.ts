@@ -508,13 +508,20 @@ export async function runLearningPipeline(p: LearningPipelineParams): Promise<Le
                 : (isSuccess ? 0.90 : 0.35));
 
         if (coordinationSettings?.rewardShaping !== false) {
-            const noveltyScore = Math.max(0, 1.0 - (p.workflowTieredCacheHit?.similarity ?? 0));
-            const redundancyCount = globalHypothesisLayer.getHypotheses('refuted').length;
-            workflowShapedReward = globalShapedRewardPolicy.calculateShapedReward({
-                extrinsicReward: extrinsic,
-                noveltyScore,
-                redundancyCount
-            });
+            if (hasEmptyPicks) {
+                workflowShapedReward = {
+                    shapedReward: 0.5,
+                    components: { extrinsic: 0.5, noveltyBonus: 0, redundancyPenalty: 0 }
+                };
+            } else {
+                const noveltyScore = Math.max(0, 1.0 - (p.workflowTieredCacheHit?.similarity ?? 0));
+                const redundancyCount = globalHypothesisLayer.getHypotheses('refuted').length;
+                workflowShapedReward = globalShapedRewardPolicy.calculateShapedReward({
+                    extrinsicReward: extrinsic,
+                    noveltyScore,
+                    redundancyCount
+                });
+            }
         }
 
         if (coordinationSettings?.adaptiveLearningRates !== false) {

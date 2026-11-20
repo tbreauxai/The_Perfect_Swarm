@@ -7,6 +7,11 @@ import { auditPullBeforePass } from '../swarm/tools/pullBeforePass.ts';
 import { compileSynthesisPrompt } from '../swarm/engine/synthesisPipeline.ts';
 import { executeOpenAiCompatibleChat } from '../swarm/providers/baseOpenAi.ts';
 import { getInjuryAndRosterDeltaTool } from '../swarm/tools/dueloddsRpcTools.ts';
+import { parseGameHeaders } from '../swarm/context/gameHeaders.ts';
+import { guardAnalystResponse } from '../swarm/parser/responseGuards.ts';
+import { runLearningPipeline } from '../swarm/engine/learningPipeline.ts';
+import { globalShapedRewardPolicy } from '../swarm/coordination.ts';
+import { ModelRouter } from '../swarm/router.ts';
 
 const SLATE_3_GAMES = [
     'event_id=nba-401909306 | sport=basketball_nba | Orlando Magic @ Brooklyn Nets | commence=2026-11-20T23:30:00Z | options: R1 Orlando Magic ML (-110), R4 Brooklyn Nets ML (-110)',
@@ -634,5 +639,77 @@ describe('runNov20c repros (wf-1795203442644)', () => {
         expect(res.data?.injuries).toHaveLength(1);
         expect(res.data?.injuries[0].team_abbr).toBe('CLE');
         expect(res.summary).toContain('Evan Mobley');
+    });
+
+    it('S9 (optional 20b): parses minimal gameHeaders, preserves string picks in guardAnalystResponse, and skips reward shaping on 0-pick runs', async () => {
+        // 1) minimal gameHeaders line + raw table still ignored
+        const parsed = parseGameHeaders([
+            'nba-401909306 | Orlando Magic @ Brooklyn Nets | 2026-11-20T00:00:00Z',
+            '1|KC @ BUF|spread|-3.5'
+        ].join('\n'));
+        expect(parsed).toHaveLength(1);
+        expect(parsed[0]).toMatchObject({
+            eventId: 'nba-401909306',
+            sport: 'nba',
+            away: 'Orlando Magic',
+            home: 'Brooklyn Nets',
+            commence: '2026-11-20T00:00:00Z'
+        });
+
+        // 2) string picks converted without dropping, empty picks preserved
+        const guarded = guardAnalystResponse({
+            summary: 'One pick',
+            picks: ['nba-401909306: Orlando Magic ML']
+        });
+        expect(guarded.picks).toHaveLength(1);
+        expect(guarded.picks?.[0]).toMatchObject({
+            event_id: 'nba-401909306',
+            pick: 'Orlando Magic ML',
+            side: 'Orlando Magic ML'
+        });
+
+        const guardedEmpty = guardAnalystResponse({
+            summary: 'Passing today.',
+            picks: []
+        });
+        expect(guardedEmpty.picks).toEqual([]);
+
+        // 3) 0-pick run skips calculateShapedReward while preserving extrinsic=0.5
+        const shapeSpy = vi.spyOn(globalShapedRewardPolicy, 'calculateShapedReward');
+        vi.spyOn(ModelRouter, 'inferComplexity').mockReturnValue('simple');
+
+        const result = await runLearningPipeline({
+            task: 'Evaluate board',
+            data: 'board',
+            finalAnalysis: { verdict: 'NO_BET', picks: [] },
+            context: new SwarmContext(),
+            params: { task: 'Evaluate board', data: 'board' } as any,
+            settings: {
+                appId: 'duelodds',
+                feedbackSettings: { enabled: true },
+                coordinationSettings: { enabled: true, rewardShaping: true, adaptiveLearningRates: false },
+                profilingSettings: { enabled: false }
+            } as any,
+            workflowStartTime: Date.now() - 100,
+            complexity: 'simple',
+            workflowLifecycleResult: { verdict: 'PASS', computedRating: 0.92 },
+            analysts: [{ id: 'a1', role: 'Quant Analyst', provider: 'groq', modelName: 'm1' } as any],
+            managerAgent: { id: 'mgr', role: 'Manager Node', provider: 'openrouter', modelName: 'm2' } as any,
+            targetAppId: 'duelodds',
+            cacheKey: 'k1',
+            cacheQuery: 'q1',
+            agentConfigVersion: 'v1',
+            tieredCacheEnabled: false,
+            profilingEnabled: false,
+            coordinationEnabled: true,
+            workflowTotalTokens: 100,
+            workflowPromptTokensSaved: 0,
+            workflowOriginalPromptTokens: 100,
+            workflowCompressedPromptTokens: 100,
+            workflowDeduplicatedCount: 0
+        });
+
+        expect(shapeSpy).not.toHaveBeenCalled();
+        expect(result.workflowShapedReward?.components.extrinsic).toBe(0.5);
     });
 });

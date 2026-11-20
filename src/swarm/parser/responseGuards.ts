@@ -188,8 +188,37 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
         wasRepaired = true;
     }
 
+    const coerceStringPick = (rawStr: string): Record<string, any> | null => {
+        const cleaned = stripSeatText(rawStr).trim();
+        if (!cleaned) return null;
+        const eventMatch = cleaned.match(/\b([a-z][a-z0-9_-]*-\d+)\b/i);
+        const rowMatch = cleaned.match(/\b(R\d+)\b/);
+        let pickLabel = cleaned;
+        if (eventMatch) {
+            const escapedId = eventMatch[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            pickLabel = pickLabel.replace(new RegExp(`^\\s*${escapedId}\\s*[:|\\-–—]?\\s*`, 'i'), '').trim();
+        }
+        if (!pickLabel) pickLabel = cleaned;
+        return sanitizePick({
+            ...(eventMatch ? { event_id: eventMatch[1] } : {}),
+            ...(rowMatch ? { row: rowMatch[1] } : {}),
+            side: pickLabel,
+            pick: pickLabel
+        });
+    };
+
     let sanitizedObjectPicks = Array.isArray(raw?.picks)
-        ? raw.picks.filter((p: any) => p && typeof p === 'object' && !Array.isArray(p)).map(sanitizePick)
+        ? raw.picks
+              .map((p: any) => {
+                  if (p && typeof p === 'object' && !Array.isArray(p)) return sanitizePick(p);
+                  if (typeof p === 'string') {
+                      const coerced = coerceStringPick(p);
+                      if (coerced) wasRepaired = true;
+                      return coerced;
+                  }
+                  return null;
+              })
+              .filter((p: any): p is Record<string, any> => p !== null)
         : undefined;
 
     const rawAnalysisCandidate = [
