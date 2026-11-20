@@ -424,7 +424,7 @@ const POLICY_ECHO_OR_NEGATED_REGEX =
   /\b(?:before\s+saying\s+a\s+game\s+has\s+no|do\s+not\s+say\s+(?:it\s+was\s+not\s+fetched|fundamentals\s+or\s+market\s+data|market\s+data)|pull\s+before\s+pass|no\s+missing\s+(?:fundamentals|injur|market)|(?<!\bno\s+|\bwithout\s+|\blacking\s+|\bno\s+\w+\s+)fundamentals\s+(?:are\s+|were\s+|is\s+|was\s+)?(?:present|available|complete|fetched|pulled)|(?<!\bno\s+|\bwithout\s+|\blacking\s+|\bno\s+\w+\s+)market\s+(?:movement|data)\s+(?:was|were|is|are)\s+(?:fetched|pulled|available|present))\b/i;
 
 const MARKET_MISSING_REGEX = new RegExp(
-  `\\b(?:no\\s+${MARKET_MOD}(?:market\\s+(?:movement|data)|line\\s+movement)(?:\\s+(?:or|and)\\s+(?:prop|props|player\\s+prop)\\s+data)?\\s+(?:was|were|has\\s+been)?\\s*(?:fetched|pulled|available|found|provided|returned)|${MARKET_MOD}(?:market\\s+(?:movement|data)|line\\s+movement)(?:\\s+(?:or|and)\\s+(?:prop|props)\\s+data)?\\s+(?:was|were|is|are)?\\s*(?:not\\s+(?:fetched|pulled|available|found|provided|returned)|missing|unavailable|absent)|(?:missing|lack(?:s|ing)?(?:\\s+of)?|without|no)\\s+${MARKET_MOD}(?:market\\s+(?:movement|data)|line\\s+movement))\\b`,
+  `\\b(?:no\\s+${MARKET_MOD}(?:(?:market(?:\\/odds)?|odds|betting)\\s+(?:movement|data)|line\\s+movement)(?:\\s+(?:or|and)\\s+(?:prop|props|player\\s+prop)\\s+data)?\\s+(?:was|were|has\\s+been)?\\s*(?:fetched|pulled|available|found|provided|returned)|${MARKET_MOD}(?:(?:market(?:\\/odds)?|odds|betting)\\s+(?:movement|data)|line\\s+movement)(?:\\s+(?:or|and)\\s+(?:prop|props)\\s+data)?\\s+(?:was|were|is|are)?\\s*(?:not\\s+(?:fetched|pulled|available|found|provided|returned)|missing|unavailable|absent)|(?:missing|lack(?:s|ing)?(?:\\s+of)?|without|no)\\s+${MARKET_MOD}(?:(?:market(?:\\/odds)?|odds|betting)\\s+(?:movement|data)|line\\s+movement))\\b`,
   'i'
 );
 
@@ -824,7 +824,7 @@ export function sanitizePullBeforePassClaims<T extends Record<string, any>>(
       const withoutInlineMissing = s
         .replace(
           new RegExp(
-            `,?\\s*\\bwithout\\s+(?:${FUNDAMENTALS_MOD}fundamentals(?:\\s+data)?|${MARKET_MOD}(?:market\\s+(?:movement|data)|line\\s+movement)|(?:any\\s+)?(?:injury|injuries|roster\\s+delta)\\s+(?:data|reports?))\\b`,
+            `,?\\s*\\bwithout\\s+(?:${FUNDAMENTALS_MOD}fundamentals(?:\\s+data)?|${MARKET_MOD}(?:(?:market(?:\\/odds)?|odds|betting)\\s+(?:movement|data)|line\\s+movement)|(?:any\\s+)?(?:injury|injuries|roster\\s+delta)\\s+(?:data|reports?))\\b`,
             'gi'
           ),
           ''
