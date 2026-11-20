@@ -47,7 +47,7 @@ describe('runNov20e repros (wf-1795209358320)', () => {
         expect(rendered).not.toMatch(/options: R\d+ /);
     });
 
-    it('H: resolveSelectedGameIds matches synthetic R2 across all 3 games (pre-fix)', () => {
+    it('H: resolveSelectedGameIds skips empty option ids and selects only the picked game', () => {
         const slate = [
             'event_id=nba-401909306 | Orlando Magic @ Brooklyn Nets | sp 4.5 | ml 165/-190 | tot 220.5',
             'event_id=nba-401909309 | Washington Wizards @ Chicago Bulls | sp -2.5 | ml -135/115 | tot 218.5',
@@ -59,7 +59,7 @@ describe('runNov20e repros (wf-1795209358320)', () => {
         };
 
         const selected = resolveSelectedGameIds(proposal, headers);
-        expect(selected).toHaveLength(3);
+        expect(selected).toEqual(['nba-401909306']);
     });
 
     it('I: "lack of verified market data" evades auditPullBeforePass when MARKET_MOD lacks verified (pre-fix)', () => {

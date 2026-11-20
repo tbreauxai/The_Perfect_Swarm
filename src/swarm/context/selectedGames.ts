@@ -8,7 +8,8 @@ function matchHeadersInText(text: string, headers: GameHeader[], out: Set<string
     const h = headers[i];
     if (!h?.eventId) continue;
     const matchedOptionRow = (h.options || []).some(o =>
-      new RegExp(`\\b${o.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(text)
+      Boolean(o.id && o.id.trim()) &&
+      new RegExp(`\\b${o.id.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(text)
     );
     const fallbackRowMatch = !hasExplicitOptions && new RegExp(`\\bR${i + 1}\\b`, 'i').test(text);
     if (
