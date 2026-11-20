@@ -207,6 +207,11 @@ export function rankGameIdsBySupabaseEdge(gameIds: string[], contextText: string
     });
 }
 
+export function proposerHeaderBudget(provider: string | undefined): number {
+    const maxChars = seatBudget(provider).maxPromptChars;
+    return Math.min(maxChars, Math.min(2400, Math.floor(maxChars * 0.3)));
+}
+
 export function createAnalystExecutor(config: AnalystExecutorConfig) {
     const {
         task,
@@ -396,7 +401,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
         const effectiveTaskText = isCritic && cappedTask.length > 180 ? `${cappedTask.slice(0, 177)}...` : cappedTask;
         const headerBudget = isCritic
             ? Math.max(80, Math.min(1600, criticBudget.maxPromptChars - baseInstruction.length - criticToolSchemasLen - effectiveTaskText.length - 380))
-            : 1600;
+            : proposerHeaderBudget(analyst.provider);
         const cappedFallbackChunk = chunk && chunk.length > headerBudget ? chunk.slice(0, headerBudget) : chunk;
         const renderedHeadersText = parsedHeaders.length > 0
             ? renderHeaders(parsedHeaders, headerBudget)
