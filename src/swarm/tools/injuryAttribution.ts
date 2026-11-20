@@ -731,8 +731,13 @@ export function findClauseInjuryMisattribution(
         );
         // Pattern D: "<Player> (<WrongTeam>)"
         const patD = new RegExp(`\\b${playerPattern}\\s*\\(\\s*${wEsc}\\b`, 'i');
+        // Pattern E: "<WrongTeam>('s) frontcourt/backcourt/rotation/lineup/depth/bench ... <Player>"
+        const patE = new RegExp(
+          `\\b${wEsc}(?:'s)?\\s+(?:frontcourt|backcourt|rotation|lineup|depth|bench)\\b[^.;]{0,40}?\\b${playerPattern}\\b`,
+          'i'
+        );
 
-        if (patA.test(clause) || patB.test(clause) || patC.test(clause) || patD.test(clause)) {
+        if (patA.test(clause) || patB.test(clause) || patC.test(clause) || patD.test(clause) || patE.test(clause)) {
           const wrongDisplay = inj.opposingTeamName || wrongAlias.toUpperCase();
           return `Injury misattribution: ${matchedPlayerToken} (${inj.status}) belongs to ${inj.teamLabel}, not ${wrongDisplay}.`;
         }

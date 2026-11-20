@@ -92,7 +92,7 @@ describe('runNov20e repros (wf-1795209358320)', () => {
         expect(sanitized.summary).toContain('Holding cash tonight.');
     });
 
-    it('J: wrong-team gap phrasing ("Brooklyn\'s frontcourt depth ... Paolo Banchero") evades patA-D (pre-fix)', () => {
+    it('J: wrong-team gap phrasing ("Brooklyn\'s frontcourt depth ... Paolo Banchero") returns pass:false', () => {
         const board =
             'event_id=nba-401909306 | sport=nba | Orlando Magic @ Brooklyn Nets | options: R1 Orlando Magic -4.5 (-110)';
         const injuryEvidence =
@@ -106,7 +106,7 @@ describe('runNov20e repros (wf-1795209358320)', () => {
             injuryEvidence,
             board
         );
-        expect(audit.pass).toBe(true);
+        expect(audit.pass).toBe(false);
     });
 
     it('K: college-football/college-basketball event_id prefixes truncate to "college" (pre-fix)', () => {
