@@ -4,6 +4,7 @@ import { SwarmContext } from '../swarm/context.ts';
 import { ToolRegistry } from '../swarm/tools/registry.ts';
 import { GameQueryCache } from '../swarm/cache/gameQueryCache.ts';
 import { auditPullBeforePass } from '../swarm/tools/pullBeforePass.ts';
+import { compileSynthesisPrompt } from '../swarm/engine/synthesisPipeline.ts';
 
 const SLATE_3_GAMES = [
     'event_id=nba-401909306 | sport=basketball_nba | Orlando Magic @ Brooklyn Nets | commence=2026-11-20T23:30:00Z | options: R1 Orlando Magic ML (-110), R4 Brooklyn Nets ML (-110)',
@@ -421,5 +422,72 @@ describe('runNov20c repros (wf-1795203442644)', () => {
         expect(calledPairs).toContain('get_matchup_fundamentals::nba-401909309');
         expect(calledPairs).toContain('get_injury_and_roster_delta::nba-401909309');
         expect(calledPairs).toContain('get_environment_and_weather::nba-401909309');
+    });
+
+    it('S5: trims oversize tool evidence by whole EVENT blocks so >=1 block survives with evidenceChars > 0', () => {
+        const eventBlocks = Array.from({ length: 10 }, (_, i) => {
+            const idx = i + 1;
+            const pad = `detail${idx} `.repeat(90).trim();
+            return `EVENT nba-4019094${String(idx).padStart(2, '0')} Away${idx} @ Home${idx}\nINJ: Home${idx}: Player${idx} OUT\nMKT: spread -${idx}.5 | ${pad}`;
+        });
+        const oversizeEvidence = eventBlocks.join('\n\n');
+
+        const ctx = new SwarmContext();
+        const analysts = [
+            makeAgent('Quant Proposer', 'nvidia', () => '{}'),
+            makeAgent('Market Proposer', 'cloudflare', () => '{}')
+        ];
+        const manager = makeAgent('Manager Node', 'groq', () => '{}');
+
+        const res = compileSynthesisPrompt({
+            task: 'Evaluate slate',
+            rawInput: 'event_id=nba-401909401 | sport=basketball_nba | Away1 @ Home1',
+            analysts,
+            managerAgent: manager,
+            allAnalystReports: [
+                [{ summary: 'Quant pass', insights: ['No edge'], anomalies: [], coveredEventIds: ['nba-401909401'], picks: [] }],
+                [{ summary: 'Market pass', insights: ['Lines efficient'], anomalies: [], coveredEventIds: ['nba-401909401'], picks: [] }]
+            ],
+            clusterDigests: {},
+            historicalContext: '',
+            context: ctx,
+            params: { task: 'Evaluate slate', callerAppId: 'duelodds' } as any,
+            bypassCache: true,
+            verifierEvidence: oversizeEvidence
+        });
+
+        expect(res.effectiveDynamicPrompt.length).toBeLessThanOrEqual(5600);
+        expect(res.effectiveDynamicPrompt).toContain('[evidence trimmed]');
+        expect(res.effectiveDynamicPrompt).toContain(eventBlocks[0]);
+        expect(res.effectiveDynamicPrompt).not.toContain(eventBlocks[9]);
+
+        const telemetryEvent = ctx.events.find((e: any) => e.action === 'Manager Synthesis Context');
+        expect(telemetryEvent?.output?.evidenceChars).toBeGreaterThan(0);
+        expect(telemetryEvent?.output?.evidenceDropped).toBe(false);
+
+        // Extreme case: single giant EVENT block larger than available budget -> evidenceDropped = true, evidenceChars = 0
+        const ctxDrop = new SwarmContext();
+        const singleGiantBlock = `EVENT nba-401909999 GiantAway @ GiantHome\nMKT: ${'x'.repeat(5800)}`;
+        const resDrop = compileSynthesisPrompt({
+            task: 'Evaluate slate',
+            rawInput: 'event_id=nba-401909999 | sport=basketball_nba | GiantAway @ GiantHome',
+            analysts,
+            managerAgent: manager,
+            allAnalystReports: [
+                [{ summary: 'Quant pass', insights: ['No edge'], anomalies: [], picks: [] }]
+            ],
+            clusterDigests: {},
+            historicalContext: '',
+            context: ctxDrop,
+            params: { task: 'Evaluate slate', callerAppId: 'duelodds' } as any,
+            bypassCache: true,
+            verifierEvidence: singleGiantBlock
+        });
+
+        expect(resDrop.effectiveDynamicPrompt.length).toBeLessThanOrEqual(5600);
+        expect(resDrop.effectiveDynamicPrompt).toContain('[tool evidence omitted: over budget]');
+        const dropEvent = ctxDrop.events.find((e: any) => e.action === 'Manager Synthesis Context');
+        expect(dropEvent?.output?.evidenceChars).toBe(0);
+        expect(dropEvent?.output?.evidenceDropped).toBe(true);
     });
 });

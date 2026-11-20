@@ -319,9 +319,36 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
             candidate = buildBettingPrompt(baselinesText, digestsText, toolEvidenceSection);
         }
         if (candidate.length > promptCap && toolEvidenceSection) {
-            toolEvidenceSection = 'Tool evidence:\n[tool evidence omitted: over budget]\n\n';
-            evidenceChars = 0;
-            evidenceDropped = true;
+            const prefix = 'Tool evidence:\n';
+            const suffix = '\n\n';
+            const trimMarker = '\n[evidence trimmed]';
+            const restLen = buildBettingPrompt(baselinesText, digestsText, '').length;
+            const availableForBody = promptCap - restLen - prefix.length - suffix.length;
+            const blocks = cappedToolEvidence
+                .split(/\n\n+|\n(?=EVENT\s+)/)
+                .map(b => b.trim())
+                .filter(Boolean);
+            const keptBlocks: string[] = [];
+            let usedLen = 0;
+            for (const blk of blocks) {
+                const sepLen = keptBlocks.length > 0 ? 2 : 0;
+                if (usedLen + sepLen + blk.length + trimMarker.length <= availableForBody) {
+                    keptBlocks.push(blk);
+                    usedLen += sepLen + blk.length;
+                } else if (keptBlocks.length > 0) {
+                    break;
+                }
+            }
+            if (keptBlocks.length > 0) {
+                const trimmedBody = `${keptBlocks.join('\n\n')}${trimMarker}`;
+                toolEvidenceSection = `${prefix}${trimmedBody}${suffix}`;
+                evidenceChars = trimmedBody.length;
+                evidenceDropped = false;
+            } else {
+                toolEvidenceSection = 'Tool evidence:\n[tool evidence omitted: over budget]\n\n';
+                evidenceChars = 0;
+                evidenceDropped = true;
+            }
             candidate = buildBettingPrompt(baselinesText, digestsText, toolEvidenceSection);
         }
         dynamicPrompt = candidate;
