@@ -205,6 +205,13 @@ export function buildToolPullLedger(
     record(entry.eventId, entry.tool, entry.status);
   }
 
+  for (const h of options?.headers || []) {
+    if (!h?.eventId) continue;
+    if ((h.options || []).some(o => /\bML\s+[-+]?\d/.test(o?.text || ''))) {
+      record(h.eventId, 'get_market_movement', 'data');
+    }
+  }
+
   for (const rec of options?.marketToolRecords || []) {
     if (!rec || !rec.eventId) continue;
     const status: ToolCallStatus = rec.summary && isEmptyToolSummary(rec.summary) ? 'empty' : 'data';
