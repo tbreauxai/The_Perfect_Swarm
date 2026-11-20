@@ -4,6 +4,7 @@ import { AnalysisLifecycle } from '../lifecycle.ts';
 import { guardManagerResponse } from '../parser.ts';
 import { globalSpecialistProfiler } from '../loadBalancer.ts';
 import { getManagerContextTokenCeiling } from './synthesisPipeline.ts';
+import { formatRunDebugOutputDigest, recordRunDebugSeat } from './runDebugRecord.ts';
 import { parseGameHeaders, renderHeaders, filterPicksByCoverage } from '../context/gameHeaders.ts';
 import { INJURY_ATTRIBUTION_RULE, sanitizeMisattributedPicksAndText } from '../tools/injuryAttribution.ts';
 import { MARKET_AND_ROW_RULES, SPREAD_SIDE_RULE, sanitizeRowMismatchedPicks, type MarketToolRecord } from '../tools/marketRowBinding.ts';
@@ -287,6 +288,16 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
             finalAnalysis.reason = 'no picks with specialist coverage';
         }
     }
+
+    recordRunDebugSeat((context as any)?.id, 'manager', {
+        role: managerAgent.role,
+        provider: String(managerAgent.provider),
+        model: managerAgent.modelName,
+        promptChars: effectiveDynamicPrompt.length,
+        limitChars: getManagerContextTokenCeiling(managerAgent.provider) * 4,
+        ...(p.toolResults ? { toolResultsSent: p.toolResults } : {}),
+        outputDigest: formatRunDebugOutputDigest(finalAnalysis)
+    });
 
     if (lifecycleResult?.computedRating && analysts.length > 0) {
         const isVerifiedSuccess = !finalAnalysis?.ui_title?.toLowerCase().includes("error");

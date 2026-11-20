@@ -60,6 +60,7 @@ import { globalLearningRateManager, globalHypothesisLayer } from '../coordinatio
 import { globalTieredCache } from '../tieredCache.ts';
 import { globalFeedbackEngine } from '../feedback.ts';
 import { isRunDebugPersistEnabled, persistRunDebugRecord } from './runDebugPersist.ts';
+import { recordRunDebugAgreement } from './runDebugRecord.ts';
 
 export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise<SwarmWorkflowResult> {
     const workflowStartTime = Date.now();
@@ -367,6 +368,9 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             } else {
                 // Step 4b: Cross-Analyst Consensus Synthesis
                 workflowConsensus = extractAnalystConsensus(clusterResult.allAnalystReports, analysts, task);
+                if (workflowConsensus?.agreementLevel) {
+                    recordRunDebugAgreement((context as any)?.id, workflowConsensus.agreementLevel);
+                }
                 if (workflowConsensus && workflowConsensus.totalAnalysts > 1) {
                     context.addEvent({
                         agentRole: 'Analyst Consensus Engine',

@@ -4,7 +4,7 @@ import { parseJsonSafe, guardVerificationResult } from './parser.ts';
 import { redactForLog } from './parser/responseGuards.ts';
 import { groqPromptCharCap } from './providers/groq.ts';
 import { seatBudget } from './context/promptBudget.ts';
-import { recordRunDebugSeat, recordRunDebugDrop, recordRunDebugEdit } from './engine/runDebugRecord.ts';
+import { formatRunDebugOutputDigest, recordRunDebugSeat, recordRunDebugDrop, recordRunDebugEdit } from './engine/runDebugRecord.ts';
 import { parseGameHeaders, renderHeaders, filterPicksByCoverage, type GameHeader } from './context/gameHeaders.ts';
 import { filterHeadersByEventIds, resolveSelectedGameIds } from './context/selectedGames.ts';
 import {
@@ -240,7 +240,22 @@ export class AnalysisLifecycle {
                 modelName: this.proposer.modelName,
                 prompt: executePrompt
             });
-            
+
+            const proposerToolMatch = /(?:^|\n)Tool evidence:\s*\n([\s\S]*?)(?=\n\n(?:Analyst Reports:|Specialist Coverage:)|$)/i.exec(executePrompt);
+            const proposerToolSent = proposerToolMatch
+                ? proposerToolMatch[1].trim()
+                : (typeof rawData === 'object' && rawData && typeof (rawData as any).toolResults === 'string'
+                    ? (rawData as any).toolResults
+                    : '');
+            recordRunDebugSeat((context as any)?.id, 'manager', {
+                role: this.proposer.role,
+                provider: String((this.proposer as any).provider || 'unknown'),
+                model: this.proposer.modelName,
+                promptChars: executePrompt.length,
+                limitChars: seatBudget(this.proposer.provider).maxPromptChars,
+                toolResultsSent: proposerToolSent
+            });
+
             const proposalRaw = await this.proposer.run(executePrompt, context, {
                 responseMimeType: 'application/json',
                 bypassCache: attempt > 1,
@@ -248,6 +263,9 @@ export class AnalysisLifecycle {
             });
             
             currentProposal = parseJsonSafe(proposalRaw, { rawText: proposalRaw, error: "Failed to parse JSON" });
+            recordRunDebugSeat((context as any)?.id, 'manager', {
+                outputDigest: formatRunDebugOutputDigest(currentProposal)
+            });
 
             if (effectiveCoveredEventIds && currentProposal && Array.isArray(currentProposal.picks)) {
                 const headers = Array.isArray((rawData as any)?.allHeaders) && (rawData as any).allHeaders.length > 0
@@ -652,6 +670,10 @@ export class AnalysisLifecycle {
             });
             
             let verification: VerificationResult = guardVerificationResult(verificationRaw);
+            recordRunDebugSeat((context as any)?.id, 'verifier', {
+                outputDigest: formatRunDebugOutputDigest(verificationRaw),
+                verdict: { pass: Boolean(verification.pass), flags: [] }
+            });
             if (verification.parseFailed) {
                 console.warn(`[Critic] unparsed verification output (attempt ${attempt}): ${redactForLog(String(verificationRaw)).slice(0, 300)}`);
             }
@@ -1107,6 +1129,26 @@ export class AnalysisLifecycle {
                         extractQuotedVetoedClaims([verification.feedback])
                     );
                 }
+
+                const verifierFlags = Array.from(
+                    new Set<string>([
+                        ...(injuryVetoTriggered ? ['injury_misattribution'] : []),
+                        ...(marketVetoTriggered ? (marketRowAudit.flags || ['market_row_mismatch']) : []),
+                        ...(groundingVetoTriggered ? (groundingAudit.flags || ['ungrounded_claim']) : []),
+                        ...(pullVetoTriggered ? (pullAudit.flags || ['pull_before_pass']) : []),
+                        ...(llmAuditCoverage.criticSkippedAudit ? ['critic_did_not_audit'] : [])
+                    ])
+                );
+                recordRunDebugSeat((context as any)?.id, 'verifier', {
+                    outputDigest: formatRunDebugOutputDigest({
+                        pass: verification.pass,
+                        feedback: verification.feedback
+                    }),
+                    verdict: {
+                        pass: Boolean(verification.pass),
+                        flags: verifierFlags
+                    }
+                });
             }
 
             // 3. Pass/Fail evaluation

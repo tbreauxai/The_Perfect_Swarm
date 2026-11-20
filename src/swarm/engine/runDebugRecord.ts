@@ -7,6 +7,11 @@ export interface RunDebugEdit {
   reason: string;
 }
 
+export interface RunDebugVerdict {
+  pass: boolean;
+  flags?: string[];
+}
+
 export interface RunDebugSeatRecord {
   seat: string;
   role: string;
@@ -17,6 +22,8 @@ export interface RunDebugSeatRecord {
   postFailoverProvider?: string;
   postFailoverLimitChars?: number;
   toolResultsSent?: string;
+  outputDigest?: string;
+  verdict?: RunDebugVerdict;
   droppedBlocks: string[];
   edits: RunDebugEdit[];
 }
@@ -24,6 +31,7 @@ export interface RunDebugSeatRecord {
 export interface RunDebugRecord {
   workflowId: string;
   createdAt: string;
+  agreementLevel?: string;
   seats: Record<string, RunDebugSeatRecord>;
 }
 
@@ -94,6 +102,17 @@ export function recordRunDebugSeat(
   if (typeof data.toolResultsSent === 'string') {
     seat.toolResultsSent = scrubKeyLikeStrings(data.toolResultsSent);
   }
+  if (typeof data.outputDigest === 'string') {
+    seat.outputDigest = scrubKeyLikeStrings(data.outputDigest).slice(0, 600);
+  }
+  if (data.verdict && typeof data.verdict === 'object' && typeof data.verdict.pass === 'boolean') {
+    seat.verdict = {
+      pass: data.verdict.pass,
+      ...(Array.isArray(data.verdict.flags)
+        ? { flags: data.verdict.flags.map(f => scrubKeyLikeStrings(String(f))) }
+        : {})
+    };
+  }
   if (Array.isArray(data.droppedBlocks)) {
     for (const b of data.droppedBlocks) {
       const clean = scrubKeyLikeStrings(b);
@@ -141,6 +160,30 @@ export function recordRunDebugFailover(
     postFailoverProvider: provider,
     postFailoverLimitChars: limitChars
   });
+}
+
+export function formatRunDebugOutputDigest(output: unknown): string {
+  if (output === null || output === undefined) return '';
+  let raw = '';
+  if (typeof output === 'string') {
+    raw = output;
+  } else {
+    try {
+      raw = JSON.stringify(output);
+    } catch {
+      raw = String(output);
+    }
+  }
+  return scrubKeyLikeStrings(raw).slice(0, 600);
+}
+
+export function recordRunDebugAgreement(
+  workflowId: string | undefined,
+  agreementLevel: string | undefined
+): void {
+  if (!isRunDebugEnabled() || !workflowId || !agreementLevel) return;
+  const rec = ensureRecord(workflowId);
+  rec.agreementLevel = scrubKeyLikeStrings(agreementLevel);
 }
 
 export function getRunDebugRecord(workflowId: string): RunDebugRecord | undefined {

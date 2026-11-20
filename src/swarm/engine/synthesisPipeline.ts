@@ -13,7 +13,7 @@ import { compileDebateDigest } from './coordinationPipeline.ts';
 import { TokenEstimator } from '../compression/tokenEstimator.ts';
 import { seatBudget } from '../context/promptBudget.ts';
 import { parseGameHeaders, renderHeaders, filterPicksByCoverage } from '../context/gameHeaders.ts';
-import { recordRunDebugSeat, recordRunDebugDrop, recordRunDebugEdit } from './runDebugRecord.ts';
+import { formatRunDebugOutputDigest, recordRunDebugAgreement, recordRunDebugSeat, recordRunDebugDrop, recordRunDebugEdit } from './runDebugRecord.ts';
 import { partitionTaskAndContract } from './analystExecution.ts';
 import { sanitizeMisattributedPicksAndText } from '../tools/injuryAttribution.ts';
 import { sanitizeRowMismatchedPicks, type MarketToolRecord } from '../tools/marketRowBinding.ts';
@@ -183,6 +183,9 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
 
     const consensusPromptBlock = workflowConsensus ? renderPromptConsensusBlock(workflowConsensus) : '';
     const consensusSection = consensusPromptBlock ? `${consensusPromptBlock}\n\n` : '';
+    if (workflowConsensus?.agreementLevel) {
+        recordRunDebugAgreement((context as any)?.id, workflowConsensus.agreementLevel);
+    }
 
     params.onStage?.({
         stage: 'manager_synthesis',
@@ -682,6 +685,13 @@ export async function executeManagerSynthesis(
             finalResult.reason = 'no picks with specialist coverage';
         }
     }
+
+    if (groundingContext?.agreementLevel) {
+        recordRunDebugAgreement((context as any)?.id, groundingContext.agreementLevel);
+    }
+    recordRunDebugSeat((context as any)?.id, 'manager', {
+        outputDigest: formatRunDebugOutputDigest(finalResult)
+    });
 
     return finalResult;
 }

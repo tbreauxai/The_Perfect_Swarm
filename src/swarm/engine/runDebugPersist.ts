@@ -81,19 +81,27 @@ export async function persistRunDebugRecord(workflowId: string | undefined): Pro
       Prefer: 'resolution=merge-duplicates'
     };
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-
+    const postController = new AbortController();
+    const postTimer = setTimeout(() => postController.abort(), REQUEST_TIMEOUT_MS);
     try {
-      await fetch(`${cfg.supabaseUrl}/rest/v1/swarm_run_debug`, {
+      const postRes = await fetch(`${cfg.supabaseUrl}/rest/v1/swarm_run_debug`, {
         method: 'POST',
         headers,
         body,
-        signal: controller.signal
+        signal: postController.signal
       });
+      if (postRes && !postRes.ok) {
+        console.warn(`[RunDebugPersist] POST swarm_run_debug status=${postRes.status}`);
+      }
+    } finally {
+      clearTimeout(postTimer);
+    }
 
-      const cutoffIso = new Date(Date.now() - TTL_MS).toISOString();
-      await fetch(
+    const cutoffIso = new Date(Date.now() - TTL_MS).toISOString();
+    const delController = new AbortController();
+    const delTimer = setTimeout(() => delController.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      const delRes = await fetch(
         `${cfg.supabaseUrl}/rest/v1/swarm_run_debug?created_at=lt.${encodeURIComponent(cutoffIso)}`,
         {
           method: 'DELETE',
@@ -101,11 +109,14 @@ export async function persistRunDebugRecord(workflowId: string | undefined): Pro
             apikey: cfg.supabaseServiceKey,
             Authorization: `Bearer ${cfg.supabaseServiceKey}`
           },
-          signal: controller.signal
+          signal: delController.signal
         }
       );
+      if (delRes && !delRes.ok) {
+        console.warn(`[RunDebugPersist] DELETE swarm_run_debug status=${delRes.status}`);
+      }
     } finally {
-      clearTimeout(timer);
+      clearTimeout(delTimer);
     }
   } catch {
     // Fire-and-forget: never throw on debug persistence failure

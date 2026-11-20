@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   clearRunDebugRecords,
+  getRunDebugRecord,
+  recordRunDebugAgreement,
   recordRunDebugDrop,
   recordRunDebugEdit,
   recordRunDebugFailover,
@@ -166,5 +168,76 @@ describe('runDebugPersist (S0 / S2)', () => {
     await new Promise(r => setTimeout(r, 20));
     const postCalls = fetchSpy.mock.calls.filter(c => String(c[0]).includes('/rest/v1/swarm_run_debug') && (c[1] as any)?.method === 'POST');
     expect(postCalls).toHaveLength(1);
+  });
+
+  it('S4: records outputDigest (<=600 chars, scrubbed), critic/verifier verdict, agreementLevel, lifecycle manager seat, and warns status only with separate signals on non-ok', async () => {
+    process.env.SWARM_RUN_DEBUG = '1';
+    process.env.SWARM_RUN_DEBUG_PERSIST = '1';
+
+    recordRunDebugAgreement('wf-s4', 'strong');
+    recordRunDebugSeat('wf-s4', 'critic', {
+      role: 'Risk Critic',
+      provider: 'groq',
+      promptChars: 2400,
+      limitChars: 5600,
+      outputDigest: 'secret=sk-abcdef1234567890abcdef ' + 'z'.repeat(800),
+      verdict: { pass: false, flags: ['ungrounded_claim'] }
+    });
+
+    const rec = getRunDebugRecord('wf-s4');
+    expect(rec?.agreementLevel).toBe('strong');
+    expect(rec?.seats.critic.outputDigest?.length).toBeLessThanOrEqual(600);
+    expect(rec?.seats.critic.outputDigest).not.toContain('sk-abcdef1234567890abcdef');
+    expect(rec?.seats.critic.verdict).toEqual({ pass: false, flags: ['ungrounded_claim'] });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const signals: Array<AbortSignal | null | undefined> = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit = {}) => {
+      signals.push(init.signal);
+      return new Response('sensitive-error-body-do-not-log', { status: 503 });
+    }));
+
+    await persistRunDebugRecord('wf-s4');
+
+    expect(signals).toHaveLength(2);
+    expect(signals[0]).toBeDefined();
+    expect(signals[1]).toBeDefined();
+    expect(signals[0]).not.toBe(signals[1]);
+    expect(warnSpy).toHaveBeenCalled();
+    const warnText = warnSpy.mock.calls.map(c => c.join(' ')).join('\n');
+    expect(warnText).toContain('503');
+    expect(warnText).not.toContain('sensitive-error-body-do-not-log');
+
+    ProviderRegistry.register({
+      providerName: 'custom-mock-deep',
+      async call() {
+        return JSON.stringify({ pass: true, feedback: 'ok', summary: 'ok', insights: ['ok'], ui_title: 'ok', picks: [] });
+      }
+    } as any);
+
+    const ctxDeep = new SwarmContext();
+    (ctxDeep as any).id = 'wf-deep-s4';
+    await executeSwarmWorkflow({
+      task: 'Analyze slate',
+      context: ctxDeep,
+      forceFullSwarm: true,
+      enableDeepAnalysis: true,
+      bypassCache: true,
+      settings: {
+        appId: 'test-deep-s4',
+        agents: [
+          { id: 'manager', role: 'Manager Node', provider: 'custom-mock-deep', apiKey: 'k', model: 'm' },
+          { id: 'a1', role: 'Quant Analyst', provider: 'custom-mock-deep', apiKey: 'k', model: 'm' },
+          { id: 'critic', role: 'Risk Critic', provider: 'custom-mock-deep', apiKey: 'k', model: 'm' }
+        ]
+      } as any
+    });
+
+    const deepRec = getRunDebugRecord('wf-deep-s4');
+    expect(deepRec?.agreementLevel).toBeDefined();
+    expect(deepRec?.seats.manager).toBeDefined();
+    expect(deepRec?.seats.manager.promptChars).toBeGreaterThan(0);
+    expect(deepRec?.seats.manager.outputDigest).toBeDefined();
+    expect(deepRec?.seats.verifier?.verdict?.pass).toBe(true);
   });
 });

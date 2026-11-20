@@ -33,7 +33,7 @@ import { runSeatWithTools, getRoleToolNames, type ToolEvidenceItem } from './sea
 import { GameQueryCache } from '../cache/gameQueryCache.ts';
 import { executeToolWithCacheAndTimeout } from './triageExecutor.ts';
 import { seatBudget } from '../context/promptBudget.ts';
-import { recordRunDebugSeat, recordRunDebugEdit } from './runDebugRecord.ts';
+import { formatRunDebugOutputDigest, recordRunDebugSeat, recordRunDebugEdit } from './runDebugRecord.ts';
 import { auditInjuryAttribution, sanitizeMisattributedPicksAndText } from '../tools/injuryAttribution.ts';
 import {
     auditClaimGrounding,
@@ -632,7 +632,16 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                 model: analyst.modelName,
                 promptChars: seatPrompt.length,
                 limitChars: criticBudget.maxPromptChars,
-                toolResultsSent: seatLoopRes?.toolEvidence || prefetchedInjurySummary || ''
+                toolResultsSent: seatLoopRes?.toolEvidence || prefetchedInjurySummary || '',
+                outputDigest: formatRunDebugOutputDigest(resData),
+                ...(isCritic
+                    ? {
+                          verdict: {
+                              pass: Boolean((resData as any)?.pass ?? true),
+                              flags: Array.isArray((resData as any)?.flags) ? (resData as any).flags.map(String) : []
+                          }
+                      }
+                    : {})
             });
             (resData as any)._chunkIndex = chunkIdx;
             (resData as any).coveredEventIds = scorecardReport?.coveredEventIds ?? seatLoopRes?.coveredEventIds ?? [];
@@ -1040,6 +1049,17 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                     }
                 }
             }
+            recordRunDebugSeat((context as any)?.id, seat, {
+                outputDigest: formatRunDebugOutputDigest(resData),
+                ...(isCritic
+                    ? {
+                          verdict: {
+                              pass: Boolean((resData as any)?.pass ?? true),
+                              flags: Array.isArray((resData as any)?.flags) ? (resData as any).flags.map(String) : []
+                          }
+                      }
+                    : {})
+            });
             if (scorecardReport) {
                 // R2-S3: stream each scorecard as soon as the seat finishes.
                 try {
