@@ -109,14 +109,18 @@ describe('runNov20e repros (wf-1795209358320)', () => {
         expect(audit.pass).toBe(false);
     });
 
-    it('K: college-football/college-basketball event_id prefixes truncate to "college" (pre-fix)', () => {
+    it('K: college-football/college-basketball event_id prefixes map to ncaaf/ncaab while preserving other prefixes', () => {
         const cfb = parseGameHeaders(
             'event_id=college-football-401864542 | New Mexico @ Wyoming | sp -3.5 | ml -165/140 | tot 52.5'
         );
         const cbb = parseGameHeaders(
             'event_id=college-basketball-401829310 | Duke @ North Carolina | sp -2.5 | ml -140/120 | tot 148.5'
         );
-        expect(cfb[0].sport).toBe('college');
-        expect(cbb[0].sport).toBe('college');
+        const nba = parseGameHeaders(
+            'event_id=nba-401909306 | Orlando Magic @ Brooklyn Nets | sp 4.5 | ml 165/-190 | tot 220.5'
+        );
+        expect(cfb[0].sport).toBe('ncaaf');
+        expect(cbb[0].sport).toBe('ncaab');
+        expect(nba[0].sport).toBe('nba');
     });
 });

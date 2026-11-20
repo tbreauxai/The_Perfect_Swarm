@@ -18,6 +18,21 @@ export interface GameHeader {
   options: GameHeaderOption[];
 }
 
+const EVENT_PREFIX_SPORT_MAP: Record<string, string> = {
+  'college-football': 'ncaaf',
+  'college-basketball': 'ncaab'
+};
+
+function inferSportFromEventId(eventId: string): string {
+  const clean = eventId.trim().toLowerCase();
+  const prefixMatch =
+    clean.match(/^([a-z][a-z0-9_-]*?)-\d+$/) ??
+    clean.match(/^(college-football|college-basketball|[a-z][a-z0-9_]*)-/);
+  const prefix = prefixMatch?.[1];
+  if (!prefix) return 'unknown';
+  return EVENT_PREFIX_SPORT_MAP[prefix] ?? prefix;
+}
+
 /**
  * Parses DuelOdds compact-slate lines:
  * "event_id=<id> | sport=<sport> | <away> @ <home> | commence=<time> | options: R1 ... , R2 ..."
@@ -101,10 +116,7 @@ export function parseGameHeaders(data: unknown, fallbackEventIds?: string[]): Ga
 
         if (eventId) {
           if (sport === 'unknown') {
-            const prefixMatch = eventId.match(/^([a-z][a-z0-9_]*)-/i);
-            if (prefixMatch) {
-              sport = prefixMatch[1].toLowerCase();
-            }
+            sport = inferSportFromEventId(eventId);
           }
           if (mlRaw && !/^n\/a$/i.test(mlRaw)) {
             const mlParts = mlRaw.split('/').map(s => s.trim());
@@ -139,8 +151,7 @@ export function parseGameHeaders(data: unknown, fallbackEventIds?: string[]): Ga
         const parts = line.split('|').map(p => p.trim());
         if (parts.length >= 2 && /^[a-z][a-z0-9_-]*-\d+$/i.test(parts[0])) {
           const eventId = parts[0];
-          const prefixMatch = eventId.match(/^([a-z][a-z0-9_]*)-/i);
-          let sport = prefixMatch ? prefixMatch[1].toLowerCase() : 'unknown';
+          let sport = inferSportFromEventId(eventId);
           let away = 'Away';
           let home = 'Home';
           let commence: string | undefined = undefined;
