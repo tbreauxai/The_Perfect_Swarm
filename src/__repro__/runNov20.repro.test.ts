@@ -87,7 +87,6 @@ describe('runNov20 repros', () => {
             historicalContext: '',
             chunks: [twelveGames],
             context: new SwarmContext(),
-            complexity: 'complex',
             settings: { appId: 'duelodds' },
             toolRegistry: registry,
             analystClusterMap: new Map()

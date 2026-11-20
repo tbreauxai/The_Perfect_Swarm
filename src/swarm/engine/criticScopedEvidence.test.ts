@@ -203,7 +203,6 @@ describe('Critic Scoped Evidence Pulls (Goal 2 & Goal 3)', () => {
       historicalContext: '',
       chunks: [twelveGames],
       context: new SwarmContext(),
-      complexity: 'complex',
       settings: { appId: 'duelodds' },
       toolRegistry: registry,
       analystClusterMap: new Map()
@@ -259,7 +258,6 @@ describe('Critic Scoped Evidence Pulls (Goal 2 & Goal 3)', () => {
       historicalContext: '',
       chunks: [SLATE],
       context: new SwarmContext(),
-      complexity: 'complex',
       settings: { appId: 'duelodds' },
       toolRegistry: registry,
       analystClusterMap: new Map()

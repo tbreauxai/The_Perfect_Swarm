@@ -25,7 +25,7 @@ export { DEFAULT_PROVIDER_MODELS } from './server/modelsProvider.ts';
  * - Robust reasoning model sanitization (<think> tag stripping)
  */
 function checkTargetLimits(
-    target: { provider: AIProvider | string; modelName?: string },
+    target: { provider: string; modelName?: string },
     defaultModelName: string,
     prompt: string,
     systemInstruction: string | undefined,
@@ -168,21 +168,21 @@ export class Agent {
                 ? INTERACTIVE_MAX_BUDGET_WAIT_MS
                 : (config?.maxBudgetWaitMs ?? DEFAULT_STRICT_BUDGET_WAIT_MS);
             const preCheck = checkTargetLimits(currentTarget, this.modelName, prompt, this.systemInstruction, maxBudgetWait, config?.groqMode);
-            if (!preCheck.ok && !preCheck.needsBudgetWait) {
-                lastFailedProvider = String(currentTarget.provider);
-                lastFailedModel = preCheck.targetModel;
-                lastError = new Error(preCheck.reason);
-                context.addEvent({
-                    agentRole: this.role,
-                    action: 'Provider Skipped',
-                    modelName: `${currentTarget.provider}/${preCheck.targetModel}`,
-                    prompt: `Skipped provider target: ${preCheck.reason}`,
-                    output: { provider: currentTarget.provider, model: preCheck.targetModel, reason: preCheck.reason }
-                });
-                continue;
-            }
+            if (!preCheck.ok) {
+                if (!preCheck.needsBudgetWait) {
+                    lastFailedProvider = String(currentTarget.provider);
+                    lastFailedModel = preCheck.targetModel;
+                    lastError = new Error(preCheck.reason);
+                    context.addEvent({
+                        agentRole: this.role,
+                        action: 'Provider Skipped',
+                        modelName: `${currentTarget.provider}/${preCheck.targetModel}`,
+                        prompt: `Skipped provider target: ${preCheck.reason}`,
+                        output: { provider: currentTarget.provider, model: preCheck.targetModel, reason: preCheck.reason }
+                    });
+                    continue;
+                }
 
-            if (!preCheck.ok && preCheck.needsBudgetWait) {
                 const waitMs = Math.min(60000, globalProviderLimiter.budgetWaitMs(String(currentTarget.provider), preCheck.estimatedTokens));
                 if (Number.isFinite(waitMs) && waitMs > 0) {
                     await new Promise(resolve => setTimeout(resolve, waitMs));
