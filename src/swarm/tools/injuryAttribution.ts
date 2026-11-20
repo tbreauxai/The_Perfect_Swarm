@@ -715,7 +715,7 @@ export function findClauseInjuryMisattribution(
       // Case 2: Both teams appear in the text; check if the wrong team directly modifies/claims the player
       for (const wrongAlias of matchedWrongAliases) {
         const wEsc = escapeRegex(wrongAlias);
-        const roleWords = `(?:starting\\s+|backup\\s+|star\\s+|key\\s+|no\\.\\s*1\\s+|#1\\s+|primary\\s+|top\\s+|injured\\s+|sidelined\\s+)*(?:goalie\\s+|goaltender\\s+|netminder\\s+|qb\\s+|quarterback\\s+|center\\s+|forward\\s+|guard\\s+|wing\\s+|winger\\s+|defenseman\\s+|defender\\s+|starter\\s+|ace\\s+|pitcher\\s+|scorer\\s+|player\\s+)?`;
+        const roleWords = `(?:starting\\s+|backup\\s+|star\\s+|key\\s+|no\\.\\s*1\\s+|#1\\s+|primary\\s+|top\\s+|injured\\s+|sidelined\\s+|frontcourt\\s+|backcourt\\s+|rotation\\s+|lineup\\s+|depth\\s+|bench\\s+)*(?:goalie\\s+|goaltender\\s+|netminder\\s+|qb\\s+|quarterback\\s+|center\\s+|forward\\s+|guard\\s+|wing\\s+|winger\\s+|defenseman\\s+|defender\\s+|starter\\s+|ace\\s+|pitcher\\s+|scorer\\s+|player\\s+|frontcourt\\s+|backcourt\\s+|rotation\\s+|lineup\\s+|depth\\s+|bench\\s+)?`;
 
         // Pattern A: "<WrongTeam>'s starting goalie <Player>"
         const patA = new RegExp(`\\b${wEsc}(?:'s)?\\s+${roleWords}${playerPattern}\\b`, 'i');
