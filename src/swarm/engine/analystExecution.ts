@@ -588,7 +588,12 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                               fullRawSource || renderedHeadersText
                           )
                         : [];
-                    const emptyCriticAudit = hasAuditContext && allGameIds.length === 0;
+                    const emptyCriticAudit = hasAuditContext && allGameIds.length === 0 && stage1ProposedLegs.length === 0;
+                    if (stage1ProposedLegs.length > 0 && allGameIds.length === 0) {
+                        allGameIds = Array.from(
+                            new Set(stage1ProposedLegs.map(l => l.eventId).filter((id): id is string => Boolean(id)))
+                        );
+                    }
                     seatLoopRes = await runSeatWithTools({
                         agent: analyst,
                         seat,

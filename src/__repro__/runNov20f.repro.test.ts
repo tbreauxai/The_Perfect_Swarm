@@ -1,6 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { parseGameHeaders } from '../swarm/context/gameHeaders.ts';
 import { resolveSelectedGameIds } from '../swarm/context/selectedGames.ts';
+import { createAnalystExecutor } from '../swarm/engine/analystExecution.ts';
+import { SwarmContext } from '../swarm/context.ts';
+import { ToolRegistry } from '../swarm/tools/registry.ts';
 
 describe('runNov20f repros (wf-1795213037531)', () => {
     const SLATE = [
@@ -75,5 +78,66 @@ describe('runNov20f repros (wf-1795213037531)', () => {
             headers
         );
         expect(narrativeOnlyAliases).toEqual([]);
+    });
+
+    it('S3: legs present with empty targetGameIds recovers gameIds from leg eventIds and prompts critic with "Audit all"', async () => {
+        const pulledGameIds: string[] = [];
+        const registry = new ToolRegistry([
+            {
+                name: 'get_market_movement',
+                description: 'market movement',
+                parameters: {
+                    game_id: { type: 'string' as const, description: 'id', required: true },
+                    market_type: { type: 'string' as const, description: 'm' }
+                },
+                execute: vi.fn(async ({ game_id }: any) => {
+                    pulledGameIds.push(game_id);
+                    return { success: true, summary: `[MARKET MOVEMENT: ${game_id} | all] ml_home=165, ml_away=-190` };
+                })
+            }
+        ]);
+
+        const capturedPrompts: string[] = [];
+        const criticAgent: any = {
+            id: 'critic',
+            role: 'Risk Critic',
+            provider: 'groq',
+            setSystemInstruction: vi.fn(),
+            run: vi.fn(async (p: string) => {
+                capturedPrompts.push(p);
+                return JSON.stringify({
+                    pass: true,
+                    verdict: 'Verified Magic ML and Nuggets -1.5 against tool evidence.',
+                    flags: []
+                });
+            })
+        };
+
+        const executeAnalyst = createAnalystExecutor({
+            task: 'Audit proposed legs',
+            historicalContext: '',
+            chunks: [SLATE],
+            profile: null,
+            targetAppId: 'duelodds',
+            bypassCache: true,
+            context: new SwarmContext(),
+            settings: { appId: 'duelodds' },
+            toolRegistry: registry,
+            analystClusterMap: new Map()
+        });
+
+        const res: any = await executeAnalyst(criticAgent, SLATE, 0, {
+            summaryText: '- [Quant] Proposed 2 leg(s): Magic ML (-190) | Nuggets -1.5 (-110)',
+            targetGameIds: [],
+            proposedPicks: [
+                { row: 'R2', side: 'Magic ML (-190)' },
+                { row: 'R6', side: 'Nuggets -1.5 (-110)' }
+            ]
+        });
+
+        const finalPrompt = capturedPrompts[capturedPrompts.length - 1] || '';
+        expect(finalPrompt).toContain('Audit all 2 proposed leg(s)');
+        expect(pulledGameIds).toEqual(['nba-401909306', 'nba-401909312']);
+        expect(res.coveredEventIds).toEqual(['nba-401909306', 'nba-401909312']);
     });
 });

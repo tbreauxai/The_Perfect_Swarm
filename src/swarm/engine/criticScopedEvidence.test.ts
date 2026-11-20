@@ -281,4 +281,65 @@ describe('Critic Scoped Evidence Pulls (Goal 2 & Goal 3)', () => {
     expect(capturedPrompt).not.toContain('nba-lal');
     expect(capturedPrompt).toContain('Confirm pass/no-picks');
   });
+
+  it('legs present with empty targetGameIds: recovers gameIds from leg eventIds and prompt includes "Audit all"', async () => {
+    const pulledGameIds: string[] = [];
+    const registry = new ToolRegistry([
+      {
+        name: 'get_market_movement',
+        description: 'get_market_movement',
+        parameters: { game_id: { type: 'string' as const, description: 'id', required: true } },
+        execute: vi.fn(async ({ game_id }: any) => {
+          pulledGameIds.push(game_id);
+          return { success: true, summary: `[get_market_movement: ${game_id}] ok` };
+        })
+      }
+    ]);
+    let capturedPrompt = '';
+    const criticAgent: any = {
+      id: 'critic',
+      role: 'Risk Critic',
+      provider: 'groq',
+      setSystemInstruction: vi.fn(),
+      run: vi.fn(async (p: string) => {
+        capturedPrompt = p;
+        return JSON.stringify({ pass: true, verdict: 'Verified Lakers -7.5 and Magic -2.5', flags: [] });
+      })
+    };
+
+    const executeAnalyst = createAnalystExecutor({
+      task: 'Audit slate',
+      historicalContext: '',
+      chunks: [SLATE],
+      profile: null,
+      targetAppId: 'duelodds',
+      bypassCache: false,
+      context: new SwarmContext(),
+      settings: { appId: 'duelodds' },
+      toolRegistry: registry,
+      analystClusterMap: new Map()
+    });
+
+    const res: any = await executeAnalyst(criticAgent, SLATE, 0, {
+      summaryText: '- [Quant] Proposed 2 leg(s): Lakers -7.5 | Magic -2.5',
+      targetGameIds: [],
+      proposerReports: [
+        {
+          role: 'Quant',
+          picks: [
+            { row: 'R1', side: 'Lakers -7.5' },
+            { row: 'R4', side: 'Magic -2.5' }
+          ]
+        }
+      ],
+      proposedPicks: [
+        { row: 'R1', side: 'Lakers -7.5' },
+        { row: 'R4', side: 'Magic -2.5' }
+      ]
+    });
+
+    expect(capturedPrompt).toContain('Audit all 2 proposed leg(s)');
+    expect(pulledGameIds).toEqual(['nba-lal', 'nba-orl']);
+    expect(res.coveredEventIds).toEqual(['nba-lal', 'nba-orl']);
+  });
 });
