@@ -78,6 +78,24 @@ export interface AnalysisLifecycleOptions {
     toolOptions?: { env?: Record<string, string | undefined>; fetchFn?: typeof fetch; qdrantClient?: any };
 }
 
+async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+    if (items.length === 0) return;
+    let index = 0;
+    const workers = Array.from({ length: Math.min(Math.max(1, limit), items.length) }, async () => {
+        while (index < items.length) {
+            const current = items[index++];
+            await fn(current);
+        }
+    });
+    await Promise.all(workers);
+}
+
+function isFailedToolSummary(summary: string): boolean {
+    const trimmed = summary.trim();
+    if (!trimmed) return true;
+    return /^(?:\[[^\]]+\]:?\s*)?Error(?:\s+fetching\b[^:\n]*)?:|^\[Not Fetched\]:|^\[TOOL_(?:ERROR|TIMEOUT):|\b(?:rpc_failed(?:_\d+)?|rpc_network_error|supabase_not_configured|invalid_game_id|unresolved_game_id|status=failed)\b/i.test(trimmed);
+}
+
 export class AnalysisLifecycle {
     private proposer: Agent;
     private critic: Agent;
@@ -266,6 +284,15 @@ export class AnalysisLifecycle {
                 typeof rawData === 'object' && rawData && Array.isArray((rawData as any).toolEvidenceItems)
                     ? (rawData as any).toolEvidenceItems
                     : [];
+            const normalizeToolKey = (tool: string, gId: string) =>
+                `${String(tool || '').trim().replace(/_v1$/i, '')}::${String(gId || '').trim()}`;
+            const prePassedDataKeys = new Set<string>();
+            for (const item of prePassedToolItems) {
+                if (!item || !item.tool || !item.eventId || typeof item.summary !== 'string') continue;
+                const sum = item.summary.trim();
+                if (!sum || isEmptyToolSummary(sum) || isFailedToolSummary(sum)) continue;
+                prePassedDataKeys.add(normalizeToolKey(item.tool, item.eventId));
+            }
 
             const allParsedHeaders: GameHeader[] = Array.isArray((rawData as any)?.allHeaders) && (rawData as any).allHeaders.length > 0
                 ? ((rawData as any).allHeaders as GameHeader[])
@@ -296,11 +323,20 @@ export class AnalysisLifecycle {
                 if (criticTools.length > 0) {
                     const cache = this.queryCache ?? new GameQueryCache();
                     const headerById = new Map<string, GameHeader>(allParsedHeaders.map(h => [h.eventId, h]));
-                    const pullCalls = selectedGameIds.flatMap(gId =>
-                        criticTools.map(tool => ({ tool, gId }))
-                    );
-                    await Promise.all(
-                        pullCalls.map(async ({ tool, gId }) => {
+                    const pullCalls: Array<{ tool: string; gId: string }> = [];
+                    for (const gId of selectedGameIds) {
+                        for (const tool of criticTools) {
+                            if (prePassedDataKeys.has(normalizeToolKey(tool, gId))) {
+                                verifiedEventIdsSet.add(gId);
+                            } else {
+                                pullCalls.push({ tool, gId });
+                            }
+                        }
+                    }
+                    await mapLimit(
+                        pullCalls,
+                        4,
+                        async ({ tool, gId }) => {
                             const hdr = headerById.get(gId);
                             const opts = hdr
                                 ? {
@@ -362,7 +398,7 @@ export class AnalysisLifecycle {
                                 }
                                 verifiedEventIdsSet.add(gId);
                             }
-                        })
+                        }
                     );
                     if (pulledItems.length > 0) {
                         rawPulledText = pulledItems.map(i => i.summary).join('\n\n');
@@ -779,15 +815,17 @@ export class AnalysisLifecycle {
                         for (const gId of pullAudit.unqueriedGameIds.slice(0, 8)) {
                             const toolsForGame = pullAudit.missingToolsByGame[gId] || availableSportsTools;
                             for (const tool of toolsForGame) {
-                                if (this.toolRegistry.has(tool)) {
+                                if (this.toolRegistry.has(tool) && !prePassedDataKeys.has(normalizeToolKey(tool, gId))) {
                                     missingCalls.push({ tool, gId });
                                 }
                             }
                         }
                         if (missingCalls.length > 0) {
                             const newlyPulled: string[] = [];
-                            await Promise.all(
-                                missingCalls.map(async ({ tool, gId }) => {
+                            await mapLimit(
+                                missingCalls,
+                                4,
+                                async ({ tool, gId }) => {
                                     const hdr = headerById.get(gId);
                                     const opts = hdr
                                         ? {
@@ -846,7 +884,7 @@ export class AnalysisLifecycle {
                                             });
                                         }
                                     }
-                                })
+                                }
                             );
                             accumulatedToolTrace = mergeToolCallTraceEntries(accumulatedToolTrace);
                             if (newlyPulled.length > 0) {

@@ -275,4 +275,151 @@ describe('runNov20c repros (wf-1795203442644)', () => {
         expect(resC.success).toBe(false);
         expect(resC.criticFeedback).toContain('INJURY ATTRIBUTION RULE');
     });
+
+    it('S4: limits critic tool pulls to max 4 in flight and skips duplicate pre-passed non-empty items', async () => {
+        // Subcase A: 3 picked games x 4 tools = 12 pulls -> max 4 in flight
+        let inFlight = 0;
+        let maxInFlight = 0;
+        const toolNames = [
+            'get_market_movement',
+            'get_injury_and_roster_delta',
+            'get_matchup_fundamentals',
+            'get_environment_and_weather'
+        ] as const;
+        const delayTools = toolNames.map(name => ({
+            name,
+            description: name,
+            parameters: {
+                game_id: { type: 'string' as const, description: 'id', required: true },
+                market_type: { type: 'string' as const, description: 'm' }
+            },
+            execute: vi.fn(async ({ game_id }: any) => {
+                inFlight++;
+                if (inFlight > maxInFlight) maxInFlight = inFlight;
+                await new Promise(r => setTimeout(r, 25));
+                inFlight--;
+                if (name === 'get_market_movement') {
+                    return {
+                        success: true,
+                        summary: `[MARKET MOVEMENT: ${game_id}] ml_home: -110 | ml_away: -110 | spread: -1.5`,
+                        data: { ml_home: -110, ml_away: -110, spread: -1.5 }
+                    };
+                }
+                return { success: true, summary: `[${name}: ${game_id}] ok` };
+            })
+        }));
+
+        const proposerA = makeAgent('Manager Node', 'gemini', () =>
+            JSON.stringify({
+                ui_title: '3-Leg Parlay',
+                summary: 'Backing R1, R2, and R3.',
+                picks: [
+                    { row: 'R1', event_id: 'nba-401909306', side: 'Orlando Magic ML', reason: 'Magic ML.' },
+                    { row: 'R2', event_id: 'nba-401909309', side: 'Chicago Bulls ML', reason: 'Bulls ML.' },
+                    { row: 'R3', event_id: 'nba-401909312', side: 'Denver Nuggets ML', reason: 'Nuggets ML.' }
+                ]
+            })
+        );
+        const criticA = makeAgent('Risk Critic', 'groq', () =>
+            JSON.stringify({ pass: true, feedback: 'Verified 3 legs.' })
+        );
+
+        const resA = await new AnalysisLifecycle(proposerA, criticA, 1, {
+            toolRegistry: new ToolRegistry(delayTools),
+            queryCache: new GameQueryCache()
+        }).executeAndVerify(
+            { rawBoard: SLATE_3_GAMES, fullBoard: SLATE_3_GAMES },
+            new SwarmContext(),
+            'Build 3-leg parlay.',
+            'Verify proposal.'
+        );
+
+        expect(resA.success).toBe(true);
+        expect(maxInFlight).toBeLessThanOrEqual(4);
+        expect(maxInFlight).toBeGreaterThan(1);
+        for (const t of delayTools) {
+            expect(t.execute).toHaveBeenCalledTimes(3);
+        }
+
+        // Subcase B: skips (tool, gId) already in prePassedToolItems with non-empty data, but still pulls empty/error/missing
+        const calledPairs: string[] = [];
+        const trackedTools = toolNames.map(name => ({
+            name,
+            description: name,
+            parameters: {
+                game_id: { type: 'string' as const, description: 'id', required: true },
+                market_type: { type: 'string' as const, description: 'm' }
+            },
+            execute: vi.fn(async ({ game_id }: any) => {
+                calledPairs.push(`${name}::${game_id}`);
+                if (name === 'get_market_movement') {
+                    return {
+                        success: true,
+                        summary: `[MARKET MOVEMENT: ${game_id}] ml_home: -135 | ml_away: +115 | spread: -2.5`,
+                        data: { ml_home: -135, ml_away: 115, spread: -2.5 }
+                    };
+                }
+                return { success: true, summary: `[${name}: ${game_id}] fresh data` };
+            })
+        }));
+
+        const proposerB = makeAgent('Manager Node', 'gemini', () =>
+            JSON.stringify({
+                ui_title: '2-Leg Parlay',
+                summary: 'Backing R1 Orlando Magic ML and R2 Chicago Bulls ML.',
+                picks: [
+                    { row: 'R1', event_id: 'nba-401909306', side: 'Orlando Magic ML', reason: 'Magic ML.' },
+                    { row: 'R2', event_id: 'nba-401909309', side: 'Chicago Bulls ML', reason: 'Bulls ML.' }
+                ]
+            })
+        );
+        const criticB = makeAgent('Risk Critic', 'groq', () =>
+            JSON.stringify({ pass: true, feedback: 'Verified 2 legs.' })
+        );
+
+        const resB = await new AnalysisLifecycle(proposerB, criticB, 1, {
+            toolRegistry: new ToolRegistry(trackedTools),
+            queryCache: new GameQueryCache()
+        }).executeAndVerify(
+            {
+                rawBoard: SLATE_3_GAMES,
+                fullBoard: SLATE_3_GAMES,
+                toolEvidenceItems: [
+                    {
+                        tool: 'get_market_movement',
+                        eventId: 'nba-401909306',
+                        summary: '[MARKET MOVEMENT: nba-401909306] ml_home: -110 | ml_away: -110 | spread: -1.5'
+                    },
+                    {
+                        tool: 'get_injury_and_roster_delta',
+                        eventId: 'nba-401909306',
+                        summary: '[INJURY & ROSTER DELTA: nba-401909306] Brooklyn Nets (BKN): Cam Thomas (G): OUT'
+                    },
+                    {
+                        tool: 'get_market_movement',
+                        eventId: 'nba-401909309',
+                        summary: '[MARKET MOVEMENT: nba-401909309 | all] no FanDuel snapshots tracked (0 snapshots).'
+                    },
+                    {
+                        tool: 'get_matchup_fundamentals',
+                        eventId: 'nba-401909309',
+                        summary: 'Error fetching matchup fundamentals for nba-401909309: rpc_failed_500'
+                    }
+                ]
+            },
+            new SwarmContext(),
+            'Build 2-leg parlay.',
+            'Verify proposal.'
+        );
+
+        expect(resB.success).toBe(true);
+        expect(calledPairs).not.toContain('get_market_movement::nba-401909306');
+        expect(calledPairs).not.toContain('get_injury_and_roster_delta::nba-401909306');
+        expect(calledPairs).toContain('get_matchup_fundamentals::nba-401909306');
+        expect(calledPairs).toContain('get_environment_and_weather::nba-401909306');
+        expect(calledPairs).toContain('get_market_movement::nba-401909309');
+        expect(calledPairs).toContain('get_matchup_fundamentals::nba-401909309');
+        expect(calledPairs).toContain('get_injury_and_roster_delta::nba-401909309');
+        expect(calledPairs).toContain('get_environment_and_weather::nba-401909309');
+    });
 });
