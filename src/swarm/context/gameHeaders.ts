@@ -71,6 +71,9 @@ export function parseGameHeaders(data: unknown, fallbackEventIds?: string[]): Ga
         let home = 'Home';
         let commence: string | undefined = undefined;
         const options: GameHeaderOption[] = [];
+        let spRaw: string | undefined;
+        let mlRaw: string | undefined;
+        let totRaw: string | undefined;
 
         for (const p of parts) {
           if (p.startsWith('event_id=')) {
@@ -87,10 +90,49 @@ export function parseGameHeaders(data: unknown, fallbackEventIds?: string[]): Ga
             }
           } else if (p.toLowerCase().startsWith('options:')) {
             parseOptionsSegment(p, options);
+          } else if (/^sp\s+/i.test(p)) {
+            spRaw = p.replace(/^sp\s+/i, '').trim();
+          } else if (/^ml\s+/i.test(p)) {
+            mlRaw = p.replace(/^ml\s+/i, '').trim();
+          } else if (/^tot\s+/i.test(p)) {
+            totRaw = p.replace(/^tot\s+/i, '').trim();
           }
         }
 
         if (eventId) {
+          if (sport === 'unknown') {
+            const prefixMatch = eventId.match(/^([a-z][a-z0-9_]*)-/i);
+            if (prefixMatch) {
+              sport = prefixMatch[1].toLowerCase();
+            }
+          }
+          if (mlRaw && !/^n\/a$/i.test(mlRaw)) {
+            const mlParts = mlRaw.split('/').map(s => s.trim());
+            if (mlParts.length === 2 && mlParts[0] && mlParts[1] && !/^n\/a$/i.test(mlParts[0]) && !/^n\/a$/i.test(mlParts[1])) {
+              options.push({
+                id: `R${options.length + 1}`,
+                text: `${away} ML ${mlParts[1]} / ${home} ML ${mlParts[0]}`
+              });
+            }
+          }
+          if (spRaw && !/^n\/a$/i.test(spRaw)) {
+            const spNum = Number(spRaw);
+            if (Number.isFinite(spNum)) {
+              const homeSp = spNum > 0 ? `+${spNum}` : `${spNum}`;
+              const awayNum = -spNum;
+              const awaySp = awayNum > 0 ? `+${awayNum}` : `${awayNum}`;
+              options.push({
+                id: `R${options.length + 1}`,
+                text: `${home} ${homeSp} / ${away} ${awaySp}`
+              });
+            }
+          }
+          if (totRaw && !/^n\/a$/i.test(totRaw)) {
+            options.push({
+              id: `R${options.length + 1}`,
+              text: `O/U ${totRaw}`
+            });
+          }
           headers.push({ eventId, sport, away, home, commence, options });
         }
       } else if (line.includes('|') && line.includes('@')) {
