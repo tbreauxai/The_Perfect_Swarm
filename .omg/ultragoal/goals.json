@@ -1,26 +1,96 @@
 {
-  "activeGoalId": "goal-nov20b-3-stage2-reprompt-and-verify",
+  "activeGoalId": "goal-s0-repro-nov20d",
   "goals": [
     {
-      "id": "goal-nov20b-1-repro",
-      "title": "Repro tests for wf-1795200330594 (empty-picks verification & Stage 2 critic reprompt)",
-      "description": "Add src/__repro__/runNov20b.repro.test.ts reproducing (1) lifecycle verification failing on a valid PASS with picks: [] and (2) Stage 2 Risk Critic reprompt not forbidding tool calls.",
-      "status": "completed",
-      "verificationCriteria": "src/__repro__/runNov20b.repro.test.ts runs and reproduces the failures."
+      "id": "goal-s0-repro-nov20d",
+      "title": "S0: Add src/__repro__/runNov20d.repro.test.ts (A-F)",
+      "description": "Add src/__repro__/runNov20d.repro.test.ts covering repro cases A-F; flip asserts as each step lands.",
+      "status": "in-progress",
+      "verificationCriteria": "src/__repro__/runNov20d.repro.test.ts runs and reproduces A-F."
     },
     {
-      "id": "goal-nov20b-2-lifecycle-empty-picks",
-      "title": "Fix lifecycle.ts verification on valid NO-BET / empty picks",
-      "description": "In src/swarm/lifecycle.ts, when proposedLegsThisAttempt.length === 0 (valid PASS / NO-BET), tell the Verification Critic that picks: [] is valid and pass when the critic rejects solely for having no picks.",
-      "status": "completed",
-      "verificationCriteria": "runNov20b.repro.test.ts empty-picks verification test passes."
+      "id": "goal-s1-gameheaders-sp-ml-tot",
+      "title": "S1: Parse sp/ml/tot & sport prefix in context/gameHeaders.ts",
+      "description": "In context/gameHeaders.ts:66-95 event_id= branch: parse sp X (home spread), ml H/A (home/away), tot T into options 'AWAY ML a / HOME ML h', 'HOME sp / AWAY -sp', 'O/U t' (skip n/a); infer sport from id prefix when no sport=.",
+      "status": "todo",
+      "verificationCriteria": "Repro A flips, F flips (HOU 'home favorite' fails)."
     },
     {
-      "id": "goal-nov20b-3-stage2-reprompt-and-verify",
-      "title": "Fix Stage 2 Risk Critic reprompt & run full verification",
-      "description": "In src/swarm/tools/criticAudit.ts, explicitly forbid tool calls in the Stage 2 Risk Critic reprompt and run npx tsc --noEmit + npx vitest run.",
-      "status": "completed",
-      "verificationCriteria": "runNov20b.repro.test.ts, tsc --noEmit, and full vitest run pass."
+      "id": "goal-s2-marketrow-pipe-eventid",
+      "title": "S2: Pipe row eventId from cells[1] in tools/marketRowBinding.ts",
+      "description": "In tools/marketRowBinding.ts:147-155 pipe row: if cells[1] matches /^[a-z-]+-\\d+$/i set eventId=cells[1].",
+      "status": "todo",
+      "verificationCriteria": "Repro B R2->nba-401909306 flips."
+    },
+    {
+      "id": "goal-s3-missing-ml-scrub-pass",
+      "title": "S3: Extend claimsMissingML & scrub/pass=true when coverage exists",
+      "description": "In tools/marketRowBinding.ts:1598 + engine/analystExecution.ts:940 + lifecycle.ts: claimsMissingML also matches lack(s|ing)?( of)?( verified)? market data|no market (data|pricing); run check whatever pass is, and when coverage exists scrub clause from verdict/summary and set pass=true.",
+      "status": "todo",
+      "verificationCriteria": "Repro C flips."
+    },
+    {
+      "id": "goal-s4-seat-tool-loop-compact",
+      "title": "S4: Compact tool summaries & floor tool budget in seatToolLoop.ts",
+      "description": "Export compactToolLine from engine/verifierEvidence.ts:67; in engine/seatToolLoop.ts:400-430 map entry summaries through compactToolLine before fair-share fill; floor tool budget at 600 chars.",
+      "status": "todo",
+      "verificationCriteria": "Unit test: 9 entries in 1100 chars keep 'MKT:' with ML for each game."
+    },
+    {
+      "id": "goal-s5-pull-before-pass-lack",
+      "title": "S5: Add lack(s|ing)? of to pullBeforePass.ts & conditional correction push",
+      "description": "In tools/pullBeforePass.ts:426-437 + lifecycle.ts:852-858: add lack(?:s|ing)?(?:\\s+of)? to MARKET/FUNDAMENTALS/INJURY missing regexes; push correction only if JSON.stringify(proposal) changed.",
+      "status": "todo",
+      "verificationCriteria": "Repro D flips."
+    },
+    {
+      "id": "goal-s6-injury-role-words",
+      "title": "S6: Expand roleWords in tools/injuryAttribution.ts:718",
+      "description": "In tools/injuryAttribution.ts:718: roleWords += frontcourt|backcourt|rotation|lineup|depth|bench.",
+      "status": "todo",
+      "verificationCriteria": "Repro E flips."
+    },
+    {
+      "id": "goal-s7-home-away-role-flip",
+      "title": "S7: Home/away role_flip check in tools/marketRowBinding.ts:1229",
+      "description": "In tools/marketRowBinding.ts:1229: team hit plus home|at home|hosting when header has it away (road|away for home) -> role_flip.",
+      "status": "todo",
+      "verificationCriteria": "Test 'Houston are home favorites' vetoed."
+    },
+    {
+      "id": "goal-s8-claim-grounding-strips",
+      "title": "S8: Strip combined/parlay odds & ungrounded off/def metrics in claimGrounding.ts",
+      "description": "In tools/claimGrounding.ts:1389/1646: strip combined/parlay odds claims (contract rule 4); strip (offensive|defensive) (metrics|efficiency|rating) unless in tool text.",
+      "status": "todo",
+      "verificationCriteria": "Unit test passes."
+    },
+    {
+      "id": "goal-s9-lifecycle-protected-ids",
+      "title": "S9: Protected ordering IDs in lifecycle.ts:495-515",
+      "description": "In lifecycle.ts:495-515: protected ids = selectedGameIds.length ? selectedGameIds : resolveDiscussedGameIds(currentProposal, allParsedHeaders) (ordering only, no pulls).",
+      "status": "todo",
+      "verificationCriteria": "0-pick test keeps the IND@CLE block."
+    },
+    {
+      "id": "goal-s10-zero-pick-consensus",
+      "title": "S10 (optional): All non-critic seats picks=[] -> agreementLevel 'strong'",
+      "description": "In engine/consensusPipeline.ts:353: all non-critic seats picks=[] -> agreementLevel 'strong'.",
+      "status": "todo",
+      "verificationCriteria": "Unit test passes."
+    },
+    {
+      "id": "goal-s11-run-debug-record",
+      "title": "S11: In-memory RunDebugRecord + GET /api/debug/runs/:workflowId",
+      "description": "Create src/swarm/engine/runDebugRecord.ts + hooks in analystExecution.ts, lifecycle.ts, synthesisPipeline.ts, agent.ts + GET /api/debug/runs/:workflowId behind appAuth (off unless SWARM_RUN_DEBUG=1; ring of 10; no keys/headers/env).",
+      "status": "todo",
+      "verificationCriteria": "Unit test: flag off records nothing; flag on records chars/limit, dropped block, sanitizer edit; 11th evicts 1st; no key-like strings."
+    },
+    {
+      "id": "goal-s12-verify-and-push",
+      "title": "VERIFY & PUSH: Repro tests, npm test, tsc, smoke-start, push main",
+      "description": "Run npx vitest run src/__repro__/runNov20d.repro.test.ts src/__repro__/runNov20c.repro.test.ts; npm test; npx tsc --noEmit; node scripts/smoke-start.mjs; verify git log/diff and git push origin main.",
+      "status": "todo",
+      "verificationCriteria": "All checks pass and origin/main pushed."
     }
   ]
 }
