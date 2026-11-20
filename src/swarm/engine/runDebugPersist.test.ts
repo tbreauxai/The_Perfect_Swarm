@@ -7,6 +7,9 @@ import {
   recordRunDebugSeat
 } from './runDebugRecord.ts';
 import { isRunDebugPersistEnabled, persistRunDebugRecord } from './runDebugPersist.ts';
+import { executeSwarmWorkflow } from './index.ts';
+import { ProviderRegistry } from '../providers/registry.ts';
+import { SwarmContext } from '../context.ts';
 
 describe('runDebugPersist (S0 / S2)', () => {
   const origDebug = process.env.SWARM_RUN_DEBUG;
@@ -116,5 +119,52 @@ describe('runDebugPersist (S0 / S2)', () => {
     }));
 
     await expect(persistRunDebugRecord('wf-err')).resolves.toBeUndefined();
+  });
+
+  it('executeSwarmWorkflow calls persist once when enabled and never when disabled', async () => {
+    ProviderRegistry.register({
+      providerName: 'custom-mock',
+      async call() {
+        return JSON.stringify({ summary: 'ok', insights: ['ok'], ui_title: 'ok' });
+      }
+    } as any);
+
+    const fetchSpy = vi.fn(async () => new Response('', { status: 201 }));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const baseSettings = {
+      appId: 'test-persist-hook',
+      agents: [
+        { id: 'manager', role: 'Manager Node', provider: 'custom-mock', apiKey: 'k', model: 'm' },
+        { id: 'a1', role: 'Quant Analyst', provider: 'custom-mock', apiKey: 'k', model: 'm' }
+      ]
+    };
+
+    const ctxOff = new SwarmContext();
+    (ctxOff as any).id = 'wf-hook-off';
+    await executeSwarmWorkflow({
+      task: 'Hello',
+      context: ctxOff,
+      forceFullSwarm: true,
+      bypassCache: true,
+      settings: baseSettings as any
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    process.env.SWARM_RUN_DEBUG = '1';
+    process.env.SWARM_RUN_DEBUG_PERSIST = '1';
+    const ctxOn = new SwarmContext();
+    (ctxOn as any).id = 'wf-hook-on';
+    await executeSwarmWorkflow({
+      task: 'Hello',
+      context: ctxOn,
+      forceFullSwarm: true,
+      bypassCache: true,
+      settings: baseSettings as any
+    });
+
+    await new Promise(r => setTimeout(r, 20));
+    const postCalls = fetchSpy.mock.calls.filter(c => String(c[0]).includes('/rest/v1/swarm_run_debug') && (c[1] as any)?.method === 'POST');
+    expect(postCalls).toHaveLength(1);
   });
 });

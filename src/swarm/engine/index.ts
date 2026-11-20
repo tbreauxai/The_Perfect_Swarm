@@ -59,6 +59,7 @@ import { globalKnowledgeGraph } from '../knowledgeGraph.ts';
 import { globalLearningRateManager, globalHypothesisLayer } from '../coordination.ts';
 import { globalTieredCache } from '../tieredCache.ts';
 import { globalFeedbackEngine } from '../feedback.ts';
+import { isRunDebugPersistEnabled, persistRunDebugRecord } from './runDebugPersist.ts';
 
 export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise<SwarmWorkflowResult> {
     const workflowStartTime = Date.now();
@@ -817,6 +818,9 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             throw swarmErr;
         }
     } finally {
+        if (isRunDebugPersistEnabled()) {
+            void persistRunDebugRecord((context as any).id);
+        }
         if (unsubscribe) {
             unsubscribe();
         }
