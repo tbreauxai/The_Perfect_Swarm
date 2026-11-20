@@ -396,10 +396,27 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     prePassedItems: flatReports.flatMap((r: any) => (Array.isArray(r?.toolEvidenceItems) ? r.toolEvidenceItems : [])),
                     toolCallTrace: allToolCallTrace
                 });
-                const verifierEvidence = buildVerifierEvidence(
+                const baseVerifierEvidence = buildVerifierEvidence(
                     [{ toolEvidenceItems: allToolEvidenceItems }],
                     profilingResult.rawInput ?? data ?? task
                 );
+                const verifierEvidence = (() => {
+                    if (!calibrationBlock) return baseVerifierEvidence;
+                    const maxCap = 2400;
+                    if (!baseVerifierEvidence) {
+                        if (calibrationBlock.length <= maxCap) return calibrationBlock;
+                        const label = '\n[calibration trimmed]';
+                        return `${calibrationBlock.slice(0, Math.max(0, maxCap - label.length)).trimEnd()}${label}`;
+                    }
+                    const room = maxCap - baseVerifierEvidence.length - 2;
+                    if (room <= 40) return baseVerifierEvidence;
+                    if (calibrationBlock.length <= room) {
+                        return `${baseVerifierEvidence}\n\n${calibrationBlock}`;
+                    }
+                    const label = '\n[calibration trimmed]';
+                    const sliceLen = Math.max(0, room - label.length);
+                    return `${baseVerifierEvidence}\n\n${calibrationBlock.slice(0, sliceLen).trimEnd()}${label}`;
+                })();
 
                 const synthesisResult = blackboard ? emptySynthesisResult() : compileSynthesisPrompt({
                     task,
@@ -507,7 +524,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     })
                     .filter(Boolean)
                     .join('\n\n');
-                const verifierToolResults = verifierEvidence || joinedToolEvidence;
+                const baseJoinedEvidence = [joinedToolEvidence, calibrationBlock].filter(Boolean).join('\n\n');
+                const verifierToolResults = verifierEvidence || baseJoinedEvidence;
 
                 if (allPlaceholderOrDataRequest) {
                     const criticParts: string[] = [];
