@@ -233,8 +233,18 @@ export function renderHeaders(headers: GameHeader[], maxChars: number = 1600): s
   }
 
   const baseLines = headers.map(h => formatLine(h, 0));
-  if (baseLines.join('\n').length <= maxChars) {
-    return baseLines.join('\n');
+  let totalLen = baseLines.reduce((sum, l) => sum + l.length, 0) + Math.max(0, baseLines.length - 1);
+  if (totalLen <= maxChars) {
+    const upgraded = [...baseLines];
+    for (let i = 0; i < headers.length; i++) {
+      const candidate = formatLine(headers[i], 1);
+      const delta = candidate.length - upgraded[i].length;
+      if (delta > 0 && totalLen + delta <= maxChars) {
+        upgraded[i] = candidate;
+        totalLen += delta;
+      }
+    }
+    return upgraded.join('\n');
   }
 
   return baseLines.join('\n').slice(0, maxChars);
