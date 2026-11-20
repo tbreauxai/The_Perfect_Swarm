@@ -1,33 +1,61 @@
 {
-  "activeGoalId": "goal-4-tests-and-verify",
+  "activeGoalId": "goal-s7-verify-and-pr",
   "goals": [
     {
-      "id": "goal-1-selected-game-resolver",
-      "title": "Selected Game Resolver: Map proposed legs & cited rows to selected event_ids",
-      "description": "Implement/update deterministic Selected Game Resolver to extract unique event_ids from proposed picks/legs (event_id, game_id, row, match, side, selection) and scorecard citations mapped against parsed slate headers, dropping unselected slate games.",
+      "id": "goal-s0-git-and-repro",
+      "title": "S0: Branch setup (fix/run-nov20) & runNov20.repro.test.ts",
+      "description": "Verify git state/base c3bf8541, create branch fix/run-nov20, and add src/__repro__/runNov20.repro.test.ts covering test1 (verdict JSON), test2 (team names at groq budget), and test4 (reward 0.5).",
       "status": "completed",
-      "verificationCriteria": "Unit test confirms selected event_ids are extracted from picks/scorecards and unselected slate games excluded."
+      "verificationCriteria": "On branch fix/run-nov20 based on c3bf8541; src/__repro__/runNov20.repro.test.ts runs and reproduces test1, test2, test4."
     },
     {
-      "id": "goal-2-stage2-critic-scoping",
-      "title": "Stage 2 Risk Critic Seat Scoping & Tool Suite + CRITIC SCOPE prompt",
-      "description": "In analystExecution.ts / seatToolLoop.ts / constants.ts, restrict Stage 2 Risk Critic allGameIds strictly to proposedAuditContext.targetGameIds, filter board headers to selected games, grant get_market_movement, get_injury_and_roster_delta, get_matchup_fundamentals, get_environment_and_weather, and add CRITIC SCOPE prompt rule.",
+      "id": "goal-s1-critic-scoped-evidence",
+      "title": "S1: Scope Critic to cited games only (clusterPipeline.ts + analystExecution.ts)",
+      "description": "Set targetGameIds from resolveSelectedGameIds (criticEvidence.ts L239) instead of resolveDiscussedGameIds; render full detail for those headers only (teams, FanDuel lines, injuries via getSharedInjurySummary). If targetGameIds is empty: no Game Slate, no tool pulls, critic only confirms pass/no-picks (do NOT fall back to allParsedHeaders). Keep caps unchanged.",
       "status": "completed",
-      "verificationCriteria": "Stage 2 Critic receives only selected game headers/IDs, pulls tools for selected games only, and preserves pass-field & injury attribution rules."
+      "verificationCriteria": "criticScopedEvidence.test.ts green; new test (2 cited of 12 games -> critic prompt & tool calls name only those 2; 0 cited -> no slate & no tool calls); repro test2 has team names + lines at groq budget; committed."
     },
     {
-      "id": "goal-3-verification-critic-scoped-pulls",
-      "title": "Deep Analysis Verification Critic Loop Scoped Tool Pulls",
-      "description": "In lifecycle.ts / verificationPipeline.ts / engine/index.ts, extract proposed leg event_ids before Critic verification, pull get_market_movement, get_injury_and_roster_delta, get_matchup_fundamentals for those selected games via tool registry/cache, build [Tool Evidence] and [Raw Board Sample] exclusively from selected games, and include verified games in coveredEventIds.",
+      "id": "goal-s2-agreement-and-sanitizer",
+      "title": "S2: Append agreementLevel/score% & strip N/N seats agree on divergent runs",
+      "description": "In src/swarm/engine/synthesisPipeline.ts (appComputedCountsLine L250) + manager sanitizer, append agreement=<agreementLevel> <score%>; when level is divergent, strip 'N/N seats agree' text from manager output.",
       "status": "completed",
-      "verificationCriteria": "Multi-sport parlay (e.g. Lakers -7.5, Clippers -6.5, Dallas ML) pulls evidence for all selected games and passes verification without false truncation vetoes."
+      "verificationCriteria": "Unit test confirms divergent run has no '3/3 agree'; committed."
     },
     {
-      "id": "goal-4-tests-and-verify",
-      "title": "Tests & Full Verification (tsc, vitest, smoke-start)",
-      "description": "Add comprehensive tests for dual-stage Critic scoping and multi-sport parlays; run npx tsc --noEmit, npx vitest run, and node scripts/smoke-start.mjs.",
+      "id": "goal-s3-groq-json-salvage",
+      "title": "S3: Salvage 400 tool_use_failed JSON arguments in baseOpenAi.ts",
+      "description": "In src/swarm/providers/baseOpenAi.ts (~L119-136, error path ~L148-198), on 400 tool_use_failed whose failed_generation is {\"name\":\"json\" or a name not in tools, \"arguments\":{...}}, return JSON.stringify(arguments) as completion instead of throwing; other 400s unchanged.",
       "status": "completed",
-      "verificationCriteria": "tsc --noEmit, full vitest run, and smoke-start pass."
+      "verificationCriteria": "repro test1 resolves to the verdict JSON; committed."
+    },
+    {
+      "id": "goal-s4-neutral-nopick-reward",
+      "title": "S4: Neutral 0.5 reward & skip recordReward on empty picks",
+      "description": "In src/swarm/engine/learningPipeline.ts (extrinsic ~L500-504, ~L451-457), if finalAnalysis.picks is empty: set extrinsic=0.5 and skip globalLoadBalancer.recordReward for that workflow.",
+      "status": "completed",
+      "verificationCriteria": "repro test4 = 0.5 and recordReward not called; committed."
+    },
+    {
+      "id": "goal-s5-calibration-block-verifier",
+      "title": "S5: Prefix calibration brief & include in verifier evidence",
+      "description": "In src/swarm/feedback/probabilityCalibration.ts (~L106-110) + src/swarm/engine/index.ts (~L262-268), prefix calibration brief with 'Cite only verbatim; not an App-computed count; never a pick edge.'; include calibration block in verifier evidence within existing cap (labeled if trimmed).",
+      "status": "in-progress",
+      "verificationCriteria": "Verify prompt contains the block and verifier test doesn't flag it as invented; committed."
+    },
+    {
+      "id": "goal-s6-failover-skipped-event",
+      "title": "S6: Real fallbackProvider selection & Provider Skipped events in agent.ts",
+      "description": "In src/swarm/agent.ts (failover ~L457-477; checks L128-157), set fallbackProvider to the next target passing limiter/budget checks and emit a 'Provider Skipped' event for each skipped target.",
+      "status": "todo",
+      "verificationCriteria": "Unit test confirms skipped target emits 'Provider Skipped' event and label names the real fallback; committed."
+    },
+    {
+      "id": "goal-s7-verify-and-pr",
+      "title": "VERIFY & PR: Full tsc, vitest, smoke-start, and PR creation",
+      "description": "Run npx tsc --noEmit, npx vitest run (full; all __repro__ green), node scripts/smoke-start.mjs (GET /api/health 200), verify git log/diff, push fix/run-nov20, and create PR.",
+      "status": "todo",
+      "verificationCriteria": "tsc --noEmit, full vitest run, and smoke-start.mjs pass; fix/run-nov20 pushed and PR created against main."
     }
   ]
 }
