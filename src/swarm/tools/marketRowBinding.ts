@@ -734,6 +734,7 @@ export interface AuthoritativeTeamSpread {
   spread: number;
   role: 'favorite' | 'underdog' | 'pickem';
   eventId?: string;
+  venue?: 'home' | 'away';
   source: 'slate' | 'tool';
 }
 
@@ -1092,6 +1093,7 @@ export function extractAuthoritativeTeamSpreads(
         spread: awaySpread,
         role: awaySpread < 0 ? 'favorite' : (awaySpread > 0 ? 'underdog' : 'pickem'),
         eventId: h.eventId,
+        venue: 'away',
         source
       });
     }
@@ -1101,6 +1103,7 @@ export function extractAuthoritativeTeamSpreads(
         spread: homeSpread,
         role: homeSpread < 0 ? 'favorite' : (homeSpread > 0 ? 'underdog' : 'pickem'),
         eventId: h.eventId,
+        venue: 'home',
         source
       });
     }
@@ -1232,7 +1235,6 @@ function findSpreadSideViolationInClause(
   for (let i = 0; i < teamHits.length; i++) {
     const hit = teamHits[i];
     const entry = hit.entry;
-    if (entry.role === 'pickem') continue;
     const nextHitStart = i + 1 < teamHits.length ? teamHits[i + 1].start : clause.length;
     const rawAfter = clause.slice(hit.end, Math.min(nextHitStart, hit.end + 55));
     const afterSep = rawAfter.search(/\b(?:while|whereas|although|though|but)\b/i);
@@ -1248,6 +1250,42 @@ function findSpreadSideViolationInClause(
     }
     // If there's a preceding team and no clause/preposition boundary separated it, words immediately after team[i-1] belong to team[i-1]
     const spanBefore = (i > 0 && lastSepEnd === 0) ? '' : rawBefore.slice(lastSepEnd);
+
+    if (entry.venue === 'away') {
+      const homeAfter = spanAfter.match(/\b(?:at\s+home|hosting|home)\b/i);
+      const homeBefore = spanBefore.match(/\b(?:at\s+home|hosting|home)\b/i);
+      const homeMatch = homeAfter ? { text: spanAfter, idx: homeAfter.index! } : (homeBefore ? { text: spanBefore, idx: homeBefore.index! } : null);
+      if (homeMatch) {
+        const localPre = homeMatch.text.slice(Math.max(0, homeMatch.idx - 28), homeMatch.idx);
+        const isNegated = /\b(?:not|never|no|isn't|aren't|away\s+from)\b/i.test(localPre);
+        const refersToOpponent = /\b(?:against|vs\.?|versus|facing|on\s+the\s+road\s+at)\b/i.test(localPre);
+        if (!isNegated && !refersToOpponent) {
+          return {
+            kind: 'role_flip',
+            entry,
+            reason: `${entry.teamName} venue mismatch: described as home, but ${entry.teamName} is the away team.`
+          };
+        }
+      }
+    } else if (entry.venue === 'home') {
+      const awayAfter = spanAfter.match(/\b(?:on\s+the\s+road|road|away)\b/i);
+      const awayBefore = spanBefore.match(/\b(?:on\s+the\s+road|road|away)\b/i);
+      const awayMatch = awayAfter ? { text: spanAfter, idx: awayAfter.index! } : (awayBefore ? { text: spanBefore, idx: awayBefore.index! } : null);
+      if (awayMatch) {
+        const localPre = awayMatch.text.slice(Math.max(0, awayMatch.idx - 28), awayMatch.idx);
+        const isNegated = /\b(?:not|never|no|isn't|aren't|away\s+from)\b/i.test(localPre);
+        const refersToOpponent = /\b(?:against|vs\.?|versus|facing)\b/i.test(localPre);
+        if (!isNegated && !refersToOpponent) {
+          return {
+            kind: 'role_flip',
+            entry,
+            reason: `${entry.teamName} venue mismatch: described as away/road, but ${entry.teamName} is the home team.`
+          };
+        }
+      }
+    }
+
+    if (entry.role === 'pickem') continue;
 
     if (entry.role === 'underdog') {
       const favAfter = spanAfter.match(/\b(?:favored|favorite|favorites|chalk|laying\s+[+-]?\d+(?:\.\d+)?)\b/i);
