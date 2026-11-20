@@ -845,10 +845,20 @@ export function sanitizePullBeforePassClaims<T extends Record<string, any>>(
       }
       const subParts = s.split(/;\s+|,\s*(?=(?:while|whereas|but|although|though|so|yet|and)\b)/i);
       if (subParts.length > 1) {
-        const cleanSubs = subParts.filter(part => !clauseHasViolation(part));
-        const rejoined = cleanSubs.join(', ').trim();
-        if (rejoined && !clauseHasViolation(rejoined)) {
-          kept.push(rejoined);
+        const cleanSubs = subParts.filter(part => {
+          if (clauseHasViolation(part)) return false;
+          const strippedPart = part.replace(/^(?:and|so|but|while)\s+/i, '').trim();
+          return strippedPart.split(/\s+/).filter(Boolean).length >= 3;
+        });
+        let rejoined = cleanSubs
+          .join(', ')
+          .replace(/^(?:and|so|but|while)\s+/i, '')
+          .trim();
+        if (rejoined) {
+          rejoined = rejoined.charAt(0).toUpperCase() + rejoined.slice(1);
+          if (!clauseHasViolation(rejoined)) {
+            kept.push(rejoined);
+          }
         }
       }
     }
