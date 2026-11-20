@@ -17,18 +17,22 @@ import {
     extractVetoedLegTargets,
     mergeVetoedClaims,
     mergeVetoedLegTargets,
+    sanitizeContradictedStreakClaims,
+    sanitizeUngroundedClaims,
     type VetoedLegTarget
 } from './tools/claimGrounding.ts';
 import {
     auditMarketCoverageAndRowBinding,
     extractRowOptions,
     isFalseMissingMoneylineCritique,
+    sanitizeRowMismatchedPicks,
     type MarketToolRecord
 } from './tools/marketRowBinding.ts';
 import {
     auditPullBeforePass,
     isEmptyToolSummary,
     mergeToolCallTraceEntries,
+    sanitizePullBeforePassClaims,
     type ToolCallStatus,
     type ToolCallTraceEntry
 } from './tools/pullBeforePass.ts';
@@ -718,6 +722,7 @@ export class AnalysisLifecycle {
                     ? rawData
                     : (rawData?.rawBoard || rawData?.dataSample || JSON.stringify(rawData || ''));
 
+                const zeroPickCorrections: string[] = [];
                 const injuryEvidence = `${combinedToolSummary}\n${analystReports}`;
                 const injurySlate = slateHeaders || fallbackBoardText;
                 const injuryAudit = auditInjuryAttribution(
@@ -741,6 +746,9 @@ export class AnalysisLifecycle {
                         verification.feedback = pickInjuryAudit.feedback || injuryAudit.feedback || 'Veto: Proposal attributed an injury to the wrong team.';
                     } else if (currentProposal && typeof currentProposal === 'object') {
                         sanitizeMisattributedPicksAndText(currentProposal, injuryEvidence, injurySlate);
+                        if (hasEmptyPicks) {
+                            zeroPickCorrections.push('removed misattributed injury reference');
+                        }
                     }
                 }
 
@@ -752,9 +760,19 @@ export class AnalysisLifecycle {
                     allParsedHeaders,
                     pulledMarketRecords
                 );
+                let marketVetoTriggered = false;
                 if (!marketRowAudit.pass) {
-                    verification.pass = false;
-                    verification.feedback = marketRowAudit.feedback || 'Veto: Row side mismatch or missing market coverage.';
+                    if (hasEmptyPicks && typeof currentProposal === 'object') {
+                        sanitizeRowMismatchedPicks(currentProposal, boardSourceForAudit, allParsedHeaders, {
+                            toolEvidenceText: combinedToolSummary,
+                            toolRecords: pulledMarketRecords
+                        });
+                        zeroPickCorrections.push('adjusted spread/market reference to match slate');
+                    } else {
+                        marketVetoTriggered = true;
+                        verification.pass = false;
+                        verification.feedback = marketRowAudit.feedback || 'Veto: Row side mismatch or missing market coverage.';
+                    }
                 }
 
                 const auditRowMap = extractRowOptions([boardSourceForAudit], allParsedHeaders);
@@ -769,44 +787,77 @@ export class AnalysisLifecycle {
                         vetoedClaims: accumulatedVetoedClaims
                     }
                 );
+                let groundingVetoTriggered = false;
                 if (!groundingAudit.pass) {
-                    verification.pass = false;
-                    const gMsg = groundingAudit.feedback || 'Veto (GROUNDING): Ungrounded claim or vetoed leg rewrite.';
-                    verification.feedback = (!injuryVetoTriggered && marketRowAudit.pass)
-                        ? gMsg
-                        : [verification.feedback, gMsg].filter(Boolean).join(' ');
+                    if (hasEmptyPicks && typeof currentProposal === 'object') {
+                        sanitizeUngroundedClaims(currentProposal, combinedToolSummary, boardSourceForAudit, {
+                            headers: allParsedHeaders,
+                            vetoTexts: accumulatedVetoTexts,
+                            vetoedLegs: accumulatedVetoedLegs,
+                            vetoedClaims: groundingAudit.vetoedClaims ?? accumulatedVetoedClaims,
+                            stripVetoedLegRecommendations: true
+                        });
+                        zeroPickCorrections.push('removed ungrounded form or health claim');
+                    } else {
+                        groundingVetoTriggered = true;
+                        verification.pass = false;
+                        const gMsg = groundingAudit.feedback || 'Veto (GROUNDING): Ungrounded claim or vetoed leg rewrite.';
+                        verification.feedback = (!injuryVetoTriggered && !marketVetoTriggered)
+                            ? gMsg
+                            : [verification.feedback, gMsg].filter(Boolean).join(' ');
+                    }
+                }
+
+                if (hasEmptyPicks && typeof currentProposal === 'object') {
+                    const streakRes = sanitizeContradictedStreakClaims(
+                        currentProposal,
+                        combinedToolSummary,
+                        boardSourceForAudit,
+                        { headers: allParsedHeaders }
+                    );
+                    if (streakRes.corrected) {
+                        zeroPickCorrections.push('adjusted streak claim to match recent results');
+                    }
                 }
 
                 // Merge structured veto targets from deterministic audits immediately into the cumulative ledger
                 accumulatedVetoedLegs = mergeVetoedLegTargets(
                     accumulatedVetoedLegs,
                     effectiveInjuryVetoedLegs,
-                    marketRowAudit.vetoedLegs,
-                    groundingAudit.vetoedLegs
+                    marketVetoTriggered ? marketRowAudit.vetoedLegs : undefined,
+                    groundingVetoTriggered ? groundingAudit.vetoedLegs : undefined
                 );
                 accumulatedVetoedClaims = mergeVetoedClaims(
                     accumulatedVetoedClaims,
-                    groundingAudit.vetoedClaims
+                    groundingVetoTriggered ? groundingAudit.vetoedClaims : undefined
                 );
 
                 accumulatedToolTrace = mergeToolCallTraceEntries(accumulatedToolTrace);
                 const availableSportsTools = this.toolRegistry
                     ? ['get_matchup_fundamentals', 'get_injury_and_roster_delta', 'get_market_movement'].filter(t => this.toolRegistry!.has(t))
                     : [];
-                const pullAudit = hasEmptyPicks
-                    ? { pass: true, violations: [], flags: [], unqueriedGameIds: [], missingToolsByGame: {} }
-                    : auditPullBeforePass(
-                          currentProposal,
-                          combinedToolSummary,
-                          boardSourceForAudit,
-                          {
-                              headers: allParsedHeaders,
-                              toolCallTrace: accumulatedToolTrace,
-                              availableTools: availableSportsTools,
-                              marketToolRecords: pulledMarketRecords
-                          }
-                      );
-                if (!pullAudit.pass) {
+                const pullAudit = auditPullBeforePass(
+                    currentProposal,
+                    combinedToolSummary,
+                    boardSourceForAudit,
+                    {
+                        headers: allParsedHeaders,
+                        toolCallTrace: accumulatedToolTrace,
+                        availableTools: availableSportsTools,
+                        marketToolRecords: pulledMarketRecords
+                    }
+                );
+                let pullVetoTriggered = false;
+                if (!pullAudit.pass && hasEmptyPicks && typeof currentProposal === 'object') {
+                    sanitizePullBeforePassClaims(currentProposal, combinedToolSummary, boardSourceForAudit, {
+                        headers: allParsedHeaders,
+                        toolCallTrace: accumulatedToolTrace,
+                        availableTools: availableSportsTools,
+                        marketToolRecords: pulledMarketRecords
+                    });
+                    zeroPickCorrections.push('removed inaccurate missing-data statement');
+                } else if (!pullAudit.pass) {
+                    pullVetoTriggered = true;
                     let newlyPulledCount = 0;
                     if (this.toolRegistry && pullAudit.unqueriedGameIds.length > 0) {
                         const cache = this.queryCache ?? new GameQueryCache();
@@ -899,16 +950,16 @@ export class AnalysisLifecycle {
                     const pullNote = newlyPulledCount > 0
                         ? ' Missing tools were just pulled; use the [Fresh Tool Evidence Pulled Before Retry] above.'
                         : '';
-                    const allPriorPassed = !injuryVetoTriggered && marketRowAudit.pass && groundingAudit.pass;
+                    const allPriorPassed = !injuryVetoTriggered && !marketVetoTriggered && !groundingVetoTriggered;
                     verification.feedback = allPriorPassed
                         ? `${pMsg}${pullNote}`
                         : [verification.feedback, `${pMsg}${pullNote}`].filter(Boolean).join(' ');
                 } else if (
                     !verification.pass &&
                     !injuryVetoTriggered &&
-                    marketRowAudit.pass &&
-                    groundingAudit.pass &&
-                    pullAudit.pass &&
+                    !marketVetoTriggered &&
+                    !groundingVetoTriggered &&
+                    !pullVetoTriggered &&
                     isFalseMissingMoneylineCritique(
                         verification.feedback,
                         currentProposal,
@@ -923,9 +974,9 @@ export class AnalysisLifecycle {
                 } else if (
                     !verification.pass &&
                     !injuryVetoTriggered &&
-                    marketRowAudit.pass &&
-                    groundingAudit.pass &&
-                    pullAudit.pass &&
+                    !marketVetoTriggered &&
+                    !groundingVetoTriggered &&
+                    !pullVetoTriggered &&
                     isFalseHallucinationCritique(
                         verification.feedback,
                         currentProposal,
@@ -948,6 +999,27 @@ export class AnalysisLifecycle {
                         prompt: `attempt=${attempt}`,
                         output: { dismissedFeedback: originalFeedback }
                     });
+                }
+
+                if (hasEmptyPicks && zeroPickCorrections.length > 0 && typeof currentProposal === 'object') {
+                    const uniqueCorrections = Array.from(new Set(zeroPickCorrections));
+                    const correctionsText = `Corrections: ${uniqueCorrections.join('; ')}.`;
+                    const curSummary = typeof (currentProposal as any).summary === 'string'
+                        ? (currentProposal as any).summary.trim()
+                        : '';
+                    (currentProposal as any).summary = curSummary
+                        ? `${curSummary}\n\n${correctionsText}`
+                        : correctionsText;
+                    if (typeof (currentProposal as any).analysis === 'string') {
+                        const curAnalysis = (currentProposal as any).analysis.trim();
+                        if (curAnalysis && curAnalysis !== curSummary && !curAnalysis.includes('Corrections:')) {
+                            (currentProposal as any).analysis = `${curAnalysis}\n\n${correctionsText}`;
+                        } else if (!curAnalysis) {
+                            (currentProposal as any).analysis = correctionsText;
+                        }
+                    }
+                    verification.pass = true;
+                    verification.feedback = `Verified pass after deterministic corrections: ${uniqueCorrections.join('; ')}.`;
                 }
 
                 if (verification.pass) {

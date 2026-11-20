@@ -398,7 +398,7 @@ describe('Swarm Fix: No form without a tool, no "missing" after a hit', () => {
       });
 
       expect(capturedMarketProposerPrompt).toContain('ncaaf-rice-temple');
-      expect(managerCalls).toBe(2);
+      expect(managerCalls).toBe(1);
 
       // Market Proposer's "without specific game fundamentals" was sanitized out before synthesis
       expect(capturedManagerPrompts[0]).toContain('Market Proposer');

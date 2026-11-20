@@ -490,4 +490,55 @@ describe('runNov20c repros (wf-1795203442644)', () => {
         expect(dropEvent?.output?.evidenceChars).toBe(0);
         expect(dropEvent?.output?.evidenceDropped).toBe(true);
     });
+
+    it('S6: 0-pick bad claims (ungrounded form, false missing-data, contradicted streak) are rewritten with Corrections and keep pass=true', async () => {
+        const spySet = makeToolSpies();
+        const evidence = [
+            'EVENT nba-401909306 Orlando Magic @ Brooklyn Nets',
+            'FUND: Away (ORL): W-L 3-2 | PF/PA 115 / 110 | Net Margin +5 | Recent W,L,W,W,L | Home (BKN): W-L 2-3 | PF/PA 108 / 112 | Net Margin -4 | Recent L,L,W,L,W',
+            'MKT: Open spread 5.5 -> Current spread 6.5 | Total 222.5 | ml_home +205 | ml_away -245'
+        ].join('\n');
+
+        const proposer = makeAgent('Manager Node', 'gemini', () =>
+            JSON.stringify({
+                ui_title: 'Pass on Slate',
+                summary:
+                    'Passing on tonight slate. Orlando Magic are 0-2 L2 right now. No market movement was fetched for Orlando Magic. Orlando Magic are on a 5-game winning streak.',
+                picks: []
+            })
+        );
+        const critic = makeAgent('Risk Critic', 'groq', () =>
+            JSON.stringify({ pass: true, feedback: 'Valid pass.' })
+        );
+
+        const res = await new AnalysisLifecycle(proposer, critic, 2, {
+            toolRegistry: spySet.registry,
+            queryCache: new GameQueryCache()
+        }).executeAndVerify(
+            {
+                rawBoard: SLATE_3_GAMES,
+                fullBoard: SLATE_3_GAMES,
+                toolResults: evidence,
+                toolCallTrace: [
+                    { tool: 'get_matchup_fundamentals', eventId: 'nba-401909306', status: 'data', summary: evidence },
+                    { tool: 'get_market_movement', eventId: 'nba-401909306', status: 'data', summary: evidence }
+                ]
+            },
+            new SwarmContext(),
+            'Build parlay or pass.',
+            'Verify proposal.'
+        );
+
+        expect(res.success).toBe(true);
+        expect(res.attempts).toBe(1);
+        expect(res.finalProposal.picks).toEqual([]);
+        expect(res.finalProposal.summary).toContain('Passing on tonight slate.');
+        expect(res.finalProposal.summary).toContain('Corrections:');
+        expect(res.finalProposal.summary).not.toContain('0-2 L2');
+        expect(res.finalProposal.summary).not.toMatch(/no market movement/i);
+        expect(res.finalProposal.summary).not.toMatch(/5-game winning streak/i);
+        for (const t of spySet.tools) {
+            expect(t.execute).toHaveBeenCalledTimes(0);
+        }
+    });
 });
