@@ -63,6 +63,7 @@ export interface RunSeatWithToolsParams {
   marketType?: string;
   marketTypesByGame?: Record<string, string>;
   propParamsByGame?: Record<string, Array<{ player_id: string; stat_category: string }>>;
+  priorEvidenceItems?: ToolEvidenceItem[];
   cache?: GameQueryCache;
   runConfig?: any;
   options?: {
@@ -256,7 +257,40 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
   const toolEvidenceItems: ToolEvidenceItem[] = [];
   const marketToolRecords: MarketEvidenceRecord[] = [];
   const toolCallTrace: ToolCallTraceEntry[] = [];
-  const executedEntries: Array<{ targetGameId: string; summary: string }> = [];
+  const executedEntries: Array<{ tool: string; targetGameId: string; summary: string }> = [];
+  const normalizeToolKey = (tool: string, eventId: string): string =>
+    `${String(tool || '').trim().replace(/_v1$/i, '')}::${String(eventId || '').trim()}`;
+  const scopedPriorItems: ToolEvidenceItem[] = (() => {
+    if (!Array.isArray(params.priorEvidenceItems) || params.priorEvidenceItems.length === 0) return [];
+    const allowedSet = gameIds.length > 0 ? new Set(gameIds) : null;
+    const deduped = new Map<string, ToolEvidenceItem>();
+    for (const item of params.priorEvidenceItems) {
+      if (!item || typeof item.summary !== 'string' || !item.summary.trim()) continue;
+      if (!item.eventId || item.eventId === 'unknown-game') continue;
+      if (allowedSet && !allowedSet.has(item.eventId)) continue;
+      const key = normalizeToolKey(item.tool, item.eventId);
+      const existing = deduped.get(key);
+      if (!existing || (isEmptyToolSummary(existing.summary) && !isEmptyToolSummary(item.summary)) || item.summary.length > existing.summary.length) {
+        deduped.set(key, { tool: item.tool, eventId: item.eventId, summary: item.summary.trim() });
+      }
+    }
+    return Array.from(deduped.values());
+  })();
+  const getMergedToolEvidenceItems = (): ToolEvidenceItem[] => {
+    if (scopedPriorItems.length === 0) return toolEvidenceItems;
+    const merged = new Map<string, ToolEvidenceItem>();
+    for (const item of scopedPriorItems) {
+      merged.set(normalizeToolKey(item.tool, item.eventId), item);
+    }
+    for (const item of toolEvidenceItems) {
+      const key = normalizeToolKey(item.tool, item.eventId);
+      const existing = merged.get(key);
+      if (!existing || (isEmptyToolSummary(existing.summary) && !isEmptyToolSummary(item.summary)) || (!isEmptyToolSummary(item.summary) && item.summary.length >= existing.summary.length)) {
+        merged.set(key, item);
+      }
+    }
+    return Array.from(merged.values());
+  };
   const gameHeaderMap = new Map<string, GameHeader>();
   for (const h of parseGameHeaders(prompt)) {
     if (h.eventId && !gameHeaderMap.has(h.eventId)) {
@@ -347,9 +381,38 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     : budget.maxToolResultChars;
   const effectiveToolBudget = Math.min(budget.maxToolResultChars, promptRoom);
 
-  const formatToolResultsWithinBudget = (entries: Array<{ targetGameId: string; summary: string }>): string => {
-    const validEntries = entries.filter(e => typeof e.summary === 'string' && e.summary.trim().length > 0);
-    const unfetchedGames = gameIds.filter(gId => !attemptedEventIds.has(gId) && !coveredEventIds.has(gId));
+  const formatToolResultsWithinBudget = (entries: Array<{ tool?: string; targetGameId: string; summary: string }>): string => {
+    const combinedEntries: Array<{ targetGameId: string; summary: string }> = [];
+    const seenKeys = new Map<string, number>();
+
+    const upsertEntry = (tool: string | undefined, targetGameId: string, summary: string) => {
+      const clean = typeof summary === 'string' ? summary.trim() : '';
+      if (!clean) return;
+      if (tool && targetGameId && targetGameId !== 'unknown-game') {
+        const key = normalizeToolKey(tool, targetGameId);
+        const idx = seenKeys.get(key);
+        if (idx !== undefined) {
+          const prev = combinedEntries[idx].summary;
+          if ((isEmptyToolSummary(prev) && !isEmptyToolSummary(clean)) || (!isEmptyToolSummary(clean) && clean.length > prev.length)) {
+            combinedEntries[idx] = { targetGameId, summary: clean };
+          }
+          return;
+        }
+        seenKeys.set(key, combinedEntries.length);
+      }
+      combinedEntries.push({ targetGameId, summary: clean });
+    };
+
+    for (const e of entries) {
+      upsertEntry(e.tool, e.targetGameId, e.summary);
+    }
+    for (const prior of scopedPriorItems) {
+      upsertEntry(prior.tool, prior.eventId, prior.summary);
+    }
+
+    const validEntries = combinedEntries.filter(e => typeof e.summary === 'string' && e.summary.trim().length > 0);
+    const priorCoveredSet = new Set(scopedPriorItems.map(p => p.eventId));
+    const unfetchedGames = gameIds.filter(gId => !attemptedEventIds.has(gId) && !coveredEventIds.has(gId) && !priorCoveredSet.has(gId));
     const notFetchedLine = unfetchedGames.length > 0
       ? `[Not Fetched]: ${unfetchedGames.map(g => `${g}: not fetched`).join(', ')}`
       : '';
@@ -536,7 +599,7 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
           }
         }
         if (typeof res?.summary === 'string' && res.summary.trim().length > 0) {
-          executedEntries.push({ targetGameId, summary: res.summary.trim() });
+          executedEntries.push({ tool: c.tool, targetGameId, summary: res.summary.trim() });
         }
         return { res, targetGameId, summary: res.summary };
       })
@@ -600,7 +663,7 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
       toolCallsExecuted: executedTools,
       coveredEventIds: Array.from(coveredEventIds),
       toolEvidence: toolResultsSummary,
-      toolEvidenceItems,
+      toolEvidenceItems: getMergedToolEvidenceItems(),
       ...(marketToolRecords.length > 0 ? { marketToolRecords } : {}),
       toolCallTrace
     };
@@ -653,7 +716,7 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
         toolCallsExecuted: executedTools,
         coveredEventIds: Array.from(coveredEventIds),
         toolEvidence: toolResultsSummary,
-        toolEvidenceItems,
+        toolEvidenceItems: getMergedToolEvidenceItems(),
         ...(marketToolRecords.length > 0 ? { marketToolRecords } : {}),
         toolCallTrace
       };
@@ -699,19 +762,22 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
         toolCallsExecuted: executedTools,
         coveredEventIds: Array.from(coveredEventIds),
         toolEvidence: toolResultsSummary,
-        toolEvidenceItems,
+        toolEvidenceItems: getMergedToolEvidenceItems(),
         ...(marketToolRecords.length > 0 ? { marketToolRecords } : {}),
         toolCallTrace
       };
     }
 
+    const priorFallbackEvidence = scopedPriorItems.length > 0
+      ? formatToolResultsWithinBudget([])
+      : '';
     return {
       report: round1Output,
       rounds: 1,
       toolCallsExecuted: [],
-      coveredEventIds: [],
-      toolEvidence: '',
-      toolEvidenceItems: [],
+      coveredEventIds: Array.from(coveredEventIds),
+      toolEvidence: priorFallbackEvidence,
+      toolEvidenceItems: getMergedToolEvidenceItems(),
       toolCallTrace: []
     };
   }
@@ -744,7 +810,7 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     toolCallsExecuted: executedTools,
     coveredEventIds: Array.from(coveredEventIds),
     toolEvidence: toolResultsSummary,
-    toolEvidenceItems,
+    toolEvidenceItems: getMergedToolEvidenceItems(),
     ...(marketToolRecords.length > 0 ? { marketToolRecords } : {}),
     toolCallTrace
   };

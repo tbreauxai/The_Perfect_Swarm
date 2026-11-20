@@ -5,7 +5,12 @@ import { redactForLog } from './parser/responseGuards.ts';
 import { groqPromptCharCap } from './providers/groq.ts';
 import { seatBudget } from './context/promptBudget.ts';
 import { parseGameHeaders, renderHeaders, filterPicksByCoverage, type GameHeader } from './context/gameHeaders.ts';
-import { resolveSelectedGameIds, filterHeadersByEventIds } from './context/selectedGames.ts';
+import { filterHeadersByEventIds } from './context/selectedGames.ts';
+import {
+    isFalseHallucinationCritique,
+    mergeScopedToolEvidence,
+    resolveDiscussedGameIds
+} from './tools/criticEvidence.ts';
 import { auditInjuryAttribution } from './tools/injuryAttribution.ts';
 import {
     auditClaimGrounding,
@@ -31,7 +36,6 @@ import {
 import type { ToolRegistry } from './tools/registry.ts';
 import { GameQueryCache } from './cache/gameQueryCache.ts';
 import { executeToolWithCacheAndTimeout } from './engine/triageExecutor.ts';
-import { buildVerifierEvidence } from './engine/verifierEvidence.ts';
 import type { ToolEvidenceItem } from './engine/seatToolLoop.ts';
 
 import type { VerificationResult } from './types.ts';
@@ -246,17 +250,21 @@ export class AnalysisLifecycle {
             const prePassedToolResults = typeof rawData === 'object' && rawData && 'toolResults' in rawData
                 ? toSampleText((rawData as any).toolResults)
                 : '';
+            const prePassedToolItems: ToolEvidenceItem[] =
+                typeof rawData === 'object' && rawData && Array.isArray((rawData as any).toolEvidenceItems)
+                    ? (rawData as any).toolEvidenceItems
+                    : [];
 
             const allParsedHeaders: GameHeader[] = Array.isArray((rawData as any)?.allHeaders) && (rawData as any).allHeaders.length > 0
                 ? ((rawData as any).allHeaders as GameHeader[])
                 : parseGameHeaders((rawData as any)?.fullBoard || rawData);
-            const selectedGameIds = resolveSelectedGameIds(currentProposal, allParsedHeaders);
+            const selectedGameIds = resolveDiscussedGameIds(currentProposal, allParsedHeaders, prePassedToolResults);
             const scopedHeaders = selectedGameIds.length > 0
                 ? filterHeadersByEventIds(allParsedHeaders, selectedGameIds)
                 : allParsedHeaders;
 
-            let scopedToolResults = '';
             let rawPulledText = '';
+            const pulledItems: ToolEvidenceItem[] = [];
             const pulledMarketRecords = accumulatedMarketRecords;
             if (this.toolRegistry && selectedGameIds.length > 0) {
                 const criticTools = [
@@ -271,7 +279,6 @@ export class AnalysisLifecycle {
                     const pullCalls = selectedGameIds.flatMap(gId =>
                         criticTools.map(tool => ({ tool, gId }))
                     );
-                    const pulledItems: ToolEvidenceItem[] = [];
                     await Promise.all(
                         pullCalls.map(async ({ tool, gId }) => {
                             const hdr = headerById.get(gId);
@@ -339,8 +346,6 @@ export class AnalysisLifecycle {
                     );
                     if (pulledItems.length > 0) {
                         rawPulledText = pulledItems.map(i => i.summary).join('\n\n');
-                        scopedToolResults = buildVerifierEvidence([{ toolEvidenceItems: pulledItems }], rawData)
-                            || rawPulledText;
                         context.addEvent({
                             agentRole: this.critic.role,
                             action: 'Scoped Critic Tool Pulls',
@@ -352,10 +357,16 @@ export class AnalysisLifecycle {
                 }
             }
 
-            const baseToolResults = scopedToolResults || prePassedToolResults;
-            const toolResults = freshRetryEvidenceParts.length > 0
-                ? [baseToolResults, ...freshRetryEvidenceParts].filter(Boolean).join('\n\n')
-                : baseToolResults;
+            const { mergedEvidenceText } = mergeScopedToolEvidence({
+                prePassedItems: prePassedToolItems,
+                pulledItems,
+                toolCallTrace: accumulatedToolTrace,
+                prePassedEvidenceText: prePassedToolResults,
+                freshRetryEvidenceParts,
+                selectedGameIds,
+                slateSource: (rawData as any)?.fullBoard || rawData
+            });
+            const toolResults = mergedEvidenceText;
             const rawAnalystReports = typeof rawData === 'object' && rawData && 'analystReports' in rawData
                 ? (rawData as any).analystReports
                 : undefined;
@@ -389,23 +400,48 @@ export class AnalysisLifecycle {
                 ? `\n[Prior Critique From Attempt ${attempt - 1}]: ${feedback.slice(0, 280)}\nIf the revised [Proposal] resolved the prior critique and its recommended picks are grounded in the Game Slate and Analyst Reports, return {"pass":true,"feedback":"Verified after revision."}.`
                 : '';
             const promptHeader = `${VERIFICATION_OUTPUT_CONTRACT}\n\n${criticPrompt}${countsLine}${retryContextLine}\n\nEvaluate the [Proposal] below against the [Tool Evidence] and [Analyst Reports Sample].`;
-            const proposalSection = `\n\n[Proposal]:\n${proposalSample}`;
+            let effectiveProposalSample = proposalSample;
+            let proposalSection = `\n\n[Proposal]:\n${effectiveProposalSample}`;
             const trailer = `\n\n${REMINDER}`;
-            const maxReportBudget = Math.max(0, CAP - (promptHeader.length + proposalSection.length + trailer.length + 2));
-            const digestReserve = analystReports ? Math.min(900, Math.floor(maxReportBudget * 0.2)) : 0;
-            const evidenceBudget = Math.max(0, maxReportBudget - digestReserve);
+            let maxReportBudget = Math.max(0, CAP - (promptHeader.length + proposalSection.length + trailer.length + 2));
+
+            // Keep [Tool Evidence] intact before trimming: give it full priority over secondary text
+            // and, if needed under tight provider caps, modestly trim long proposal text before dropping tool evidence.
+            const evPrefix = '[Tool Evidence]:\n';
+            if (toolResults && evPrefix.length + toolResults.length > maxReportBudget) {
+                const shortfall = evPrefix.length + toolResults.length - maxReportBudget;
+                const minProposalChars = Math.min(effectiveProposalSample.length, 900);
+                if (effectiveProposalSample.length > minProposalChars) {
+                    const nextProposalLen = Math.max(minProposalChars, effectiveProposalSample.length - shortfall);
+                    const cut = effectiveProposalSample.slice(0, nextProposalLen).trimEnd();
+                    effectiveProposalSample = `${cut}…[truncated]`;
+                    proposalSection = `\n\n[Proposal]:\n${effectiveProposalSample}`;
+                    maxReportBudget = Math.max(0, CAP - (promptHeader.length + proposalSection.length + trailer.length + 2));
+                }
+            }
+            const evidenceBudget = maxReportBudget;
 
             let evidenceSection = '';
             if (toolResults) {
-                const evPrefix = '[Tool Evidence]:\n';
                 const fullEv = `${evPrefix}${toolResults}`;
                 if (fullEv.length <= evidenceBudget) {
                     evidenceSection = fullEv;
                 } else {
                     const groups = toolResults.split(/\n\n+/).filter(Boolean);
+                    const selectedSet = new Set(selectedGameIds);
+                    const isSelectedGroup = (g: string): boolean => {
+                        if (selectedSet.size === 0) return false;
+                        const firstLine = g.split(/\r?\n/)[0] || '';
+                        for (const id of selectedSet) {
+                            if (firstLine.includes(id)) return true;
+                        }
+                        return false;
+                    };
+
+                    // 1. First drop any trailing non-discussed game groups so discussed games stay intact
                     let keptGroups = [...groups];
                     let droppedCount = 0;
-                    while (keptGroups.length > 0) {
+                    while (keptGroups.length > 0 && !isSelectedGroup(keptGroups[keptGroups.length - 1])) {
                         const suffix = droppedCount > 0 ? `\n\n[evidence truncated: ${droppedCount} games]` : '';
                         const candidate = `${evPrefix}${keptGroups.join('\n\n')}${suffix}`;
                         if (candidate.length <= evidenceBudget) {
@@ -414,6 +450,83 @@ export class AnalysisLifecycle {
                         }
                         keptGroups.pop();
                         droppedCount++;
+                    }
+                    if (!evidenceSection && keptGroups.length > 0) {
+                        const suffix = droppedCount > 0 ? `\n\n[evidence truncated: ${droppedCount} games]` : '';
+                        const candidate = `${evPrefix}${keptGroups.join('\n\n')}${suffix}`;
+                        if (candidate.length <= evidenceBudget) {
+                            evidenceSection = candidate;
+                        }
+                    }
+
+                    // 2. If all remaining discussed games still exceed evidenceBudget, compact proportionally
+                    //    per game so every discussed game remains represented instead of dropping whole games.
+                    if (!evidenceSection && keptGroups.length > 0) {
+                        const suffix = droppedCount > 0 ? `\n\n[evidence truncated: ${droppedCount} games]` : '';
+                        const bodyBudget = evidenceBudget - evPrefix.length - suffix.length;
+                        const sepOverhead = 2 * (keptGroups.length - 1);
+                        if (bodyBudget - sepOverhead >= keptGroups.length * 60) {
+                            const n = keptGroups.length;
+                            const used = new Array<number>(n).fill(0);
+                            let remaining = bodyBudget - sepOverhead;
+                            let active = keptGroups.map((_, i) => i);
+                            while (active.length > 0 && remaining > 0) {
+                                const share = Math.floor(remaining / active.length);
+                                if (share <= 0) {
+                                    for (const i of active) {
+                                        if (remaining <= 0) break;
+                                        if (used[i] < keptGroups[i].length) {
+                                            used[i]++;
+                                            remaining--;
+                                        }
+                                    }
+                                    break;
+                                }
+                                let sat = 0;
+                                const nextActive: number[] = [];
+                                for (const i of active) {
+                                    const need = keptGroups[i].length - used[i];
+                                    if (need <= share) {
+                                        used[i] += need;
+                                        remaining -= need;
+                                        sat++;
+                                    } else {
+                                        nextActive.push(i);
+                                    }
+                                }
+                                if (sat === 0) {
+                                    for (const i of active) {
+                                        used[i] += share;
+                                        remaining -= share;
+                                    }
+                                    break;
+                                }
+                                active = nextActive;
+                            }
+                            const compacted = keptGroups.map((g, i) => {
+                                const cap = used[i];
+                                if (cap >= g.length) return g;
+                                return cap > 16 ? `${g.slice(0, cap - 1).trimEnd()}…` : g.slice(0, cap);
+                            });
+                            const compactedCandidate = `${evPrefix}${compacted.join('\n\n')}${suffix}`;
+                            if (compactedCandidate.length <= evidenceBudget) {
+                                evidenceSection = compactedCandidate;
+                            }
+                        }
+                    }
+
+                    // 3. Last-resort fallback if evidenceBudget is extremely tiny
+                    if (!evidenceSection) {
+                        while (keptGroups.length > 0) {
+                            const suffix = droppedCount > 0 ? `\n\n[evidence truncated: ${droppedCount} games]` : '';
+                            const candidate = `${evPrefix}${keptGroups.join('\n\n')}${suffix}`;
+                            if (candidate.length <= evidenceBudget) {
+                                evidenceSection = candidate;
+                                break;
+                            }
+                            keptGroups.pop();
+                            droppedCount++;
+                        }
                     }
                     if (!evidenceSection) {
                         const fallbackMsg = `${evPrefix}[evidence truncated: ${groups.length} games]`;
@@ -464,14 +577,30 @@ export class AnalysisLifecycle {
             if (currentProposal) {
                 const slateHeaders = renderHeaders(scopedHeaders);
                 const toolResultsSummary = toolResults;
-                const allowedSourceText = `${slateHeaders}\n${toolResultsSummary}`.trim();
+                const traceDataText = accumulatedToolTrace
+                    .filter(e => e && e.status === 'data' && typeof e.summary === 'string' && e.summary.trim().length > 0)
+                    .map(e => e.summary!.trim())
+                    .join('\n\n');
+                const combinedToolSummary = [
+                    toolResultsSummary,
+                    prePassedToolResults,
+                    rawPulledText,
+                    traceDataText,
+                    ...freshRetryEvidenceParts
+                ]
+                    .filter(Boolean)
+                    .join('\n\n');
+                if (combinedToolSummary) {
+                    lastCombinedToolSummary = combinedToolSummary;
+                }
+                const allowedSourceText = `${slateHeaders}\n${combinedToolSummary}`.trim();
                 const fallbackBoardText = typeof rawData === 'string'
                     ? rawData
                     : (rawData?.rawBoard || rawData?.dataSample || JSON.stringify(rawData || ''));
 
                 const injuryAudit = auditInjuryAttribution(
                     currentProposal,
-                    `${toolResultsSummary}\n${analystReports}`,
+                    `${combinedToolSummary}\n${analystReports}`,
                     slateHeaders || fallbackBoardText
                 );
                 if (!injuryAudit.pass) {
@@ -480,12 +609,6 @@ export class AnalysisLifecycle {
                 }
 
                 const boardSourceForAudit = (rawData as any)?.fullBoard || rawData || slateHeaders || fallbackBoardText;
-                const combinedToolSummary = [toolResultsSummary, prePassedToolResults, rawPulledText, ...freshRetryEvidenceParts]
-                    .filter(Boolean)
-                    .join('\n\n');
-                if (combinedToolSummary) {
-                    lastCombinedToolSummary = combinedToolSummary;
-                }
                 const marketRowAudit = auditMarketCoverageAndRowBinding(
                     currentProposal,
                     combinedToolSummary,
@@ -657,6 +780,34 @@ export class AnalysisLifecycle {
                 ) {
                     verification.pass = true;
                     verification.feedback = 'Verified: moneyline covered by ml_home/ml_away in market tool result.';
+                } else if (
+                    !verification.pass &&
+                    injuryAudit.pass &&
+                    marketRowAudit.pass &&
+                    groundingAudit.pass &&
+                    pullAudit.pass &&
+                    isFalseHallucinationCritique(
+                        verification.feedback,
+                        currentProposal,
+                        combinedToolSummary,
+                        {
+                            headers: allParsedHeaders,
+                            toolCallTrace: accumulatedToolTrace,
+                            marketToolRecords: pulledMarketRecords,
+                            slateText: typeof boardSourceForAudit === 'string' ? boardSourceForAudit : slateHeaders
+                        }
+                    )
+                ) {
+                    const originalFeedback = verification.feedback;
+                    verification.pass = true;
+                    verification.feedback = 'Verified: cited injury, market, or form claims confirmed by successful run tool trace.';
+                    context.addEvent({
+                        agentRole: this.critic.role,
+                        action: 'Dismissed False Hallucination Veto',
+                        modelName: this.critic.modelName,
+                        prompt: `attempt=${attempt}`,
+                        output: { dismissedFeedback: originalFeedback }
+                    });
                 }
 
                 if (verification.pass) {

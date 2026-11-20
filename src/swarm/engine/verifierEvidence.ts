@@ -1,29 +1,39 @@
 import { parseGameHeaders, type GameHeader } from '../context/gameHeaders.ts';
 import type { ToolEvidenceItem } from './seatToolLoop.ts';
+import { isEmptyToolSummary } from '../tools/pullBeforePass.ts';
+
+function normalizeEvidenceToolName(name: string): string {
+  return String(name || '').trim().replace(/_v1$/i, '');
+}
+
+const INJURY_HEADER_PREFIX = /^\[INJURY[^\]]*\]:?\s*/i;
+const MARKET_HEADER_PREFIX = /^\[MARKET MOVEMENT[^\]]*\]:?\s*/i;
+const GENERIC_TOOL_HEADER_PREFIX = /^\[(?:MATCHUP FUNDAMENTALS|MARKET MOVEMENT|PLAYER PROP|ENVIRONMENT|INJURY[^\]]*)\]:?\s*/i;
 
 function compactInjurySummary(summary: string): string {
   const lines = summary
     .split(/\r?\n/)
-    .map(l => l.trim())
-    .filter(l => l && !/^\[INJURY\b/i.test(l));
+    .map(l => l.trim().replace(INJURY_HEADER_PREFIX, '').trim())
+    .filter(Boolean);
   if (lines.length === 0) return 'No injuries reported';
 
+  const statusRegex = /\b(OUT|DOUBTFUL|QUESTIONABLE|IR|INJURED\s+RESERVE|SUSPENDED)\b/i;
   const keptTeams: string[] = [];
   for (const rawLine of lines) {
     const line = rawLine.replace(/^-\s*/, '');
     const colonIdx = line.indexOf(':');
-    if (colonIdx > 0 && !/:\s*(OUT|DOUBTFUL|QUESTIONABLE|PROBABLE)\b/i.test(line.slice(0, colonIdx + 12))) {
+    if (colonIdx > 0 && !/:\s*(OUT|DOUBTFUL|QUESTIONABLE|PROBABLE|IR|SUSPENDED)\b/i.test(line.slice(0, colonIdx + 12))) {
       // Team-grouped format: "BAL: Lamar Jackson (QB): OUT; Adisa Isaac: QUESTIONABLE"
       const team = line.slice(0, colonIdx).trim();
       const rest = line.slice(colonIdx + 1).trim();
       const filteredPlayers = rest
         .split(';')
         .map(p => p.trim())
-        .filter(p => /\b(OUT|DOUBTFUL|QUESTIONABLE)\b/i.test(p));
+        .filter(p => statusRegex.test(p));
       if (filteredPlayers.length > 0) {
         keptTeams.push(`${team}: ${filteredPlayers.join('; ')}`);
       }
-    } else if (/\b(OUT|DOUBTFUL|QUESTIONABLE)\b/i.test(line)) {
+    } else if (statusRegex.test(line)) {
       keptTeams.push(line);
     }
   }
@@ -33,8 +43,8 @@ function compactInjurySummary(summary: string): string {
 function compactMarketSummary(summary: string): string {
   const lines = summary
     .split(/\r?\n/)
-    .map(l => l.trim())
-    .filter(l => l && !/^\[MARKET MOVEMENT\b/i.test(l));
+    .map(l => l.trim().replace(MARKET_HEADER_PREFIX, '').trim())
+    .filter(Boolean);
   if (lines.length === 0) return summary.replace(/\s+/g, ' ').trim().slice(0, 220);
 
   const mlAndTotal = lines.filter(l => /^(?:ML|Total):/i.test(l) || /\b(?:ml_home|ml_away)\b/i.test(l));
@@ -55,23 +65,25 @@ function compactMarketSummary(summary: string): string {
 }
 
 function compactToolLine(tool: string, summary: string): string {
-  if (tool === 'get_injury_and_roster_delta') {
+  const normTool = normalizeEvidenceToolName(tool);
+  if (normTool === 'get_injury_and_roster_delta') {
     return `INJ: ${compactInjurySummary(summary)}`;
   }
-  if (tool === 'get_market_movement') {
+  if (normTool === 'get_market_movement') {
     return `MKT: ${compactMarketSummary(summary)}`;
   }
   const stripped = summary
     .split(/\r?\n/)
-    .map(l => l.trim())
-    .filter(l => l && !/^\[(?:MATCHUP FUNDAMENTALS|MARKET MOVEMENT|PLAYER PROP|ENVIRONMENT)\b/i.test(l))
+    .map(l => l.trim().replace(GENERIC_TOOL_HEADER_PREFIX, '').trim())
+    .filter(Boolean)
     .join(' | ')
     .replace(/\s+/g, ' ')
     .trim();
   const body = stripped || summary.replace(/\s+/g, ' ').trim();
-  const cut = body.length > 140 ? `${body.slice(0, 137).trimEnd()}…` : body;
-  if (tool === 'get_matchup_fundamentals') return `FUND: ${cut}`;
-  return `${tool}: ${cut}`;
+  const maxLen = normTool === 'get_matchup_fundamentals' ? 200 : 140;
+  const cut = body.length > maxLen ? `${body.slice(0, maxLen - 3).trimEnd()}…` : body;
+  if (normTool === 'get_matchup_fundamentals') return `FUND: ${cut}`;
+  return `${normTool}: ${cut}`;
 }
 
 /**
@@ -80,16 +92,27 @@ function compactToolLine(tool: string, summary: string): string {
  */
 export function buildVerifierEvidence(
   reports: Array<{ toolEvidenceItems?: ToolEvidenceItem[] }>,
-  slateSource?: unknown
+  slateSource?: unknown,
+  priorityEventIds?: string[]
 ): string {
   const deduped = new Map<string, ToolEvidenceItem>();
   for (const r of reports || []) {
     const items = Array.isArray(r?.toolEvidenceItems) ? r.toolEvidenceItems : [];
     for (const item of items) {
       if (!item || !item.tool || !item.eventId || !item.summary) continue;
-      const key = `${item.tool}::${item.eventId}`;
-      if (!deduped.has(key)) {
-        deduped.set(key, item);
+      const normTool = normalizeEvidenceToolName(item.tool);
+      const cleanSummary = item.summary.trim();
+      if (!cleanSummary) continue;
+      const key = `${normTool}::${item.eventId}`;
+      const existing = deduped.get(key);
+      if (!existing) {
+        deduped.set(key, { tool: normTool, eventId: item.eventId, summary: cleanSummary });
+      } else {
+        const existingEmpty = isEmptyToolSummary(existing.summary);
+        const incomingEmpty = isEmptyToolSummary(cleanSummary);
+        if ((existingEmpty && !incomingEmpty) || (!incomingEmpty && cleanSummary.length > existing.summary.length)) {
+          deduped.set(key, { tool: normTool, eventId: item.eventId, summary: cleanSummary });
+        }
       }
     }
   }
@@ -98,10 +121,17 @@ export function buildVerifierEvidence(
   const headers = parseGameHeaders(slateSource);
   const headerById = new Map<string, GameHeader>();
   const orderedIds: string[] = [];
+  for (const pId of priorityEventIds || []) {
+    if (pId && !orderedIds.includes(pId)) {
+      orderedIds.push(pId);
+    }
+  }
   for (const h of headers) {
     if (h.eventId && !headerById.has(h.eventId)) {
       headerById.set(h.eventId, h);
-      orderedIds.push(h.eventId);
+      if (!orderedIds.includes(h.eventId)) {
+        orderedIds.push(h.eventId);
+      }
     }
   }
 
@@ -109,7 +139,7 @@ export function buildVerifierEvidence(
   for (const item of deduped.values()) {
     if (!byEvent.has(item.eventId)) {
       byEvent.set(item.eventId, []);
-      if (!headerById.has(item.eventId) && !orderedIds.includes(item.eventId)) {
+      if (!orderedIds.includes(item.eventId)) {
         orderedIds.push(item.eventId);
       }
     }
@@ -117,9 +147,10 @@ export function buildVerifierEvidence(
   }
 
   const toolOrder = (t: string): number => {
-    if (t === 'get_injury_and_roster_delta') return 0;
-    if (t === 'get_matchup_fundamentals') return 1;
-    if (t === 'get_market_movement') return 2;
+    const norm = normalizeEvidenceToolName(t);
+    if (norm === 'get_injury_and_roster_delta') return 0;
+    if (norm === 'get_matchup_fundamentals') return 1;
+    if (norm === 'get_market_movement') return 2;
     return 3;
   };
 

@@ -55,6 +55,11 @@ import {
     type ToolCallStatus,
     type ToolCallTraceEntry
 } from '../tools/pullBeforePass.ts';
+import {
+    collectSuccessfulEvidenceItems,
+    isFalseHallucinationCritique
+} from '../tools/criticEvidence.ts';
+import { buildVerifierEvidence } from './verifierEvidence.ts';
 
 export interface AnalystExecutorConfig {
     task: string;
@@ -436,6 +441,34 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                 allGameIds = Array.from(new Set(proposedAuditContext.targetGameIds.filter(Boolean)));
             }
 
+            const priorRunItems: ToolEvidenceItem[] = isCritic
+                ? collectSuccessfulEvidenceItems({
+                      prePassedItems: [
+                          ...(Array.isArray(proposedAuditContext?.proposerReports)
+                              ? proposedAuditContext!.proposerReports.flatMap((r: any) =>
+                                    Array.isArray(r?.toolEvidenceItems) ? r.toolEvidenceItems : []
+                                )
+                              : []),
+                          ...Array.from(sharedInjuryItemsByGame.values())
+                      ],
+                      toolCallTrace: [
+                          ...(Array.isArray(proposedAuditContext?.proposerReports)
+                              ? proposedAuditContext!.proposerReports.flatMap((r: any) =>
+                                    Array.isArray(r?.toolCallTrace) ? r.toolCallTrace : []
+                                )
+                              : []),
+                          ...Array.from(sharedInjuryTraceByGame.values())
+                      ],
+                      allowedEventIds: allGameIds.length > 0 ? allGameIds : undefined
+                  })
+                : [];
+
+            const priorMarketRecords: MarketToolRecord[] = isCritic && Array.isArray(proposedAuditContext?.proposerReports)
+                ? proposedAuditContext!.proposerReports
+                      .flatMap((r: any) => (Array.isArray(r?.marketToolRecords) ? r.marketToolRecords : []))
+                      .filter((rec: any) => rec && rec.eventId && (allGameIds.length === 0 || allGameIds.includes(rec.eventId)))
+                : [];
+
             const isBettingSeat = !isCritic && (/\b(a1|quant|a2|market)\b/i.test(seat.trim()) || /\b(a1|quant|a2|market)\b/i.test(analyst.role.trim()));
             let seatPrompt = effectiveAnalystPrompt;
             if (isCritic && proposedAuditContext?.summaryText) {
@@ -449,6 +482,22 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                         ? `${proposedAuditContext.summaryText.slice(0, Math.max(0, bodyBudget - 1)).trimEnd()}…`
                         : proposedAuditContext.summaryText;
                     seatPrompt += `${chosenPrefix}${body}`;
+                }
+            }
+            const criticWillRunToolRound2 =
+                isCritic &&
+                allGameIds.length > 0 &&
+                getRoleToolNames(seat).some(t => activeRegistry.has(t));
+            if (isCritic && priorRunItems.length > 0 && !criticWillRunToolRound2) {
+                const priorDigest = buildVerifierEvidence([{ toolEvidenceItems: priorRunItems }], fullRawSource, allGameIds);
+                const remainingRoom = Math.max(0, criticBudget.maxPromptChars - baseInstruction.length - criticToolSchemasLen - seatPrompt.length - 20);
+                const evPrefix = '\n\nExisting Run Tool Evidence (already pulled for these games):\n';
+                if (priorDigest && remainingRoom > evPrefix.length + 40) {
+                    const evBodyBudget = remainingRoom - evPrefix.length;
+                    const evBody = priorDigest.length > evBodyBudget
+                        ? `${priorDigest.slice(0, Math.max(0, evBodyBudget - 1)).trimEnd()}…`
+                        : priorDigest;
+                    seatPrompt += `${evPrefix}${evBody}`;
                 }
             }
             if (isCritic) {
@@ -525,6 +574,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                             : 'Provide your specialist analysis now in JSON format.',
                         gameId: allGameIds[0] || parsedHeaders[0]?.eventId,
                         gameIds: allGameIds,
+                        ...(isCritic && priorRunItems.length > 0 ? { priorEvidenceItems: priorRunItems } : {}),
                         cache: sharedQueryCache,
                         runConfig: analystRunConfig
                     });
@@ -543,9 +593,15 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
             (resData as any)._chunkIndex = chunkIdx;
             (resData as any).coveredEventIds = scorecardReport?.coveredEventIds ?? seatLoopRes?.coveredEventIds ?? [];
             (resData as any).toolEvidence = scorecardReport?.toolEvidence ?? seatLoopRes?.toolEvidence ?? '';
-            const baseEvidenceItems: ToolEvidenceItem[] = [
+            const rawSeatItems: ToolEvidenceItem[] = [
                 ...((scorecardReport as any)?.toolEvidenceItems ?? seatLoopRes?.toolEvidenceItems ?? [])
             ];
+            const baseEvidenceItems: ToolEvidenceItem[] = isCritic
+                ? collectSuccessfulEvidenceItems({
+                      prePassedItems: priorRunItems,
+                      pulledItems: rawSeatItems
+                  })
+                : [...rawSeatItems];
             if (isBettingSeat && sharedInjuryItemsByGame.size > 0) {
                 for (const [gId, item] of sharedInjuryItemsByGame.entries()) {
                     if (!baseEvidenceItems.some(e => e.tool === item.tool && e.eventId === gId)) {
@@ -557,7 +613,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
             const seatToolTrace: ToolCallTraceEntry[] = mergeToolCallTraceEntries([
                 ...(Array.isArray((scorecardReport as any)?.toolCallTrace) ? (scorecardReport as any).toolCallTrace : []),
                 ...(Array.isArray(seatLoopRes?.toolCallTrace) ? seatLoopRes.toolCallTrace : []),
-                ...(isBettingSeat ? Array.from(sharedInjuryTraceByGame.values()) : [])
+                ...(isBettingSeat || isCritic ? Array.from(sharedInjuryTraceByGame.values()) : [])
             ]);
             if (seatToolTrace.length > 0) {
                 (resData as any).toolCallTrace = seatToolTrace;
@@ -568,22 +624,35 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
             const combinedInjuryEvidence = [
                 prefetchedInjurySummary,
                 (resData as any).toolEvidence || '',
-                ...baseEvidenceItems.filter(e => e.tool === 'get_injury_and_roster_delta').map(e => e.summary)
+                ...baseEvidenceItems
+                    .filter(e => e.tool.replace(/_v1$/i, '') === 'get_injury_and_roster_delta')
+                    .map(e => e.summary)
             ].filter(Boolean).join('\n');
 
             const marketEvidenceText = [
                 (resData as any).toolEvidence || '',
-                ...baseEvidenceItems.filter(e => e.tool === 'get_market_movement').map(e => e.summary)
+                ...baseEvidenceItems
+                    .filter(e => e.tool.replace(/_v1$/i, '') === 'get_market_movement')
+                    .map(e => e.summary)
             ].filter(Boolean).join('\n');
-            const marketToolRecords: MarketToolRecord[] = Array.isArray(seatLoopRes?.marketToolRecords) && seatLoopRes.marketToolRecords.length > 0
-                ? seatLoopRes.marketToolRecords
-                : baseEvidenceItems
-                    .filter(e => e.tool === 'get_market_movement' && e.eventId)
-                    .map(e => ({
-                        tool: e.tool,
-                        eventId: e.eventId,
-                        summary: e.summary
-                    }));
+            const marketToolRecords: MarketToolRecord[] = (() => {
+                const combined: MarketToolRecord[] = [];
+                const pushUnique = (rec: MarketToolRecord) => {
+                    if (!combined.some(e => e.eventId === rec.eventId && e.summary === rec.summary)) {
+                        combined.push(rec);
+                    }
+                };
+                if (Array.isArray(seatLoopRes?.marketToolRecords)) {
+                    for (const r of seatLoopRes.marketToolRecords) pushUnique(r);
+                }
+                for (const r of priorMarketRecords) pushUnique(r);
+                for (const e of baseEvidenceItems) {
+                    if (e.tool.replace(/_v1$/i, '') === 'get_market_movement' && e.eventId) {
+                        pushUnique({ tool: e.tool, eventId: e.eventId, summary: e.summary });
+                    }
+                }
+                return combined;
+            })();
             if (marketToolRecords.length > 0) {
                 (resData as any).marketToolRecords = marketToolRecords;
             }
@@ -773,6 +842,31 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                 ) {
                     (resData as any).pass = true;
                     const okMsg = 'Verified: moneyline covered by ml_home/ml_away in market tool result.';
+                    (resData as any).verdict = okMsg;
+                    (resData as any).summary = okMsg;
+                    (resData as any).analysis = okMsg;
+                    (resData as any).flags = [];
+                    stage2VetoedLegs = [];
+                    stage2VetoedClaims = [];
+                } else if (
+                    (resData as any).pass === false &&
+                    injuryAuditPassed &&
+                    marketRowAudit.pass &&
+                    groundingAuditPassed &&
+                    isFalseHallucinationCritique(
+                        String((resData as any).verdict || (resData as any).summary || (resData as any).analysis || ''),
+                        groundingTargetProposal,
+                        criticGroundingEvidence,
+                        {
+                            headers: mergedHeadersForRowCheck,
+                            toolCallTrace: unionToolTrace,
+                            marketToolRecords,
+                            slateText: fullRawSource || renderedHeadersText
+                        }
+                    )
+                ) {
+                    (resData as any).pass = true;
+                    const okMsg = 'Verified: cited injury, market, or form claims confirmed by successful run tool trace.';
                     (resData as any).verdict = okMsg;
                     (resData as any).summary = okMsg;
                     (resData as any).analysis = okMsg;

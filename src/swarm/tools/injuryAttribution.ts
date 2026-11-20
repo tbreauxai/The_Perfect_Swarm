@@ -609,33 +609,41 @@ export function extractAuthoritativeInjuries(evidenceText: string, slateText?: s
     }
 
     // Parse "INJ: TeamA: Player1: OUT; Player2: QUESTIONABLE | TeamB: Player3: OUT"
-    // or "- TeamA: Player1 (Pos): OUT; Player2: OUT"
+    // or "TeamA: Player1 (OUT), Player2 (OUT). TeamB: Player3 (OUT)"
     const normalizedSegments = line
       .replace(/^\[INJURY\s*&\s*ROSTER\s*DELTA:[^\]]*\]\s*;?\s*/i, '')
+      .replace(/^\[INJURY:[^\]]*\]\s*;?\s*/i, '')
       .replace(/^INJ:\s*/i, '')
-      .split(/\s*\|\s*|\s*;\s*(?=-\s*[A-Za-z])/);
+      .split(/\s*\|\s*|\s*;\s*(?=-\s*[A-Za-z])|\.\s+(?=[A-Z][A-Za-z.\s'-]{2,35}:\s)/);
 
     for (const seg of normalizedSegments) {
       const cleanSeg = seg.replace(/^-\s*/, '').trim();
       if (!cleanSeg || /^no\s+(?:significant|injuries)/i.test(cleanSeg)) continue;
+      if (/^\[(?:risk|critic|quant|market|analyst|manager|a\d+|seat|specialist|proposer)/i.test(cleanSeg)) continue;
 
       const colonIdx = cleanSeg.indexOf(':');
       if (colonIdx <= 0) continue;
 
       const candidateTeam = cleanSeg.slice(0, colonIdx).trim();
       const playersPart = cleanSeg.slice(colonIdx + 1).trim();
-      if (!candidateTeam || /^(event_id|sport|options|task|summary|analysis|pick|reason|verdict|fund|mkt)$/i.test(candidateTeam)) {
+      if (
+        !candidateTeam ||
+        candidateTeam.length > 42 ||
+        /[\[\]]/.test(candidateTeam) ||
+        /^(event_id|sport|options|task|summary|analysis|pick|reason|verdict|fund|mkt|verified|pass|note|warning|veto|bottom-line|market check)/i.test(candidateTeam)
+      ) {
         continue;
       }
 
-      for (const pItem of playersPart.split(';')) {
-        const trimmedP = pItem.trim();
-        const colonMatch = trimmedP.match(/^([^:]+):\s*(OUT|DOUBTFUL|QUESTIONABLE|PROBABLE|IR|SUSPENDED)\b/i);
+      for (const pItem of playersPart.split(/[;,]/)) {
+        const trimmedP = pItem.replace(/\.+$/, '').trim();
+        if (!trimmedP) continue;
+        const colonMatch = trimmedP.match(/^([^:]+):\s*(OUT|DOUBTFUL|QUESTIONABLE|PROBABLE|IR|INJURED\s+RESERVE|SUSPENDED)\b/i);
         if (colonMatch) {
           addBinding(candidateTeam, colonMatch[1].trim(), colonMatch[2].trim(), currentEventId);
           continue;
         }
-        const parenMatch = trimmedP.match(/^([^(]+)\((OUT|DOUBTFUL|QUESTIONABLE|PROBABLE|IR|SUSPENDED)\)/i);
+        const parenMatch = trimmedP.match(/^([^(]+)\((OUT|DOUBTFUL|QUESTIONABLE|PROBABLE|IR|INJURED\s+RESERVE|SUSPENDED)\)/i);
         if (parenMatch) {
           addBinding(candidateTeam, parenMatch[1].trim(), parenMatch[2].trim(), currentEventId);
         }

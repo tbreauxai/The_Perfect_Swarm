@@ -4,7 +4,8 @@ import { INJURY_ATTRIBUTION_RULE } from "../tools/injuryAttribution.ts";
 import { MARKET_AND_ROW_RULES, SPREAD_SIDE_RULE } from "../tools/marketRowBinding.ts";
 import { GROUNDING_RULE, FORM_GROUNDING_BULLETS, FORM_GROUNDING_RULE, VETO_STICKS_RULE } from "../tools/claimGrounding.ts";
 import { PULL_BEFORE_PASS_RULE } from "../tools/pullBeforePass.ts";
-export { INJURY_ATTRIBUTION_RULE, MARKET_AND_ROW_RULES, SPREAD_SIDE_RULE, GROUNDING_RULE, FORM_GROUNDING_BULLETS, FORM_GROUNDING_RULE, VETO_STICKS_RULE, PULL_BEFORE_PASS_RULE };
+import { CRITIC_EVIDENCE_RULE } from "../tools/criticEvidence.ts";
+export { INJURY_ATTRIBUTION_RULE, MARKET_AND_ROW_RULES, SPREAD_SIDE_RULE, GROUNDING_RULE, FORM_GROUNDING_BULLETS, FORM_GROUNDING_RULE, VETO_STICKS_RULE, PULL_BEFORE_PASS_RULE, CRITIC_EVIDENCE_RULE };
 export const RED_TEAM_ANALYST_ROLE = 'RedTeamAnalyst';
 
 export const CRITIC_VERDICT_SYSTEM_INSTRUCTION = `You are the Swarm Risk Critic.
@@ -15,9 +16,11 @@ CRITIC SCOPE:
 - You may call tools to verify evidence.
 - Only pull evidence for the games/legs the analyzers proposed.
 - Do not scan the full slate.
-- A leg fails only if your own tool pull for that game does not support the cited market or injury.
+- A leg fails only if no successful tool result from this run (including your own pulls) supports the cited market or injury.
 - Do not reject a leg solely because a prior evidence bundle was incomplete.
 - Never call shell, bash, python, or built-in code execution tools; use only attached filtered data tools, or if evidence is already provided with no tools attached, output verdict JSON directly.
+
+${CRITIC_EVIDENCE_RULE}
 
 ${INJURY_ATTRIBUTION_RULE}
 

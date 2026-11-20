@@ -41,6 +41,7 @@ import {
 } from "./scorecardManager.ts";
 import { parseGameHeaders, filterPicksByCoverage } from "../context/gameHeaders.ts";
 import { buildVerifierEvidence } from "./verifierEvidence.ts";
+import { collectSuccessfulEvidenceItems } from "../tools/criticEvidence.ts";
 import { mergeVetoedClaims, mergeVetoedLegTargets, type VetoedLegTarget } from "../tools/claimGrounding.ts";
 import { mergeToolCallTraceEntries, type ToolCallTraceEntry } from "../tools/pullBeforePass.ts";
 import { isDataRequest } from "../parser/responseGuards.ts";
@@ -388,9 +389,16 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                         return r;
                     });
                 });
-                const verifierEvidence = buildVerifierEvidence(flatReports as any, profilingResult.rawInput ?? data ?? task);
                 const allToolCallTrace: ToolCallTraceEntry[] = mergeToolCallTraceEntries(
                     flatReports.flatMap((r: any) => (Array.isArray(r?.toolCallTrace) ? r.toolCallTrace : []))
+                );
+                const allToolEvidenceItems = collectSuccessfulEvidenceItems({
+                    prePassedItems: flatReports.flatMap((r: any) => (Array.isArray(r?.toolEvidenceItems) ? r.toolEvidenceItems : [])),
+                    toolCallTrace: allToolCallTrace
+                });
+                const verifierEvidence = buildVerifierEvidence(
+                    [{ toolEvidenceItems: allToolEvidenceItems }],
+                    profilingResult.rawInput ?? data ?? task
                 );
 
                 const synthesisResult = blackboard ? emptySynthesisResult() : compileSynthesisPrompt({
@@ -550,6 +558,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                 ...(stage2VetoedLegs.length > 0 ? { vetoedLegs: stage2VetoedLegs } : {}),
                                 ...(stage2VetoedClaims.length > 0 ? { vetoedClaims: stage2VetoedClaims } : {}),
                                 ...(verifierToolResults ? { toolResults: verifierToolResults } : {}),
+                                ...(allToolEvidenceItems.length > 0 ? { toolEvidenceItems: allToolEvidenceItems } : {}),
                                 ...(synthesisResult.appComputedCounts ? { appComputedCounts: synthesisResult.appComputedCounts } : {})
                             });
                             finalAnalysis = verificationResult.finalAnalysis;
