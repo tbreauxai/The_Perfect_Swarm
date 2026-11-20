@@ -1,38 +1,52 @@
 {
-  "activeGoalId": "goal-persist-s0-test",
+  "activeGoalId": "goal-h-s0-repro",
   "goals": [
     {
-      "id": "goal-persist-s0-test",
-      "title": "S0: Add failing src/swarm/engine/runDebugPersist.test.ts",
-      "description": "Failing test first: flag off -> no fetch; flag on -> one upsert to swarm_run_debug {workflow_id, created_at, payload} mirroring RunDebugRecord; no key-like strings; delete for created_at < now()-7d sent; fetch error never throws.",
+      "id": "goal-h-s0-repro",
+      "title": "S0 (RED FIRST): Add src/__repro__/runNov20h.repro.test.ts (N, O, P)",
+      "description": "Add src/__repro__/runNov20h.repro.test.ts and confirm N, O, P fail before any edit. Commit.",
       "status": "in-progress",
-      "verificationCriteria": "src/swarm/engine/runDebugPersist.test.ts runs red."
+      "verificationCriteria": "runNov20h.repro.test.ts runs red on N, O, P."
     },
     {
-      "id": "goal-persist-s1-migration",
-      "title": "S1: Add supabase/migrations/20261120_swarm_run_debug.sql",
-      "description": "Additive migration with header '-- DON'T APPLY FROM IDE (Tyler approves in Code Auditor's chat)', create table public.swarm_run_debug, index on created_at, RLS enabled, revoke all from anon/authenticated, grant all to service_role.",
+      "id": "goal-h-s1-render-headers",
+      "title": "S1 (TOP): Greedily upgrade renderHeaders lines to formatLine(h,1) in context/gameHeaders.ts",
+      "description": "In src/swarm/context/gameHeaders.ts:235-238, when maxOpts loop fails but base lines fit, greedily upgrade lines (slate order) to formatLine(h,1) while total <= maxChars.",
       "status": "todo",
-      "verificationCriteria": "Migration file created and reviewed; not applied."
+      "verificationCriteria": "Repro N green; context/*.test.ts green."
     },
     {
-      "id": "goal-persist-s2-module",
-      "title": "S2: Implement src/swarm/engine/runDebugPersist.ts",
-      "description": "Export isRunDebugPersistEnabled() and persistRunDebugRecord(workflowId): read getRunDebugRecord, re-scrub, cap payload ~200KB (trim toolResultsSent first with '[trimmed]'), POST rest/v1/swarm_run_debug with Prefer: resolution=merge-duplicates via getSupabaseConfig(), then DELETE created_at=lt.<now-7d>. Fire-and-forget, catch all, 1500ms timeout.",
+      "id": "goal-h-s2-proposer-header-budget",
+      "title": "S2: Proposer headerBudget helper & test in analystExecution.ts + proposerHeaderBudget.test.ts",
+      "description": "Export proposerHeaderBudget(provider) = Math.min(2400, Math.floor(seatBudget(provider).maxPromptChars * 0.3)) and use for non-critic headerBudget at analystExecution.ts:397-399; add src/swarm/engine/proposerHeaderBudget.test.ts.",
       "status": "todo",
-      "verificationCriteria": "S0 test (runDebugPersist.test.ts) passes."
+      "verificationCriteria": "proposerHeaderBudget.test.ts + runNov20c/d/e/f + promptBudget tests green."
     },
     {
-      "id": "goal-persist-s3-hook",
-      "title": "S3: Wire void persistRunDebugRecord(workflowId) on run completion",
-      "description": "Call void persistRunDebugRecord(workflowId) once per run on the run-completion path (only when enabled, no await on response path).",
+      "id": "goal-h-s3-market-odds-regex",
+      "title": "S3: Expand market/odds/betting noun group in pullBeforePass.ts",
+      "description": "In src/swarm/tools/pullBeforePass.ts:426-429 and L827 inline strip (all 4 occurrences), expand (?:market\\s+(?:movement|data)|line\\s+movement) to (?:(?:market(?:\\/odds)?|odds|betting)\\s+(?:movement|data)|line\\s+movement).",
       "status": "todo",
-      "verificationCriteria": "Unit test: enabled run calls it once; disabled never."
+      "verificationCriteria": "Repro O green."
     },
     {
-      "id": "goal-persist-s4-verify-push",
-      "title": "VERIFY & PUSH: tsc, full vitest, smoke-start, push main",
-      "description": "Run npx tsc --noEmit, npx vitest run, node scripts/smoke-start.mjs with flag unset; verify git log/diff; push origin main.",
+      "id": "goal-h-s4-header-ml-ledger",
+      "title": "S4: Record get_market_movement='data' from header ML options in buildToolPullLedger",
+      "description": "In src/swarm/tools/pullBeforePass.ts:208 (before marketToolRecords loop), for each options.headers h with an option matching /\\bML\\s+[-+]?\\d/, record(h.eventId, 'get_market_movement', 'data').",
+      "status": "todo",
+      "verificationCriteria": "Repro P green."
+    },
+    {
+      "id": "goal-h-s5-conjunction-cleanup",
+      "title": "S5 (optional): Strip leading conjunction & short parts in pullBeforePass.ts:839-845",
+      "description": "After rejoining subParts, strip a leading conjunction (and|so|but|while) and capitalize; skip parts under 3 words.",
+      "status": "todo",
+      "verificationCriteria": "Unit/repro tests green."
+    },
+    {
+      "id": "goal-h-s6-verify-push",
+      "title": "VERIFY & PUSH: Run full verification suite and push origin main",
+      "description": "Run vitest on proposerHeaderBudget + runNov20c/d/e/f/h, npm test, tsc --noEmit, smoke-start.mjs; verify git log/diff and git push origin main.",
       "status": "todo",
       "verificationCriteria": "All checks pass and origin/main pushed."
     }
