@@ -1876,6 +1876,318 @@ export function sanitizeUngroundedClaims<T extends Record<string, any>>(
   return report;
 }
 
+function extractRecentTokensFromSegment(seg: string): Array<'W' | 'L'> {
+  if (!seg) return [];
+  const norm = normalizeText(seg);
+  const recentRx =
+    /(?:\b(?:Recent|team_games(?:\s+last[\s_]?\d{1,2})?|last[\s_]?\d{1,2})\s*:?\s*([WLOT](?:\s*[,/\s-]\s*(?:OTL|OT|[WLT]))+)|"recent_results"\s*:\s*\[([^\]]+)\])/gi;
+  let m: RegExpExecArray | null;
+  let best: Array<'W' | 'L'> = [];
+  while ((m = recentRx.exec(norm)) !== null) {
+    const rawSeq = m[1] || m[2] || '';
+    const tokens = rawSeq.match(/\b(?:OTL|OT|[WLT])\b/gi);
+    if (!tokens || tokens.length === 0) continue;
+    const mapped: Array<'W' | 'L'> = [];
+    for (const tok of tokens) {
+      const up = tok.toUpperCase();
+      if (up === 'W') mapped.push('W');
+      else if (up === 'L' || up === 'OTL' || up === 'OT') mapped.push('L');
+    }
+    if (mapped.length > best.length) best = mapped;
+  }
+  return best;
+}
+
+function extractRecentResultsByTeamKey(
+  successfulEvidence: string,
+  candidates: TeamDescriptor[],
+  headers: GameHeader[]
+): Map<string, Array<'W' | 'L'>> {
+  const recentByTeamKey = new Map<string, Array<'W' | 'L'>>();
+  if (!successfulEvidence || candidates.length === 0) return recentByTeamKey;
+
+  const setSeq = (teamKey: string, seq: Array<'W' | 'L'>) => {
+    if (!teamKey || seq.length === 0) return;
+    const prev = recentByTeamKey.get(teamKey);
+    if (!prev || seq.length > prev.length) {
+      recentByTeamKey.set(teamKey, seq);
+    }
+  };
+
+  let currentEventId = '';
+  for (const rawLine of successfulEvidence.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    const evLineMatch =
+      line.match(/^EVENT\s+([a-z0-9-]+)/i) ||
+      line.match(/\[(?:MATCHUP FUNDAMENTALS|MARKET MOVEMENT|INJURY(?:\s*&\s*ROSTER\s*DELTA)?):\s*([a-z0-9-]+)/i) ||
+      line.match(/\bevent_id\s*=\s*([a-z0-9-]+)/i);
+    if (evLineMatch && evLineMatch[1]) {
+      currentEventId = evLineMatch[1].trim();
+    }
+
+    // Handle JSON form.items payloads if present
+    if (line.includes('"items"') && line.includes('"result"')) {
+      const jsonStart = line.indexOf('{');
+      if (jsonStart >= 0) {
+        try {
+          const parsed = JSON.parse(line.slice(jsonStart));
+          const items = Array.isArray(parsed?.form?.items)
+            ? parsed.form.items
+            : (Array.isArray(parsed?.items) ? parsed.items : []);
+          if (items.length > 0) {
+            const byTeam = new Map<string, Array<{ res: 'W' | 'L'; date: string }>>();
+            for (const item of items) {
+              if (!item || typeof item !== 'object') continue;
+              const rawRes = String(item.result || '').toUpperCase().trim();
+              const res: 'W' | 'L' | null = rawRes === 'W' ? 'W' : (/^(?:L|OTL|OT)$/.test(rawRes) ? 'L' : null);
+              if (!res) continue;
+              const teamHint = [item.team_name, item.team].filter(Boolean).join(' ');
+              if (!teamHint) continue;
+              const mentions = findTeamMentionsInText(teamHint, candidates);
+              if (mentions.length === 0) continue;
+              const tk = mentions[0].team.key;
+              if (!byTeam.has(tk)) byTeam.set(tk, []);
+              byTeam.get(tk)!.push({ res, date: String(item.game_date || '') });
+            }
+            for (const [tk, entries] of byTeam.entries()) {
+              entries.sort((a, b) => b.date.localeCompare(a.date));
+              setSeq(tk, entries.map(e => e.res));
+            }
+          }
+        } catch {
+          // fall through to segment text parsing
+        }
+      }
+    }
+
+    const segments = line.split(/(?=\b(?:Home|Away)\s*(?:\(|[:\-]))/i);
+    for (const seg of segments) {
+      const jsonTeamBlockRx = /"([A-Za-z0-9_.\s-]{2,30})"\s*:\s*\{/g;
+      let jm: RegExpExecArray | null;
+      const jsonTeamStarts: Array<{ index: number; key: string }> = [];
+      while ((jm = jsonTeamBlockRx.exec(seg)) !== null) {
+        const keyMentions = findTeamMentionsInText(jm[1], candidates);
+        if (keyMentions.length === 1) {
+          jsonTeamStarts.push({ index: jm.index, key: keyMentions[0].team.key });
+        }
+      }
+      if (jsonTeamStarts.length >= 2) {
+        for (let i = 0; i < jsonTeamStarts.length; i++) {
+          const start = jsonTeamStarts[i].index;
+          const end = i + 1 < jsonTeamStarts.length ? jsonTeamStarts[i + 1].index : seg.length;
+          setSeq(jsonTeamStarts[i].key, extractRecentTokensFromSegment(seg.slice(start, end)));
+        }
+        continue;
+      }
+
+      const mentions = findTeamMentionsInText(seg, candidates);
+      let uniqueKeys = Array.from(new Set(mentions.map(m => m.team.key)));
+      if (uniqueKeys.length === 0 && currentEventId) {
+        const sideKey = resolveSegmentSideTeamKey(seg, currentEventId, headers, candidates);
+        if (sideKey) uniqueKeys = [sideKey];
+      }
+
+      if (uniqueKeys.length === 1) {
+        setSeq(uniqueKeys[0], extractRecentTokensFromSegment(seg));
+      } else if (uniqueKeys.length >= 2 && seg.includes('|')) {
+        let activeLineTeamKey: string | undefined;
+        for (const sub of seg.split('|').map(s => s.trim()).filter(Boolean)) {
+          const subMentions = findTeamMentionsInText(sub, candidates);
+          let subKeys = Array.from(new Set(subMentions.map(m => m.team.key)));
+          if (subKeys.length === 0 && currentEventId) {
+            const subSideKey = resolveSegmentSideTeamKey(sub, currentEventId, headers, candidates);
+            if (subSideKey) subKeys = [subSideKey];
+          }
+          if (subKeys.length === 1) activeLineTeamKey = subKeys[0];
+          else if (subKeys.length >= 2) activeLineTeamKey = undefined;
+          const resolvedKey = subKeys.length === 1 ? subKeys[0] : (subKeys.length === 0 ? activeLineTeamKey : undefined);
+          if (resolvedKey) {
+            setSeq(resolvedKey, extractRecentTokensFromSegment(sub));
+          }
+        }
+      }
+    }
+  }
+
+  return recentByTeamKey;
+}
+
+const STREAK_PATTERNS: Array<{ rx: RegExp; kind: 'W' | 'L'; numbered: boolean }> = [
+  { rx: /\b(\d{1,2})\s*-?\s*game\s+(?:win(?:ning)?|victory)\s+streak\b/gi, kind: 'W', numbered: true },
+  { rx: /\b(?:won|winning|wins?|victories)\s+(\d{1,2})\s+(?:straight|consecutive|in\s+a\s+row)\b/gi, kind: 'W', numbered: true },
+  { rx: /\b(\d{1,2})\s+(?:straight|consecutive)\s+(?:wins?|victories)\b/gi, kind: 'W', numbered: true },
+  { rx: /\b(?:unbeaten|undefeated)\s+(?:in|over)\s+(?:their\s+|the\s+)?(?:last|past)\s+(\d{1,2})\b/gi, kind: 'W', numbered: true },
+  { rx: /\b(?:on\s+a\s+)?W(\d{1,2})\s+streak\b/gi, kind: 'W', numbered: true },
+  { rx: /\b(\d{1,2})\s*-?\s*game\s+(?:losing\s+streak|skid|slump|slide)\b/gi, kind: 'L', numbered: true },
+  { rx: /\b(?:lost|dropped|losing)\s+(\d{1,2})\s+(?:straight|consecutive|in\s+a\s+row)\b/gi, kind: 'L', numbered: true },
+  { rx: /\b(\d{1,2})\s+(?:straight|consecutive)\s+(?:losses?|defeats?)\b/gi, kind: 'L', numbered: true },
+  { rx: /\bwinless\s+(?:in|over)\s+(?:their\s+|the\s+)?(?:last|past)\s+(\d{1,2})\b/gi, kind: 'L', numbered: true },
+  { rx: /\b(?:on\s+a\s+)?L(\d{1,2})\s+streak\b/gi, kind: 'L', numbered: true },
+  { rx: /\b(?:on\s+a|riding\s+a|carrying\s+a|extending\s+(?:their|its|a))\s+(?:hot\s+)?win(?:ning)?\s+streak\b/gi, kind: 'W', numbered: false },
+  { rx: /\b(?:on\s+a|riding\s+a|stuck\s+in\s+a|mired\s+in\s+a)\s+(?:losing\s+streak|skid|slump|losing\s+slide)\b/gi, kind: 'L', numbered: false }
+];
+
+function findContradictedStreakInClause(
+  clause: string,
+  candidates: TeamDescriptor[],
+  recentByTeamKey: Map<string, Array<'W' | 'L'>>
+): { teamLabel: string } | null {
+  if (!clause || recentByTeamKey.size === 0 || candidates.length === 0) return null;
+  const norm = normalizeText(clause);
+
+  for (const spec of STREAK_PATTERNS) {
+    spec.rx.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = spec.rx.exec(norm)) !== null) {
+      const prefix = norm.slice(Math.max(0, m.index - 25), m.index);
+      if (/\b(?:snapped|ended|broke|halted|stopped|not\s+on|no\s+longer\s+on|without)\b/i.test(prefix)) {
+        continue;
+      }
+      const requiredCount = spec.numbered ? parseInt(m[1], 10) : 2;
+      if (!Number.isFinite(requiredCount) || requiredCount <= 0) continue;
+
+      const targetTeams = findTargetTeamsForSpan(norm, m.index, m.index + m[0].length, candidates);
+      for (const team of targetTeams) {
+        const seq = recentByTeamKey.get(team.key);
+        if (!seq || seq.length === 0) continue;
+        const actualKind = seq[0];
+        let actualCount = 0;
+        for (const r of seq) {
+          if (r === actualKind) actualCount++;
+          else break;
+        }
+        if (actualKind !== spec.kind || actualCount < requiredCount) {
+          return { teamLabel: team.label };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Strips streak claims contradicted by FUND recent results (newest-first) from report prose fields.
+ */
+export function sanitizeContradictedStreakClaims<T extends Record<string, any>>(
+  report: T,
+  evidenceText: string,
+  slateText?: string,
+  options?: { headers?: GameHeader[] }
+): { report: T; corrected: boolean; details: string[] } {
+  if (!report || typeof report !== 'object') {
+    return { report, corrected: false, details: [] };
+  }
+
+  const headers = options?.headers && options.headers.length > 0
+    ? options.headers
+    : parseGameHeaders(slateText);
+  const successfulEvidence = extractSuccessfulEvidenceText(evidenceText);
+  if (!successfulEvidence) {
+    return { report, corrected: false, details: [] };
+  }
+
+  const hasSportsSignal =
+    headers.length > 0 ||
+    SPORTS_CONTEXT_REGEX.test(JSON.stringify(report)) ||
+    SPORTS_CONTEXT_REGEX.test(slateText || '') ||
+    Boolean(successfulEvidence);
+
+  const allInjuries = extractAuthoritativeInjuries(successfulEvidence, slateText);
+  const outInjuries = allInjuries.filter(inj => /^(?:OUT|IR|INJURED\s+RESERVE|SUSPENDED)$/i.test(inj.status));
+  const candidates = buildTeamDescriptors(headers, outInjuries, hasSportsSignal);
+  const recentByTeamKey = extractRecentResultsByTeamKey(successfulEvidence, candidates, headers);
+  if (recentByTeamKey.size === 0) {
+    return { report, corrected: false, details: [] };
+  }
+
+  let corrected = false;
+  const details: string[] = [];
+  const recordCorrection = (teamLabel: string) => {
+    corrected = true;
+    const msg = `adjusted streak claim for ${teamLabel} to match recent results`;
+    if (!details.includes(msg)) details.push(msg);
+  };
+
+  const cleanTextField = (text: string): string => {
+    const sentences = text.split(/(?<=[.!?])\s+|\n+/);
+    const kept: string[] = [];
+    for (const s of sentences) {
+      const hit = findContradictedStreakInClause(s, candidates, recentByTeamKey);
+      if (!hit) {
+        kept.push(s);
+        continue;
+      }
+      recordCorrection(hit.teamLabel);
+      const withoutParen = s.replace(/\s*\([^)]*\)/g, '').replace(/\s{2,}/g, ' ').trim();
+      if (withoutParen && withoutParen !== s.trim() && !findContradictedStreakInClause(withoutParen, candidates, recentByTeamKey)) {
+        kept.push(withoutParen);
+        continue;
+      }
+      const subParts = s.split(/;\s+|,\s*(?=(?:while|whereas|but|although|though|so|yet|and)\b)/i);
+      if (subParts.length > 1) {
+        const cleanSubs = subParts.filter(part => !findContradictedStreakInClause(part, candidates, recentByTeamKey));
+        const rejoined = cleanSubs.join(', ').trim();
+        if (rejoined && !findContradictedStreakInClause(rejoined, candidates, recentByTeamKey)) {
+          kept.push(rejoined);
+        }
+      }
+    }
+    return kept.join(' ').trim();
+  };
+
+  const rep = report as Record<string, any>;
+  for (const field of ['summary', 'analysis', 'reason', 'rationale', 'conclusion'] as const) {
+    if (typeof rep[field] === 'string' && rep[field].trim()) {
+      rep[field] = cleanTextField(rep[field]);
+    }
+  }
+  if (Array.isArray(rep.insights)) {
+    rep.insights = rep.insights
+      .map((ins: any) => (typeof ins === 'string' ? cleanTextField(ins) : ins))
+      .filter((ins: any) => typeof ins !== 'string' || ins.trim().length > 0);
+  }
+  if (Array.isArray(rep.anomalies)) {
+    rep.anomalies = rep.anomalies
+      .map((anom: any) => (typeof anom === 'string' ? cleanTextField(anom) : anom))
+      .filter((anom: any) => typeof anom !== 'string' || anom.trim().length > 0);
+  }
+  if (Array.isArray(rep.components)) {
+    for (const comp of rep.components) {
+      if (!comp || typeof comp !== 'object' || !comp.props) continue;
+      if (comp.type === 'InsightList' && Array.isArray(comp.props.insights)) {
+        comp.props.insights = comp.props.insights
+          .map((ins: any) => {
+            if (typeof ins === 'string') return cleanTextField(ins);
+            if (ins && typeof ins === 'object' && typeof ins.message === 'string') {
+              return { ...ins, message: cleanTextField(ins.message) };
+            }
+            return ins;
+          })
+          .filter((ins: any) => {
+            if (typeof ins === 'string') return ins.trim().length > 0;
+            if (ins && typeof ins === 'object' && typeof ins.message === 'string') return ins.message.trim().length > 0;
+            return true;
+          });
+      } else if (comp.type === 'MetricCard' && typeof comp.props.subtitle === 'string') {
+        comp.props.subtitle = cleanTextField(comp.props.subtitle);
+      } else if (comp.type === 'DataTable' && Array.isArray(comp.props.rows)) {
+        for (const row of comp.props.rows) {
+          if (!row || typeof row !== 'object') continue;
+          for (const key of Object.keys(row)) {
+            if (typeof row[key] === 'string' && row[key].trim()) {
+              row[key] = cleanTextField(row[key]);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return { report, corrected, details };
+}
+
 /**
  * Normalizes a report into a clean pass if all proposed picks were removed by Critic vetoes.
  */
@@ -1900,4 +2212,316 @@ export function normalizePassIfAllLegsVetoed<T extends Record<string, any>>(
     }
   }
   return report;
+}
+
+function extractRecentTokensFromSegment(seg: string): Array<'W' | 'L'> {
+  if (!seg) return [];
+  const norm = normalizeText(seg);
+  const recentRx =
+    /(?:\b(?:Recent|team_games(?:\s+last[\s_]?\d{1,2})?|last[\s_]?\d{1,2})\s*:?\s*([WLOT](?:\s*[,/\s-]\s*(?:OTL|OT|[WLT]))+)|"recent_results"\s*:\s*\[([^\]]+)\])/gi;
+  let m: RegExpExecArray | null;
+  let best: Array<'W' | 'L'> = [];
+  while ((m = recentRx.exec(norm)) !== null) {
+    const rawSeq = m[1] || m[2] || '';
+    const tokens = rawSeq.match(/\b(?:OTL|OT|[WLT])\b/gi);
+    if (!tokens || tokens.length === 0) continue;
+    const mapped: Array<'W' | 'L'> = [];
+    for (const tok of tokens) {
+      const up = tok.toUpperCase();
+      if (up === 'W') mapped.push('W');
+      else if (up === 'L' || up === 'OTL' || up === 'OT') mapped.push('L');
+    }
+    if (mapped.length > best.length) best = mapped;
+  }
+  return best;
+}
+
+function extractRecentResultsByTeamKey(
+  successfulEvidence: string,
+  candidates: TeamDescriptor[],
+  headers: GameHeader[]
+): Map<string, Array<'W' | 'L'>> {
+  const recentByTeamKey = new Map<string, Array<'W' | 'L'>>();
+  if (!successfulEvidence || candidates.length === 0) return recentByTeamKey;
+
+  const setSeq = (teamKey: string, seq: Array<'W' | 'L'>) => {
+    if (!teamKey || seq.length === 0) return;
+    const prev = recentByTeamKey.get(teamKey);
+    if (!prev || seq.length > prev.length) {
+      recentByTeamKey.set(teamKey, seq);
+    }
+  };
+
+  let currentEventId = '';
+  for (const rawLine of successfulEvidence.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    const evLineMatch =
+      line.match(/^EVENT\s+([a-z0-9-]+)/i) ||
+      line.match(/\[(?:MATCHUP FUNDAMENTALS|MARKET MOVEMENT|INJURY(?:\s*&\s*ROSTER\s*DELTA)?):\s*([a-z0-9-]+)/i) ||
+      line.match(/\bevent_id\s*=\s*([a-z0-9-]+)/i);
+    if (evLineMatch && evLineMatch[1]) {
+      currentEventId = evLineMatch[1].trim();
+    }
+
+    // Handle JSON form.items payloads if present
+    if (line.includes('"items"') && line.includes('"result"')) {
+      const jsonStart = line.indexOf('{');
+      if (jsonStart >= 0) {
+        try {
+          const parsed = JSON.parse(line.slice(jsonStart));
+          const items = Array.isArray(parsed?.form?.items)
+            ? parsed.form.items
+            : (Array.isArray(parsed?.items) ? parsed.items : []);
+          if (items.length > 0) {
+            const byTeam = new Map<string, Array<{ res: 'W' | 'L'; date: string }>>();
+            for (const item of items) {
+              if (!item || typeof item !== 'object') continue;
+              const rawRes = String(item.result || '').toUpperCase().trim();
+              const res: 'W' | 'L' | null = rawRes === 'W' ? 'W' : (/^(?:L|OTL|OT)$/.test(rawRes) ? 'L' : null);
+              if (!res) continue;
+              const teamHint = [item.team_name, item.team].filter(Boolean).join(' ');
+              if (!teamHint) continue;
+              const mentions = findTeamMentionsInText(teamHint, candidates);
+              if (mentions.length === 0) continue;
+              const tk = mentions[0].team.key;
+              if (!byTeam.has(tk)) byTeam.set(tk, []);
+              byTeam.get(tk)!.push({ res, date: String(item.game_date || '') });
+            }
+            for (const [tk, entries] of byTeam.entries()) {
+              entries.sort((a, b) => b.date.localeCompare(a.date));
+              setSeq(tk, entries.map(e => e.res));
+            }
+          }
+        } catch {
+          // fall through to segment text parsing
+        }
+      }
+    }
+
+    const segments = line.split(/(?=\b(?:Home|Away)\s*(?:\(|[:\-]))/i);
+    for (const seg of segments) {
+      const jsonTeamBlockRx = /"([A-Za-z0-9_.\s-]{2,30})"\s*:\s*\{/g;
+      let jm: RegExpExecArray | null;
+      const jsonTeamStarts: Array<{ index: number; key: string }> = [];
+      while ((jm = jsonTeamBlockRx.exec(seg)) !== null) {
+        const keyMentions = findTeamMentionsInText(jm[1], candidates);
+        if (keyMentions.length === 1) {
+          jsonTeamStarts.push({ index: jm.index, key: keyMentions[0].team.key });
+        }
+      }
+      if (jsonTeamStarts.length >= 2) {
+        for (let i = 0; i < jsonTeamStarts.length; i++) {
+          const start = jsonTeamStarts[i].index;
+          const end = i + 1 < jsonTeamStarts.length ? jsonTeamStarts[i + 1].index : seg.length;
+          setSeq(jsonTeamStarts[i].key, extractRecentTokensFromSegment(seg.slice(start, end)));
+        }
+        continue;
+      }
+
+      const mentions = findTeamMentionsInText(seg, candidates);
+      let uniqueKeys = Array.from(new Set(mentions.map(m => m.team.key)));
+      if (uniqueKeys.length === 0 && currentEventId) {
+        const sideKey = resolveSegmentSideTeamKey(seg, currentEventId, headers, candidates);
+        if (sideKey) uniqueKeys = [sideKey];
+      }
+
+      if (uniqueKeys.length === 1) {
+        setSeq(uniqueKeys[0], extractRecentTokensFromSegment(seg));
+      } else if (uniqueKeys.length >= 2 && seg.includes('|')) {
+        let activeLineTeamKey: string | undefined;
+        for (const sub of seg.split('|').map(s => s.trim()).filter(Boolean)) {
+          const subMentions = findTeamMentionsInText(sub, candidates);
+          let subKeys = Array.from(new Set(subMentions.map(m => m.team.key)));
+          if (subKeys.length === 0 && currentEventId) {
+            const subSideKey = resolveSegmentSideTeamKey(sub, currentEventId, headers, candidates);
+            if (subSideKey) subKeys = [subSideKey];
+          }
+          if (subKeys.length === 1) activeLineTeamKey = subKeys[0];
+          else if (subKeys.length >= 2) activeLineTeamKey = undefined;
+          const resolvedKey = subKeys.length === 1 ? subKeys[0] : (subKeys.length === 0 ? activeLineTeamKey : undefined);
+          if (resolvedKey) {
+            setSeq(resolvedKey, extractRecentTokensFromSegment(sub));
+          }
+        }
+      }
+    }
+  }
+
+  return recentByTeamKey;
+}
+
+const STREAK_PATTERNS: Array<{ rx: RegExp; kind: 'W' | 'L'; numbered: boolean }> = [
+  { rx: /\b(\d{1,2})\s*-?\s*game\s+(?:win(?:ning)?|victory)\s+streak\b/gi, kind: 'W', numbered: true },
+  { rx: /\b(?:won|winning|wins?|victories)\s+(\d{1,2})\s+(?:straight|consecutive|in\s+a\s+row)\b/gi, kind: 'W', numbered: true },
+  { rx: /\b(\d{1,2})\s+(?:straight|consecutive)\s+(?:wins?|victories)\b/gi, kind: 'W', numbered: true },
+  { rx: /\b(?:unbeaten|undefeated)\s+(?:in|over)\s+(?:their\s+|the\s+)?(?:last|past)\s+(\d{1,2})\b/gi, kind: 'W', numbered: true },
+  { rx: /\b(?:on\s+a\s+)?W(\d{1,2})\s+streak\b/gi, kind: 'W', numbered: true },
+  { rx: /\b(\d{1,2})\s*-?\s*game\s+(?:losing\s+streak|skid|slump|slide)\b/gi, kind: 'L', numbered: true },
+  { rx: /\b(?:lost|dropped|losing)\s+(\d{1,2})\s+(?:straight|consecutive|in\s+a\s+row)\b/gi, kind: 'L', numbered: true },
+  { rx: /\b(\d{1,2})\s+(?:straight|consecutive)\s+(?:losses?|defeats?)\b/gi, kind: 'L', numbered: true },
+  { rx: /\bwinless\s+(?:in|over)\s+(?:their\s+|the\s+)?(?:last|past)\s+(\d{1,2})\b/gi, kind: 'L', numbered: true },
+  { rx: /\b(?:on\s+a\s+)?L(\d{1,2})\s+streak\b/gi, kind: 'L', numbered: true },
+  { rx: /\b(?:on\s+a|riding\s+a|carrying\s+a|extending\s+(?:their|its|a))\s+(?:hot\s+)?win(?:ning)?\s+streak\b/gi, kind: 'W', numbered: false },
+  { rx: /\b(?:on\s+a|riding\s+a|stuck\s+in\s+a|mired\s+in\s+a)\s+(?:losing\s+streak|skid|slump|losing\s+slide)\b/gi, kind: 'L', numbered: false }
+];
+
+function findContradictedStreakInClause(
+  clause: string,
+  candidates: TeamDescriptor[],
+  recentByTeamKey: Map<string, Array<'W' | 'L'>>
+): { teamLabel: string } | null {
+  if (!clause || recentByTeamKey.size === 0 || candidates.length === 0) return null;
+  const norm = normalizeText(clause);
+
+  for (const spec of STREAK_PATTERNS) {
+    spec.rx.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = spec.rx.exec(norm)) !== null) {
+      const prefix = norm.slice(Math.max(0, m.index - 25), m.index);
+      if (/\b(?:snapped|ended|broke|halted|stopped|not\s+on|no\s+longer\s+on|without)\b/i.test(prefix)) {
+        continue;
+      }
+      const requiredCount = spec.numbered ? parseInt(m[1], 10) : 2;
+      if (!Number.isFinite(requiredCount) || requiredCount <= 0) continue;
+
+      const targetTeams = findTargetTeamsForSpan(norm, m.index, m.index + m[0].length, candidates);
+      for (const team of targetTeams) {
+        const seq = recentByTeamKey.get(team.key);
+        if (!seq || seq.length === 0) continue;
+        const actualKind = seq[0];
+        let actualCount = 0;
+        for (const r of seq) {
+          if (r === actualKind) actualCount++;
+          else break;
+        }
+        if (actualKind !== spec.kind || actualCount < requiredCount) {
+          return { teamLabel: team.label };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Strips streak claims contradicted by FUND recent results (newest-first) from report prose fields.
+ */
+export function sanitizeContradictedStreakClaims<T extends Record<string, any>>(
+  report: T,
+  evidenceText: string,
+  slateText?: string,
+  options?: { headers?: GameHeader[] }
+): { report: T; corrected: boolean; details: string[] } {
+  if (!report || typeof report !== 'object') {
+    return { report, corrected: false, details: [] };
+  }
+
+  const headers = options?.headers && options.headers.length > 0
+    ? options.headers
+    : parseGameHeaders(slateText);
+  const successfulEvidence = extractSuccessfulEvidenceText(evidenceText);
+  if (!successfulEvidence) {
+    return { report, corrected: false, details: [] };
+  }
+
+  const hasSportsSignal =
+    headers.length > 0 ||
+    SPORTS_CONTEXT_REGEX.test(JSON.stringify(report)) ||
+    SPORTS_CONTEXT_REGEX.test(slateText || '') ||
+    Boolean(successfulEvidence);
+
+  const allInjuries = extractAuthoritativeInjuries(successfulEvidence, slateText);
+  const outInjuries = allInjuries.filter(inj => /^(?:OUT|IR|INJURED\s+RESERVE|SUSPENDED)$/i.test(inj.status));
+  const candidates = buildTeamDescriptors(headers, outInjuries, hasSportsSignal);
+  const recentByTeamKey = extractRecentResultsByTeamKey(successfulEvidence, candidates, headers);
+  if (recentByTeamKey.size === 0) {
+    return { report, corrected: false, details: [] };
+  }
+
+  let corrected = false;
+  const details: string[] = [];
+  const recordCorrection = (teamLabel: string) => {
+    corrected = true;
+    const msg = `adjusted streak claim for ${teamLabel} to match recent results`;
+    if (!details.includes(msg)) details.push(msg);
+  };
+
+  const cleanTextField = (text: string): string => {
+    const sentences = text.split(/(?<=[.!?])\s+|\n+/);
+    const kept: string[] = [];
+    for (const s of sentences) {
+      const hit = findContradictedStreakInClause(s, candidates, recentByTeamKey);
+      if (!hit) {
+        kept.push(s);
+        continue;
+      }
+      recordCorrection(hit.teamLabel);
+      const withoutParen = s.replace(/\s*\([^)]*\)/g, '').replace(/\s{2,}/g, ' ').trim();
+      if (withoutParen && withoutParen !== s.trim() && !findContradictedStreakInClause(withoutParen, candidates, recentByTeamKey)) {
+        kept.push(withoutParen);
+        continue;
+      }
+      const subParts = s.split(/;\s+|,\s*(?=(?:while|whereas|but|although|though|so|yet|and)\b)/i);
+      if (subParts.length > 1) {
+        const cleanSubs = subParts.filter(part => !findContradictedStreakInClause(part, candidates, recentByTeamKey));
+        const rejoined = cleanSubs.join(', ').trim();
+        if (rejoined && !findContradictedStreakInClause(rejoined, candidates, recentByTeamKey)) {
+          kept.push(rejoined);
+        }
+      }
+    }
+    return kept.join(' ').trim();
+  };
+
+  const rep = report as Record<string, any>;
+  for (const field of ['summary', 'analysis', 'reason', 'rationale', 'conclusion'] as const) {
+    if (typeof rep[field] === 'string' && rep[field].trim()) {
+      rep[field] = cleanTextField(rep[field]);
+    }
+  }
+  if (Array.isArray(rep.insights)) {
+    rep.insights = rep.insights
+      .map((ins: any) => (typeof ins === 'string' ? cleanTextField(ins) : ins))
+      .filter((ins: any) => typeof ins !== 'string' || ins.trim().length > 0);
+  }
+  if (Array.isArray(rep.anomalies)) {
+    rep.anomalies = rep.anomalies
+      .map((anom: any) => (typeof anom === 'string' ? cleanTextField(anom) : anom))
+      .filter((anom: any) => typeof anom !== 'string' || anom.trim().length > 0);
+  }
+  if (Array.isArray(rep.components)) {
+    for (const comp of rep.components) {
+      if (!comp || typeof comp !== 'object' || !comp.props) continue;
+      if (comp.type === 'InsightList' && Array.isArray(comp.props.insights)) {
+        comp.props.insights = comp.props.insights
+          .map((ins: any) => {
+            if (typeof ins === 'string') return cleanTextField(ins);
+            if (ins && typeof ins === 'object' && typeof ins.message === 'string') {
+              return { ...ins, message: cleanTextField(ins.message) };
+            }
+            return ins;
+          })
+          .filter((ins: any) => {
+            if (typeof ins === 'string') return ins.trim().length > 0;
+            if (ins && typeof ins === 'object' && typeof ins.message === 'string') return ins.message.trim().length > 0;
+            return true;
+          });
+      } else if (comp.type === 'MetricCard' && typeof comp.props.subtitle === 'string') {
+        comp.props.subtitle = cleanTextField(comp.props.subtitle);
+      } else if (comp.type === 'DataTable' && Array.isArray(comp.props.rows)) {
+        for (const row of comp.props.rows) {
+          if (!row || typeof row !== 'object') continue;
+          for (const key of Object.keys(row)) {
+            if (typeof row[key] === 'string' && row[key].trim()) {
+              row[key] = cleanTextField(row[key]);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return { report, corrected, details };
 }
