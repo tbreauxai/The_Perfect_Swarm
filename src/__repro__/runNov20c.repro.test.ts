@@ -5,6 +5,7 @@ import { ToolRegistry } from '../swarm/tools/registry.ts';
 import { GameQueryCache } from '../swarm/cache/gameQueryCache.ts';
 import { auditPullBeforePass } from '../swarm/tools/pullBeforePass.ts';
 import { compileSynthesisPrompt } from '../swarm/engine/synthesisPipeline.ts';
+import { executeOpenAiCompatibleChat } from '../swarm/providers/baseOpenAi.ts';
 
 const SLATE_3_GAMES = [
     'event_id=nba-401909306 | sport=basketball_nba | Orlando Magic @ Brooklyn Nets | commence=2026-11-20T23:30:00Z | options: R1 Orlando Magic ML (-110), R4 Brooklyn Nets ML (-110)',
@@ -79,6 +80,7 @@ function makeToolSpies() {
 describe('runNov20c repros (wf-1795203442644)', () => {
     afterEach(() => {
         vi.restoreAllMocks();
+        vi.unstubAllGlobals();
     });
 
     it('1a: discussed scoping gone — 0-pick pass runs 0 critic pulls; 1-pick pulls only picked event_id', async () => {
@@ -540,5 +542,58 @@ describe('runNov20c repros (wf-1795203442644)', () => {
         for (const t of spySet.tools) {
             expect(t.execute).toHaveBeenCalledTimes(0);
         }
+    });
+
+    it('S7: salvages only json verdict payloads with boolean pass and rejects repo_browser.search or non-verdict json', async () => {
+        const callWithFailedGen = (failedGen: Record<string, unknown>, isJson = false) => {
+            const errorBody = JSON.stringify({
+                error: {
+                    message: 'Failed to call a function. Please adjust your prompt.',
+                    type: 'invalid_request_error',
+                    code: 'tool_use_failed',
+                    failed_generation: JSON.stringify(failedGen)
+                }
+            });
+            vi.stubGlobal('fetch', vi.fn(async () => new Response(errorBody, {
+                status: 400,
+                headers: { 'content-type': 'application/json' }
+            })));
+            return executeOpenAiCompatibleChat(
+                { modelName: 'llama-3.3-70b-versatile', contents: 'Audit picks' } as any,
+                {
+                    providerName: 'groq',
+                    providerLabel: 'Groq',
+                    endpoint: 'https://api.groq.com/openai/v1/chat/completions',
+                    apiKey: 'test-key',
+                    modelName: 'llama-3.3-70b-versatile',
+                    messages: [{ role: 'user', content: 'Audit picks' }],
+                    maxTokens: 1024,
+                    isJson,
+                    timeoutMs: 5000,
+                    tools: [{ type: 'function', function: { name: 'get_market_movement', parameters: {} } }]
+                }
+            );
+        };
+
+        await expect(
+            callWithFailedGen({
+                name: 'repo_browser.search',
+                arguments: { path: '', query: 'nba-401909306', max_results: 20 }
+            })
+        ).rejects.toThrow();
+
+        await expect(
+            callWithFailedGen({
+                name: 'json',
+                arguments: { path: '', query: 'nba-401909306' }
+            }, true)
+        ).rejects.toThrow();
+
+        const verdictArgs = { pass: true, verdict: 'PASS', flags: [] };
+        const salvaged = await callWithFailedGen({
+            name: 'json',
+            arguments: verdictArgs
+        });
+        expect(JSON.parse(salvaged)).toEqual(verdictArgs);
     });
 });

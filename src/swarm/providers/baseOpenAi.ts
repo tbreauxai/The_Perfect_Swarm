@@ -37,7 +37,7 @@ export interface OpenAiCompatibleConfig {
     formatGenericError?: (status: number, errorText: string, providerLabel: string) => string;
 }
 
-function trySalvageToolUseFailed(errorText: string, resolvedTools: any[]): string | null {
+function trySalvageToolUseFailed(errorText: string): string | null {
     if (!errorText) return null;
     try {
         const parsed = JSON.parse(errorText);
@@ -52,12 +52,12 @@ function trySalvageToolUseFailed(errorText: string, resolvedTools: any[]): strin
         if (!gen.arguments || typeof gen.arguments !== 'object' || Array.isArray(gen.arguments)) {
             return null;
         }
-        const toolNames = new Set(
-            (resolvedTools || [])
-                .map((t: any) => String(t?.function?.name ?? t?.name ?? '').trim())
-                .filter(Boolean)
-        );
-        if (gen.name.toLowerCase() === 'json' || !toolNames.has(gen.name)) {
+        const args = gen.arguments as Record<string, unknown>;
+        if (
+            gen.name.toLowerCase() === 'json' &&
+            typeof args.pass === 'boolean' &&
+            (typeof args.verdict === 'string' || typeof args.feedback === 'string')
+        ) {
             return JSON.stringify(gen.arguments);
         }
     } catch {
@@ -152,15 +152,17 @@ export async function executeOpenAiCompatibleChat(
         if (options.onHeaders && response?.headers) options.onHeaders(response.headers);
         if (!response.ok && response.status === 400 && activeJson) {
             const peekError = await response.clone().text().catch(() => '');
-            if (trySalvageToolUseFailed(peekError, resolvedTools) !== null) {
-                const salvaged = trySalvageToolUseFailed(peekError, resolvedTools)!;
+            const salvaged = trySalvageToolUseFailed(peekError);
+            if (salvaged !== null) {
                 return salvaged;
             }
-            const isFormatRejection = !peekError ||
+            const isFormatRejection = !peekError.includes('tool_use_failed') && (
+                !peekError ||
                 peekError.toLowerCase().includes('response_format') ||
                 peekError.toLowerCase().includes('format') ||
                 peekError.toLowerCase().includes('schema') ||
-                peekError.toLowerCase().includes('json');
+                peekError.toLowerCase().includes('json')
+            );
 
             if (isFormatRejection) {
                 console.warn(`[${providerLabel}] Model '${options.modelName}' rejected response_format (${peekError}); retrying without format flag.`);
@@ -204,7 +206,7 @@ export async function executeOpenAiCompatibleChat(
     if (!response.ok) {
         const errorText = await response.text();
         if (response.status === 400) {
-            const salvaged = trySalvageToolUseFailed(errorText, resolvedTools);
+            const salvaged = trySalvageToolUseFailed(errorText);
             if (salvaged !== null) {
                 return salvaged;
             }
