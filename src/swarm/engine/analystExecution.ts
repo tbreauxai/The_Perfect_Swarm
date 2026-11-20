@@ -527,9 +527,11 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                 prefetchedInjurySummary = rawInjurySummary;
                 if (rawInjurySummary) {
                     const pBudget = seatBudget(analyst.provider);
+                    const finalInstrReserve = isCritic ? 260 : 400;
+                    const toolSchemaReserve = isCritic ? criticToolSchemasLen : 0;
                     const maxAllowed = Math.min(
                         pBudget.maxToolResultChars,
-                        Math.max(0, pBudget.maxPromptChars - baseInstruction.length - seatPrompt.length - 400)
+                        Math.max(0, pBudget.maxPromptChars - baseInstruction.length - toolSchemaReserve - seatPrompt.length - finalInstrReserve)
                     );
                     if (maxAllowed >= 60) {
                         const blockPrefix = '\n\nInjury evidence:\n';
