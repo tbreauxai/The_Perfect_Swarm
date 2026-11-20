@@ -33,6 +33,7 @@ import { runSeatWithTools, getRoleToolNames, type ToolEvidenceItem } from './sea
 import { GameQueryCache } from '../cache/gameQueryCache.ts';
 import { executeToolWithCacheAndTimeout } from './triageExecutor.ts';
 import { seatBudget } from '../context/promptBudget.ts';
+import { recordRunDebugSeat, recordRunDebugEdit } from './runDebugRecord.ts';
 import { auditInjuryAttribution, sanitizeMisattributedPicksAndText } from '../tools/injuryAttribution.ts';
 import {
     auditClaimGrounding,
@@ -620,6 +621,14 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
             }
 
             const resData = scorecardReport || guardAnalystResponse(rawOutput, analyst.role);
+            recordRunDebugSeat((context as any)?.id, seat, {
+                role: analyst.role,
+                provider: String(analyst.provider),
+                model: analyst.modelName,
+                promptChars: seatPrompt.length,
+                limitChars: criticBudget.maxPromptChars,
+                toolResultsSent: seatLoopRes?.toolEvidence || prefetchedInjurySummary || ''
+            });
             (resData as any)._chunkIndex = chunkIdx;
             (resData as any).coveredEventIds = scorecardReport?.coveredEventIds ?? seatLoopRes?.coveredEventIds ?? [];
             (resData as any).toolEvidence = scorecardReport?.toolEvidence ?? seatLoopRes?.toolEvidence ?? '';
@@ -715,6 +724,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                     'get_injury_and_roster_delta',
                     'get_market_movement'
                 ].filter(t => activeRegistry.has(t));
+                const beforePull = JSON.stringify(resData);
                 sanitizePullBeforePassClaims(
                     resData as any,
                     successfulToolEvidence,
@@ -726,6 +736,15 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                         marketToolRecords
                     }
                 );
+                const afterPull = JSON.stringify(resData);
+                if (afterPull !== beforePull) {
+                    recordRunDebugEdit((context as any)?.id, seat, {
+                        check: 'pullBeforePass',
+                        before: beforePull,
+                        after: afterPull,
+                        reason: 'Sanitized unverified missing-data claim in proposer output'
+                    });
+                }
             } else if (isCritic && proposedAuditContext?.summaryText) {
                 let stage2VetoedLegs: VetoedLegTarget[] = [];
                 let stage2VetoedClaims: string[] = [];

@@ -3,6 +3,8 @@ import type { Provider, AgentRunConfig, ProviderCredential } from './types.ts';
 import { SwarmContext } from './context.ts';
 import { ProviderRegistry } from './providers/registry.ts';
 import { sanitizeModelOutput } from './providers/adapter.ts';
+import { recordRunDebugFailover } from './engine/runDebugRecord.ts';
+import { seatBudget } from './context/promptBudget.ts';
 import { SwarmTracer } from './profiler.ts';
 import { globalLoadBalancer, type AdaptiveLoadBalancer } from './loadBalancer.ts';
 import { globalTokenBudgetManager } from './loadBalancer/tokenBudgetManager.ts';
@@ -510,6 +512,12 @@ export class Agent {
                             }
                         }
                         if (realFallback) {
+                            recordRunDebugFailover(
+                                (context as any)?.id,
+                                this.role,
+                                String(realFallback.provider),
+                                seatBudget(String(realFallback.provider)).maxPromptChars
+                            );
                             context.addEvent({
                                 agentRole: this.role,
                                 action: 'Provider Failover Triggered',

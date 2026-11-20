@@ -8,6 +8,7 @@ import type { SwarmServerOptions, SwarmServerApp } from './types.ts';
 import { restoreLearningState } from './learningState.ts';
 import { ensureCatalogProbeFresh, probeAllProviders } from './modelsProvider.ts';
 import { createAppAuthMiddleware } from './appAuth.ts';
+import { getRunDebugRecord } from '../engine/runDebugRecord.ts';
 import { createCorsMiddleware } from './cors.ts';
 import { initFeedbackDedupe } from './feedbackDedupe.ts';
 import {
@@ -168,6 +169,15 @@ export function createSwarmServer(options: SwarmServerOptions = {}): SwarmServer
     registerMorningRoutes(app, routeCtx);
     registerModelsRoutes(app, routeCtx);
     registerAnalyzeRoutes(app, routeCtx);
+
+    app.get('/api/debug/runs/:workflowId', (c) => {
+        const wfId = c.req.param('workflowId');
+        const rec = getRunDebugRecord(wfId);
+        if (!rec) {
+            return c.json({ error: 'Not found' }, 404);
+        }
+        return c.json(rec);
+    });
 
     app.all('/api/*', (c) => {
         return c.json({ error: 'Not found' }, 404);

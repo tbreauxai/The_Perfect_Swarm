@@ -13,6 +13,7 @@ import { compileDebateDigest } from './coordinationPipeline.ts';
 import { TokenEstimator } from '../compression/tokenEstimator.ts';
 import { seatBudget } from '../context/promptBudget.ts';
 import { parseGameHeaders, renderHeaders, filterPicksByCoverage } from '../context/gameHeaders.ts';
+import { recordRunDebugSeat, recordRunDebugDrop, recordRunDebugEdit } from './runDebugRecord.ts';
 import { partitionTaskAndContract } from './analystExecution.ts';
 import { sanitizeMisattributedPicksAndText } from '../tools/injuryAttribution.ts';
 import { sanitizeRowMismatchedPicks, type MarketToolRecord } from '../tools/marketRowBinding.ts';
@@ -564,17 +565,29 @@ export async function executeManagerSynthesis(
     if (safeDynamicPrompt.length > maxChars) {
         if (safeDynamicPrompt.includes('Cluster Digests:')) {
             safeDynamicPrompt = safeDynamicPrompt.replace(/Cluster Digests:[\s\S]*?(?=\n\n(?:Analyst Reports|Raw Board|Critic Result|Task:|$))/i, '');
+            recordRunDebugDrop((context as any)?.id, 'manager', 'Cluster Digests');
         }
         if (safeDynamicPrompt.length > maxChars && safeDynamicPrompt.includes('Historical Baselines:')) {
             safeDynamicPrompt = safeDynamicPrompt.replace(/Historical Baselines:[\s\S]*?(?=\n\n(?:Analyst Reports|Raw Board|Critic Result|Task:|$))/i, '');
+            recordRunDebugDrop((context as any)?.id, 'manager', 'Historical Baselines');
         }
         if (safeDynamicPrompt.length > maxChars) {
             const trimTarget = maxChars - 120;
             const lastBreak = Math.max(safeDynamicPrompt.lastIndexOf('\n\n', trimTarget), safeDynamicPrompt.lastIndexOf('\n', trimTarget));
             const cut = lastBreak > (maxChars * 0.5) ? lastBreak : trimTarget;
             safeDynamicPrompt = safeDynamicPrompt.slice(0, cut) + '\n\n[trimmed for manager context ceiling]';
+            recordRunDebugDrop((context as any)?.id, 'manager', 'manager prompt tail');
         }
     }
+
+    recordRunDebugSeat((context as any)?.id, 'manager', {
+        role: managerAgent.role,
+        provider: String(managerAgent.provider),
+        model: managerAgent.modelName,
+        promptChars: safeDynamicPrompt.length,
+        limitChars: maxChars,
+        toolResultsSent: extractToolEvidenceSection(safeDynamicPrompt)
+    });
 
     const parsedManagerOutput = await managerAgent.run(safeDynamicPrompt, context, {
         responseMimeType: "application/json",
@@ -646,7 +659,17 @@ export async function executeManagerSynthesis(
             || /\bagreement=divergent\b/i.test(safeDynamicPrompt)
             || /\bLevel:\s*divergent\b/i.test(safeDynamicPrompt);
         if (isDivergentRun) {
+            const beforeDiv = JSON.stringify(finalResult);
             sanitizeDivergentSeatAgreement(finalResult);
+            const afterDiv = JSON.stringify(finalResult);
+            if (afterDiv !== beforeDiv) {
+                recordRunDebugEdit((context as any)?.id, 'manager', {
+                    check: 'sanitizeDivergentSeatAgreement',
+                    before: beforeDiv,
+                    after: afterDiv,
+                    reason: 'Stripped N/N seats agree claim on divergent run'
+                });
+            }
         }
     }
 

@@ -4,6 +4,7 @@ import { parseJsonSafe, guardVerificationResult } from './parser.ts';
 import { redactForLog } from './parser/responseGuards.ts';
 import { groqPromptCharCap } from './providers/groq.ts';
 import { seatBudget } from './context/promptBudget.ts';
+import { recordRunDebugSeat, recordRunDebugDrop, recordRunDebugEdit } from './engine/runDebugRecord.ts';
 import { parseGameHeaders, renderHeaders, filterPicksByCoverage, type GameHeader } from './context/gameHeaders.ts';
 import { filterHeadersByEventIds, resolveSelectedGameIds } from './context/selectedGames.ts';
 import {
@@ -518,7 +519,11 @@ export class AnalysisLifecycle {
                             evidenceSection = candidate;
                             break;
                         }
-                        keptGroups.pop();
+                        const poppedGroup = keptGroups.pop();
+                        if (poppedGroup) {
+                            const firstLine = (poppedGroup.split(/\r?\n/)[0] || '').slice(0, 80);
+                            recordRunDebugDrop((context as any)?.id, 'verifier', firstLine);
+                        }
                         droppedCount++;
                     }
                     if (!evidenceSection && keptGroups.length > 0) {
@@ -620,6 +625,14 @@ export class AnalysisLifecycle {
 
             const limitedReportSample = [evidenceSection, limitedSecondary].filter(Boolean).join('\n\n');
             const verifyPrompt = `${promptHeader}${proposalSection}\n\n${limitedReportSample}${trailer}`;
+            recordRunDebugSeat((context as any)?.id, 'verifier', {
+                role: this.critic.role,
+                provider: String((this.critic as any).provider || 'unknown'),
+                model: this.critic.modelName,
+                promptChars: verifyPrompt.length,
+                limitChars: CAP,
+                toolResultsSent: evidenceSection
+            });
             if (verifyPrompt.length > CAP) {
                 throw new Error(`Verification prompt exceeded budget cap (${verifyPrompt.length} > ${CAP}).`);
             }
@@ -978,8 +991,15 @@ export class AnalysisLifecycle {
                     )
                 ) {
                     const scrubbed = scrubFalseMissingMarketClause(verification.feedback || '');
+                    const prevFb = verification.feedback || '';
                     verification.pass = true;
                     verification.feedback = scrubbed || 'Verified: moneyline covered by ml_home/ml_away in market tool result.';
+                    recordRunDebugEdit((context as any)?.id, 'verifier', {
+                        check: 'isFalseMissingMoneylineCritique',
+                        before: prevFb,
+                        after: verification.feedback,
+                        reason: 'Moneyline covered by ml_home/ml_away in market tool result'
+                    });
                 } else if (
                     !verification.pass &&
                     !injuryVetoTriggered &&
