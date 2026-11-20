@@ -98,7 +98,7 @@ describe('runNov20d repros (wf-1795206176838 / wf-1795205597957)', () => {
             },
             '[MARKET MOVEMENT: nba-401909312 | all] spread=-1.5, ml_home=-122, ml_away=102',
             line,
-            { headers }
+            headers
         );
         expect(res.pass).toBe(false);
     });

@@ -9,7 +9,8 @@ import { parseGameHeaders, renderHeaders, filterPicksByCoverage, type GameHeader
 import { filterHeadersByEventIds, resolveSelectedGameIds } from './context/selectedGames.ts';
 import {
     isFalseHallucinationCritique,
-    mergeScopedToolEvidence
+    mergeScopedToolEvidence,
+    resolveDiscussedGameIds
 } from './tools/criticEvidence.ts';
 import { auditInjuryAttribution, sanitizeMisattributedPicksAndText } from './tools/injuryAttribution.ts';
 import {
@@ -494,10 +495,10 @@ export class AnalysisLifecycle {
                     evidenceSection = fullEv;
                 } else {
                     const groups = toolResults.split(/\n\n+/).filter(Boolean);
-                    const protectedIds = selectedGameIds.length > 0
+                    const protectedIds: string[] = selectedGameIds.length > 0
                         ? selectedGameIds
                         : resolveDiscussedGameIds(currentProposal, allParsedHeaders);
-                    const selectedSet = new Set(protectedIds);
+                    const selectedSet = new Set<string>(protectedIds);
                     const isSelectedGroup = (g: string): boolean => {
                         if (selectedSet.size === 0) return false;
                         const firstLine = g.split(/\r?\n/)[0] || '';
