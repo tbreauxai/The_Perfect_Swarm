@@ -350,8 +350,19 @@ export function extractAnalystConsensus(
     const citationBoost = Math.min(0.15, calibratedEnsemble.totalVerifiedCitations * 0.015);
     const evidenceWeightedScore = Math.min(1.0, Number((normalizedConsensus + citationBoost).toFixed(3)));
 
+    const nonCriticReports: any[] = [];
+    for (let i = 0; i < activeAnalystCount; i++) {
+        const role = String(analysts[i]?.role || '').toLowerCase();
+        if (role.includes('critic') || role.includes('risk')) continue;
+        for (const r of allAnalystReports[i] || []) {
+            if (r && typeof r === 'object') nonCriticReports.push(r);
+        }
+    }
+    const allNonCriticZeroPicks = nonCriticReports.length > 0 &&
+        nonCriticReports.every(r => Array.isArray(r.picks) && r.picks.length === 0);
+
     let agreementLevel: 'strong' | 'moderate' | 'divergent';
-    if (normalizedConsensus >= 0.60 || unanimousFindings.length >= 2) {
+    if (allNonCriticZeroPicks || normalizedConsensus >= 0.60 || unanimousFindings.length >= 2) {
         agreementLevel = 'strong';
     } else if (normalizedConsensus >= 0.38 || majorityFindings.length >= 1) {
         agreementLevel = 'moderate';

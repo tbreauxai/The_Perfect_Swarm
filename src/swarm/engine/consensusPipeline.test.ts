@@ -169,4 +169,22 @@ describe('Consensus Pipeline & Disagreement Arbitration', () => {
         expect(promptBlock).toContain('[CONTESTED_CONSENSUS]');
         expect(promptBlock).toContain('High variance detected across specialist predictions');
     });
+
+    it('sets agreementLevel to strong when all non-critic seats return picks=[]', () => {
+        const quant = new Agent('Quant Proposer', 'm1', 'groq' as any, 'k1');
+        const market = new Agent('Market Proposer', 'm2', 'openrouter' as any, 'k2');
+        const critic = new Agent('Risk Critic', 'm3', 'groq' as any, 'k3');
+
+        const digest = extractAnalystConsensus(
+            [
+                [{ summary: 'Passing due to thin edge on Magic', picks: [], insights: [] }],
+                [{ summary: 'Passing due to stale lines on Nuggets', picks: [], insights: [] }],
+                [{ pass: true, verdict: 'No picks proposed', flags: [] }]
+            ],
+            [quant, market, critic],
+            'Build parlay'
+        );
+
+        expect(digest.agreementLevel).toBe('strong');
+    });
 });
