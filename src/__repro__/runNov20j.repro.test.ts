@@ -27,7 +27,7 @@ describe('runNov20j repros (wf-1795237523010)', () => {
     recordRunDebugFailover('wf-t', 'Risk Critic', 'gemini', 24000);
     recordRunDebugFailover('wf-t', 'Quant Proposer', 'nvidia', 14000);
     recordRunDebugFailover('wf-t', 'Market Proposer', 'openrouter', 14000);
-    recordRunDebugFailover('wf-t', 'Verification Critic', 'mistral', 14000);
+    recordRunDebugFailover('wf-t', 'verifier', 'mistral', 14000);
     recordRunDebugFailover('wf-t', 'Manager Node', 'groq', 5600);
 
     const rec = getRunDebugRecord('wf-t');
