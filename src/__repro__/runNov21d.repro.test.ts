@@ -16,6 +16,8 @@ describe('runNov21d repros (wf-1795276340194)', () => {
   it('V2: SimulatedAdapter matches Evaluate the [Proposal] verifier prompt', async () => {
     const adapter = new SimulatedAdapter();
     const raw = await adapter.call({
+      modelName: 'simulated-v1',
+      apiKey: 'mock-key',
       prompt: 'Evaluate the [Proposal] for consistency and data grounding.',
       systemInstruction: 'You are an analyst.'
     });
