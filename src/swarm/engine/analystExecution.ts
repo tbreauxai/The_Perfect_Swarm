@@ -331,7 +331,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                         });
                         return '';
                     }
-                })
+                }
             );
             return results.filter(Boolean).join('\n');
         })();
