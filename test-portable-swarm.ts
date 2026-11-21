@@ -945,11 +945,14 @@ async function runPortableValidation() {
         }
     });
 
+    const calcRegistry = new ToolRegistry();
+    calcRegistry.register(calculatorTool);
+
     const toolWorkflowResult = await executeSwarmWorkflow({
         task: 'Calculate exact throughput metrics',
         data: 'total_requests=5000, duration_sec=25',
         enableDeepAnalysis: true,
-        tools: globalToolRegistry,
+        tools: calcRegistry,
         settings: {
             appId: 'tool-test-app',
             agents: [
