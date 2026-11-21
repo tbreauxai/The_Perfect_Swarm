@@ -228,8 +228,11 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
                 });
             }
         } else {
-            const estTokens = Math.max(10, TokenEstimator.estimatePayloadTokens(chunks[0]));
+            const rawEstTokens = Math.max(10, TokenEstimator.estimatePayloadTokens(chunks[0]));
             const assignments = analysts.map(analyst => {
+                const provLimit = PROVIDER_LIMITS[analyst.provider?.toLowerCase()];
+                const maxCap = provLimit?.maxInputTokens ?? Infinity;
+                const estTokens = Math.min(rawEstTokens, maxCap);
                 const { score: affinity, matchedDomain } = globalSpecialistRouter.scoreAffinity(analyst.role, `${task}\n${chunks[0]}`);
                 return {
                     chunkIndex: 0,
@@ -246,17 +249,21 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
             });
 
             const specialistSummary: Record<string, { role: string; chunksAssigned: number; tokensAllocated: number }> = {};
-            for (const a of analysts) {
+            let totalEstimatedTokens = 0;
+            for (let i = 0; i < analysts.length; i++) {
+                const a = analysts[i];
+                const allocated = assignments[i].allocatedTokens;
+                totalEstimatedTokens += allocated;
                 specialistSummary[a.role] = {
                     role: a.role,
                     chunksAssigned: 1,
-                    tokensAllocated: estTokens
+                    tokensAllocated: allocated
                 };
             }
 
             routingPlan = {
                 totalChunks: 1,
-                totalEstimatedTokens: estTokens * analysts.length,
+                totalEstimatedTokens,
                 assignments,
                 specialistSummary
             };

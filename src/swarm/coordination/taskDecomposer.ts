@@ -4,14 +4,28 @@ import type { StrategicSubtask, TaskDecompositionPlan } from './types.ts';
  * Higher-level agent task decomposition engine breaking macro-tasks into strategic subtasks.
  */
 export class HierarchicalTaskDecomposer {
+    private static formatConciseLabel(macroTask: string, maxChars: number): string {
+        const cleaned = String(macroTask || '')
+            .split(/\r?\n/)
+            .map((l) => l.trim())
+            .find((l) => l.length > 0) || 'Swarm Task';
+        const singleLine = cleaned.replace(/\s+/g, ' ').trim();
+        if (singleLine.length <= maxChars) return singleLine;
+        return `${singleLine.slice(0, Math.max(1, maxChars - 3)).trimEnd()}...`;
+    }
+
     public decompose(macroTask: string, availableRoles: string[]): TaskDecompositionPlan {
         const roles = availableRoles.length > 0 ? availableRoles : ['Security Analyst', 'Performance Analyst', 'Infrastructure Analyst'];
         const subtasks: StrategicSubtask[] = [];
+        const envPrefix = 'Profile environment baselines for ';
+        const synthPrefix = 'Synthesize multi-domain findings and mitigation actions for ';
+        const conciseEnvLabel = HierarchicalTaskDecomposer.formatConciseLabel(macroTask, 120 - envPrefix.length);
+        const conciseSynthLabel = HierarchicalTaskDecomposer.formatConciseLabel(macroTask, 120 - synthPrefix.length);
 
         // 1. Telemetry and Environment Profiling (prerequisite)
         subtasks.push({
             id: 'sub-env-profile',
-            title: `Profile environment baselines for ${macroTask}`,
+            title: `${envPrefix}${conciseEnvLabel}`.slice(0, 120),
             assignedRole: roles.find(r => r.toLowerCase().includes('infra')) || roles[0],
             dependencies: [],
             priority: 1,
@@ -26,7 +40,7 @@ export class HierarchicalTaskDecomposer {
             const role = auditRoles[i];
             subtasks.push({
                 id: `sub-audit-${i + 1}`,
-                title: `Execute deep specialist audit: ${role}`,
+                title: `Execute deep specialist audit: ${role}`.slice(0, 120),
                 assignedRole: role,
                 dependencies: ['sub-env-profile'],
                 priority: 2,
@@ -37,7 +51,7 @@ export class HierarchicalTaskDecomposer {
         // 3. Synthesis & Mitigation Formulation (dependent on all audits)
         subtasks.push({
             id: 'sub-synthesis',
-            title: `Synthesize multi-domain findings and mitigation actions for ${macroTask}`,
+            title: `${synthPrefix}${conciseSynthLabel}`.slice(0, 120),
             assignedRole: 'Manager Node',
             dependencies: subtasks.map(s => s.id),
             priority: 3,
@@ -47,7 +61,7 @@ export class HierarchicalTaskDecomposer {
         const waves = this.computeWaves(subtasks);
 
         return {
-            macroTask,
+            macroTask: HierarchicalTaskDecomposer.formatConciseLabel(macroTask, 120),
             strategySummary: `Decomposed into ${subtasks.length} strategic subtasks across ${waves.length} sequential execution waves.`,
             subtasks,
             executionWaves: waves,

@@ -125,7 +125,14 @@ export function runDataProfilingPipeline(params: ProfilingPipelineParams): Profi
     }
 
     // 2. Columnar Pre-Aggregation Sketching & Anomaly Extraction
-    const enableSketch = optSettings?.enablePreAggregationSketch !== false && Boolean(rawInput && rawInput.trim().length > 120);
+    const isCompactSlatePayload = Boolean(
+        rawInput &&
+        (/===\s*COMPACT SLATE/i.test(rawInput) || /\bevent_id=[a-z0-9_-]+\s*\|/i.test(rawInput))
+    );
+    const enableSketch =
+        optSettings?.enablePreAggregationSketch !== false &&
+        !isCompactSlatePayload &&
+        Boolean(rawInput && rawInput.trim().length > 120);
     let datasetSketch: DatasetSketch | undefined;
     if (enableSketch) {
         const sketchStart = Date.now();
@@ -204,11 +211,11 @@ export function runDataProfilingPipeline(params: ProfilingPipelineParams): Profi
         chunks: rawChunks,
         sketch: datasetSketch,
         analysts: analysts.map(a => ({ id: (a as any).id, role: a.role, provider: a.provider })),
-        enablePreAggregationSketch: optSettings?.enablePreAggregationSketch === true,
+        enablePreAggregationSketch: optSettings?.enablePreAggregationSketch === true && !isCompactSlatePayload,
         enableProviderSharding
     });
 
-    const effectiveChunks = (optSettings?.enablePreAggregationSketch === true || enableProviderSharding)
+    const effectiveChunks = ((optSettings?.enablePreAggregationSketch === true && !isCompactSlatePayload) || enableProviderSharding)
         ? adaptiveShardPlan.shards
         : rawChunks;
 

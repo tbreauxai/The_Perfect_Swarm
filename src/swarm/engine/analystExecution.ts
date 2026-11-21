@@ -582,7 +582,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
             if ((isBettingSeat || (hasAuditContext && allGameIds.length > 0)) && allGameIds.length > 0 && activeRegistry.has('get_injury_and_roster_delta')) {
                 const isNonGroqFrontrunner = isBettingSeat && String(analyst.provider || '').toLowerCase().trim() !== 'groq';
                 const injuryCap = isNonGroqFrontrunner ? Math.min(allGameIds.length, 20) : 8;
-                const rawInjurySummary = await getSharedInjurySummary(allGameIds, activeRegistry, parsedHeaders, injuryCap);
+                const rawInjurySummary = await getSharedInjurySummary(allGameIds, activeRegistry, mergedHeadersForRowCheck, injuryCap);
                 prefetchedInjurySummary = rawInjurySummary;
                 if (rawInjurySummary) {
                     const pBudget = seatBudget(analyst.provider);

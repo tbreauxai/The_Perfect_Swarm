@@ -545,18 +545,25 @@ export function planAdaptiveProviderShards(params: {
     if (!enableProviderSharding && !enablePreAggregationSketch) {
         return {
             shards: chunks,
-            seatAllocations: analysts.map((a, idx) => ({
-                seatId: a.id || a.role,
-                agentRole: a.role,
-                provider: a.provider,
-                providerMaxInputTokens: PROVIDER_LIMITS[a.provider?.toLowerCase()]?.maxInputTokens || 8000,
-                effectiveTokenBudget: PROVIDER_LIMITS[a.provider?.toLowerCase()]?.maxInputTokens || 8000,
-                budgetTelemetryLabel: 'estimatedTokenBudget (telemetry only)',
-                shardMode: 'full_context',
-                assignedShardIndices: [idx % Math.max(1, chunks.length)],
-                estimatedShardTokens: Math.ceil((chunks[0] || '').length / 4),
-                truncationAvoidedTokens: 0
-            })),
+            seatAllocations: analysts.map((a, idx) => {
+                const prov = (a.provider || '').toLowerCase();
+                const providerMaxInputTokens = PROVIDER_LIMITS[prov]?.maxInputTokens || 8000;
+                const effectiveTokenBudget = Math.max(600, providerMaxInputTokens - overheadTokens);
+                const rawShardTokens = Math.ceil((chunks[0] || '').length / 4);
+                const estimatedShardTokens = Math.min(rawShardTokens, providerMaxInputTokens);
+                return {
+                    seatId: a.id || a.role,
+                    agentRole: a.role,
+                    provider: a.provider,
+                    providerMaxInputTokens,
+                    effectiveTokenBudget,
+                    budgetTelemetryLabel: 'estimatedTokenBudget (telemetry only)',
+                    shardMode: rawShardTokens > providerMaxInputTokens ? 'adaptive_partition' : 'full_context',
+                    assignedShardIndices: [idx % Math.max(1, chunks.length)],
+                    estimatedShardTokens,
+                    truncationAvoidedTokens: Math.max(0, rawShardTokens - estimatedShardTokens)
+                };
+            }),
             sketchUsed: false,
             totalOriginalTokens,
             totalShardedTokens: totalOriginalTokens,

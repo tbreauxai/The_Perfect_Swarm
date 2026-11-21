@@ -459,7 +459,16 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
         };
     }
 
-    wasRepaired = true;
+    const isCleanBettingContract = Boolean(
+        !parseRepaired &&
+        raw &&
+        typeof raw === 'object' &&
+        !Array.isArray(raw) &&
+        typeof raw.analysis === 'string' &&
+        raw.analysis.trim().length > 0 &&
+        Array.isArray(raw.picks)
+    );
+    wasRepaired = !isCleanBettingContract;
 
     // Synthesize valid Manager UI from whatever data is present
     const title = typeof raw.ui_title === 'string' && raw.ui_title.trim().length > 0
@@ -470,9 +479,25 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
         ? stripApproximateOdds(raw.analysis.trim(), { allowExactOdds: true })
         : undefined;
 
-    const summary = typeof raw.summary === 'string' && raw.summary.trim().length > 0
+    const rawSummaryExplicit = typeof raw.summary === 'string' && raw.summary.trim().length > 0
         ? stripApproximateOdds(raw.summary.trim(), { allowExactOdds: true })
-        : rawAnalysis;
+        : undefined;
+    const summary = (() => {
+        if (rawSummaryExplicit && rawSummaryExplicit !== rawAnalysis) {
+            return rawSummaryExplicit;
+        }
+        if (rawAnalysis) {
+            const sentences = rawAnalysis
+                .split(/(?<=[.!?])\s+/)
+                .map((s) => s.trim())
+                .filter(Boolean);
+            if (sentences.length >= 2) {
+                return sentences[0];
+            }
+            return rawAnalysis;
+        }
+        return rawSummaryExplicit;
+    })();
 
     const components: ManagerResponse['components'] = [];
 
@@ -519,11 +544,44 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
         }
     }
 
-    // If no valid components could be salvaged, construct an InsightList component
+    // If no valid components could be salvaged, construct an InsightList component without duplicating full analysis verbatim
     if (components.length === 0) {
-        const insightsList = Array.isArray(raw.insights)
+        const insightsList = Array.isArray(raw.insights) && raw.insights.length > 0
             ? raw.insights.map((i: any) => ({ type: 'info' as const, message: String(i) }))
-            : [{ type: 'info' as const, message: summary || rawAnalysis || (typeof input === 'string' ? String(input).slice(0, 500) : (input && Object.keys(input).length > 0 ? JSON.stringify(input) : 'Swarm analysis completed successfully.')) }];
+            : (() => {
+                if (Array.isArray(raw?.picks) && raw.picks.length > 0) {
+                    const pickBullets = raw.picks
+                        .map((p: any) => {
+                            if (!p || typeof p !== 'object') return '';
+                            const row = p.row ? `[${p.row}] ` : '';
+                            const side = p.side || p.pickName || p.pick || p.selection || '';
+                            const reason = p.reason || (Array.isArray(p.reasons) ? p.reasons[0] : '') || '';
+                            return `${row}${side}${reason ? ` — ${reason}` : ''}`.trim();
+                        })
+                        .filter(Boolean);
+                    if (pickBullets.length > 0) {
+                        return pickBullets.map((msg: string) => ({ type: 'success' as const, message: msg }));
+                    }
+                }
+                if (rawAnalysis) {
+                    const sentences = rawAnalysis
+                        .split(/(?<=[.!?])\s+/)
+                        .map((s) => s.trim())
+                        .filter(Boolean);
+                    if (sentences.length > 1) {
+                        return sentences.slice(1).map((msg) => ({ type: 'info' as const, message: msg }));
+                    }
+                }
+                const fallbackMsg =
+                    summary ||
+                    rawAnalysis ||
+                    (typeof input === 'string'
+                        ? String(input).slice(0, 500)
+                        : input && Object.keys(input).length > 0
+                            ? JSON.stringify(input)
+                            : 'Swarm analysis completed successfully.');
+                return [{ type: 'info' as const, message: fallbackMsg }];
+            })();
 
         components.push({
             id: 'default-insight-list',
@@ -552,7 +610,7 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
         ...(raw && typeof raw.wageringPass === 'boolean' ? { wageringPass: raw.wageringPass } : {}),
         ...(raw && raw.status ? { status: raw.status } : {}),
         ...(raw && raw.reason ? { reason: raw.reason } : {}),
-        _repaired: true
+        ...(wasRepaired ? { _repaired: true } : {})
     } as ManagerResponse;
 }
 

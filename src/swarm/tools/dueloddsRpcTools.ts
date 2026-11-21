@@ -464,14 +464,35 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
       ctxAny?.game?.home_team
     ].filter((t): t is string => typeof t === 'string' && Boolean(t.trim()));
 
+    const rawTotalInjuries =
+      typeof d.total_injuries === 'number' && Number.isFinite(d.total_injuries)
+        ? d.total_injuries
+        : injuries.length;
+
     const grouped = new Map<string, { label: string; items: any[] }>();
     const keptInjuries: any[] = [];
     for (const p of injuries) {
       if (!p || typeof p !== 'object') continue;
-      const resolved = resolveInjuryTeam(p, { teamLabelMap, sportHint, matchupTeams });
+      let resolved = resolveInjuryTeam(p, { teamLabelMap, sportHint, matchupTeams });
       if (!resolved) {
-        // Drop injury if the tool result does not clearly identify the team
-        continue;
+        const playerName = String(p.player_name || p.name || '').trim();
+        const statusStr = String(p.status || p.injury_status || '').trim();
+        const rawTeamId = String(p.team_id || p.teamId || '').trim();
+        const isCollegeGame = /ncaa|college/i.test(sportHint) || /ncaa|college/i.test(gameId);
+        if (isCollegeGame && playerName && statusStr && rawTeamId) {
+          const fallbackName =
+            matchupTeams.length === 2
+              ? `${matchupTeams[0]} / ${matchupTeams[1]}`
+              : matchupTeams[0] || `Team ${rawTeamId}`;
+          resolved = {
+            abbr: `T${rawTeamId}`,
+            name: fallbackName,
+            label: `${fallbackName} (ID ${rawTeamId})`
+          };
+        } else {
+          // Drop injury if the tool result does not clearly identify the team
+          continue;
+        }
       }
       const enriched = {
         ...p,
@@ -513,12 +534,15 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
       }
       return val;
     };
+    const strippedKept = stripSourceRef(keptInjuries);
     const cleanedData = Array.isArray(d)
-      ? stripSourceRef(keptInjuries)
+      ? strippedKept
       : {
           ...d,
-          ...(Array.isArray(d.injuries) ? { injuries: stripSourceRef(keptInjuries) } : {}),
-          ...(Array.isArray(d.players) ? { players: stripSourceRef(keptInjuries) } : {})
+          total_injuries: strippedKept.length,
+          raw_total_injuries: rawTotalInjuries,
+          ...(Array.isArray(d.injuries) ? { injuries: strippedKept } : {}),
+          ...(Array.isArray(d.players) ? { players: strippedKept } : {})
         };
 
     const summary = [
