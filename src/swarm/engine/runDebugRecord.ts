@@ -155,6 +155,16 @@ export function recordRunDebugEdit(
   recordRunDebugSeat(workflowId, seatKey, { edits: [edit] });
 }
 
+function canonicalFailoverSeatKey(seatKey: string): string {
+  const s = seatKey.trim();
+  if (/verifier/i.test(s)) return 'verifier';
+  if (/critic/i.test(s)) return 'critic';
+  if (/manager/i.test(s)) return 'manager';
+  if (/(^a1$|quant)/i.test(s)) return 'a1';
+  if (/(^a2$|market)/i.test(s)) return 'a2';
+  return seatKey;
+}
+
 export function recordRunDebugFailover(
   workflowId: string | undefined,
   seatKey: string,
@@ -162,7 +172,7 @@ export function recordRunDebugFailover(
   limitChars: number
 ): void {
   if (!isRunDebugEnabled() || !workflowId || !seatKey) return;
-  recordRunDebugSeat(workflowId, seatKey, {
+  recordRunDebugSeat(workflowId, canonicalFailoverSeatKey(seatKey), {
     postFailoverProvider: provider,
     postFailoverLimitChars: limitChars
   });
