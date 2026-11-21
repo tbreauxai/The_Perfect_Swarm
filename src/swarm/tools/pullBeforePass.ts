@@ -70,9 +70,9 @@ export function isEmptyToolSummary(summary: string): boolean {
 }
 
 const FUNDAMENTALS_MOD =
-  '(?:(?:any|specific|clear|detailed|supporting|underlying|verified|available|full|additional|further|game|matchup|team|form|fetched|pulled|retrieved)\\s+){0,3}';
+  '(?:(?:any|specific|clear|detailed|supporting|underlying|verified|available|full|additional|further|sufficient|enough|adequate|game|matchup|team|form|fetched|pulled|retrieved)\\s+){0,3}';
 const MARKET_MOD =
-  '(?:(?:any|specific|detailed|supporting|fresh|live|current|verified|confirmed|reliable|available|actual|fetched|pulled|retrieved)\\s+){0,2}';
+  '(?:(?:any|specific|detailed|supporting|fresh|live|current|verified|confirmed|reliable|available|actual|sufficient|enough|adequate|fetched|pulled|retrieved)\\s+){0,2}';
 
 export function looksLikePassOrMissingDataClaim(text: string): boolean {
   if (!text || typeof text !== 'string') return false;
