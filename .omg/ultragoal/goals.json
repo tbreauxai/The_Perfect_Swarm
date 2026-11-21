@@ -1,52 +1,31 @@
 {
-  "activeGoalId": "goal-h-s0-repro",
+  "activeGoalId": "goal-j-s0-repro",
   "goals": [
     {
-      "id": "goal-h-s0-repro",
-      "title": "S0 (RED FIRST): Add src/__repro__/runNov20h.repro.test.ts (N, O, P)",
-      "description": "Add src/__repro__/runNov20h.repro.test.ts and confirm N, O, P fail before any edit. Commit.",
+      "id": "goal-j-s0-repro",
+      "title": "S0 (RED FIRST): Add src/__repro__/runNov20j.repro.test.ts (T, U)",
+      "description": "Add src/__repro__/runNov20j.repro.test.ts; confirm T and U FAIL before any edit. Commit.",
       "status": "in-progress",
-      "verificationCriteria": "runNov20h.repro.test.ts runs red on N, O, P."
+      "verificationCriteria": "T and U fail."
     },
     {
-      "id": "goal-h-s1-render-headers",
-      "title": "S1 (TOP): Greedily upgrade renderHeaders lines to formatLine(h,1) in context/gameHeaders.ts",
-      "description": "In src/swarm/context/gameHeaders.ts:235-238, when maxOpts loop fails but base lines fit, greedily upgrade lines (slate order) to formatLine(h,1) while total <= maxChars.",
+      "id": "goal-j-s1-canonical-failover-key",
+      "title": "S1: Canonicalize seatKey in recordRunDebugFailover (runDebugRecord.ts)",
+      "description": "In src/swarm/engine/runDebugRecord.ts:158-169 recordRunDebugFailover, map seatKey to canonical key (/critic/i->'critic', /verifier/i->'verifier', /manager/i->'manager', /(^a1$|quant)/i->'a1', /(^a2$|market)/i->'a2', else unchanged; critic/verifier/manager before quant/market).",
       "status": "todo",
-      "verificationCriteria": "Repro N green; context/*.test.ts green."
+      "verificationCriteria": "T green."
     },
     {
-      "id": "goal-h-s2-proposer-header-budget",
-      "title": "S2: Proposer headerBudget helper & test in analystExecution.ts + proposerHeaderBudget.test.ts",
-      "description": "Export proposerHeaderBudget(provider) = Math.min(2400, Math.floor(seatBudget(provider).maxPromptChars * 0.3)) and use for non-critic headerBudget at analystExecution.ts:397-399; add src/swarm/engine/proposerHeaderBudget.test.ts.",
+      "id": "goal-j-s2-manager-chain",
+      "title": "S2: Update managerChain.ts Gemini 2.5 -> gemini-3.1-flash-lite & managerChain.test.ts",
+      "description": "In src/swarm/engine/managerChain.ts:21-22, replace L21 model with 'gemini-3.1-flash-lite' and delete L22; update src/swarm/engine/managerChain.test.ts expectations.",
       "status": "todo",
-      "verificationCriteria": "proposerHeaderBudget.test.ts + runNov20c/d/e/f + promptBudget tests green."
+      "verificationCriteria": "U and managerChain.test.ts green."
     },
     {
-      "id": "goal-h-s3-market-odds-regex",
-      "title": "S3: Expand market/odds/betting noun group in pullBeforePass.ts",
-      "description": "In src/swarm/tools/pullBeforePass.ts:426-429 and L827 inline strip (all 4 occurrences), expand (?:market\\s+(?:movement|data)|line\\s+movement) to (?:(?:market(?:\\/odds)?|odds|betting)\\s+(?:movement|data)|line\\s+movement).",
-      "status": "todo",
-      "verificationCriteria": "Repro O green."
-    },
-    {
-      "id": "goal-h-s4-header-ml-ledger",
-      "title": "S4: Record get_market_movement='data' from header ML options in buildToolPullLedger",
-      "description": "In src/swarm/tools/pullBeforePass.ts:208 (before marketToolRecords loop), for each options.headers h with an option matching /\\bML\\s+[-+]?\\d/, record(h.eventId, 'get_market_movement', 'data').",
-      "status": "todo",
-      "verificationCriteria": "Repro P green."
-    },
-    {
-      "id": "goal-h-s5-conjunction-cleanup",
-      "title": "S5 (optional): Strip leading conjunction & short parts in pullBeforePass.ts:839-845",
-      "description": "After rejoining subParts, strip a leading conjunction (and|so|but|while) and capitalize; skip parts under 3 words.",
-      "status": "todo",
-      "verificationCriteria": "Unit/repro tests green."
-    },
-    {
-      "id": "goal-h-s6-verify-push",
+      "id": "goal-j-s3-verify-push",
       "title": "VERIFY & PUSH: Run full verification suite and push origin main",
-      "description": "Run vitest on proposerHeaderBudget + runNov20c/d/e/f/h, npm test, tsc --noEmit, smoke-start.mjs; verify git log/diff and git push origin main.",
+      "description": "Run vitest on runNov20j/i/h, npm test, tsc --noEmit, smoke-start.mjs; verify git log/diff and push origin main.",
       "status": "todo",
       "verificationCriteria": "All checks pass and origin/main pushed."
     }
