@@ -1,6 +1,7 @@
 import type { Context } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { executeSwarmWorkflow, type SwarmWorkflowParams } from '../engine/index.ts';
+import { SwarmContext } from '../context.ts';
 import type { SwarmEvent } from '../types.ts';
 
 /**
@@ -56,6 +57,10 @@ export async function handleSwarmSse(
         });
 
         try {
+            const runContext = params.context || new SwarmContext();
+            (runContext as any).id = (runContext as any).id || `wf-${Date.now()}`;
+            params.context = runContext;
+            await sendEvent('swarm_started', { workflowId: (runContext as any).id });
             const executor = (params as any).workflowExecutor || executeSwarmWorkflow;
             const workflowPromise = executor({
                 ...params,
