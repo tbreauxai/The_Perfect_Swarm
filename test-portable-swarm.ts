@@ -48,7 +48,7 @@ async function runPortableValidation() {
     ProviderRegistry.register({
         providerName: 'custom-mock',
         async call(opts) {
-            if (opts.prompt.includes('Evaluate this proposal')) {
+            if (opts.prompt.includes('Evaluate this proposal') || opts.prompt.includes('Evaluate the [Proposal]')) {
                 return JSON.stringify({ pass: true, feedback: 'Verified successfully against all criteria.' });
             }
             if (opts.systemInstruction?.includes('Swarm Orchestrator') || opts.prompt.includes('Analyst Reports:')) {
@@ -59,7 +59,7 @@ async function runPortableValidation() {
                     ]
                 });
             }
-            if (opts.systemInstruction?.includes('Specialized Analyst') || opts.prompt.includes('Data Chunk')) {
+            if (opts.systemInstruction?.includes('Specialized Analyst') || opts.prompt.includes('Data Chunk') || opts.prompt.includes('<user_task>')) {
                 return JSON.stringify({
                     insights: ['Endpoint authenticated', 'Policy verified'],
                     anomalies: [],
@@ -681,7 +681,7 @@ async function runPortableValidation() {
     ProviderRegistry.register({
         providerName: 'backup-mock',
         async call(opts) {
-            if (opts.prompt.includes('Evaluate this proposal') || opts.systemInstruction?.includes('Verification Critic')) {
+            if (opts.prompt.includes('Evaluate this proposal') || opts.prompt.includes('Evaluate the [Proposal]') || opts.systemInstruction?.includes('Verification Critic')) {
                 return JSON.stringify({ pass: true, feedback: 'Cross-provider verification passed with zero discrepancies.' });
             }
             return JSON.stringify({ insights: ['Backup analyst insight'], anomalies: [], summary: 'Done' });
@@ -927,7 +927,7 @@ async function runPortableValidation() {
     ProviderRegistry.register({
         providerName: 'tool-mock',
         async call(opts) {
-            if (opts.prompt.includes('Data Chunk')) {
+            if (opts.prompt.includes('Data Chunk') || opts.prompt.includes('<user_task>')) {
                 // Analyst returns a tool call block and structured response
                 return '```tool_call\n{\n  "tool": "calculator",\n  "parameters": { "expression": "5000 / 25" }\n}\n```\n' +
                     JSON.stringify({
@@ -1140,7 +1140,7 @@ Anomalies:
     ProviderRegistry.register({
         providerName: malformedProvider,
         async call(opts) {
-            if (opts.prompt.includes('Evaluate this proposal')) {
+            if (opts.prompt.includes('Evaluate this proposal') || opts.prompt.includes('Evaluate the [Proposal]')) {
                 return 'After careful review, VERIFICATION PASSED. All invariants met.';
             }
             if (opts.systemInstruction?.includes('Swarm Orchestrator') || opts.prompt.includes('Analyst Reports:')) {
@@ -1394,7 +1394,7 @@ Anomalies:
     const criticMockProvider = {
         providerName: 'critic-baseline-verifier',
         async call(opts: any) {
-            if (opts.systemInstruction?.includes('CRITIC') || opts.prompt?.includes('Evaluate this proposal')) {
+            if (opts.systemInstruction?.includes('CRITIC') || opts.prompt?.includes('Evaluate this proposal') || opts.prompt?.includes('Evaluate the [Proposal]')) {
                 if (!opts.prompt.includes('[Historical Baselines & Past Lessons]')) {
                     throw new Error('Critic prompt failed to include [Historical Baselines & Past Lessons]');
                 }
