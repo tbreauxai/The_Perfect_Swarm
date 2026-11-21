@@ -18,8 +18,7 @@ export const MANAGER_CHAIN: ReadonlyArray<{
   provider: Provider;
   model: string;
 }> = [
-  { provider: "gemini" as Provider, model: "gemini-2.5-flash" },
-  { provider: "gemini" as Provider, model: "gemini-2.5-flash-lite" },
+  { provider: "gemini" as Provider, model: "gemini-3.1-flash-lite" },
   { provider: "mistral" as Provider, model: "mistral-small-latest" },
   { provider: "groq" as Provider, model: "openai/gpt-oss-120b" },
 ];
