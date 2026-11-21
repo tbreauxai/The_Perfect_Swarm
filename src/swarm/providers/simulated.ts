@@ -12,6 +12,7 @@ export class SimulatedAdapter implements ProviderAdapter {
             system.includes('Quality Critic') ||
             system.includes('Verification Critic') ||
             prompt.includes('Evaluate this proposal') ||
+            prompt.includes('Evaluate the [Proposal]') ||
             prompt.includes('Review the synthesized dashboard') ||
             prompt.includes('Verify whether this analysis')
         ) {
