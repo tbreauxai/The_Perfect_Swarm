@@ -19,6 +19,9 @@ export interface RunDebugSeatRecord {
   model?: string;
   promptChars: number;
   limitChars: number;
+  headerChars?: number;
+  headerBudget?: number;
+  pricedHeaders?: number;
   postFailoverProvider?: string;
   postFailoverLimitChars?: number;
   toolResultsSent?: string;
@@ -97,6 +100,9 @@ export function recordRunDebugSeat(
   if (data.model) seat.model = data.model;
   if (typeof data.promptChars === 'number') seat.promptChars = data.promptChars;
   if (typeof data.limitChars === 'number') seat.limitChars = data.limitChars;
+  if (typeof data.headerChars === 'number') seat.headerChars = data.headerChars;
+  if (typeof data.headerBudget === 'number') seat.headerBudget = data.headerBudget;
+  if (typeof data.pricedHeaders === 'number') seat.pricedHeaders = data.pricedHeaders;
   if (data.postFailoverProvider) seat.postFailoverProvider = data.postFailoverProvider;
   if (typeof data.postFailoverLimitChars === 'number') seat.postFailoverLimitChars = data.postFailoverLimitChars;
   if (typeof data.toolResultsSent === 'string') {
