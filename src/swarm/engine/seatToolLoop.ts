@@ -144,7 +144,7 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     options
   } = params;
 
-  const budget = params.budget || seatBudget(agent.provider);
+  const baseBudget = params.budget || seatBudget(agent.provider);
   const baseTools = getRoleToolNames(seat);
   const hasBaseTools = baseTools.some(t => registry.has(t));
   const candidateNames = hasBaseTools ? [...baseTools] : registry.list().map(t => t.name);
@@ -159,6 +159,12 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
   const gameIds: string[] = (params.gameIds && params.gameIds.length > 0)
     ? params.gameIds
     : (gameId && gameId !== 'unknown-game' ? [gameId] : []);
+
+  const isFrontrunnerSeat = (isQuantSeatName(seat) || isMarketSeatName(seat)) &&
+    String(agent.provider || '').toLowerCase().trim() !== 'groq';
+  const budget = isFrontrunnerSeat
+    ? { ...baseBudget, maxToolCalls: Math.max(baseBudget.maxToolCalls, Math.min(gameIds.length, 20)) }
+    : baseBudget;
 
   const willPrefetchBettingSeat = isBettingRoleSeat(seat) && gameIds.length > 0 && hasBaseTools;
 

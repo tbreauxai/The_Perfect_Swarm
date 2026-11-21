@@ -238,11 +238,25 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
     const sharedInjuryItemsByGame = new Map<string, ToolEvidenceItem>();
     const sharedInjuryTraceByGame = new Map<string, ToolCallTraceEntry>();
 
-    const getSharedInjurySummary = (gameIds: string[], activeReg: ToolRegistry, headers?: GameHeader[]): Promise<string> => {
+    const mapLimit = async <T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> => {
+        const out: R[] = new Array(items.length);
+        let next = 0;
+        const worker = async () => {
+            while (next < items.length) {
+                const idx = next++;
+                out[idx] = await fn(items[idx]);
+            }
+        };
+        const workers = Array.from({ length: Math.min(limit, items.length) }, () => worker());
+        await Promise.all(workers);
+        return out;
+    };
+
+    const getSharedInjurySummary = (gameIds: string[], activeReg: ToolRegistry, headers?: GameHeader[], cap: number = 8): Promise<string> => {
         if (gameIds.length === 0 || !activeReg.has('get_injury_and_roster_delta')) {
             return Promise.resolve('');
         }
-        const key = gameIds.join('|');
+        const key = `${cap}:${gameIds.join('|')}`;
         const existing = sharedInjuryPrefetchMap.get(key);
         if (existing) return existing;
 
@@ -252,9 +266,11 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
         }
 
         const promise = (async () => {
-            const calls = gameIds.slice(0, 8);
-            const results = await Promise.all(
-                calls.map(async (gId) => {
+            const calls = gameIds.slice(0, cap);
+            const results = await mapLimit(
+                calls,
+                4,
+                async (gId) => {
                     try {
                         const hdr = headerById.get(gId);
                         const toolOptions = hdr
@@ -530,7 +546,9 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
             }
             let prefetchedInjurySummary = '';
             if ((isBettingSeat || (hasAuditContext && allGameIds.length > 0)) && allGameIds.length > 0 && activeRegistry.has('get_injury_and_roster_delta')) {
-                const rawInjurySummary = await getSharedInjurySummary(allGameIds, activeRegistry, parsedHeaders);
+                const isNonGroqFrontrunner = isBettingSeat && String(analyst.provider || '').toLowerCase().trim() !== 'groq';
+                const injuryCap = isNonGroqFrontrunner ? Math.min(allGameIds.length, 20) : 8;
+                const rawInjurySummary = await getSharedInjurySummary(allGameIds, activeRegistry, parsedHeaders, injuryCap);
                 prefetchedInjurySummary = rawInjurySummary;
                 if (rawInjurySummary) {
                     const pBudget = seatBudget(analyst.provider);
