@@ -46,7 +46,7 @@ export function resolveSupabaseRpcConfig(
 }
 
 export function isCanonicalOrHexId(id: string): boolean {
-  return /^[a-z]+-\d+$/i.test(id) || /^[a-f0-9]{32}$/i.test(id);
+  return /^[a-z]+(?:-[a-z]+)*-\d+$/i.test(id) || /^[a-f0-9]{32}$/i.test(id);
 }
 
 export function isOptionCitationId(id: string): boolean {
