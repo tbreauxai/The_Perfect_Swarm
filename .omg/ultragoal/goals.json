@@ -1,33 +1,48 @@
 {
-  "activeGoalId": "goal-j-s0-repro",
+  "session": "runNov21d",
+  "baseCommit": "651a40ad",
   "goals": [
     {
-      "id": "goal-j-s0-repro",
-      "title": "S0 (RED FIRST): Add src/__repro__/runNov20j.repro.test.ts (T, U)",
-      "description": "Add src/__repro__/runNov20j.repro.test.ts; confirm T and U FAIL before any edit. Commit.",
+      "id": "S0",
+      "description": "Add failing repro test src/__repro__/runNov21d.repro.test.ts (V1, V2, V3) and confirm V1, V2, and V3 fail red; commit.",
       "status": "in-progress",
-      "verificationCriteria": "T and U fail."
+      "verificationCriteria": "npx vitest run src/__repro__/runNov21d.repro.test.ts fails on V1, V2, and V3; committed on main.",
+      "evidence": null
     },
     {
-      "id": "goal-j-s1-canonical-failover-key",
-      "title": "S1: Canonicalize seatKey in recordRunDebugFailover (runDebugRecord.ts)",
-      "description": "In src/swarm/engine/runDebugRecord.ts:158-169 recordRunDebugFailover, map seatKey to canonical key (/critic/i->'critic', /verifier/i->'verifier', /manager/i->'manager', /(^a1$|quant)/i->'a1', /(^a2$|market)/i->'a2', else unchanged; critic/verifier/manager before quant/market).",
+      "id": "S1",
+      "description": "Add sufficient|enough|adequate to FUNDAMENTALS_MOD and MARKET_MOD in src/swarm/tools/pullBeforePass.ts:72-75 (keep {0,3}/{0,2} bounds); commit.",
       "status": "todo",
-      "verificationCriteria": "T green."
+      "verificationCriteria": "V3 green in runNov21d.repro.test.ts; committed on main.",
+      "evidence": null
     },
     {
-      "id": "goal-j-s2-manager-chain",
-      "title": "S2: Update managerChain.ts Gemini 2.5 -> gemini-3.1-flash-lite & managerChain.test.ts",
-      "description": "In src/swarm/engine/managerChain.ts:21-22, replace L21 model with 'gemini-3.1-flash-lite' and delete L22; update src/swarm/engine/managerChain.test.ts expectations.",
+      "id": "S2",
+      "description": "Also match 'Evaluate the [Proposal]' in src/swarm/providers/simulated.ts:14; commit.",
       "status": "todo",
-      "verificationCriteria": "U and managerChain.test.ts green."
+      "verificationCriteria": "V2 green in runNov21d.repro.test.ts; committed on main.",
+      "evidence": null
     },
     {
-      "id": "goal-j-s3-verify-push",
-      "title": "VERIFY & PUSH: Run full verification suite and push origin main",
-      "description": "Run vitest on runNov20j/i/h, npm test, tsc --noEmit, smoke-start.mjs; verify git log/diff and push origin main.",
+      "id": "S3",
+      "description": "Update test-portable-swarm.ts matchers at L51, L684, L1143, L1397 ('Evaluate the [Proposal]') and L62, L930 ('<user_task>'); commit.",
       "status": "todo",
-      "verificationCriteria": "All checks pass and origin/main pushed."
+      "verificationCriteria": "Portable steps 6, 19c, 24f, and 26d pass; committed on main.",
+      "evidence": null
+    },
+    {
+      "id": "S4",
+      "description": "Fix step 22d (pick A or B without widening betting-seat role tools or budgets) so step 22d passes and npm run test:portable exits 0 (V1 green); commit.",
+      "status": "todo",
+      "verificationCriteria": "npm run test:portable exits 0 and V1 green; committed on main.",
+      "evidence": null
+    },
+    {
+      "id": "VERIFY",
+      "description": "Run npx vitest run src/__repro__/runNov21d.repro.test.ts, npm test, npx tsc --noEmit, node scripts/smoke-start.mjs, check git log/diff against origin/main, and push origin main.",
+      "status": "todo",
+      "verificationCriteria": "All checks pass (exit 0); origin/main..HEAD non-empty; pushed to origin main.",
+      "evidence": null
     }
   ]
 }

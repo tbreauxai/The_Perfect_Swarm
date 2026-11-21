@@ -18,3 +18,6 @@
 {"timestamp":"2026-11-20T23:40:05Z","event":"session_initialized","activeGoalId":"goal-h-s0-repro","note":"Initialized ultragoal session for todo.md (runNov20h, S0-S5 + VERIFY, base 5db4fe57)."}
 {"timestamp":"2026-11-21T04:38:50Z","event":"session_initialized","activeGoalId":"goal-i-s0-repro","note":"Initialized ultragoal session for todo.md (runNov20i, S0-S4 + VERIFY, base a40f005d)."}
 {"timestamp":"2026-11-21T05:58:10Z","event":"session_initialized","activeGoalId":"goal-j-s0-repro","note":"Initialized ultragoal session for todo.md (runNov20j, S0-S2 + VERIFY, base 75ae6cfc)."}
+{"timestamp":"2026-11-21T14:41:10Z","event":"session_initialized","activeGoalId":"goal-nov21a-s0-repro","note":"Initialized ultragoal session for todo.md (runNov21a, S0-S4 + VERIFY, base 4be594b9)."}
+{"ts":"2026-11-21T09:42:33-06:00","session":"runNov21b","event":"initialized","baseCommit":"cd53c93c","activeGoal":"S0"}
+{"ts":"2026-11-21T10:50:28-06:00","session":"runNov21d","event":"initialized","baseCommit":"651a40ad","activeGoal":"S0"}
