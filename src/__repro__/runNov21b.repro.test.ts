@@ -34,10 +34,10 @@ describe('runNov21b repros (wf-1795274058727)', () => {
           { team_id: 101, game_date: '2026-11-12', result: 'W' },
           { team_id: 202, game_date: '2026-11-15', result: 'L' },
           { team_id: 101, game_date: '2026-11-16', result: 'L' },
-          { team_id: 202, game_date: '2026-11-11', result: 'W' },
+          { team_id: 202, game_date: '2026-11-11', result: 'L' },
           { team_id: 101, game_date: '2026-11-05', result: 'L' },
           { team_id: 202, game_date: '2026-11-13', result: 'W' },
-          { team_id: 202, game_date: '2026-11-06', result: 'L' }
+          { team_id: 202, game_date: '2026-11-06', result: 'W' }
         ]
       },
       h2h: []

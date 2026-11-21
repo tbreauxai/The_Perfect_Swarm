@@ -261,9 +261,34 @@ export const getMatchupFundamentalsTool: SwarmTool = {
         }
         return val;
       };
-      const formText = d.form
-        ? (typeof d.form === 'object' ? JSON.stringify(mapFormValue(d.form)) : String(d.form))
-        : `Home: ${d.home_form ?? homeObj.form ?? 'N/A'} | Away: ${d.away_form ?? awayObj.form ?? 'N/A'}`;
+      let formText: string;
+      if (Array.isArray(d.form?.items) && d.form.items.length > 0) {
+        const mappedItems = mapFormValue(d.form.items) as any[];
+        const byTeam = new Map<string, any[]>();
+        for (const item of mappedItems) {
+          const team = String(item?.team ?? item?.team_id ?? 'Unknown');
+          const list = byTeam.get(team);
+          if (list) list.push(item);
+          else byTeam.set(team, [item]);
+        }
+        const parts: string[] = [];
+        for (const [team, items] of byTeam.entries()) {
+          const sorted = [...items].sort((a, b) =>
+            String(b?.game_date ?? '').localeCompare(String(a?.game_date ?? ''))
+          );
+          const results = sorted
+            .map((it) => (typeof it?.result === 'string' ? it.result.trim().toUpperCase() : ''))
+            .filter(Boolean);
+          const wins = results.filter((r) => r === 'W').length;
+          const losses = results.filter((r) => r === 'L').length;
+          parts.push(`${team} ${wins}-${losses} last${results.length} ${results.join('')}`);
+        }
+        formText = parts.join('; ');
+      } else {
+        formText = d.form
+          ? (typeof d.form === 'object' ? JSON.stringify(mapFormValue(d.form)) : String(d.form))
+          : `Home: ${d.home_form ?? homeObj.form ?? 'N/A'} | Away: ${d.away_form ?? awayObj.form ?? 'N/A'}`;
+      }
       const h2hText = formatH2h(d.h2h);
       const summary = [
         `[MATCHUP FUNDAMENTALS: ${gameId} (${displayWindow}) | source: snapshot]`,
