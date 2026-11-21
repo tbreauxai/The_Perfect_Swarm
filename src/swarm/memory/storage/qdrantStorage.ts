@@ -452,7 +452,22 @@ export class QdrantStorageAdapter implements StorageBackend {
                     });
                 }
             }
-            if (options.domain) {
+            if (Array.isArray(options.domains) && options.domains.length > 0) {
+                const domainValues = Array.from(
+                    new Set([
+                        ...options.domains.map((d) => normalizeDomain(d)),
+                        'multi-sport',
+                        'odds',
+                        'general'
+                    ])
+                );
+                filterMust.push({
+                    should: domainValues.map((d) => ({
+                        key: 'domain',
+                        match: { value: d }
+                    }))
+                });
+            } else if (options.domain && normalizeDomain(options.domain) !== 'multi-sport') {
                 filterMust.push({ key: 'domain', match: { value: normalizeDomain(options.domain) } });
             }
             if (options.agentRole) {

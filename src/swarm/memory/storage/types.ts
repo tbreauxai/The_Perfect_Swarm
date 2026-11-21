@@ -5,6 +5,7 @@ export interface StorageFilterOptions {
     originApp?: string;
     appId?: string;
     domain?: string;
+    domains?: string[];
     sport?: string;
     entityIds?: string[];
     entityId?: string;

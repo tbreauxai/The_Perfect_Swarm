@@ -43,6 +43,7 @@ export interface RetrievalOptions {
     originApp?: string;
     targetApps?: string | string[];
     domain?: string;
+    domains?: string[];
     entityIds?: string[];
     entityId?: string;
     eventIds?: string[];

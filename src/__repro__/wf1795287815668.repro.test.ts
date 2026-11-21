@@ -3,6 +3,8 @@ import { parseGameHeaders, renderHeaders } from '../swarm/context/gameHeaders.ts
 import { filterHeadersByEventIds } from '../swarm/context/selectedGames.ts';
 import { executeSwarmWorkflow } from '../swarm/engine/index.ts';
 import { guardAnalystResponse, guardManagerResponse, guardVerificationResult } from '../swarm/parser/responseGuards.ts';
+import { computeBlendWeight, rankAndFilterCandidates } from '../swarm/memory/tags.ts';
+import { InMemoryStorageAdapter } from '../swarm/memory/storage/inMemoryStorage.ts';
 
 const WF_1795287815668_COMPACT_SLATE = `=== COMPACT SLATE ===
 event_id=nba-401910027 | New Orleans Pelicans @ Dallas Mavericks | sp +15.5(-110)/-15.5(-110) | ml +980/-1800 | tot 235.5(-110)/235.5(-110) | rows=R1:ML New Orleans Pelicans(+980),R2:ML Dallas Mavericks(-1800),R3:SPR New Orleans Pelicans +15.5(-110),R4:SPR Dallas Mavericks -15.5(-110),R5:TOT Over 235.5(-110),R6:TOT Under 235.5(-110)
@@ -184,5 +186,88 @@ describe('Flight Recorder Audit wf-1795287815668 — P0-2 Regressions (The_Perfe
     expect((managerOut as any).criticApproved).toBe(true);
     expect((managerOut as any).wageringPass).toBe(false);
     expect((managerOut as any).picks).toHaveLength(1);
+  });
+});
+
+describe('Flight Recorder Audit wf-1795287815668 — P2-1 Regressions (The_Perfect_Swarm)', () => {
+  it('1. Multi-sport Qdrant/InMemory Cortex querying matches lessons across all active sports (ncaaf, nhl, nba)', async () => {
+    const storage = new InMemoryStorageAdapter({ isolatedStore: true });
+    await storage.initialize('duelodds');
+
+    await storage.store({
+      id: 'lesson-ncaaf',
+      denseVector: [1, 0, 0],
+      payload: {
+        originApp: 'duelodds',
+        appId: 'duelodds',
+        domain: 'ncaaf',
+        visibility: 'public',
+        memoryType: 'fact',
+        rule: 'Avoid unverified road favorites > 14 pts in NCAAF conference play.',
+      },
+    });
+    await storage.store({
+      id: 'lesson-nhl',
+      denseVector: [0, 1, 0],
+      payload: {
+        originApp: 'duelodds',
+        appId: 'duelodds',
+        domain: 'nhl',
+        visibility: 'public',
+        memoryType: 'fact',
+        rule: 'Verify starting goalies before locking NHL puckline legs.',
+      },
+    });
+    await storage.store({
+      id: 'lesson-nba',
+      denseVector: [0, 0, 1],
+      payload: {
+        originApp: 'duelodds',
+        appId: 'duelodds',
+        domain: 'nba',
+        visibility: 'public',
+        memoryType: 'fact',
+        rule: 'Cap NBA double-digit spread legs in multi-game parlays.',
+      },
+    });
+
+    const hits = await storage.search([0.6, 0.6, 0.6], {
+      appId: 'duelodds',
+      domain: 'multi-sport',
+      domains: ['ncaaf', 'nhl', 'nba'],
+      limit: 5,
+    });
+    expect(hits.map((h) => h.id)).toEqual(
+      expect.arrayContaining(['lesson-ncaaf', 'lesson-nhl', 'lesson-nba']),
+    );
+
+    const ranked = rankAndFilterCandidates(
+      hits,
+      {
+        appId: 'duelodds',
+        domain: 'multi-sport',
+        domains: ['ncaaf', 'nhl', 'nba'],
+        limit: 5,
+      },
+      "what's the best parlay to place today?",
+      'duelodds',
+    );
+    expect(ranked).toHaveLength(3);
+    expect(
+      computeBlendWeight(
+        {
+          originApp: 'duelodds',
+          appId: 'duelodds',
+          domain: 'ncaaf',
+          memoryType: 'fact',
+          entityIds: [],
+        },
+        'duelodds',
+        'multi-sport',
+        [],
+        true,
+        ['ncaaf', 'nhl', 'nba'],
+      ),
+    ).toBe(1.0);
   });
 });

@@ -108,14 +108,28 @@ export function computeBlendWeight(
     readerApp: string,
     requestedDomain: string | undefined,
     queryEntityIds: string[],
-    includeShared: boolean = true
+    includeShared: boolean = true,
+    requestedDomains?: string[]
 ): number {
     const isSameOriginApp = pointTags.originApp.toLowerCase() === readerApp.toLowerCase();
     const effectiveReaderDomain = requestedDomain ? requestedDomain.toLowerCase() : 'general';
     const pointDomain = pointTags.domain.toLowerCase();
-    const isSameDomain = requestedDomain
-        ? (pointDomain === effectiveReaderDomain)
-        : (isSameOriginApp ? true : pointDomain === effectiveReaderDomain);
+    const domainSet =
+        Array.isArray(requestedDomains) && requestedDomains.length > 0
+            ? new Set([
+                  ...requestedDomains.map((d) => String(d || '').toLowerCase()),
+                  'multi-sport',
+                  'odds',
+                  'general'
+              ])
+            : null;
+    const isSameDomain = domainSet
+        ? domainSet.has(pointDomain)
+        : effectiveReaderDomain === 'multi-sport'
+            ? true
+            : requestedDomain
+                ? (pointDomain === effectiveReaderDomain)
+                : (isSameOriginApp ? true : pointDomain === effectiveReaderDomain);
 
     if (isSameOriginApp && isSameDomain) {
         return 1.0;
@@ -142,6 +156,7 @@ export interface CandidateRankingOptions {
     appId?: string;
     originApp?: string;
     domain?: string;
+    domains?: string[];
     entityIds?: string[];
     entityId?: string;
     limit?: number;
@@ -187,7 +202,7 @@ export function rankAndFilterCandidates(
 
     for (const c of candidates) {
         const tags = normalizeMemoryPayload(c.payload, defaultAppId);
-        const weight = computeBlendWeight(tags, readerApp, requestedDomain, queryEntities, includeShared);
+        const weight = computeBlendWeight(tags, readerApp, requestedDomain, queryEntities, includeShared, options.domains);
         if (weight <= 0) continue;
 
         if (options.minRating !== undefined && (c.payload.qualityRating ?? 0) < options.minRating) continue;

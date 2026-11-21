@@ -30,6 +30,7 @@ export interface MemoryGroundingParams {
     toolRegistry: ToolRegistry;
     context: SwarmContext;
     domain?: string;
+    domains?: string[];
     disableMemoryRetrieval?: boolean;
     settings?: SwarmEngineSettings;
     eventId?: string;
@@ -147,6 +148,31 @@ export async function resolveMemoryGrounding(
     const explicitEvents = scope?.eventIds?.length
         ? scope.eventIds
         : p.eventIds || (p.eventId ? [p.eventId] : undefined);
+    const inferredDomainsFromEvents = (() => {
+        if (Array.isArray(p.domains) && p.domains.length > 0) {
+            return Array.from(new Set(p.domains.map((d) => String(d || '').trim().toLowerCase()).filter(Boolean)));
+        }
+        const evList = Array.isArray(explicitEvents) ? explicitEvents : [];
+        const sports = new Set<string>();
+        for (const eid of evList) {
+            const lower = String(eid || '').trim().toLowerCase();
+            if (lower.startsWith('college-football') || lower.startsWith('ncaaf')) sports.add('ncaaf');
+            else if (lower.startsWith('mens-college-basketball') || lower.startsWith('college-basketball') || lower.startsWith('ncaab')) sports.add('ncaab');
+            else if (lower.startsWith('wnba-')) sports.add('wnba');
+            else if (lower.startsWith('nba-')) sports.add('nba');
+            else if (lower.startsWith('nfl-')) sports.add('nfl');
+            else if (lower.startsWith('nhl-')) sports.add('nhl');
+            else if (lower.startsWith('mlb-')) sports.add('mlb');
+        }
+        if (sports.size > 1) {
+            return Array.from(sports);
+        }
+        return undefined;
+    })();
+    const effectiveDomain =
+        inferredDomainsFromEvents && inferredDomainsFromEvents.length > 1
+            ? 'multi-sport'
+            : readDomain;
     const effectiveSport = scope?.sport || p.sport;
     const effectiveAsOf = scope?.asOf;
     const disableMemoryRetrieval = Boolean(
@@ -270,7 +296,10 @@ export async function resolveMemoryGrounding(
 
                 const scopedQueryOpts = {
                     appId: trustedAppId,
-                    domain: readDomain,
+                    domain: effectiveDomain,
+                    ...(inferredDomainsFromEvents && inferredDomainsFromEvents.length > 0
+                        ? { domains: inferredDomainsFromEvents }
+                        : {}),
                     sport: effectiveSport,
                     entityIds: explicitEntities,
                     eventIds: explicitEvents,

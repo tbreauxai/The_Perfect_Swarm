@@ -248,6 +248,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 toolRegistry,
                 context,
                 domain: params.domain || settings?.domain,
+                domains: params.domains || (settings as any)?.domains,
                 disableMemoryRetrieval: Boolean(params.disableMemoryRetrieval || settings?.disableMemoryRetrieval),
                 settings,
                 eventIds: params.eventIds,
