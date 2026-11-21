@@ -5,7 +5,7 @@ import type { SwarmEngineSettings } from '../types.ts';
 import type { AgentVariantConfig } from '../experiment.ts';
 import { ToolRegistry } from '../tools/index.ts';
 import { parseGameHeaders, renderHeaders } from '../context/gameHeaders.ts';
-import { resolveSelectedGameIds } from '../context/selectedGames.ts';
+import { filterHeadersByEventIds, resolveSelectedGameIds } from '../context/selectedGames.ts';
 import {
     globalHierarchicalMessageBus,
     type ClusterDigest,
@@ -83,6 +83,18 @@ export interface ClusterPipelineResult {
     workflowCompressedPromptTokens: number;
     workflowPromptTokensSaved: number;
     workflowDeduplicatedCount: number;
+    seatVisibility?: Array<{
+        seat: string;
+        role: string;
+        provider: string;
+        model: string;
+        inputTokens: number;
+        inputChars: number;
+        inputPreview: string;
+        slateChars: number;
+        rIdCount: number;
+        coveredEventIds: string[];
+    }>;
 }
 
 /**
@@ -147,6 +159,7 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
     const optSettings = settings?.optimizationSettings;
 
     const allAnalystReports: any[][] = analysts.map(() => []);
+    const seatVisibilityList: NonNullable<ClusterPipelineResult['seatVisibility']> = [];
 
     // 1. Dynamic Cluster Auto-Discovery & Capability Lead Election
     const {
@@ -270,7 +283,7 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
         const curatedDossierText = typeof params.curatedDossier === 'string'
             ? params.curatedDossier
             : params.curatedDossier?.markdown;
-        const disableAdHocTools = Boolean(curatedDossierText || params.seedManifest);
+        const disableAdHocTools = Boolean(params.seedManifest);
 
         const executeAnalyst = createAnalystExecutor({
             task,
@@ -290,6 +303,11 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
             onStage: params.onStage,
             curatedDossier: curatedDossierText,
             disableAdHocTools,
+            eventIds: params.eventIds,
+            triageMode: (params as any).triageMode,
+            onSeatVisibility: (v) => {
+                seatVisibilityList.push(v);
+            },
             onPromptCompression: (m) => {
                 workflowOriginalPromptTokens += m.originalTokens;
                 workflowCompressedPromptTokens += m.compressedTokens;
@@ -615,12 +633,20 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
             }
         } else {
             const usePool = optimizationEnabled && (optSettings?.workerPoolConcurrency ?? 4) > 1;
-            const parsedChunkHeaders = parseGameHeaders(chunks[0] || task, (params as any)?.eventIds);
+            const allChunkHeaders = parseGameHeaders(chunks[0] || task, (params as any)?.eventIds);
+            const activeEventIdList = Array.isArray((params as any)?.eventIds)
+                ? (params as any).eventIds.map((id: unknown) => String(id || '').trim()).filter(Boolean)
+                : [];
+            const scopedChunkHeaders = activeEventIdList.length > 0
+                ? filterHeadersByEventIds(allChunkHeaders, activeEventIdList)
+                : allChunkHeaders;
+            const parsedChunkHeaders = scopedChunkHeaders.length > 0 ? scopedChunkHeaders : allChunkHeaders;
             const rawChunk = chunks[0];
-            const cappedChunk = rawChunk && rawChunk.length > 1600 ? rawChunk.slice(0, 1600) : rawChunk;
+            const headerCap = (params as any)?.triageMode === 'two-hop' || (rawChunk && rawChunk.includes('rows=R')) ? 4200 : 1600;
+            const cappedChunk = rawChunk && rawChunk.length > headerCap ? rawChunk.slice(0, headerCap) : rawChunk;
             const headersPayload = parsedChunkHeaders.length > 0
-                ? renderHeaders(parsedChunkHeaders, 1600)
-                : (cappedChunk || renderHeaders(parsedChunkHeaders, 1600));
+                ? renderHeaders(parsedChunkHeaders, headerCap)
+                : (cappedChunk || renderHeaders(parsedChunkHeaders, headerCap));
 
             const isCriticSeat = (a: Agent) => /critic|\brisk\b/i.test(a.role) || /critic|\brisk\b/i.test((a as any).id || '');
             const proposerEntries = analysts.map((analyst, idx) => ({ analyst, idx })).filter(e => !isCriticSeat(e.analyst));
@@ -862,6 +888,7 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
         workflowOriginalPromptTokens,
         workflowCompressedPromptTokens,
         workflowPromptTokensSaved,
-        workflowDeduplicatedCount
+        workflowDeduplicatedCount,
+        ...(seatVisibilityList.length > 0 ? { seatVisibility: seatVisibilityList } : {})
     };
 }

@@ -269,9 +269,13 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             ].filter(Boolean);
             const historicalContext = contextParts.join('\n\n');
 
-            // Hop 1: Two-Hop Triage & Fetch (when SeedManifest is provided)
-            let curatedDossier: CuratedDossier | undefined = params.curatedDossier;
+            // Hop 1: Two-Hop Triage & Fetch (when SeedManifest is provided or triageMode === 'two-hop')
+            let hop1Plan: any = params.hop1Plan;
+            let curatedDossier: CuratedDossier | any | undefined = params.curatedDossier;
             const env = typeof process !== "undefined" ? process.env : {} as Record<string, string | undefined>;
+            const isTwoHopSlateRun =
+                !params.seedManifest &&
+                (params.triageMode === 'two-hop' || (typeof data === 'string' && data.includes('=== COMPACT SLATE ===')));
             if (params.seedManifest && !curatedDossier) {
                 // 1. Triage Plan
                 const plan = await planTriage(params.seedManifest, {
@@ -279,6 +283,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     env,
                     qdrantClient: (params as any).qdrantClient
                 });
+                hop1Plan = plan;
+                params.hop1Plan = plan;
                 params.onStage?.({
                     stage: 'hop1_plan',
                     plan
@@ -301,14 +307,48 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     dossier: curatedDossier
                 });
                 params.curatedDossier = curatedDossier;
+            } else if (isTwoHopSlateRun && !hop1Plan) {
+                const rawSlateSource = typeof data === 'string' && data.length > 0 ? data : (profilingResult.rawInput || '');
+                const parsedSlateHeaders = parseGameHeaders(rawSlateSource, params.eventIds);
+                const activeSet = Array.isArray(params.eventIds) && params.eventIds.length > 0
+                    ? new Set(params.eventIds.map((id) => String(id).trim()).filter(Boolean))
+                    : null;
+                const scopedHeaders = activeSet && activeSet.size > 0
+                    ? parsedSlateHeaders.filter((h) => activeSet.has(h.eventId))
+                    : parsedSlateHeaders;
+                const activeHeaders = scopedHeaders.length > 0 ? scopedHeaders : parsedSlateHeaders;
+                const selectedTools = [
+                    'get_injury_and_roster_delta',
+                    'get_matchup_fundamentals',
+                    'get_market_movement'
+                ].filter((t) => toolRegistry.has(t));
+                hop1Plan = {
+                    mode: 'two-hop-slate',
+                    triageMode: params.triageMode || 'two-hop',
+                    active_event_ids: activeHeaders.map((h) => h.eventId),
+                    slate_games_count: activeHeaders.length,
+                    priced_games_count: activeHeaders.filter((h) => (h.options || []).length > 0).length,
+                    r_id_count: activeHeaders.reduce(
+                        (acc, h) => acc + (h.options || []).filter((o) => Boolean(o.id)).length,
+                        0
+                    ),
+                    selected_tools: selectedTools,
+                    reasoning: 'Two-hop compact slate triage preserving R# pricing rows across activeEventIds with scoped tool prefetch.'
+                };
+                params.hop1Plan = hop1Plan;
+                params.onStage?.({
+                    stage: 'hop1_plan',
+                    plan: hop1Plan,
+                    selected_tools: selectedTools
+                });
             }
 
             // Hop 2 Specialist Debate Start Event
-            if (params.seedManifest || curatedDossier) {
+            if (params.seedManifest || curatedDossier || isTwoHopSlateRun) {
                 params.onStage?.({
                     stage: 'analyst_start',
                     analysts: analysts.map(a => a.role),
-                    hasCuratedDossier: Boolean(curatedDossier)
+                    hasCuratedDossier: Boolean(curatedDossier || isTwoHopSlateRun)
                 });
             }
 
@@ -401,6 +441,36 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     prePassedItems: flatReports.flatMap((r: any) => (Array.isArray(r?.toolEvidenceItems) ? r.toolEvidenceItems : [])),
                     toolCallTrace: allToolCallTrace
                 });
+                if (!curatedDossier && (isTwoHopSlateRun || hop1Plan)) {
+                    const dossierMarkdown = allToolEvidenceItems.map((i) => i.summary).join('\n\n');
+                    curatedDossier = {
+                        mode: 'two-hop-slate',
+                        active_event_ids: hop1Plan?.active_event_ids || params.eventIds || [],
+                        sections: allToolEvidenceItems.map((item) => ({
+                            tool: item.tool,
+                            event_id: item.eventId,
+                            status: 'ok',
+                            summary: item.summary,
+                            tokenCost: Math.ceil((item.summary?.length || 0) / 4)
+                        })),
+                        tool_call_trace: allToolCallTrace,
+                        seat_visibility: clusterResult.seatVisibility || [],
+                        markdown: dossierMarkdown,
+                        tokenEstimate: Math.ceil(dossierMarkdown.length / 4),
+                        totalDurationMs: allToolCallTrace.reduce((acc, t: any) => acc + (Number(t?.durationMs) || 0), 0)
+                    };
+                    params.curatedDossier = curatedDossier;
+                    params.onStage?.({
+                        stage: 'curated_dossier',
+                        dossier: curatedDossier
+                    });
+                } else if (curatedDossier && clusterResult.seatVisibility && clusterResult.seatVisibility.length > 0) {
+                    curatedDossier = {
+                        ...curatedDossier,
+                        seat_visibility: clusterResult.seatVisibility
+                    };
+                    params.curatedDossier = curatedDossier;
+                }
                 const baseVerifierEvidence = buildVerifierEvidence(
                     [{ toolEvidenceItems: allToolEvidenceItems }],
                     profilingResult.rawInput ?? data ?? task
@@ -726,8 +796,31 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 if (anyEv.output?.tool) toolsCalled.add(anyEv.output.tool);
             }
             const toolsCalledList = Array.from(toolsCalled);
+            if (!curatedDossier && (isTwoHopSlateRun || hop1Plan)) {
+                curatedDossier = {
+                    mode: 'two-hop-slate',
+                    active_event_ids: hop1Plan?.active_event_ids || params.eventIds || [],
+                    sections: [],
+                    tool_call_trace: [],
+                    seat_visibility: clusterResult.seatVisibility || [],
+                    markdown: '',
+                    tokenEstimate: 0,
+                    totalDurationMs: 0
+                };
+                params.curatedDossier = curatedDossier;
+                params.onStage?.({
+                    stage: 'curated_dossier',
+                    dossier: curatedDossier
+                });
+            }
             if (finalAnalysis && typeof finalAnalysis === 'object') {
                 finalAnalysis.tools_called = [...toolsCalledList];
+                if (hop1Plan && finalAnalysis.hop1Plan === undefined) {
+                    finalAnalysis.hop1Plan = hop1Plan;
+                }
+                if (curatedDossier && finalAnalysis.curatedDossier === undefined) {
+                    finalAnalysis.curatedDossier = curatedDossier;
+                }
             }
 
             return {
@@ -736,6 +829,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 partial: managerFailed,
                 degraded,
                 tools_called: toolsCalledList,
+                ...(hop1Plan ? { hop1Plan } : {}),
+                ...(curatedDossier ? { curatedDossier } : {}),
                 events: context.events,
                 finalAnalysis,
                 metrics: learningResult.metrics,

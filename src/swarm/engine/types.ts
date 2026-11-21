@@ -69,6 +69,9 @@ export interface SwarmWorkflowParams {
     pricing?: SeedManifestPricing;
     flags?: SeedManifestFlags;
     curatedDossier?: any;
+    hop1Plan?: any;
+    triageMode?: 'two-hop' | 'legacy';
+    domains?: string[];
 }
 
 export interface SwarmWorkflowResult {
@@ -152,6 +155,8 @@ export interface SwarmWorkflowResult {
     consensus?: AnalystConsensusDigest;
     /** R2-S3: present only in scorecardMode: { brief, scorecards, degraded, citedRows, critic? }. */
     blackboard?: Blackboard;
+    hop1Plan?: any;
+    curatedDossier?: any;
 }
 
 export interface SwarmFeedbackReport {

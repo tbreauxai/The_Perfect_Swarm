@@ -55,11 +55,11 @@ export function parseGameHeaders(data: unknown, fallbackEventIds?: string[]): Ga
   }
 
   const parseOptionsSegment = (segment: string, options: GameHeaderOption[]) => {
-    const rawOpts = segment.replace(/^options:\s*/i, '').trim();
-    // Options format: "R1 KC -3.5 (-110), R2 BUF +3.5 (-110)" or semicolon delimited
+    const rawOpts = segment.replace(/^(?:options:|rows=)\s*/i, '').trim();
+    // Options format: "R1 KC -3.5 (-110), R2 BUF +3.5 (-110)" or "R1:ML KC(-110),R2:SPR BUF +3.5(-110)"
     const optItems = rawOpts.split(/[,;]\s*(?=R\d+)/);
     for (const item of optItems) {
-      const match = item.trim().match(/^(R\d+)\s*(.*)$/);
+      const match = item.trim().match(/^(R\d+)[:\s]*(.*)$/);
       if (match) {
         options.push({
           id: match[1],
@@ -103,7 +103,7 @@ export function parseGameHeaders(data: unknown, fallbackEventIds?: string[]): Ga
               away = teams[0];
               home = teams[1];
             }
-          } else if (p.toLowerCase().startsWith('options:')) {
+          } else if (p.toLowerCase().startsWith('options:') || p.toLowerCase().startsWith('rows=')) {
             parseOptionsSegment(p, options);
           } else if (/^sp\s+/i.test(p)) {
             spRaw = p.replace(/^sp\s+/i, '').trim();
@@ -118,32 +118,45 @@ export function parseGameHeaders(data: unknown, fallbackEventIds?: string[]): Ga
           if (sport === 'unknown') {
             sport = inferSportFromEventId(eventId);
           }
-          if (mlRaw && !/^n\/a$/i.test(mlRaw)) {
-            const mlParts = mlRaw.split('/').map(s => s.trim());
-            if (mlParts.length === 2 && mlParts[0] && mlParts[1] && !/^n\/a$/i.test(mlParts[0]) && !/^n\/a$/i.test(mlParts[1])) {
+          const hasExplicitRidOptions = options.some(o => Boolean(o.id));
+          if (!hasExplicitRidOptions) {
+            if (mlRaw && !/^n\/a$/i.test(mlRaw)) {
+              const mlParts = mlRaw.split('/').map(s => s.trim());
+              if (mlParts.length === 2 && mlParts[0] && mlParts[1] && !/^n\/a$/i.test(mlParts[0]) && !/^n\/a$/i.test(mlParts[1])) {
+                options.push({
+                  id: '',
+                  text: `${away} ML ${mlParts[1]} / ${home} ML ${mlParts[0]}`
+                });
+              } else if (mlParts.length === 2 && mlParts[0] && !/^n\/a$/i.test(mlParts[0])) {
+                options.push({
+                  id: '',
+                  text: `${home} ML ${mlParts[0]}`
+                });
+              } else if (mlParts.length === 2 && mlParts[1] && !/^n\/a$/i.test(mlParts[1])) {
+                options.push({
+                  id: '',
+                  text: `${away} ML ${mlParts[1]}`
+                });
+              }
+            }
+            if (spRaw && !/^n\/a$/i.test(spRaw)) {
+              const spNum = Number(spRaw);
+              if (Number.isFinite(spNum)) {
+                const homeSp = spNum > 0 ? `+${spNum}` : `${spNum}`;
+                const awayNum = -spNum;
+                const awaySp = awayNum > 0 ? `+${awayNum}` : `${awayNum}`;
+                options.push({
+                  id: '',
+                  text: `${home} ${homeSp} / ${away} ${awaySp}`
+                });
+              }
+            }
+            if (totRaw && !/^n\/a$/i.test(totRaw)) {
               options.push({
                 id: '',
-                text: `${away} ML ${mlParts[1]} / ${home} ML ${mlParts[0]}`
+                text: `O/U ${totRaw}`
               });
             }
-          }
-          if (spRaw && !/^n\/a$/i.test(spRaw)) {
-            const spNum = Number(spRaw);
-            if (Number.isFinite(spNum)) {
-              const homeSp = spNum > 0 ? `+${spNum}` : `${spNum}`;
-              const awayNum = -spNum;
-              const awaySp = awayNum > 0 ? `+${awayNum}` : `${awayNum}`;
-              options.push({
-                id: '',
-                text: `${home} ${homeSp} / ${away} ${awaySp}`
-              });
-            }
-          }
-          if (totRaw && !/^n\/a$/i.test(totRaw)) {
-            options.push({
-              id: '',
-              text: `O/U ${totRaw}`
-            });
           }
           headers.push({ eventId, sport, away, home, commence, options });
         }
@@ -177,7 +190,7 @@ export function parseGameHeaders(data: unknown, fallbackEventIds?: string[]): Ga
                 home = teams[1];
                 foundMatchup = true;
               }
-            } else if (p.toLowerCase().startsWith('options:')) {
+            } else if (p.toLowerCase().startsWith('options:') || p.toLowerCase().startsWith('rows=')) {
               parseOptionsSegment(p, options);
             }
           }

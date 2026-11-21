@@ -99,6 +99,23 @@ export interface AnalystExecutorConfig {
     curatedDossier?: string;
     /** Disable multi-turn ad-hoc tool calling in Hop 2 debate */
     disableAdHocTools?: boolean;
+    /** Active event IDs for two-hop compact slate scoping */
+    eventIds?: string[];
+    /** Triage mode ('two-hop' | 'legacy') */
+    triageMode?: 'two-hop' | 'legacy';
+    /** Callback invoked after each seat executes to capture per-seat input preview and token count */
+    onSeatVisibility?: (seatTelemetry: {
+        seat: string;
+        role: string;
+        provider: string;
+        model: string;
+        inputTokens: number;
+        inputChars: number;
+        inputPreview: string;
+        slateChars: number;
+        rIdCount: number;
+        coveredEventIds: string[];
+    }) => void;
 }
 
 /**
@@ -411,9 +428,26 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
         const auditTargetIds = hasAuditContext
             ? Array.from(new Set((proposedAuditContext?.targetGameIds || []).filter(Boolean)))
             : [];
-        const parsedHeaders = hasAuditContext
-            ? (auditTargetIds.length > 0 ? filterHeadersByEventIds(allParsedHeaders, auditTargetIds) : [])
+        const activeEventIdList = Array.isArray(config.eventIds)
+            ? config.eventIds.map(id => String(id || '').trim()).filter(Boolean)
+            : [];
+        const activeScopedHeaders = !hasAuditContext && activeEventIdList.length > 0
+            ? (() => {
+                const matched = filterHeadersByEventIds(mergedHeadersForRowCheck, activeEventIdList);
+                return matched.length > 0 ? matched : allParsedHeaders;
+            })()
             : allParsedHeaders;
+        const parsedHeaders = hasAuditContext
+            ? (() => {
+                if (auditTargetIds.length > 0) {
+                    return filterHeadersByEventIds(mergedHeadersForRowCheck, auditTargetIds);
+                }
+                if (config.triageMode === 'two-hop' || fullRawSource.includes('rows=R')) {
+                    return activeScopedHeaders;
+                }
+                return [];
+            })()
+            : activeScopedHeaders;
         const effectiveTaskText = isCritic && cappedTask.length > 180 ? `${cappedTask.slice(0, 177)}...` : cappedTask;
         const headerBudget = isCritic
             ? Math.max(80, Math.min(1600, criticBudget.maxPromptChars - baseInstruction.length - criticToolSchemasLen - effectiveTaskText.length - 380))
@@ -649,6 +683,20 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
             }
 
             const resData = scorecardReport || guardAnalystResponse(rawOutput, analyst.role);
+            const rMatches = renderedHeadersText.match(/\bR\d+\b/g);
+            const rIdCount = rMatches ? new Set(rMatches).size : 0;
+            config.onSeatVisibility?.({
+                seat,
+                role: analyst.role,
+                provider: String(analyst.provider),
+                model: analyst.modelName || 'default',
+                inputTokens: TokenEstimator.estimatePayloadTokens(seatPrompt),
+                inputChars: seatPrompt.length,
+                inputPreview: seatPrompt.slice(0, 600),
+                slateChars: renderedHeadersText.length,
+                rIdCount,
+                coveredEventIds: scorecardReport?.coveredEventIds ?? seatLoopRes?.coveredEventIds ?? parsedHeaders.map(h => h.eventId)
+            });
             recordRunDebugSeat((context as any)?.id, seat, {
                 role: analyst.role,
                 provider: String(analyst.provider),
