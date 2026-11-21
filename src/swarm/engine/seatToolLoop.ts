@@ -556,8 +556,10 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
 
   const executeCalls = async (calls: { tool: string; parameters: Record<string, unknown> }[]) => {
     const callsToRun = calls.slice(0, budget.maxToolCalls);
-    await Promise.all(
-      callsToRun.map(async (c) => {
+    let nextIdx = 0;
+    const workers = Array.from({ length: Math.min(4, callsToRun.length) }, async () => {
+      while (nextIdx < callsToRun.length) {
+        const c = callsToRun[nextIdx++];
         executedTools.push(c.tool);
         const targetGameId = (c.parameters.game_id as string) || (c.parameters.p_game_id as string) || (c.parameters.id as string) || gameId;
         if (targetGameId && targetGameId !== 'unknown-game') {
@@ -631,9 +633,9 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
         if (typeof res?.summary === 'string' && res.summary.trim().length > 0) {
           executedEntries.push({ tool: c.tool, targetGameId, summary: res.summary.trim() });
         }
-        return { res, targetGameId, summary: res.summary };
-      })
-    );
+      }
+    });
+    await Promise.all(workers);
 
     return formatToolResultsWithinBudget(executedEntries);
   };
