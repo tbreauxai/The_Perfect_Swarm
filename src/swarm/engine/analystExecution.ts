@@ -646,7 +646,11 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                               flags: Array.isArray((resData as any)?.flags) ? (resData as any).flags.map(String) : []
                           }
                       }
-                    : {})
+                    : {
+                          headerChars: renderedHeadersText.length,
+                          headerBudget,
+                          pricedHeaders: parsedHeaders.filter(h => (h.options || []).length > 0).length
+                      })
             });
             (resData as any)._chunkIndex = chunkIdx;
             (resData as any).coveredEventIds = scorecardReport?.coveredEventIds ?? seatLoopRes?.coveredEventIds ?? [];
@@ -1063,7 +1067,11 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                               flags: Array.isArray((resData as any)?.flags) ? (resData as any).flags.map(String) : []
                           }
                       }
-                    : {})
+                    : {
+                          headerChars: renderedHeadersText.length,
+                          headerBudget,
+                          pricedHeaders: parsedHeaders.filter(h => (h.options || []).length > 0).length
+                      })
             });
             if (scorecardReport) {
                 // R2-S3: stream each scorecard as soon as the seat finishes.
