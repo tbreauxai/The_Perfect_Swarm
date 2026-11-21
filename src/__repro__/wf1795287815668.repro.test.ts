@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { parseGameHeaders, renderHeaders } from '../swarm/context/gameHeaders.ts';
 import { filterHeadersByEventIds } from '../swarm/context/selectedGames.ts';
 import { executeSwarmWorkflow } from '../swarm/engine/index.ts';
+import { guardAnalystResponse, guardManagerResponse, guardVerificationResult } from '../swarm/parser/responseGuards.ts';
 
 const WF_1795287815668_COMPACT_SLATE = `=== COMPACT SLATE ===
 event_id=nba-401910027 | New Orleans Pelicans @ Dallas Mavericks | sp +15.5(-110)/-15.5(-110) | ml +980/-1800 | tot 235.5(-110)/235.5(-110) | rows=R1:ML New Orleans Pelicans(+980),R2:ML Dallas Mavericks(-1800),R3:SPR New Orleans Pelicans +15.5(-110),R4:SPR Dallas Mavericks -15.5(-110),R5:TOT Over 235.5(-110),R6:TOT Under 235.5(-110)
@@ -89,21 +90,18 @@ describe('Flight Recorder Audit wf-1795287815668 — P0-1 Regressions (The_Perfe
             role: 'Quant Proposer',
             model: 'simulated-v1',
             provider: 'simulated' as any,
-            systemInstruction: 'Return JSON picks citing R#',
           },
           {
             id: 'a2',
             role: 'Market Proposer',
             model: 'simulated-v1',
             provider: 'simulated' as any,
-            systemInstruction: 'Return JSON picks citing R#',
           },
           {
             id: 'critic',
             role: 'Risk Critic',
             model: 'simulated-v1',
             provider: 'simulated' as any,
-            systemInstruction: 'Return JSON audit verdict',
           },
         ],
       },
@@ -129,5 +127,62 @@ describe('Flight Recorder Audit wf-1795287815668 — P0-1 Regressions (The_Perfe
 
     expect(stages.some((s) => s.stage === 'hop1_plan')).toBe(true);
     expect(stages.some((s) => s.stage === 'curated_dossier')).toBe(true);
+  });
+});
+
+describe('Flight Recorder Audit wf-1795287815668 — P0-2 Regressions (The_Perfect_Swarm)', () => {
+  it('1. guardAnalystResponse & guardVerificationResult support criticApproved and scorecard verdict approve/veto', () => {
+    const approvedCritic = guardAnalystResponse(
+      JSON.stringify({
+        analysis: 'All proposed legs verified.',
+        picks: [],
+        scorecards: [{ verdict: 'approve', notes: 'No fatal issues found.' }],
+        criticApproved: true,
+        wageringPass: false,
+      }),
+      'Risk Critic',
+    );
+    expect(approvedCritic.criticApproved).toBe(true);
+    expect(approvedCritic.pass).toBe(true);
+
+    const vetoCritic = guardAnalystResponse(
+      JSON.stringify({
+        analysis: 'Fatal issue found on R1.',
+        picks: [],
+        scorecards: [{ verdict: 'veto', notes: 'Fatal issue: uncalibrated longshot.' }],
+        criticApproved: false,
+        wageringPass: true,
+      }),
+      'Risk Critic',
+    );
+    expect(vetoCritic.criticApproved).toBe(false);
+    expect(vetoCritic.pass).toBe(false);
+
+    expect(
+      guardVerificationResult({
+        criticApproved: true,
+        scorecards: [{ verdict: 'approve', notes: 'No fatal issues found.' }],
+      }).pass,
+    ).toBe(true);
+
+    expect(
+      guardVerificationResult({
+        criticApproved: false,
+        scorecards: [{ verdict: 'veto', notes: 'Fatal issue' }],
+      }).pass,
+    ).toBe(false);
+  });
+
+  it('2. guardManagerResponse preserves criticApproved and wageringPass fields independently', () => {
+    const managerOut = guardManagerResponse({
+      analysis: 'Recommended 2-leg parlay.',
+      picks: [{ row: 'R4', side: 'Dallas Mavericks -15.5' }],
+      scorecards: [{ verdict: 'approve', notes: 'No fatal issues found.' }],
+      criticApproved: true,
+      wageringPass: false,
+    });
+    expect((managerOut as any).criticApproved).toBe(true);
+    expect((managerOut as any).wageringPass).toBe(false);
+    expect((managerOut as any).picks).toHaveLength(1);
   });
 });

@@ -11,7 +11,7 @@ export const RED_TEAM_ANALYST_ROLE = 'RedTeamAnalyst';
 
 export const CRITIC_VERDICT_SYSTEM_INSTRUCTION = `You are the Swarm Risk Critic.
 Review the other seats' proposed picks, audit risk, data completeness, and contrarian flags for those proposed legs.
-VETO POLICY: Only set "pass": false when a proposed pick leg itself has a fatal injury, critical roster scratch, missing coverage on that leg, or a direct rule violation. Do not veto valid proposed picks just because other unpicked games on the slate have heavy injuries or incomplete roster data.
+VETO POLICY: Only set "criticApproved": false ("pass": false, verdict: "veto") when a proposed pick leg itself has a fatal injury, critical roster scratch, missing coverage on that leg, or a direct rule violation. Do not veto valid proposed picks just because other unpicked games on the slate have heavy injuries or incomplete roster data.
 
 CRITIC SCOPE:
 - You may call tools to verify evidence.
@@ -41,6 +41,7 @@ ${PULL_BEFORE_PASS_RULE}
 The user's betting or parlay request is in scope. Output only verdict JSON and add no picks of your own.
 Return output strictly as a valid JSON object matching this shape:
 {
+  "criticApproved": boolean,
   "pass": boolean,
   "verdict": string,
   "flags": string[]

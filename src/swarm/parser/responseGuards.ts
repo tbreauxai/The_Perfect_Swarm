@@ -39,7 +39,7 @@ export function stripApproximateOdds(text: string, options?: { allowExactOdds?: 
 /**
  * Domain guard for AnalystResponseSchema: guaranteed zero crashes on worker agent outputs.
  */
-export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): AnalystResponse & { analysis?: string; picks?: any[]; scorecards?: any[]; pass?: boolean; verdict?: string; flags?: string[] } {
+export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): AnalystResponse & { analysis?: string; picks?: any[]; scorecards?: any[]; pass?: boolean; criticApproved?: boolean; wageringPass?: boolean; verdict?: string; flags?: string[] } {
     const { data: raw, repaired: parseRepaired, reasoningTraces } = parseJsonSafeWithStatus<any>(input, {});
     let wasRepaired = parseRepaired || raw?._repaired === true;
     let seatEmittedPricing = false;
@@ -57,14 +57,24 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
         if (reasoningTraces && reasoningTraces.length > 0) {
             metadata.reasoningTraces = reasoningTraces;
         }
-        if (raw && typeof raw === 'object' && !Array.isArray(raw) && typeof raw.pass === 'boolean') {
+        const resolvedCriticApproved =
+            typeof raw?.criticApproved === 'boolean'
+                ? raw.criticApproved
+                : (typeof raw?.pass === 'boolean'
+                    ? raw.pass
+                    : (Array.isArray(raw?.scorecards) && raw.scorecards.length > 0 && typeof raw.scorecards[0]?.verdict === 'string'
+                        ? verdictText(raw.scorecards[0].verdict)
+                        : (typeof raw?.verdict === 'string' ? verdictText(raw.verdict) : null)));
+        if (raw && typeof raw === 'object' && !Array.isArray(raw) && typeof resolvedCriticApproved === 'boolean') {
             const rawVerdict = typeof raw.verdict === 'string' && raw.verdict.trim()
                 ? raw.verdict.trim()
-                : (typeof raw.summary === 'string' && raw.summary.trim()
-                    ? raw.summary.trim()
-                    : (typeof raw.feedback === 'string' && raw.feedback.trim()
-                        ? raw.feedback.trim()
-                        : (raw.pass ? 'pass' : 'fail')));
+                : (typeof raw.analysis === 'string' && raw.analysis.trim()
+                    ? raw.analysis.trim()
+                    : (typeof raw.summary === 'string' && raw.summary.trim()
+                        ? raw.summary.trim()
+                        : (typeof raw.feedback === 'string' && raw.feedback.trim()
+                            ? raw.feedback.trim()
+                            : (resolvedCriticApproved ? 'approve' : 'veto'))));
             const verdictStr = stripSeatText(rawVerdict);
             const feedbackStr = typeof raw.feedback === 'string' && raw.feedback.trim()
                 ? stripSeatText(raw.feedback.trim())
@@ -79,7 +89,10 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
                 insights: verdictStr ? [verdictStr] : [],
                 anomalies: flagsList,
                 summary: verdictStr,
-                pass: raw.pass,
+                pass: resolvedCriticApproved,
+                criticApproved: resolvedCriticApproved,
+                ...(typeof raw.wageringPass === 'boolean' ? { wageringPass: raw.wageringPass } : {}),
+                ...(Array.isArray(raw.scorecards) ? { scorecards: raw.scorecards } : {}),
                 verdict: verdictStr,
                 ...(feedbackStr ? { feedback: feedbackStr } : {}),
                 flags: flagsList,
@@ -89,9 +102,10 @@ export function guardAnalystResponse(input: unknown, role: string = 'Analyst'): 
         }
         return {
             insights: [],
-            anomalies: ['Critic contract violation: missing pass boolean'],
-            summary: 'Critic contract violation: missing pass boolean.',
+            anomalies: ['Critic contract violation: missing pass/criticApproved boolean'],
+            summary: 'Critic contract violation: missing pass/criticApproved boolean.',
             pass: false,
+            criticApproved: false,
             verdict: 'contract_violation',
             flags: ['missing_pass_field'],
             ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
@@ -420,6 +434,8 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
             ...(Array.isArray(raw?.picks) ? { picks: raw.picks } : {}),
             ...(Array.isArray(raw?.scorecards) ? { scorecards: raw.scorecards } : {}),
             ...(typeof raw?.pass === 'boolean' ? { pass: raw.pass } : {}),
+            ...(typeof raw?.criticApproved === 'boolean' ? { criticApproved: raw.criticApproved } : {}),
+            ...(typeof raw?.wageringPass === 'boolean' ? { wageringPass: raw.wageringPass } : {}),
             components: parsed.data.components.map((comp) => {
                 if (comp.type === 'InsightList') {
                     return {
@@ -532,6 +548,8 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
         ...(raw && Array.isArray(raw.picks) ? { picks: raw.picks } : {}),
         ...(raw && Array.isArray(raw.scorecards) ? { scorecards: raw.scorecards } : {}),
         ...(raw && typeof raw.pass === 'boolean' ? { pass: raw.pass } : {}),
+        ...(raw && typeof raw.criticApproved === 'boolean' ? { criticApproved: raw.criticApproved } : {}),
+        ...(raw && typeof raw.wageringPass === 'boolean' ? { wageringPass: raw.wageringPass } : {}),
         ...(raw && raw.status ? { status: raw.status } : {}),
         ...(raw && raw.reason ? { reason: raw.reason } : {}),
         _repaired: true
@@ -569,7 +587,7 @@ function verdictText(value: unknown): boolean | null {
     if (typeof value !== 'string') return null;
     const normalized = value.trim().toLowerCase();
     if (normalized === 'pass' || normalized === 'approve' || normalized === 'approved' || normalized === 'accept') return true;
-    if (normalized === 'fail' || normalized === 'reject' || normalized === 'rejected') return false;
+    if (normalized === 'fail' || normalized === 'veto' || normalized === 'vetoed' || normalized === 'reject' || normalized === 'rejected') return false;
     return null;
 }
 
@@ -597,7 +615,9 @@ export function readVerdict(obj: unknown): { pass: boolean | null; feedback: str
         }
     }
 
-    if (Array.isArray(source.scorecards)) {
+    const directKeys = ['criticApproved', 'pass', 'passed', 'approved'] as const;
+    const hasTopLevelBooleanKey = directKeys.some((k) => k in source);
+    if (Array.isArray(source.scorecards) && !hasTopLevelBooleanKey) {
         const blacklistedPass = source.scorecards.some((card: any) => card && typeof card === 'object' && verdictText(card.verdict) === true);
         if (blacklistedPass) {
             return {
@@ -609,7 +629,6 @@ export function readVerdict(obj: unknown): { pass: boolean | null; feedback: str
         }
     }
 
-    const directKeys = ['pass', 'passed', 'approved'] as const;
     for (const key of directKeys) {
         if (key in source) {
             const value = source[key];
