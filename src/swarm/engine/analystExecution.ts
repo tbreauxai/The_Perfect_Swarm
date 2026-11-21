@@ -209,7 +209,7 @@ export function rankGameIdsBySupabaseEdge(gameIds: string[], contextText: string
 
 export function proposerHeaderBudget(provider: string | undefined): number {
     const maxChars = seatBudget(provider).maxPromptChars;
-    return Math.min(maxChars, Math.min(2400, Math.floor(maxChars * 0.3)));
+    return Math.min(maxChars, Math.floor(maxChars * 0.3));
 }
 
 export function createAnalystExecutor(config: AnalystExecutorConfig) {
