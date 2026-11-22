@@ -82,9 +82,9 @@ describe('runNov21a repros (wf-1795244009898)', () => {
     expect(maxInFlight).toBeGreaterThanOrEqual(1);
   });
 
-  it('C: proposerHeaderBudget scales to 4200 for 14000-char providers while keeping groq at 1680', () => {
-    expect(proposerHeaderBudget('openrouter')).toBe(4200);
-    expect(proposerHeaderBudget('nvidia')).toBe(4200);
+  it('C: proposerHeaderBudget scales with provider-aware seatBudget while keeping groq at 1680', () => {
+    expect(proposerHeaderBudget('openrouter')).toBe(6600);
+    expect(proposerHeaderBudget('nvidia')).toBe(8400);
     expect(proposerHeaderBudget('groq')).toBe(1680);
   });
 

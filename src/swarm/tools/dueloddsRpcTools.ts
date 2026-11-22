@@ -237,6 +237,88 @@ export const getMatchupFundamentalsTool: SwarmTool = {
       }).join('; ');
     };
 
+const SNAPSHOT_TEAM_CANONICAL_ALIAS: Readonly<Record<string, string>> = {
+  NO: 'NOP',
+  NOP: 'NOP',
+  GS: 'GSW',
+  GSW: 'GSW',
+  SA: 'SAS',
+  SAS: 'SAS',
+  NY: 'NYK',
+  NYK: 'NYK',
+  UTAH: 'UTA',
+  UTA: 'UTA',
+  UTH: 'UTA',
+  WSH: 'WAS',
+  WAS: 'WAS',
+  PHO: 'PHX',
+  PHX: 'PHX',
+  BK: 'BKN',
+  BRK: 'BKN',
+  BKN: 'BKN',
+  CHO: 'CHA',
+  CHA: 'CHA',
+  SJ: 'SJS',
+  SJS: 'SJS',
+  LA: 'LAK',
+  LAK: 'LAK',
+  NJ: 'NJD',
+  NJD: 'NJD',
+  TB: 'TBL',
+  TBL: 'TBL',
+  MON: 'MTL',
+  MTL: 'MTL',
+  JAC: 'JAX',
+  JAX: 'JAX',
+};
+
+function matchesSnapshotTeamKey(teamKey: string, label?: string, sportHint?: string): boolean {
+  const a = String(teamKey || '').trim();
+  const b = String(label || '').trim();
+  if (!a || !b) return false;
+  const ua = a.replace(/_/g, ' ').trim().toUpperCase();
+  const ub = b.replace(/_/g, ' ').trim().toUpperCase();
+  if (ua === ub) return true;
+
+  const ca = SNAPSHOT_TEAM_CANONICAL_ALIAS[ua] ?? ua;
+  const cb = SNAPSHOT_TEAM_CANONICAL_ALIAS[ub] ?? ub;
+  if (ca === cb) return true;
+
+  const entryA = matchTeamByLabel(a.replace(/_/g, ' '), sportHint);
+  const entryB = matchTeamByLabel(b.replace(/_/g, ' '), sportHint);
+  if (entryA && entryB) {
+    if (entryA.sport === entryB.sport && entryA.id === entryB.id) return true;
+    return false;
+  }
+  if (entryA) {
+    const abbrA = SNAPSHOT_TEAM_CANONICAL_ALIAS[entryA.abbr.toUpperCase()] ?? entryA.abbr.toUpperCase();
+    if (abbrA === cb) return true;
+  }
+  if (entryB) {
+    const abbrB = SNAPSHOT_TEAM_CANONICAL_ALIAS[entryB.abbr.toUpperCase()] ?? entryB.abbr.toUpperCase();
+    if (abbrB === ca) return true;
+  }
+
+  const checkShortAgainstLong = (shortCode: string, longName: string): boolean => {
+    const cleanShort = shortCode.replace(/[^A-Z]/g, '');
+    if (cleanShort.length < 2 || cleanShort.length > 6) return false;
+    const words = longName
+      .replace(/[^A-Z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter(Boolean);
+    if (words.length === 0) return false;
+    if (cleanShort.length >= 3 && words[0].startsWith(cleanShort)) return true;
+    const initials = words.map(w => w[0]).join('');
+    if (words.length >= 2 && cleanShort.slice(0, 2) === initials.slice(0, 2)) {
+      if (initials.startsWith(cleanShort)) return true;
+      if (cleanShort.endsWith('U') && initials.startsWith(cleanShort.slice(0, -1))) return true;
+    }
+    return false;
+  };
+
+  return checkShortAgainstLong(ua, ub) || checkShortAgainstLong(ub, ua);
+}
+
     if (d.source === 'snapshot') {
       const idToLabel = new Map<string, string>();
       const homeId = d.home_team_id ?? homeObj.team_id ?? homeObj.id;
@@ -291,24 +373,29 @@ export const getMatchupFundamentalsTool: SwarmTool = {
       };
       let formText: string;
       if (Array.isArray(d.form?.items) && d.form.items.length > 0) {
+        const snapSportHint = String(d.sport || gameId || '');
         const mappedItems = mapFormValue(d.form.items) as any[];
         const byTeam = new Map<string, any[]>();
         for (const item of mappedItems) {
           const team = String(item?.team ?? item?.team_id ?? 'Unknown');
-          const list = byTeam.get(team);
+          const matchedExistingKey = Array.from(byTeam.keys()).find(k => matchesSnapshotTeamKey(k, team, snapSportHint));
+          const bucketKey = matchedExistingKey ?? team;
+          const list = byTeam.get(bucketKey);
           if (list) list.push(item);
-          else byTeam.set(team, [item]);
+          else byTeam.set(bucketKey, [item]);
         }
-        if (homeLbl && !byTeam.has(String(homeLbl))) {
-          const homeMatched = Array.from(byTeam.keys()).find(k => k.toLowerCase() === String(homeLbl).toLowerCase());
+        const populatedTeamCount = Array.from(byTeam.values()).filter(list => list.length > 0).length;
+        if (populatedTeamCount < 2 && homeLbl) {
+          const homeMatched = Array.from(byTeam.keys()).find(k => matchesSnapshotTeamKey(k, String(homeLbl), snapSportHint));
           if (!homeMatched) byTeam.set(String(homeLbl), []);
         }
-        if (awayLbl && !byTeam.has(String(awayLbl))) {
-          const awayMatched = Array.from(byTeam.keys()).find(k => k.toLowerCase() === String(awayLbl).toLowerCase());
+        if (populatedTeamCount < 2 && awayLbl) {
+          const awayMatched = Array.from(byTeam.keys()).find(k => matchesSnapshotTeamKey(k, String(awayLbl), snapSportHint));
           if (!awayMatched) byTeam.set(String(awayLbl), []);
         }
         const parts: string[] = [];
         for (const [team, items] of byTeam.entries()) {
+          if (items.length === 0 && populatedTeamCount >= 2) continue;
           const sorted = [...items].sort((a, b) =>
             String(b?.game_date ?? '').localeCompare(String(a?.game_date ?? ''))
           );
@@ -317,8 +404,8 @@ export const getMatchupFundamentalsTool: SwarmTool = {
             .filter(Boolean);
           const wins = results.filter((r) => r === 'W').length;
           const losses = results.filter((r) => r === 'L').length;
-          const isHomeSide = homeLbl && team.toLowerCase() === String(homeLbl).toLowerCase();
-          const isAwaySide = awayLbl && team.toLowerCase() === String(awayLbl).toLowerCase();
+          const isHomeSide = Boolean(homeLbl && matchesSnapshotTeamKey(team, String(homeLbl), snapSportHint));
+          const isAwaySide = !isHomeSide && Boolean(awayLbl && matchesSnapshotTeamKey(team, String(awayLbl), snapSportHint));
           const meta = isHomeSide
             ? formatSideEnrichment(homeObj, 'home_record', 'Home')
             : isAwaySide
@@ -1509,13 +1596,17 @@ export const getMarketMovementTool: SwarmTool = {
     const booksTracked = booksTrackedRaw !== null
       ? booksTrackedRaw
       : (distinctBooksFromSnaps.size > 0 ? distinctBooksFromSnaps.size : 1);
+    const rawBook = String(d.book ?? '').trim().toLowerCase();
     const explicitDivergence =
       typeof (d.cross_book_divergence || d.divergence) === 'string' &&
       String(d.cross_book_divergence || d.divergence).trim() !== '' &&
       !/^none$/i.test(String(d.cross_book_divergence || d.divergence).trim())
         ? String(d.cross_book_divergence || d.divergence).trim()
         : null;
-    const divergence = explicitDivergence ?? (booksTracked >= 2 ? 'none' : 'single_book_only');
+    const isSingleBook =
+      booksTracked < 2 ||
+      (rawBook === 'fanduel' && distinctBooksFromSnaps.size < 2);
+    const divergence = explicitDivergence ?? (isSingleBook ? 'single_book' : 'none');
 
     const deltaSuffix = typeof delta === 'number' ? ` | Delta: ${delta}` : '';
     const summaryLines = [

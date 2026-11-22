@@ -53,7 +53,7 @@ function compactMarketSummary(summary: string): string {
     l =>
       !mlAndTotal.includes(l) &&
       !steamLines.includes(l) &&
-      !/^Steam:\s*neutral\b[^|]*\|\s*Divergence:\s*(?:none|single_book_only)$/i.test(l)
+      !/^Steam:\s*neutral\b[^|]*\|\s*Divergence:\s*(?:none|single_book|single_book_only)$/i.test(l)
   );
   const ordered = [...primary, ...mlAndTotal, ...steamLines];
   const joined = ordered.join(' | ').replace(/\s+/g, ' ').trim();

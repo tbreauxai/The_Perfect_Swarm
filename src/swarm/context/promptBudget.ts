@@ -35,12 +35,28 @@ export function seatBudget(provider?: string): SeatBudget {
       maxToolCalls: 6
     };
   }
-  // openrouter, gemini, mistral, or other fallback providers
+  if (norm === 'mistral') {
+    return {
+      maxPromptChars: 7200,
+      maxOutTokens: 1000,
+      maxToolResultChars: 2800,
+      maxToolCalls: 6
+    };
+  }
+  if (norm === 'cloudflare' || norm === 'openrouter') {
+    return {
+      maxPromptChars: 22000,
+      maxOutTokens: 1500,
+      maxToolResultChars: 12000,
+      maxToolCalls: 20
+    };
+  }
+  // nvidia (8k tokens), gemini (8k tokens), and default providers
   return {
-    maxPromptChars: 14000,
+    maxPromptChars: 28000,
     maxOutTokens: 1500,
-    maxToolResultChars: 6000,
-    maxToolCalls: 8
+    maxToolResultChars: 16000,
+    maxToolCalls: 20
   };
 }
 

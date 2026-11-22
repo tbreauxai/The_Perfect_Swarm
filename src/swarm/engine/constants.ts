@@ -36,6 +36,12 @@ ${PULL_BEFORE_PASS_RULE}
 
 Output only verdict JSON (no picks): {"criticApproved":boolean,"pass":boolean,"verdict":string,"flags":string[]}`;
 
+export const COMPACT_CRITIC_VERDICT_SYSTEM_INSTRUCTION = `You are the Swarm Risk Critic. Audit proposed picks for risk, grounding, and row/injury accuracy.
+VETO POLICY: Veto ("criticApproved":false,"pass":false) only when a proposed leg has a fatal scratch, missing coverage, wrong-team injury attribution, spread/row mismatch, or ungrounded stat/form claim—never for unpicked games.
+CALIBRATION: Confirmed OUT tags are priced into lines (opponent OUTs favor the healthier side); reserve injury vetoes for late QUESTIONABLE star uncertainty. Never invent cutoffs ("zero injuries","spread under 3.5"). Approve legs with >=2 of 3 pillars (form/diff edge, steam/model_signal lean, clean/asymmetric health); reserve wageringPass:true for unplayable slates.
+AUDIT: Evaluate every proposed pick ("No picks to evaluate" is invalid if picks exist). Verify R# rows match the slate. Trust supplied run evidence/dossier; never call shell/code tools.
+Output JSON only (no picks): {"criticApproved":boolean,"wageringPass":boolean,"pass":boolean,"verdict":string,"flags":string[],"scorecards":[{"verdict":"approve"|"veto","notes":string}]}`;
+
 export const RED_TEAM_ANALYST_SYSTEM_INSTRUCTION = `You are a Skeptical Red Team Analyst in a modular deductive swarm.
 Your mission is adversarial critique, stress-testing, and rigorous hypothesis falsification.
 

@@ -10,14 +10,26 @@ describe('Prompt Budget & Bounds (PS2 Groq 6k TPM Safe)', () => {
     expect(budget.maxToolCalls).toBe(6);
   });
 
-  it('returns openrouter / gemini / mistral budget of 14000 chars', () => {
-    for (const p of ['openrouter', 'gemini', 'mistral', 'default', undefined]) {
+  it('returns provider-aware budgets aligned with PROVIDER_LIMITS', () => {
+    for (const p of ['cloudflare', 'openrouter']) {
       const budget = seatBudget(p);
-      expect(budget.maxPromptChars).toBe(14000);
+      expect(budget.maxPromptChars).toBe(22000);
       expect(budget.maxOutTokens).toBe(1500);
-      expect(budget.maxToolResultChars).toBe(6000);
-      expect(budget.maxToolCalls).toBe(8);
+      expect(budget.maxToolResultChars).toBe(12000);
+      expect(budget.maxToolCalls).toBe(20);
     }
+    for (const p of ['nvidia', 'gemini', 'default', undefined]) {
+      const budget = seatBudget(p);
+      expect(budget.maxPromptChars).toBe(28000);
+      expect(budget.maxOutTokens).toBe(1500);
+      expect(budget.maxToolResultChars).toBe(16000);
+      expect(budget.maxToolCalls).toBe(20);
+    }
+    const mistralBudget = seatBudget('mistral');
+    expect(mistralBudget.maxPromptChars).toBe(7200);
+    expect(mistralBudget.maxOutTokens).toBe(1000);
+    expect(mistralBudget.maxToolResultChars).toBe(2800);
+    expect(mistralBudget.maxToolCalls).toBe(6);
   });
 
   it('passes when prompt is within budget', () => {
