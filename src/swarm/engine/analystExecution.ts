@@ -34,7 +34,7 @@ import { recordDegraded } from './partialResult.ts';
 import { AnalystScorecardSchema } from '../types.ts';
 import { runScorecardSeat, renderScorecardInstruction, scorecardAnalystMaxTokens, scorecardToAnalystReport, validateScorecard } from './scorecard.ts';
 import { parseGameHeaders, renderHeaders, type GameHeader } from '../context/gameHeaders.ts';
-import { filterHeadersByEventIds } from '../context/selectedGames.ts';
+import { filterHeadersByEventIds, resolveSelectedGameIds } from '../context/selectedGames.ts';
 import { runSeatWithTools, getRoleToolNames, isQuantSeatName, isMarketSeatName, type ToolEvidenceItem } from './seatToolLoop.ts';
 import {
     buildScopedUnifiedDossier,
@@ -333,20 +333,28 @@ function collectCitedRowIds(proposedAuditContext?: ProposedPicksAuditContext): s
             for (const m of matches) ids.add(m.toUpperCase());
         }
     };
-    if (Array.isArray(proposedAuditContext.proposedPicks)) {
-        for (const pk of proposedAuditContext.proposedPicks) {
-            if (!pk || typeof pk !== 'object') continue;
+    const hasProposedPicks =
+        Array.isArray(proposedAuditContext.proposedPicks) &&
+        proposedAuditContext.proposedPicks.length > 0;
+    if (hasProposedPicks) {
+        for (const pk of proposedAuditContext.proposedPicks!) {
+            if (!pk || typeof pk !== 'object') {
+                if (typeof pk === 'string') addMatch(pk);
+                continue;
+            }
             addMatch(pk.row);
             addMatch(pk.id);
+            addMatch(pk.side || pk.pick || pk.selection);
             if (Array.isArray(pk.legs)) {
                 for (const leg of pk.legs) {
                     if (typeof leg === 'string') addMatch(leg);
-                    else if (leg && typeof leg === 'object') addMatch(leg.row || leg.id);
+                    else if (leg && typeof leg === 'object') addMatch(leg.row || leg.id || leg.side || leg.pick);
                 }
             }
         }
+    } else {
+        addMatch(proposedAuditContext.summaryText);
     }
-    addMatch(proposedAuditContext.summaryText);
     return Array.from(ids);
 }
 
@@ -550,9 +558,21 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
         const allParsedHeaders = parseGameHeaders(chunk || (config as any)?.rawBoard, (config as any)?.eventIds);
         const mergedHeadersForRowCheck = fullSlateHeaders.length >= allParsedHeaders.length ? fullSlateHeaders : allParsedHeaders;
         const hasAuditContext = isCritic && proposedAuditContext !== undefined;
+        const hasProposedPicksList = Boolean(
+            hasAuditContext &&
+            Array.isArray(proposedAuditContext?.proposedPicks) &&
+            proposedAuditContext!.proposedPicks!.length > 0
+        );
+        const strictProposedGameIds = hasProposedPicksList
+            ? resolveSelectedGameIds(proposedAuditContext!.proposedPicks, mergedHeadersForRowCheck)
+            : [];
         const citedRIds = hasAuditContext ? collectCitedRowIds(proposedAuditContext) : [];
         const auditTargetIdSet = new Set<string>(
-            hasAuditContext ? (proposedAuditContext?.targetGameIds || []).filter(Boolean) : []
+            hasAuditContext
+                ? (strictProposedGameIds.length > 0
+                    ? strictProposedGameIds
+                    : (proposedAuditContext?.targetGameIds || []).filter(Boolean))
+                : []
         );
         if (hasAuditContext && citedRIds.length > 0) {
             for (const h of mergedHeadersForRowCheck) {
@@ -1021,7 +1041,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                 if (Array.isArray(fromLoop) && fromLoop.length > 0) return fromLoop;
                 if (hasUnifiedDossier) {
                     return isCritic && criticTargetIds.length > 0
-                        ? unifiedDossier!.coveredEventIds.filter(id => criticTargetIds.includes(id))
+                        ? criticTargetIds.filter(id => unifiedDossier!.coveredEventIds.includes(id))
                         : unifiedDossier!.coveredEventIds;
                 }
                 return parsedHeaders.map(h => h.eventId);

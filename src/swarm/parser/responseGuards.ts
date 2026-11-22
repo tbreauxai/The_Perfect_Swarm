@@ -39,6 +39,55 @@ export function stripApproximateOdds(text: string, options?: { allowExactOdds?: 
         .trim();
 }
 
+const DOT_SENTINEL = '\uE000';
+const NON_TERMINAL_ABBR_RE = /\b(St|Ft|Mt|Jr|Sr|Dr|Mr|Mrs|Ms|vs|No)\./gi;
+
+/**
+ * Splits prose into sentences without breaking on decimals (-10.5, 0.85),
+ * multi-letter initials (P.J., A.J.), or sports/city/name abbreviations (St., Mt., Ft., vs.).
+ */
+export function splitSentencesSafe(text: string): string[] {
+    if (!text || typeof text !== 'string') return [];
+    const trimmed = text.trim();
+    if (!trimmed) return [];
+
+    const protectedText = trimmed
+        // Protect decimal numbers, spreads, totals, probabilities (e.g. -10.5, +3.5, 46.5, 0.85)
+        .replace(/(?<=\d)\.(?=\d)/g, DOT_SENTINEL)
+        // Protect dotted initial chains (e.g. P.J., A.J., D.J., T.J., B.J., U.S.)
+        .replace(/(?<![A-Za-z0-9])((?:[A-Za-z]\.){2,})/g, (m) => m.replace(/\./g, DOT_SENTINEL))
+        // Protect spaced single-letter initials followed by another initial (e.g. P. J.)
+        .replace(/\b([A-Za-z])\.(?=\s+[A-Za-z]\.)/g, `$1${DOT_SENTINEL}`)
+        // Protect known sports/city/title/number abbreviations (St., Ft., Mt., Jr., Sr., Dr., vs., No.)
+        .replace(NON_TERMINAL_ABBR_RE, `$1${DOT_SENTINEL}`);
+
+    return protectedText
+        .split(/(?<=[.!?])\s+|\n+/)
+        .map((s) => s.replace(new RegExp(DOT_SENTINEL, 'g'), '.').trim())
+        .filter(Boolean);
+}
+
+/**
+ * Extracts the complete opening sentence (up to ~220 chars on a clean word boundary if oversized)
+ * without truncating mid-abbreviation or mid-team-name.
+ */
+export function extractFirstSentenceSafe(text: string, maxChars: number = 220): string {
+    const sentences = splitSentencesSafe(text);
+    if (sentences.length === 0) return '';
+    const first = sentences[0];
+    if (sentences.length === 1 || first.length <= maxChars) {
+        return first;
+    }
+    const minCut = Math.floor(maxChars * 0.6);
+    for (const sep of ['. ', '; ', ', ', ' ']) {
+        const idx = first.lastIndexOf(sep, maxChars - 3);
+        if (idx >= minCut) {
+            return `${first.slice(0, idx).trimEnd()}...`;
+        }
+    }
+    return `${first.slice(0, maxChars - 3).trimEnd()}...`;
+}
+
 /**
  * Domain guard for AnalystResponseSchema: guaranteed zero crashes on worker agent outputs.
  */
@@ -490,12 +539,9 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
             return rawSummaryExplicit;
         }
         if (rawAnalysis) {
-            const sentences = rawAnalysis
-                .split(/(?<=[.!?])\s+/)
-                .map((s) => s.trim())
-                .filter(Boolean);
+            const sentences = splitSentencesSafe(rawAnalysis);
             if (sentences.length >= 2) {
-                return sentences[0];
+                return extractFirstSentenceSafe(rawAnalysis, 220);
             }
             return rawAnalysis;
         }
@@ -567,10 +613,7 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
                     }
                 }
                 if (rawAnalysis) {
-                    const sentences = rawAnalysis
-                        .split(/(?<=[.!?])\s+/)
-                        .map((s) => s.trim())
-                        .filter(Boolean);
+                    const sentences = splitSentencesSafe(rawAnalysis);
                     if (sentences.length > 1) {
                         return sentences.slice(1).map((msg) => ({ type: 'info' as const, message: msg }));
                     }
