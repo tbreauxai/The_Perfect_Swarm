@@ -24,6 +24,19 @@ export interface PullBeforePassAuditOptions {
   availableTools?: string[];
   marketToolRecords?: MarketToolRecord[];
   requireAllSlateToolsOnPass?: boolean;
+  activeEventIds?: string[];
+}
+
+export function isBoardRowId(id: unknown): boolean {
+  return /^R\d+$/i.test(String(id ?? '').trim());
+}
+
+export function isValidCanonicalGameId(id: unknown): boolean {
+  const trimmed = String(id ?? '').trim();
+  if (!trimmed || trimmed === 'unknown-game' || isBoardRowId(trimmed)) {
+    return false;
+  }
+  return true;
 }
 
 export interface PullBeforePassAuditResult {
@@ -89,7 +102,7 @@ export function looksLikePassOrMissingDataClaim(text: string): boolean {
 export function mergeToolCallTraceEntries(entries: ToolCallTraceEntry[]): ToolCallTraceEntry[] {
   const merged = new Map<string, ToolCallTraceEntry>();
   for (const raw of entries || []) {
-    if (!raw || !raw.tool || !raw.eventId || raw.eventId === 'unknown-game') continue;
+    if (!raw || !raw.tool || !isValidCanonicalGameId(raw.eventId)) continue;
     const tool = normalizeToolName(raw.tool);
     const eventId = raw.eventId.trim();
     const key = `${tool}::${eventId}`;
@@ -186,7 +199,7 @@ export function buildToolPullLedger(
   const record = (eventId: string, toolName: string, status: ToolCallStatus) => {
     const ev = String(eventId || '').trim();
     const tool = normalizeToolName(toolName);
-    if (!ev || ev === 'unknown-game' || !tool) return;
+    if (!isValidCanonicalGameId(ev) || !tool) return;
     toolsSeen.add(tool);
     eventIdsSeen.add(ev);
     let m = byEvent.get(ev);
@@ -707,16 +720,46 @@ export function auditPullBeforePass(
     return { pass: true, violations: [], flags: [], unqueriedGameIds: [], missingToolsByGame: {} };
   }
 
-  const headers = options?.headers && options.headers.length > 0
+  const hasExplicitActiveEventIds = Array.isArray(options?.activeEventIds);
+  const validActiveEventIds = hasExplicitActiveEventIds
+    ? Array.from(
+        new Set(
+          (options!.activeEventIds || [])
+            .map(id => String(id ?? '').trim())
+            .filter(isValidCanonicalGameId)
+        )
+      )
+    : [];
+  if (hasExplicitActiveEventIds && validActiveEventIds.length === 0) {
+    return { pass: true, violations: [], flags: [], unqueriedGameIds: [], missingToolsByGame: {} };
+  }
+  const activeEventSet = hasExplicitActiveEventIds ? new Set(validActiveEventIds) : null;
+
+  const rawHeaders = options?.headers && options.headers.length > 0
     ? options.headers
     : parseGameHeaders(slateText);
-  const ledger = buildToolPullLedger(evidenceText, options);
+  const headers = rawHeaders.filter(h => {
+    if (!h?.eventId || !isValidCanonicalGameId(h.eventId)) return false;
+    return !activeEventSet || activeEventSet.has(h.eventId.trim());
+  });
+  const ledger = buildToolPullLedger(evidenceText, { ...options, headers });
   const mentionEntries = buildGameMentionEntries(headers);
 
-  const slateIds = headers.map(h => h.eventId).filter(Boolean);
-  const targetSlateIds = slateIds.length > 0
-    ? slateIds
-    : Array.from(ledger.eventIdsSeen);
+  const slateIds = headers.map(h => h.eventId.trim()).filter(isValidCanonicalGameId);
+  const hasEmptySlateMarker = Boolean(
+    slateText && /\b(?:No upcoming games|No slate events available)\b/i.test(slateText)
+  );
+  const targetSlateIds = activeEventSet
+    ? (slateIds.length > 0 ? slateIds : validActiveEventIds)
+    : slateIds.length > 0
+      ? slateIds
+      : hasEmptySlateMarker
+        ? []
+        : Array.from(ledger.eventIdsSeen).filter(isValidCanonicalGameId);
+
+  if (targetSlateIds.length === 0) {
+    return { pass: true, violations: [], flags: [], unqueriedGameIds: [], missingToolsByGame: {} };
+  }
 
   const hasExplicitAvailableTools = Array.isArray(options?.availableTools);
   const availableToolsSet = new Set(
@@ -788,13 +831,44 @@ export function sanitizePullBeforePassClaims<T extends Record<string, any>>(
 ): T {
   if (!report || typeof report !== 'object') return report;
 
-  const headers = options?.headers && options.headers.length > 0
+  const hasExplicitActiveEventIds = Array.isArray(options?.activeEventIds);
+  const validActiveEventIds = hasExplicitActiveEventIds
+    ? Array.from(
+        new Set(
+          (options!.activeEventIds || [])
+            .map(id => String(id ?? '').trim())
+            .filter(isValidCanonicalGameId)
+        )
+      )
+    : [];
+  if (hasExplicitActiveEventIds && validActiveEventIds.length === 0) {
+    return report;
+  }
+  const activeEventSet = hasExplicitActiveEventIds ? new Set(validActiveEventIds) : null;
+
+  const rawHeaders = options?.headers && options.headers.length > 0
     ? options.headers
     : parseGameHeaders(slateText);
-  const ledger = buildToolPullLedger(evidenceText, options);
+  const headers = rawHeaders.filter(h => {
+    if (!h?.eventId || !isValidCanonicalGameId(h.eventId)) return false;
+    return !activeEventSet || activeEventSet.has(h.eventId.trim());
+  });
+  const ledger = buildToolPullLedger(evidenceText, { ...options, headers });
   const mentionEntries = buildGameMentionEntries(headers);
-  const slateIds = headers.map(h => h.eventId).filter(Boolean);
-  const targetSlateIds = slateIds.length > 0 ? slateIds : Array.from(ledger.eventIdsSeen);
+  const slateIds = headers.map(h => h.eventId.trim()).filter(isValidCanonicalGameId);
+  const hasEmptySlateMarker = Boolean(
+    slateText && /\b(?:No upcoming games|No slate events available)\b/i.test(slateText)
+  );
+  const targetSlateIds = activeEventSet
+    ? (slateIds.length > 0 ? slateIds : validActiveEventIds)
+    : slateIds.length > 0
+      ? slateIds
+      : hasEmptySlateMarker
+        ? []
+        : Array.from(ledger.eventIdsSeen).filter(isValidCanonicalGameId);
+  if (targetSlateIds.length === 0) {
+    return report;
+  }
   const hasExplicitAvailableTools = Array.isArray(options?.availableTools);
   const availableToolsSet = new Set((options?.availableTools || []).map(normalizeToolName));
 

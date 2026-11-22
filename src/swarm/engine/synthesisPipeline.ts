@@ -553,6 +553,7 @@ export async function executeManagerSynthesis(
         hadProposedPicks?: boolean;
         auditNote?: string;
         agreementLevel?: 'strong' | 'moderate' | 'divergent';
+        activeEventIds?: string[];
     }
 ): Promise<any> {
     const managerInstruction = (settings as any)?.managerInstruction
@@ -660,7 +661,10 @@ export async function executeManagerSynthesis(
                 ...(groundingContext?.availableTools && groundingContext.availableTools.length > 0
                     ? { availableTools: groundingContext.availableTools }
                     : {}),
-                marketToolRecords: groundingContext?.marketToolRecords
+                marketToolRecords: groundingContext?.marketToolRecords,
+                ...(Array.isArray(groundingContext?.activeEventIds)
+                    ? { activeEventIds: groundingContext.activeEventIds }
+                    : {})
             });
         }
         const hadVetoes = criticVetoes.length > 0 || vetoedLegs.length > 0 || vetoedClaims.length > 0;

@@ -1,5 +1,12 @@
 import type { StorageBackend } from '../storage/types.ts';
 import type { ConsolidationOptions, ConsolidationResult, StoredMemoryPoint } from '../types.ts';
+import {
+    containsLegacyContractBoilerplate,
+    isZeroBetPassRecord,
+    MAX_MEMORY_SNIPPET_CHARS,
+    truncateCleanText,
+    truncateMemorySnippet
+} from '../memorySanitizer.ts';
 
 export interface CortexConsolidatorConfig {
     storage: StorageBackend;
@@ -83,12 +90,32 @@ export class CortexConsolidator {
     formatExemplars(memories: any[]): string {
         if (!memories || memories.length === 0) return '';
 
-        return memories.map((m: any, idx: number) => {
+        const filtered = memories.filter((m: any) => {
+            if (!m || typeof m !== 'object') return false;
+            if (isZeroBetPassRecord(m)) return false;
+            if (
+                containsLegacyContractBoilerplate(m.content) ||
+                containsLegacyContractBoilerplate(m.resultSummary) ||
+                containsLegacyContractBoilerplate(m.feedback) ||
+                containsLegacyContractBoilerplate(m.lesson) ||
+                containsLegacyContractBoilerplate(m.task)
+            ) {
+                return false;
+            }
+            return true;
+        });
+        if (filtered.length === 0) return '';
+
+        return filtered.map((m: any, idx: number) => {
             const score = m.qualityRating !== undefined
                 ? ` (Quality Rating: ${(m.qualityRating * 100).toFixed(0)}%)`
                 : '';
-            const feedbackText = m.feedback ? `\nFeedback: ${m.feedback}` : '';
-            return `[Learning Exemplar ${idx + 1}]${score}:\n${m.content || JSON.stringify(m)}${feedbackText}`;
+            const rawBody = truncateMemorySnippet(String(m.content || m.resultSummary || JSON.stringify(m)), 260);
+            const rawFeedback = m.feedback || m.lesson;
+            const cleanFeedback = rawFeedback ? truncateMemorySnippet(String(rawFeedback), 100) : '';
+            const feedbackText = cleanFeedback ? `\nFeedback: ${cleanFeedback}` : '';
+            const entry = `[Learning Exemplar ${idx + 1}]${score}:\n${rawBody}${feedbackText}`;
+            return truncateCleanText(entry, MAX_MEMORY_SNIPPET_CHARS);
         }).join('\n\n');
     }
 
@@ -96,31 +123,51 @@ export class CortexConsolidator {
      * Formats contrastive learning post-mortems separating accurate judgments from failure post-mortems.
      */
     formatContrastivePostMortems(wins: any[], losses: any[]): string {
-        if (wins.length === 0 && losses.length === 0) {
+        const cleanWins = (wins || []).filter((w: any) =>
+            w &&
+            typeof w === 'object' &&
+            !isZeroBetPassRecord(w) &&
+            !containsLegacyContractBoilerplate(w.content) &&
+            !containsLegacyContractBoilerplate(w.resultSummary) &&
+            !containsLegacyContractBoilerplate(w.task)
+        );
+        const cleanLosses = (losses || []).filter((l: any) =>
+            l &&
+            typeof l === 'object' &&
+            !isZeroBetPassRecord(l) &&
+            !containsLegacyContractBoilerplate(l.content) &&
+            !containsLegacyContractBoilerplate(l.resultSummary) &&
+            !containsLegacyContractBoilerplate(l.task)
+        );
+
+        if (cleanWins.length === 0 && cleanLosses.length === 0) {
             return '';
         }
 
         const sections: string[] = ['[Contrastive Episodic Memory: Validated Wins vs. Past Pitfalls]'];
 
-        if (wins.length > 0) {
+        if (cleanWins.length > 0) {
             sections.push(
                 'VALIDATED WINNING PATTERNS:\n' +
-                wins.map((w, i) => {
+                cleanWins.map((w, i) => {
                     const brierTag = typeof w.brierScore === 'number' ? `, Brier=${w.brierScore.toFixed(3)}` : '';
                     const marginTag = typeof w.margin === 'number' ? `, FinalMargin=${w.margin > 0 ? '+' : ''}${w.margin}` : '';
-                    return `  + [Win #${i + 1}${brierTag}${marginTag}]: ${w.content || JSON.stringify(w)}`;
+                    const body = truncateMemorySnippet(String(w.content || w.resultSummary || JSON.stringify(w)), 260);
+                    return truncateCleanText(`  + [Win #${i + 1}${brierTag}${marginTag}]: ${body}`, MAX_MEMORY_SNIPPET_CHARS);
                 }).join('\n')
             );
         }
 
-        if (losses.length > 0) {
+        if (cleanLosses.length > 0) {
             sections.push(
                 'GRADED LOSS POST-MORTEMS (AVOID REPEATING THESE BIASES):\n' +
-                losses.map((l, i) => {
+                cleanLosses.map((l, i) => {
                     const brierTag = typeof l.brierScore === 'number' ? `, Brier=${l.brierScore.toFixed(3)}` : '';
                     const marginTag = typeof l.margin === 'number' ? `, FinalMargin=${l.margin > 0 ? '+' : ''}${l.margin}` : '';
-                    const summaryTag = l.settledSummary ? ` | Settled: ${l.settledSummary}` : '';
-                    return `  - [Loss/Miss #${i + 1}${brierTag}${marginTag}]: ${l.content || JSON.stringify(l)}${summaryTag}`;
+                    const cleanSummary = l.settledSummary ? truncateMemorySnippet(String(l.settledSummary), 110) : '';
+                    const summaryTag = cleanSummary ? ` | Settled: ${cleanSummary}` : '';
+                    const body = truncateMemorySnippet(String(l.content || l.resultSummary || JSON.stringify(l)), 220);
+                    return truncateCleanText(`  - [Loss/Miss #${i + 1}${brierTag}${marginTag}]: ${body}${summaryTag}`, MAX_MEMORY_SNIPPET_CHARS);
                 }).join('\n')
             );
         }

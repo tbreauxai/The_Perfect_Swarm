@@ -15,6 +15,15 @@ import {
     MAX_PROMPT_HISTORY_BYTES,
     type GameContextStoreReadResult
 } from '../morning/gameContext.ts';
+import {
+    capCortexMemoryBlock,
+    containsLegacyContractBoilerplate,
+    isSafeRetrievedBaseline,
+    MAX_CORTEX_MEMORY_BLOCK_CHARS,
+    MAX_MEMORY_SNIPPET_CHARS,
+    STRATEGIC_PASS_RESULT_RE,
+    truncateMemorySnippet
+} from '../memory/memorySanitizer.ts';
 
 export const MAX_PUBLIC_LESSONS_PER_EVENT = 3;
 export const MAX_LESSON_RULE_CHARS = 160;
@@ -52,12 +61,12 @@ export interface MemoryGroundingResult {
 }
 
 function formatBoundedLessonRule(item: any): string {
-    const raw = String(item?.rule || item?.reason || item?.content || JSON.stringify(item))
+    const rawCandidate = String(item?.rule || item?.reason || item?.resultSummary || item?.content || JSON.stringify(item))
         .replace(/[\r\n\t]+/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
-    if (raw.length <= MAX_LESSON_RULE_CHARS) return raw;
-    return raw.slice(0, MAX_LESSON_RULE_CHARS);
+    const cleaned = truncateMemorySnippet(rawCandidate, Math.min(MAX_LESSON_RULE_CHARS, MAX_MEMORY_SNIPPET_CHARS));
+    return cleaned || rawCandidate.slice(0, MAX_LESSON_RULE_CHARS);
 }
 
 async function revalidateLessonsWithSqlFacts(
@@ -338,9 +347,54 @@ export async function resolveMemoryGrounding(
                         ? await revalidateLessonsWithSqlFacts(rawRetrieved, effectiveAsOf)
                         : rawRetrieved;
 
-                const retrieved = revalidatedRetrieved.slice(0, maxLessonsCap);
+                const retrieved = revalidatedRetrieved
+                    .filter((m: any) => isSafeRetrievedBaseline(m))
+                    .slice(0, maxLessonsCap);
 
-                historicalContext =
+                const sanitizeFormattedSection = (rawSection: string): string => {
+                    if (!rawSection || typeof rawSection !== 'string') return '';
+                    const trimmed = rawSection.trim();
+                    if (!trimmed) return '';
+                    const chunks = trimmed.split(/\r?\n\r?\n+/);
+                    const safeChunks: string[] = [];
+                    let hasBodyContent = false;
+                    for (const chunk of chunks) {
+                        const filteredLines = chunk
+                            .split(/\r?\n/)
+                            .map((line) => {
+                                if (!line.trim()) return '';
+                                if (containsLegacyContractBoilerplate(line)) return '';
+                                if (/^\s*\+\s*\[Win/i.test(line) && STRATEGIC_PASS_RESULT_RE.test(line)) {
+                                    return '';
+                                }
+                                return line.length > MAX_MEMORY_SNIPPET_CHARS
+                                    ? `${line.slice(0, MAX_MEMORY_SNIPPET_CHARS - 3).trimEnd()}...`
+                                    : line;
+                            })
+                            .filter(Boolean);
+                        if (filteredLines.length === 0) continue;
+                        const isBannerOnly =
+                            filteredLines.length === 1 &&
+                            /^\[Contrastive Episodic Memory/i.test(filteredLines[0]);
+                        const isSectionHeaderOnly =
+                            filteredLines.length === 1 &&
+                            (/^(?:VALIDATED WINNING PATTERNS:|GRADED LOSS POST-MORTEMS)/i.test(filteredLines[0]) ||
+                                isBannerOnly);
+                        if (isBannerOnly) {
+                            safeChunks.push(filteredLines[0]);
+                        } else if (!isSectionHeaderOnly) {
+                            hasBodyContent = true;
+                            safeChunks.push(filteredLines.join('\n'));
+                        }
+                    }
+                    if (!hasBodyContent) return '';
+                    return safeChunks.join('\n\n');
+                };
+
+                const safeExemplars = sanitizeFormattedSection(exemplars);
+                const safeContrastiveBlock = sanitizeFormattedSection(contrastive?.formattedBlock || '');
+
+                const baselineBlock =
                     retrieved.length > 0
                         ? `Retrieved ${retrieved.length} relevant historical baselines from memory:\n` +
                           retrieved
@@ -349,15 +403,19 @@ export async function resolveMemoryGrounding(
                                       `[Baseline ${idx + 1}]: ${formatBoundedLessonRule(m)}`
                               )
                               .join('\n')
-                        : 'Vector Cortex connected. No prior matching historical baselines found for this domain.';
+                        : (!safeExemplars && !safeContrastiveBlock
+                            ? 'Vector Cortex connected. No prior matching historical baselines found for this domain.'
+                            : '');
 
-                if (exemplars) {
-                    historicalContext += `\n\nHigh-Quality Exemplars from Past Runs:\n${exemplars}`;
-                }
+                const cortexMemoryParts: string[] = [];
+                if (baselineBlock) cortexMemoryParts.push(baselineBlock);
+                if (safeExemplars) cortexMemoryParts.push(`High-Quality Exemplars from Past Runs:\n${safeExemplars}`);
+                if (safeContrastiveBlock) cortexMemoryParts.push(safeContrastiveBlock);
 
-                if (contrastive?.formattedBlock) {
-                    historicalContext += `\n\n${contrastive.formattedBlock}`;
-                }
+                historicalContext = capCortexMemoryBlock(
+                    cortexMemoryParts.filter(Boolean).join('\n\n'),
+                    MAX_CORTEX_MEMORY_BLOCK_CHARS
+                );
 
                 // Inject validated immutable game context snapshot block if available
                 let contextStoreInjected = false;
@@ -393,7 +451,10 @@ export async function resolveMemoryGrounding(
                         console.warn(
                             '[MemoryGrounding] sports/duelodds task without Supabase config; on-demand pull skipped'
                         );
-                        historicalContext += '\n\n[DUELODDS SUPABASE ON-DEMAND] supabase_not_configured';
+                        const suffix = '[DUELODDS SUPABASE ON-DEMAND] supabase_not_configured';
+                        const maxBase = Math.max(0, MAX_CORTEX_MEMORY_BLOCK_CHARS - suffix.length - 2);
+                        const cappedBase = capCortexMemoryBlock(historicalContext, maxBase);
+                        historicalContext = cappedBase ? `${cappedBase}\n\n${suffix}` : suffix;
                     } else {
                         const onDemand = await fetchOnDemandSupabaseContext(supaCfg, {
                             task,
@@ -428,7 +489,7 @@ export async function resolveMemoryGrounding(
                     modelName: cortexName,
                     output: {
                         recordsFound: retrieved.length,
-                        exemplarsIncluded: Boolean(exemplars),
+                        exemplarsIncluded: Boolean(safeExemplars),
                         contrastiveWins: contrastive?.wins?.length || 0,
                         contrastiveLosses: contrastive?.losses?.length || 0,
                         status: 'Success',

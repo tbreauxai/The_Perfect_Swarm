@@ -1129,6 +1129,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                         { headers: mergedHeadersForRowCheck }
                     );
                 }
+                const activeEventIdsForPull = config.eventIds ?? (config.unifiedDossier as any)?.active_event_ids;
                 const availableToolsForSanitize = [
                     'get_matchup_fundamentals',
                     'get_injury_and_roster_delta',
@@ -1143,7 +1144,8 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                         headers: mergedHeadersForRowCheck,
                         toolCallTrace: seatToolTrace,
                         ...(availableToolsForSanitize.length > 0 ? { availableTools: availableToolsForSanitize } : {}),
-                        marketToolRecords
+                        marketToolRecords,
+                        ...(Array.isArray(activeEventIdsForPull) ? { activeEventIds: activeEventIdsForPull } : {})
                     }
                 );
                 const afterPull = JSON.stringify(resData);
@@ -1339,6 +1341,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                       )
                     : [];
                 const unionToolTrace = mergeToolCallTraceEntries([...proposerToolTrace, ...seatToolTrace]);
+                const activeEventIdsForAudit = config.eventIds ?? (config.unifiedDossier as any)?.active_event_ids;
                 const availableSportsTools = [
                     'get_matchup_fundamentals',
                     'get_injury_and_roster_delta',
@@ -1352,7 +1355,8 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                         headers: mergedHeadersForRowCheck,
                         toolCallTrace: unionToolTrace,
                         availableTools: availableSportsTools,
-                        marketToolRecords
+                        marketToolRecords,
+                        ...(Array.isArray(activeEventIdsForAudit) ? { activeEventIds: activeEventIdsForAudit } : {})
                     }
                 );
                 if (!pullAudit.pass) {

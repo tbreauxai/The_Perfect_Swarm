@@ -4,6 +4,15 @@ import type { SwarmWorkflowParams, SwarmFeedbackReport } from './types.ts';
 import type { SwarmEngineSettings } from '../types.ts';
 import type { AgentVariantConfig, AgentExperiment, ExecutionMetrics, ExperimentDecision } from '../experiment.ts';
 import { type MemoryCortex, normalizeDomain, extractEntityIds } from '../memory.ts';
+import {
+    extractCleanUserPrompt,
+    isZeroBetPassAnalysis,
+    MAX_LESSON_FEEDBACK_CHARS,
+    MAX_RESULT_SUMMARY_CHARS,
+    MAX_USER_PROMPT_CHARS,
+    stripContractBoilerplate,
+    truncateCleanText
+} from '../memory/memorySanitizer.ts';
 import type { TaskComplexity } from '../router.ts';
 import { globalPayloadCache, globalSemanticCache, isSemanticCacheEnabled } from '../cache.ts';
 import { globalMetricsCollector, globalUnifiedProfiler, type SwarmBaselineReport } from '../profiler.ts';
@@ -73,13 +82,31 @@ export interface LearningPipelineResult {
 }
 
 /**
- * Formats a rich, structured memory string from a completed Swarm analysis or DuelOdds judgment
- * so future retrievals receive actual probabilities, fair spreads, key arguments, and metrics
- * instead of a bare "Analysis complete" title.
+ * Formats a concise, contract-free memory string from a completed Swarm analysis or DuelOdds judgment
+ * so future retrievals receive clean user prompts, outcomes, and lessons without system prompt boilerplate.
  */
-export function formatLearnedVerdictContent(task: string, finalAnalysis: any, feedback?: string): string {
+export function formatLearnedVerdictContent(
+    task: string,
+    finalAnalysis: any,
+    feedback?: string,
+    options?: {
+        userPrompt?: string;
+        domain?: string;
+        domains?: string[];
+        mode?: string;
+    }
+): string {
+    const cleanTask =
+        extractCleanUserPrompt(task, options?.userPrompt, MAX_USER_PROMPT_CHARS) ||
+        stripContractBoilerplate(task, MAX_USER_PROMPT_CHARS);
+    const cleanFeedback = stripContractBoilerplate(feedback || '', MAX_LESSON_FEEDBACK_CHARS);
+
     if (!finalAnalysis) {
-        return `Task: ${task}\nFeedback: ${feedback || 'None'}\nResult: Analysis complete`;
+        const lines: string[] = [];
+        if (cleanTask) lines.push(`Task: ${cleanTask}`);
+        if (cleanFeedback && cleanFeedback !== 'None') lines.push(`Feedback: ${cleanFeedback}`);
+        lines.push('Result: Analysis complete');
+        return truncateCleanText(lines.join('\n'), 480);
     }
 
     // Extract candidate DuelOdds / quantitative verdict fields if present directly or nested
@@ -90,9 +117,11 @@ export function formatLearnedVerdictContent(task: string, finalAnalysis: any, fe
                 ? finalAnalysis.judgment
                 : (finalAnalysis.result && typeof finalAnalysis.result === 'object' ? finalAnalysis.result : null));
 
-    const lines: string[] = [`Task: ${task}`, `Feedback: ${feedback || 'None'}`];
-
     if (candidate && (candidate.winProbHome !== undefined || candidate.win_prob_home !== undefined)) {
+        const lines: string[] = [
+            `Task: ${cleanTask || 'Judgment'}`,
+            `Feedback: ${cleanFeedback || 'None'}`
+        ];
         const winner = candidate.likelyWinner || candidate.likely_winner || 'Unknown';
         const wpHome = Number(candidate.winProbHome ?? candidate.win_prob_home ?? 0.5);
         const spread = candidate.fairSpread ?? candidate.fair_spread ?? 'N/A';
@@ -114,32 +143,36 @@ export function formatLearnedVerdictContent(task: string, finalAnalysis: any, fe
         return lines.join('\n');
     }
 
-    // Generative UI components extraction (MetricCard + InsightList)
-    const title = finalAnalysis.ui_title || finalAnalysis.summary || 'Analysis complete';
-    lines.push(`Result: ${title}`);
+    const rawTitle = String(finalAnalysis.summary || finalAnalysis.ui_title || 'Analysis complete');
+    const resultSummary = stripContractBoilerplate(rawTitle, MAX_RESULT_SUMMARY_CHARS) || 'Analysis complete';
+    const metaTags: string[] = [];
+    if (options?.mode) metaTags.push(`Mode=${options.mode}`);
+    if (options?.domain) metaTags.push(`Domain=${options.domain}`);
+    if (Array.isArray(finalAnalysis.picks) && finalAnalysis.picks.length > 0) {
+        metaTags.push(`Picks=${finalAnalysis.picks.length}`);
+    }
 
-    if (Array.isArray(finalAnalysis.components)) {
+    const lines: string[] = [];
+    if (cleanTask) lines.push(`Prompt: ${cleanTask}`);
+    if (metaTags.length > 0) lines.push(`Scope: ${metaTags.join(' | ')}`);
+    lines.push(`Result: ${resultSummary}`);
+    if (cleanFeedback && cleanFeedback !== 'None') {
+        lines.push(`Lesson: ${cleanFeedback}`);
+    }
+
+    if (Array.isArray(finalAnalysis.components) && lines.join('\n').length < 360) {
         const metrics: string[] = [];
-        const insights: string[] = [];
         for (const comp of finalAnalysis.components) {
             if (comp?.type === 'MetricCard' && comp.props?.title && comp.props?.value !== undefined) {
                 metrics.push(`${comp.props.title}: ${comp.props.value}`);
-            } else if (comp?.type === 'InsightList' && Array.isArray(comp.props?.insights)) {
-                for (const ins of comp.props.insights.slice(0, 3)) {
-                    const text = typeof ins === 'string' ? ins : ins?.message || ins?.title;
-                    if (text) insights.push(String(text).slice(0, 180));
-                }
             }
         }
         if (metrics.length > 0) {
-            lines.push(`Metrics: ${metrics.slice(0, 4).join(' | ')}`);
-        }
-        if (insights.length > 0) {
-            lines.push(`Insights: ${insights.slice(0, 3).join(' ; ')}`);
+            lines.push(`Metrics: ${truncateCleanText(metrics.slice(0, 3).join(' | '), 140)}`);
         }
     }
 
-    return lines.join('\n');
+    return truncateCleanText(lines.join('\n'), 480);
 }
 
 export async function runLearningPipeline(p: LearningPipelineParams): Promise<LearningPipelineResult> {
@@ -189,21 +222,43 @@ export async function runLearningPipeline(p: LearningPipelineParams): Promise<Le
         });
     }
 
-    if (memoryCortex && finalAnalysis && !finalAnalysis.ui_title?.toLowerCase().includes("error")) {
+    if (memoryCortex && finalAnalysis && !finalAnalysis.ui_title?.toLowerCase().includes("error") && !isZeroBetPassAnalysis(finalAnalysis)) {
         const qualityRating = workflowLifecycleResult?.computedRating;
         const verified = workflowLifecycleResult ? workflowLifecycleResult.success : false;
-        const feedback = workflowLifecycleResult?.criticFeedback;
+        const feedback = stripContractBoilerplate(
+            workflowLifecycleResult?.criticFeedback || '',
+            MAX_LESSON_FEEDBACK_CHARS
+        );
         const isFact = verified;
         const writeOriginApp = (params as any).originApp || (params as any).callerAppId || targetAppId;
-        const domain = normalizeDomain(settings?.domain || (params as any).domain, task);
-        const entityIds = extractEntityIds(task, (params as any).entityIds || settings?.entityIds);
-        const content = formatLearnedVerdictContent(task, finalAnalysis, feedback);
+        const rawUserPrompt = (params as any).userPrompt ?? (params as any).userQuestion;
+        const userPrompt = extractCleanUserPrompt(task, rawUserPrompt, MAX_USER_PROMPT_CHARS);
+        const mode = /Operational Mode:\s*LIVE\b/i.test(task) || (params as any).mode === 'live' ? 'live' : 'pregame';
+        const explicitDomains = Array.isArray((params as any).domains)
+            ? (params as any).domains.map((d: any) => normalizeDomain(String(d || ''))).filter(Boolean)
+            : undefined;
+        const domain = normalizeDomain(settings?.domain || (params as any).domain, userPrompt || task);
+        const rawSummary = String(finalAnalysis.summary || finalAnalysis.ui_title || 'Analysis complete');
+        const entityIds = extractEntityIds(
+            userPrompt || rawSummary,
+            (params as any).entityIds || settings?.entityIds
+        );
+        const resultSummary = stripContractBoilerplate(rawSummary, MAX_RESULT_SUMMARY_CHARS) || 'Analysis complete';
+        const picksCount = Array.isArray(finalAnalysis.picks) ? finalAnalysis.picks.length : undefined;
+        const content = formatLearnedVerdictContent(userPrompt || task, finalAnalysis, feedback, {
+            userPrompt,
+            domain,
+            domains: explicitDomains,
+            mode
+        });
         const workflowId = (context as any).id || (params as any).workflowId;
         const meta = {
             workflowId,
             originApp: writeOriginApp,
             appId: writeOriginApp,
             domain,
+            ...(explicitDomains && explicitDomains.length > 0 ? { domains: explicitDomains } : {}),
+            mode,
             memoryType: 'judgment' as const,
             memory_type: 'judgment',
             entityIds,
@@ -211,9 +266,14 @@ export async function runLearningPipeline(p: LearningPipelineParams): Promise<Le
             complexity,
             verified: isFact,
             qualityRating,
-            feedback,
+            userPrompt,
+            task: userPrompt,
+            resultSummary,
+            lesson: feedback || undefined,
+            feedback: feedback || undefined,
+            ...(picksCount !== undefined ? { picksCount } : {}),
+            isWageringPass: false,
             attempts: workflowLifecycleResult?.attempts || 1,
-            task,
             fastPath: false
         };
 

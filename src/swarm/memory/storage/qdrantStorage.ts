@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { QdrantClient } from '@qdrant/js-client-rest';
 import type { StoredMemoryPoint, SparseVector } from '../types.ts';
 import { normalizeDomain } from '../types.ts';
+import { resolveCortexCollectionName } from '../memorySanitizer.ts';
 import { matchesScopedMemoryFilter, type StorageBackend, type StorageFilterOptions, type StorageQueryOptions, type StorageQueryResult } from './types.ts';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -32,6 +33,13 @@ export function formatQdrantError(err: any): string {
         .replace(/bearer\s+[a-zA-Z0-9_\-\.]+/gi, 'Bearer ***');
     const truncated = sanitized.length > 300 ? sanitized.slice(0, 297) + '...' : sanitized;
     return `status=${status} detail=${truncated}`;
+}
+
+export function isQdrantNotFoundError(err: any): boolean {
+    const status = err?.status ?? err?.statusCode ?? err?.response?.status;
+    if (status === 404) return true;
+    const msg = formatQdrantError(err);
+    return /not found.*collection|collection.*doesn'?t exist|\bstatus=404\b|\b404 Not Found\b/i.test(msg);
 }
 
 export interface QdrantStorageConfig {
@@ -84,7 +92,7 @@ export class QdrantStorageAdapter implements StorageBackend {
 
     constructor(config: QdrantStorageConfig = {}) {
         this.config = config;
-        this.collectionName = config.collectionName || 'pwa_swarm_dev_cortex_v2';
+        this.collectionName = resolveCortexCollectionName(config.collectionName);
         this.collectionNameTemplate = config.collectionNameTemplate;
         this.denseDimension = config.denseDimension || 768;
         this.timeoutMs = config.timeoutMs || 3000;
@@ -157,16 +165,20 @@ export class QdrantStorageAdapter implements StorageBackend {
         }
     }
 
-    async initialize(appId?: string): Promise<boolean> {
+    async initialize(appId?: string, options?: { createIfMissing?: boolean }): Promise<boolean> {
         if (!this.client || !this.available) return false;
         const targetCollection = this.getTargetCollection(appId);
         if (this.initializedCollections.has(targetCollection)) return true;
+        const createIfMissing = options?.createIfMissing !== false;
 
         try {
             const collections = await this.withTimeout(this.client.getCollections(), 5000);
             const exists = collections.collections.some(c => c.name === targetCollection);
 
             if (!exists) {
+                if (!createIfMissing) {
+                    return false;
+                }
                 const hnsw_config = {
                     m: this.config.hnswConfig?.m ?? 16,
                     ef_construct: this.config.hnswConfig?.ef_construct ?? 128,
@@ -412,7 +424,8 @@ export class QdrantStorageAdapter implements StorageBackend {
         if (!this.client || !this.available) return [];
         const readerApp = options.appId || options.originApp;
         const targetCollection = this.getTargetCollection(readerApp);
-        await this.initialize(readerApp);
+        const ready = await this.initialize(readerApp, { createIfMissing: false });
+        if (!ready) return [];
 
         try {
             const filterMust: any[] = [];
@@ -521,6 +534,10 @@ export class QdrantStorageAdapter implements StorageBackend {
                         })
                     );
                 } catch (hybridErr: any) {
+                    if (isQdrantNotFoundError(hybridErr)) {
+                        this.initializedCollections.delete(targetCollection);
+                        return [];
+                    }
                     qdrantRes = await this.withTimeout(
                         this.client.query(targetCollection, {
                             prefetch: [
@@ -567,6 +584,10 @@ export class QdrantStorageAdapter implements StorageBackend {
                     vectorScore: r.score ?? 1.0
                 }));
         } catch (err: any) {
+            if (isQdrantNotFoundError(err)) {
+                this.initializedCollections.delete(targetCollection);
+                return [];
+            }
             console.warn(`[QdrantStorageAdapter] Search error: ${formatQdrantError(err)}`);
             return [];
         }

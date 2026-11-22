@@ -56,6 +56,7 @@ export interface VerificationPipelineParams {
     toolRegistry?: ToolRegistry;
     queryCache?: GameQueryCache;
     toolOptions?: { env?: Record<string, string | undefined>; fetchFn?: typeof fetch; qdrantClient?: any };
+    activeEventIds?: string[];
 }
 
 export interface VerificationPipelineResult {
@@ -97,7 +98,8 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
     const lifecycle = new AnalysisLifecycle(managerAgent, criticAgent, 2, {
         toolRegistry: p.toolRegistry,
         queryCache: p.queryCache,
-        toolOptions: p.toolOptions
+        toolOptions: p.toolOptions,
+        ...(Array.isArray(p.activeEventIds) ? { activeEventIds: p.activeEventIds } : {})
     });
     context.addEvent({
         agentRole: 'Analysis Lifecycle',
@@ -212,7 +214,8 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
                 headers: parsedHeaders,
                 toolCallTrace: combinedToolTrace,
                 ...(availableTools && availableTools.length > 0 ? { availableTools } : {}),
-                marketToolRecords: combinedMarketToolRecords
+                marketToolRecords: combinedMarketToolRecords,
+                ...(Array.isArray(p.activeEventIds) ? { activeEventIds: p.activeEventIds } : {})
             });
         }
 
