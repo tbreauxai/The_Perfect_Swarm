@@ -501,6 +501,67 @@ function matchesSnapshotTeamKey(teamKey: string, label?: string, sportHint?: str
   }
 };
 
+export type HealthBalanceClassification =
+  | 'home_advantage'
+  | 'away_advantage'
+  | 'uncertain_questionable'
+  | 'symmetric';
+
+export interface InjuryHealthSummaryResult {
+  balance: HealthBalanceClassification;
+  label: string;
+  homeTeam: string;
+  awayTeam: string;
+  homeOut: number;
+  homeQ: number;
+  awayOut: number;
+  awayQ: number;
+  line: string;
+}
+
+export function classifyInjuryHealthBalance(params: {
+  homeTeam: string;
+  awayTeam: string;
+  homeOut: number;
+  homeQ: number;
+  awayOut: number;
+  awayQ: number;
+}): InjuryHealthSummaryResult {
+  const { homeTeam, awayTeam, homeOut, homeQ, awayOut, awayQ } = params;
+  const homeTotal = homeOut + homeQ;
+  const awayTotal = awayOut + awayQ;
+  const homeBetter = (awayOut - homeOut >= 2) || (awayTotal - homeTotal >= 2 && homeQ === 0);
+  const awayBetter = (homeOut - awayOut >= 2) || (homeTotal - awayTotal >= 2 && awayQ === 0);
+
+  let balance: HealthBalanceClassification;
+  let label: string;
+  if (homeBetter && !awayBetter) {
+    balance = 'home_advantage';
+    label = `home_advantage (${homeTeam})`;
+  } else if (awayBetter && !homeBetter) {
+    balance = 'away_advantage';
+    label = `away_advantage (${awayTeam})`;
+  } else if (homeQ >= 2 && awayQ >= 2) {
+    balance = 'uncertain_questionable';
+    label = 'uncertain_questionable';
+  } else {
+    balance = 'symmetric';
+    label = 'symmetric';
+  }
+
+  return {
+    balance,
+    label,
+    homeTeam,
+    awayTeam,
+    homeOut,
+    homeQ,
+    awayOut,
+    awayQ,
+    line: `Summary: ${homeTeam} (${homeOut} OUT, ${homeQ} Q) vs ${awayTeam} (${awayOut} OUT, ${awayQ} Q) | Health Balance: ${label}`
+  };
+}
+
 /**
  * Tool 2: get_injury_and_roster_delta
  * Parameters: game_id: string, position_group?: string
@@ -664,8 +725,57 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
       grouped.get(groupKey)!.items.push(enriched);
     }
 
+    const isOutTag = (statusRaw: unknown): boolean =>
+      /^(?:out|ir|injured\s+reserve|suspended)$/i.test(String(statusRaw || '').trim());
+    const isQTag = (statusRaw: unknown): boolean =>
+      /^(?:questionable|doubtful|day[- ]to[- ]day|gtd|game[- ]time\s+decision)$/i.test(String(statusRaw || '').trim());
+
+    const resolveFullTeamDisplay = (raw: unknown): string | undefined => {
+      if (typeof raw !== 'string' || !raw.trim()) return undefined;
+      const trimmed = raw.trim();
+      const matched = matchTeamByLabel(trimmed, sportHint);
+      return matched ? matched.name : trimmed;
+    };
+
+    let homeTeamDisplay =
+      resolveFullTeamDisplay(d.home_team) ??
+      resolveFullTeamDisplay(d.home?.name) ??
+      resolveFullTeamDisplay(ctxAny?.game?.home_team) ??
+      resolveFullTeamDisplay(d.home_team_abbr ?? d.home_abbr ?? d.home?.abbr ?? ctxAny?.game?.home_team_abbr);
+    let awayTeamDisplay =
+      resolveFullTeamDisplay(d.away_team) ??
+      resolveFullTeamDisplay(d.away?.name) ??
+      resolveFullTeamDisplay(ctxAny?.game?.away_team) ??
+      resolveFullTeamDisplay(d.away_team_abbr ?? d.away_abbr ?? d.away?.abbr ?? ctxAny?.game?.away_team_abbr);
+
+    const groupStats: Array<{
+      groupKey: string;
+      label: string;
+      name: string;
+      abbr: string;
+      outCount: number;
+      qCount: number;
+    }> = [];
     const injuryLines: string[] = [];
-    for (const { label, items } of grouped.values()) {
+    for (const [groupKey, { label, items }] of grouped.entries()) {
+      let outCount = 0;
+      let qCount = 0;
+      for (const p of items) {
+        const st = p.status || p.injury_status || 'OUT';
+        if (isOutTag(st)) outCount++;
+        else if (isQTag(st)) qCount++;
+      }
+      const firstName = items[0]?.team_name || label.replace(/\s*\([^)]*\)\s*$/, '').trim();
+      const matchedEntry = matchTeamByLabel(firstName, sportHint) || matchTeamByLabel(groupKey, sportHint);
+      groupStats.push({
+        groupKey,
+        label,
+        name: matchedEntry?.name || firstName,
+        abbr: matchedEntry?.abbr || items[0]?.team_abbr || groupKey,
+        outCount,
+        qCount
+      });
+
       const sorted = items
         .map((p, idx) => ({ p, idx, rank: statusRank(p.status || p.injury_status || 'OUT') }))
         .sort((a, b) => a.rank - b.rank || a.idx - b.idx)
@@ -683,6 +793,51 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
       }
     }
 
+    if (!homeTeamDisplay && !awayTeamDisplay && groupStats.length >= 2) {
+      homeTeamDisplay = groupStats[0].name;
+      awayTeamDisplay = groupStats[1].name;
+    }
+
+    const matchesTeamDisplay = (stat: typeof groupStats[number], targetName?: string): boolean => {
+      if (!targetName) return false;
+      const tLower = targetName.toLowerCase();
+      if (stat.name.toLowerCase() === tLower || stat.label.toLowerCase() === tLower) return true;
+      const tEntry = matchTeamByLabel(targetName, sportHint);
+      const sEntry = matchTeamByLabel(stat.name, sportHint) || matchTeamByLabel(stat.abbr, sportHint);
+      if (tEntry && sEntry && tEntry.abbr === sEntry.abbr) return true;
+      return stat.name.toLowerCase().includes(tLower) || tLower.includes(stat.name.toLowerCase());
+    };
+
+    let summaryHeaderLine: string | null = null;
+    let healthSummaryObj: InjuryHealthSummaryResult | null = null;
+    if (homeTeamDisplay && awayTeamDisplay) {
+      let homeOut = 0;
+      let homeQ = 0;
+      let awayOut = 0;
+      let awayQ = 0;
+      for (const st of groupStats) {
+        if (matchesTeamDisplay(st, homeTeamDisplay)) {
+          homeOut += st.outCount;
+          homeQ += st.qCount;
+        } else if (matchesTeamDisplay(st, awayTeamDisplay)) {
+          awayOut += st.outCount;
+          awayQ += st.qCount;
+        }
+      }
+      healthSummaryObj = classifyInjuryHealthBalance({
+        homeTeam: homeTeamDisplay,
+        awayTeam: awayTeamDisplay,
+        homeOut,
+        homeQ,
+        awayOut,
+        awayQ
+      });
+      summaryHeaderLine = healthSummaryObj.line;
+    } else if (groupStats.length === 1) {
+      const only = groupStats[0];
+      summaryHeaderLine = `Summary: ${only.name} (${only.outCount} OUT, ${only.qCount} Q) | Health Balance: single_team_only`;
+    }
+
     const stripSourceRef = (val: any): any => {
       if (Array.isArray(val)) return val.map(stripSourceRef);
       if (val && typeof val === 'object') {
@@ -698,12 +853,26 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
           ...d,
           total_injuries: strippedKept.length,
           raw_total_injuries: rawTotalInjuries,
+          ...(healthSummaryObj
+            ? {
+                health_balance: healthSummaryObj.label,
+                injury_counts: {
+                  home_team: healthSummaryObj.homeTeam,
+                  home_out: healthSummaryObj.homeOut,
+                  home_q: healthSummaryObj.homeQ,
+                  away_team: healthSummaryObj.awayTeam,
+                  away_out: healthSummaryObj.awayOut,
+                  away_q: healthSummaryObj.awayQ
+                }
+              }
+            : {}),
           ...(Array.isArray(d.injuries) ? { injuries: strippedKept } : {}),
           ...(Array.isArray(d.players) ? { players: strippedKept } : {})
         };
 
     const summary = [
       `[INJURY & ROSTER DELTA: ${gameId}${positionGroup ? ` | ${positionGroup}` : ''}]`,
+      ...(summaryHeaderLine ? [summaryHeaderLine] : []),
       injuryLines.length > 0 ? injuryLines.join('\n') : 'No significant roster deltas or injury tags reported.'
     ].join('\n');
 
@@ -1509,62 +1678,86 @@ export const getMarketMovementTool: SwarmTool = {
 
     const detectSpreadSteam = (): string | null => {
       if (spreadDeltaHome === null || Math.abs(spreadDeltaHome) < spreadThreshold) return null;
-      if (spreadDeltaHome < 0) {
-        return `home ${homeLabel} (${spreadDeltaHome.toFixed(1)} pts)`;
+      const pts = Math.abs(spreadDeltaHome).toFixed(1);
+      if (openResolved && currResolved && 'home' in openResolved && 'home' in currResolved) {
+        const homeRange = `${fmtSigned(openResolved.home)} -> ${fmtSigned(currResolved.home)}`;
+        const awayRange = `${fmtSigned(openResolved.away)} -> ${fmtSigned(currResolved.away)}`;
+        if (spreadDeltaHome < 0) {
+          return `TOWARD home ${homeLabel} (${homeRange}, ${pts} pts) | AGAINST away ${awayLabel} (${awayRange})`;
+        }
+        return `TOWARD away ${awayLabel} (${awayRange}, ${pts} pts) | AGAINST home ${homeLabel} (${homeRange})`;
       }
-      return `away ${awayLabel} (-${Math.abs(spreadDeltaHome).toFixed(1)} pts)`;
+      if (spreadDeltaHome < 0) {
+        return `TOWARD home ${homeLabel} (${pts} pts) | AGAINST away ${awayLabel}`;
+      }
+      return `TOWARD away ${awayLabel} (${pts} pts) | AGAINST home ${homeLabel}`;
     };
 
     const detectMlSteam = (): string | null => {
-      let useHome = openMlHomeNum !== null && currMlHomeNum !== null && openMlHomeNum !== currMlHomeNum;
-      let useAway = openMlAwayNum !== null && currMlAwayNum !== null && openMlAwayNum !== currMlAwayNum;
+      const useHome = openMlHomeNum !== null && currMlHomeNum !== null && openMlHomeNum !== currMlHomeNum;
+      const useAway = openMlAwayNum !== null && currMlAwayNum !== null && openMlAwayNum !== currMlAwayNum;
       if (!useHome && !useAway) return null;
 
-      let impShiftPct = 0;
+      let homeImpShiftPct = 0;
+      let awayImpShiftPct = 0;
       let inMidBand = false;
       let centShift = 0;
       if (useHome && openMlHomeNum !== null && currMlHomeNum !== null) {
         const pOpen = americanToImpliedProb(openMlHomeNum);
         const pCurr = americanToImpliedProb(currMlHomeNum);
         if (pOpen !== null && pCurr !== null) {
-          impShiftPct = (pCurr - pOpen) * 100;
+          homeImpShiftPct = (pCurr - pOpen) * 100;
         }
         inMidBand = Math.abs(openMlHomeNum) <= 150 && Math.abs(currMlHomeNum) <= 150;
-        centShift = Math.abs(toCentScale(currMlHomeNum) - toCentScale(openMlHomeNum));
-      } else if (useAway && openMlAwayNum !== null && currMlAwayNum !== null) {
+        centShift = Math.max(centShift, Math.abs(toCentScale(currMlHomeNum) - toCentScale(openMlHomeNum)));
+      }
+      if (useAway && openMlAwayNum !== null && currMlAwayNum !== null) {
         const pOpen = americanToImpliedProb(openMlAwayNum);
         const pCurr = americanToImpliedProb(currMlAwayNum);
         if (pOpen !== null && pCurr !== null) {
-          impShiftPct = -((pCurr - pOpen) * 100);
+          awayImpShiftPct = (pCurr - pOpen) * 100;
         }
-        inMidBand = Math.abs(openMlAwayNum) <= 150 && Math.abs(currMlAwayNum) <= 150;
-        centShift = Math.abs(toCentScale(currMlAwayNum) - toCentScale(openMlAwayNum));
+        inMidBand = inMidBand || (Math.abs(openMlAwayNum) <= 150 && Math.abs(currMlAwayNum) <= 150);
+        centShift = Math.max(centShift, Math.abs(toCentScale(currMlAwayNum) - toCentScale(openMlAwayNum)));
       }
+
+      const impShiftPct =
+        useHome && (!useAway || Math.abs(homeImpShiftPct) >= Math.abs(awayImpShiftPct))
+          ? homeImpShiftPct
+          : -awayImpShiftPct;
 
       if (Math.abs(impShiftPct) < 2.5 && !(inMidBand && centShift >= 15)) {
         return null;
       }
       const impAbs = Math.abs(impShiftPct).toFixed(1);
-      if (impShiftPct > 0 || (!useAway && openMlHomeNum !== null && currMlHomeNum !== null && toCentScale(currMlHomeNum) < toCentScale(openMlHomeNum))) {
-        if (openMlHomeNum !== null && currMlHomeNum !== null) {
-          return `home ${homeLabel} ML (${fmtOddsOrLine(openMlHomeNum)} -> ${fmtOddsOrLine(currMlHomeNum)}, +${impAbs}% imp)`;
-        }
-        return `home ${homeLabel} ML (+${impAbs}% imp)`;
+      const isHomeFavoredMove =
+        impShiftPct > 0 ||
+        (useHome && !useAway && openMlHomeNum !== null && currMlHomeNum !== null && toCentScale(currMlHomeNum) < toCentScale(openMlHomeNum));
+      if (isHomeFavoredMove) {
+        const toward = openMlHomeNum !== null && currMlHomeNum !== null
+          ? `TOWARD home ${homeLabel} ML (${fmtOddsOrLine(openMlHomeNum)} -> ${fmtOddsOrLine(currMlHomeNum)}, +${impAbs}% imp)`
+          : `TOWARD home ${homeLabel} ML (+${impAbs}% imp)`;
+        const against = openMlAwayNum !== null && currMlAwayNum !== null
+          ? `AGAINST away ${awayLabel} ML (${fmtOddsOrLine(openMlAwayNum)} -> ${fmtOddsOrLine(currMlAwayNum)})`
+          : `AGAINST away ${awayLabel} ML`;
+        return `${toward} | ${against}`;
       }
-      if (openMlAwayNum !== null && currMlAwayNum !== null) {
-        return `away ${awayLabel} ML (${fmtOddsOrLine(openMlAwayNum)} -> ${fmtOddsOrLine(currMlAwayNum)}, +${impAbs}% imp)`;
-      }
-      if (openMlHomeNum !== null && currMlHomeNum !== null) {
-        return `away ${awayLabel} ML (home ${fmtOddsOrLine(openMlHomeNum)} -> ${fmtOddsOrLine(currMlHomeNum)}, +${impAbs}% imp)`;
-      }
-      return `away ${awayLabel} ML (+${impAbs}% imp)`;
+      const toward = openMlAwayNum !== null && currMlAwayNum !== null
+        ? `TOWARD away ${awayLabel} ML (${fmtOddsOrLine(openMlAwayNum)} -> ${fmtOddsOrLine(currMlAwayNum)}, +${impAbs}% imp)`
+        : openMlHomeNum !== null && currMlHomeNum !== null
+          ? `TOWARD away ${awayLabel} ML (home ${fmtOddsOrLine(openMlHomeNum)} -> ${fmtOddsOrLine(currMlHomeNum)}, +${impAbs}% imp)`
+          : `TOWARD away ${awayLabel} ML (+${impAbs}% imp)`;
+      const against = openMlHomeNum !== null && currMlHomeNum !== null
+        ? `AGAINST home ${homeLabel} ML (${fmtOddsOrLine(openMlHomeNum)} -> ${fmtOddsOrLine(currMlHomeNum)})`
+        : `AGAINST home ${homeLabel} ML`;
+      return `${toward} | ${against}`;
     };
 
     const detectTotalSteam = (): string | null => {
       if (totalDeltaVal === null || Math.abs(totalDeltaVal) < totalThreshold) return null;
-      const side = totalDeltaVal > 0 ? 'over' : 'under';
+      const side = totalDeltaVal > 0 ? 'Over' : 'Under';
       const signed = totalDeltaVal > 0 ? `+${totalDeltaVal.toFixed(1)}` : totalDeltaVal.toFixed(1);
-      return `${side} (${openTotalNum} -> ${currTotalNum}, ${signed} pts)`;
+      return `TOWARD ${side} (${openTotalNum} -> ${currTotalNum}, ${signed} pts)`;
     };
 
     const orderedSteam = isMlRequested

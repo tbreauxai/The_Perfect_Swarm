@@ -916,7 +916,7 @@ function findHealthViolationInClause(
 }
 
 const LEG_VETO_SIGNAL_REGEX =
-  /\b(?:veto(?:ed|ing)?(?:\s+leg)?|reject(?:ed|ing)?(?:\s+leg)?|remov(?:ed|e)(?:\s+leg)?|drop(?:ped)?(?:\s+leg)?|disqualif(?:ied|y)|exclud(?:ed|e)|do\s+not\s+(?:bet|play|back|pick|recommend)|cannot\s+(?:bet|play|back|pick|recommend)|must\s+be\s+removed|fatal\s+injury|critical\s+roster\s+scratch|injury\s+misattribution|missing_(?:moneyline|spread|total)_coverage|missing\s+(?:moneyline|spread|total)\s+coverage|ungrounded|contradicted)\b/i;
+  /\b(?:veto(?:ed|ing)?(?:\s+leg)?|reject(?:ed|ing)?(?:\s+leg)?|remov(?:ed|e)(?:\s+leg)?|drop(?:ped)?(?:\s+leg)?|disqualif(?:ied|y)|exclud(?:ed|e)|do\s+not\s+(?:bet|play|back|pick|recommend)|cannot\s+(?:bet|play|back|pick|recommend)|must\s+be\s+removed|fatal\s+injury|critical\s+roster\s+scratch|injury\s+misattribution|contra_steam_misread|symmetric_injury_misread|contra-?steam|symmetric-?injury|missing_(?:moneyline|spread|total)_coverage|missing\s+(?:moneyline|spread|total)\s+coverage|ungrounded|contradicted)\b/i;
 
 const EXPLICIT_LEG_REF_IN_CLAUSE_REGEX =
   /\b(?:leg|pick|side|parlay|must\s+be\s+removed|vetoed\s+leg|R\d+|ML|moneyline|puckline|over\s+\d|under\s+\d)\b|[+-]\d+(?:\.5|\.0)\b/i;
@@ -1622,6 +1622,24 @@ export function auditClaimGrounding(
     }
   }
 
+  const premiseAudit = auditCriticPremiseContradictions(proposal, evidenceText, slateText, {
+    headers
+  });
+  if (!premiseAudit.pass) {
+    for (const f of premiseAudit.flags) {
+      if (!flags.includes(f)) flags.push(f);
+    }
+    for (const v of premiseAudit.violations) {
+      if (!violations.includes(v)) violations.push(v);
+    }
+    if (Array.isArray(premiseAudit.vetoedLegs)) {
+      for (const leg of premiseAudit.vetoedLegs) recordVetoedLeg(leg);
+    }
+    if (Array.isArray(premiseAudit.vetoedClaims)) {
+      recordClaims(premiseAudit.vetoedClaims);
+    }
+  }
+
   const mergedLegs = mergeVetoedLegTargets(detectedVetoedLegs);
   const mergedClaims = mergeVetoedClaims(detectedVetoedClaims);
 
@@ -1631,6 +1649,575 @@ export function auditClaimGrounding(
       violations,
       flags,
       feedback: `Veto (GROUNDING): ${violations.join(' ')}`,
+      ...(mergedLegs.length > 0 ? { vetoedLegs: mergedLegs } : {}),
+      ...(mergedClaims.length > 0 ? { vetoedClaims: mergedClaims } : {})
+    };
+  }
+
+  return { pass: true, violations: [], flags: [] };
+}
+
+interface ParsedSteamEntry {
+  eventId?: string;
+  marketKind: 'moneyline' | 'spread' | 'total';
+  towardRole?: 'home' | 'away' | 'over' | 'under';
+  towardTeam?: string;
+  towardDesc?: TeamDescriptor;
+  againstRole?: 'home' | 'away' | 'over' | 'under';
+  againstTeam?: string;
+  againstDesc?: TeamDescriptor;
+}
+
+interface ParsedInjuryBalanceEntry {
+  eventId: string;
+  homeTeam?: string;
+  homeOut: number;
+  homeQ: number;
+  awayTeam?: string;
+  awayOut: number;
+  awayQ: number;
+  healthBalance: 'symmetric' | 'home_advantage' | 'away_advantage' | 'uncertain_questionable' | 'single_team_only';
+}
+
+const STEAM_TOPIC_REGEX =
+  /\b(?:steam|line\s+move(?:ment)?|market\s+(?:steam|move(?:ment)?|money|action)|sharp\s+(?:money|steam|action)|RLM)\b/i;
+
+const CONTRA_STEAM_CONTRARIAN_REGEX =
+  /\b(?:despite|fading|fade|contrarian|counter-?steam|negative\s+steam|opposing\s+steam|(?:moves?|moving|moved|steamed|going|betting|is)\s+against|against\s+(?:the\s+)?(?:market\s+)?(?:steam|line\s+move(?:ment)?|sharp\s+(?:money|action|steam)))\b/i;
+
+const FAVORABLE_STEAM_CLAIM_REGEX =
+  /\b(?:favorable\s+(?:market\s+)?steam|(?:market\s+|sharp\s+)?steam\s+(?:is\s+|has\s+been\s+)?(?:moves?|moving|moved|backs?|backing|supports?|supporting|favors?|favoring|on|for|behind|toward|towards)\b|(?:sharp|market)\s+(?:money|action|movement|line\s+move(?:ment)?)\s+(?:is\s+)?(?:moves?|moving|moved|backs?|backing|supports?|supporting|favors?|favoring|toward|towards|on)\b|backing\s+(?:heavy\s+)?(?:market\s+)?steam|following\s+(?:the\s+)?steam|aligned\s+with\s+(?:the\s+)?(?:market\s+)?steam|steam\s+(?:confirmation|support|play)|line\s+move(?:ment)?\s+(?:favors?|supports?|backs?|moves?\s+toward))\b/i;
+
+const HEALTH_ADVANTAGE_CLAIM_REGEX =
+  /\b(?:health\s+(?:advantage|edge)|injury\s+(?:advantage|edge)|healthier\s+(?:side|team|roster|squad)|cleaner\s+injury\s+report|relatively\s+healthy|availability\s+(?:advantage|edge)|roster\s+(?:health\s+)?(?:advantage|edge)|fewer\s+injuries)\b/i;
+
+const HEALTH_BALANCED_ACK_REGEX =
+  /\b(?:no\s+(?:health|injury)\s+(?:advantage|edge)|without\s+(?:a|an)\s+(?:health|injury)\s+(?:advantage|edge)|not\s+(?:a|an)\s+(?:health|injury)\s+(?:advantage|edge)|neither\s+team\s+(?:is\s+healthier|has\s+an?\s+(?:injury|health)\s+(?:advantage|edge))|symmetric|evenly\s+(?:matched|depleted)|equally\s+(?:depleted|banged\s+up|short-?handed)|offsetting\s+injuries|both\s+(?:teams|[A-Za-z .'-]{2,35}\s+and\s+[A-Za-z .'-]{2,35})\s+(?:have|are\s+(?:missing|dealing\s+with|down|without)|miss(?:ing)?))\b/i;
+
+const DEPLETION_MENTION_REGEX =
+  /\b(?:missing|out|injured|depleted|decimated|shorthanded|short-?handed|banged\s+up|availability|without|scratches|players?\s+out|rotation\s+players?|starters?\s+out)\b/i;
+
+function extractLineEventId(line: string): string | undefined {
+  const m =
+    line.match(/^EVENT\s+([a-z0-9-]+)/i) ||
+    line.match(/===\s*GAME DOSSIER:\s*([a-z0-9-]+)/i) ||
+    line.match(/\[(?:MARKET\s+MOVEMENT|INJURY[^:\]]*|MATCHUP[^:\]]*):\s*([a-z0-9-]+)/i) ||
+    line.match(/\bevent_id\s*=\s*([a-z0-9-]+)/i) ||
+    line.match(/\b((?:nba|nhl|nfl|mlb|ncaab|ncaaf|wnba|epl|mls)-[a-z0-9-]+)\b/i);
+  return m?.[1];
+}
+
+function cleanSteamTeamLabel(raw: string): string {
+  return raw
+    .replace(/\s*\([^)]*\)/g, '')
+    .replace(/\s+(?:ML|moneyline|spread)\s*$/i, '')
+    .trim();
+}
+
+function descriptorMatchesHeaderSide(desc: TeamDescriptor | undefined, headerSide: string, candidates: TeamDescriptor[]): boolean {
+  if (!headerSide) return false;
+  if (desc) {
+    const lowerSide = headerSide.toLowerCase();
+    if (desc.allAliases.some(a => lowerSide === a || (a.length >= 4 && lowerSide.includes(a)))) {
+      return true;
+    }
+  }
+  const sideDesc = findTeamMentionsInText(headerSide, candidates)[0]?.team;
+  return Boolean(desc && sideDesc && desc.key === sideDesc.key);
+}
+
+function inferPickedRoleAndTeam(
+  pickText: string,
+  header: GameHeader | undefined,
+  eventCandidates: TeamDescriptor[],
+  allCandidates: TeamDescriptor[]
+): {
+  pickedRole?: 'home' | 'away' | 'over' | 'under';
+  pickedDesc?: TeamDescriptor;
+  pickedTeamLabel?: string;
+  isTotal: boolean;
+} {
+  if (/\bover\b/i.test(pickText) && !/\bML\b/i.test(pickText) && !/\bovertime\b/i.test(pickText)) {
+    return { pickedRole: 'over', pickedTeamLabel: 'Over', isTotal: true };
+  }
+  if (/\bunder\b/i.test(pickText) && !/\bML\b/i.test(pickText)) {
+    return { pickedRole: 'under', pickedTeamLabel: 'Under', isTotal: true };
+  }
+
+  const pool = eventCandidates.length > 0 ? eventCandidates : allCandidates;
+  const pickedDesc = findTeamMentionsInText(pickText, pool)[0]?.team;
+  let pickedRole: 'home' | 'away' | undefined;
+  if (header) {
+    if (descriptorMatchesHeaderSide(pickedDesc, header.away, pool) || /^\s*away\b/i.test(pickText)) {
+      pickedRole = 'away';
+    } else if (descriptorMatchesHeaderSide(pickedDesc, header.home, pool) || /^\s*home\b/i.test(pickText)) {
+      pickedRole = 'home';
+    }
+  } else if (/^\s*away\b/i.test(pickText)) {
+    pickedRole = 'away';
+  } else if (/^\s*home\b/i.test(pickText)) {
+    pickedRole = 'home';
+  }
+
+  const pickedTeamLabel =
+    pickedDesc?.label ||
+    (pickedRole === 'home' ? header?.home : pickedRole === 'away' ? header?.away : undefined);
+
+  return { pickedRole, pickedDesc, pickedTeamLabel, isTotal: false };
+}
+
+function parseSteamEntriesFromEvidence(
+  successfulEvidence: string,
+  headers: GameHeader[],
+  candidates: TeamDescriptor[]
+): ParsedSteamEntry[] {
+  const entries: ParsedSteamEntry[] = [];
+  if (!successfulEvidence) return entries;
+
+  let currentEventId: string | undefined = headers.length === 1 ? headers[0].eventId : undefined;
+  for (const rawLine of successfulEvidence.split(/\r?\n/)) {
+    const line = normalizeText(rawLine.trim());
+    if (!line) continue;
+    const lineEv = extractLineEventId(line);
+    if (lineEv) currentEventId = lineEv;
+    if (!/\b(?:TOWARD|Steam:)/i.test(line)) continue;
+
+    const eventId = lineEv || currentEventId;
+    const eventCands = eventId
+      ? candidates.filter(c => c.eventIds.length === 0 || c.eventIds.includes(eventId))
+      : candidates;
+    const pool = eventCands.length > 0 ? eventCands : candidates;
+    const hdr = eventId ? headers.find(h => h.eventId === eventId) : undefined;
+
+    for (const seg of line.split(/;\s+/)) {
+      let matchedStructured = false;
+      const twoWayRx =
+        /\bTOWARD\s+(home|away)\s+([^|(;\n]+?)(?:\s*(\([^)\n]*\)))?\s*\|\s*AGAINST\s+(home|away)\s+([^|(\n;]+?)(?:\s*(\([^)\n]*\)))?(?=$|;|\n)/gi;
+      let m: RegExpExecArray | null;
+      while ((m = twoWayRx.exec(seg)) !== null) {
+        matchedStructured = true;
+        const towardRole = m[1].toLowerCase() as 'home' | 'away';
+        const towardRaw = m[2].trim();
+        const towardParen = m[3] || '';
+        const againstRole = m[4].toLowerCase() as 'home' | 'away';
+        const againstRaw = m[5].trim();
+        const towardTeam = cleanSteamTeamLabel(towardRaw);
+        const againstTeam = cleanSteamTeamLabel(againstRaw);
+        const marketKind: 'moneyline' | 'spread' =
+          /\bML\b/i.test(`${towardRaw} ${againstRaw}`) || /%\s*imp/i.test(towardParen) ? 'moneyline' : 'spread';
+        const towardDesc = findTeamMentionsInText(towardTeam, pool)[0]?.team || (matchTeamByLabel(towardTeam) ? descriptorFromEntry(matchTeamByLabel(towardTeam)!) : undefined);
+        const againstDesc = findTeamMentionsInText(againstTeam, pool)[0]?.team || (matchTeamByLabel(againstTeam) ? descriptorFromEntry(matchTeamByLabel(againstTeam)!) : undefined);
+        entries.push({
+          ...(eventId ? { eventId } : {}),
+          marketKind,
+          towardRole,
+          towardTeam,
+          ...(towardDesc ? { towardDesc } : {}),
+          againstRole,
+          againstTeam,
+          ...(againstDesc ? { againstDesc } : {})
+        });
+      }
+
+      const totalRx = /\bTOWARD\s+(over|under)\b([^;\n]*)/gi;
+      while ((m = totalRx.exec(seg)) !== null) {
+        matchedStructured = true;
+        const towardRole = m[1].toLowerCase() as 'over' | 'under';
+        entries.push({
+          ...(eventId ? { eventId } : {}),
+          marketKind: 'total',
+          towardRole,
+          towardTeam: towardRole === 'over' ? 'Over' : 'Under',
+          againstRole: towardRole === 'over' ? 'under' : 'over',
+          againstTeam: towardRole === 'over' ? 'Under' : 'Over'
+        });
+      }
+
+      if (!matchedStructured) {
+        const oneWayToward = /\bTOWARD\s+(home|away)\s+([^|(;\n]+?)(?:\s*(\([^)\n]*\)))?(?=$|;|\n)/i.exec(seg);
+        const legacySteam = !oneWayToward ? /\bSteam:\s*(home|away)\s+([^(\n;]+?)(?:\s*(\([^)\n]*\)))?(?=$|;|\n)/i.exec(seg) : null;
+        const sm = oneWayToward || legacySteam;
+        if (sm) {
+          const towardRole = sm[1].toLowerCase() as 'home' | 'away';
+          const towardRaw = sm[2].trim();
+          const towardParen = sm[3] || '';
+          const towardTeam = cleanSteamTeamLabel(towardRaw);
+          const againstRole: 'home' | 'away' = towardRole === 'home' ? 'away' : 'home';
+          const againstTeam = hdr ? (againstRole === 'home' ? hdr.home : hdr.away) : undefined;
+          const marketKind: 'moneyline' | 'spread' =
+            /\bML\b/i.test(towardRaw) || /%\s*imp/i.test(towardParen) ? 'moneyline' : 'spread';
+          const towardDesc = findTeamMentionsInText(towardTeam, pool)[0]?.team;
+          const againstDesc = againstTeam ? findTeamMentionsInText(againstTeam, pool)[0]?.team : undefined;
+          entries.push({
+            ...(eventId ? { eventId } : {}),
+            marketKind,
+            towardRole,
+            towardTeam,
+            ...(towardDesc ? { towardDesc } : {}),
+            againstRole,
+            ...(againstTeam ? { againstTeam } : {}),
+            ...(againstDesc ? { againstDesc } : {})
+          });
+        }
+      }
+    }
+  }
+  return entries;
+}
+
+function parseInjuryBalanceFromEvidence(
+  successfulEvidence: string,
+  headers: GameHeader[],
+  allInjuries: AuthoritativeInjury[],
+  candidates: TeamDescriptor[]
+): Map<string, ParsedInjuryBalanceEntry> {
+  const byEvent = new Map<string, ParsedInjuryBalanceEntry>();
+  if (successfulEvidence) {
+    let currentEventId: string | undefined = headers.length === 1 ? headers[0].eventId : undefined;
+    for (const rawLine of successfulEvidence.split(/\r?\n/)) {
+      const line = normalizeText(rawLine.trim());
+      if (!line) continue;
+      const lineEv = extractLineEventId(line);
+      if (lineEv) currentEventId = lineEv;
+      const sm = line.match(
+        /Summary:\s*(.+?)\s*\((\d+)\s+OUT,\s*(\d+)\s+Q\)\s+vs\s+(.+?)\s*\((\d+)\s+OUT,\s*(\d+)\s+Q\)\s*\|\s*Health\s+Balance:\s*(symmetric|home_advantage|away_advantage|uncertain_questionable|single_team_only)/i
+      );
+      if (sm && (lineEv || currentEventId)) {
+        const eventId = lineEv || currentEventId!;
+        byEvent.set(eventId, {
+          eventId,
+          homeTeam: sm[1].trim(),
+          homeOut: Number(sm[2]),
+          homeQ: Number(sm[3]),
+          awayTeam: sm[4].trim(),
+          awayOut: Number(sm[5]),
+          awayQ: Number(sm[6]),
+          healthBalance: sm[7].toLowerCase() as ParsedInjuryBalanceEntry['healthBalance']
+        });
+      }
+    }
+  }
+
+  for (const h of headers) {
+    if (!h.eventId || byEvent.has(h.eventId)) continue;
+    const evInjuries = allInjuries.filter(inj => inj.eventId === h.eventId);
+    if (evInjuries.length === 0) continue;
+    const eventCands = candidates.filter(c => c.eventIds.length === 0 || c.eventIds.includes(h.eventId));
+    const pool = eventCands.length > 0 ? eventCands : candidates;
+    let homeOut = 0;
+    let homeQ = 0;
+    let awayOut = 0;
+    let awayQ = 0;
+    let homeSeen = false;
+    let awaySeen = false;
+    for (const inj of evInjuries) {
+      const injDesc = inj.teamEntry
+        ? descriptorFromEntry(inj.teamEntry, [h.eventId])
+        : findTeamMentionsInText(inj.teamLabel, pool)[0]?.team;
+      const isHome = descriptorMatchesHeaderSide(injDesc, h.home, pool) || normalizeText(inj.teamLabel).toLowerCase() === normalizeText(h.home).toLowerCase();
+      const isAway = !isHome && (descriptorMatchesHeaderSide(injDesc, h.away, pool) || normalizeText(inj.teamLabel).toLowerCase() === normalizeText(h.away).toLowerCase());
+      const isOut = /^(?:OUT|IR|INJURED\s+RESERVE|SUSPENDED)$/i.test(inj.status);
+      const isQ = /^(?:Q|QUESTIONABLE|DOUBTFUL|DAY-TO-DAY|GTD)$/i.test(inj.status);
+      if (isHome) {
+        homeSeen = true;
+        if (isOut) homeOut++;
+        else if (isQ) homeQ++;
+      } else if (isAway) {
+        awaySeen = true;
+        if (isOut) awayOut++;
+        else if (isQ) awayQ++;
+      }
+    }
+    if (!homeSeen || !awaySeen) continue;
+    const homeTotal = homeOut + homeQ;
+    const awayTotal = awayOut + awayQ;
+    const homeBetter = (awayOut - homeOut >= 2) || (awayTotal - homeTotal >= 2 && homeQ === 0);
+    const awayBetter = (homeOut - awayOut >= 2) || (homeTotal - awayTotal >= 2 && awayQ === 0);
+    let healthBalance: ParsedInjuryBalanceEntry['healthBalance'];
+    if (homeBetter && !awayBetter) {
+      healthBalance = 'home_advantage';
+    } else if (awayBetter && !homeBetter) {
+      healthBalance = 'away_advantage';
+    } else if (homeQ >= 2 && awayQ >= 2) {
+      healthBalance = 'uncertain_questionable';
+    } else {
+      healthBalance = 'symmetric';
+    }
+    byEvent.set(h.eventId, {
+      eventId: h.eventId,
+      homeTeam: h.home,
+      homeOut,
+      homeQ,
+      awayTeam: h.away,
+      awayOut,
+      awayQ,
+      healthBalance
+    });
+  }
+
+  return byEvent;
+}
+
+/**
+ * Deterministically audits proposed picks and rationales for contra-steam misreads
+ * and symmetric/disadvantaged-injury misreads against retrieved market & injury evidence.
+ */
+export function auditCriticPremiseContradictions(
+  proposal: any,
+  evidenceText: string,
+  slateText: string = '',
+  options?: {
+    headers?: GameHeader[];
+  }
+): GroundingAuditResult {
+  if (!proposal) return { pass: true, violations: [], flags: [] };
+
+  const headers = options?.headers && options.headers.length > 0
+    ? options.headers
+    : parseGameHeaders(slateText);
+  const rowMap = extractRowOptions([slateText], headers);
+  const successfulEvidence = extractSuccessfulEvidenceText(evidenceText);
+  if (!successfulEvidence) return { pass: true, violations: [], flags: [] };
+
+  const rawProposalText = typeof proposal === 'string' ? proposal : JSON.stringify(proposal);
+  const hasSportsSignal =
+    headers.length > 0 ||
+    SPORTS_CONTEXT_REGEX.test(rawProposalText) ||
+    SPORTS_CONTEXT_REGEX.test(slateText || '') ||
+    Boolean(successfulEvidence);
+
+  const allInjuries = extractAuthoritativeInjuries(successfulEvidence, slateText);
+  const outInjuries = allInjuries.filter(inj => /^(?:OUT|IR|INJURED\s+RESERVE|SUSPENDED)$/i.test(inj.status));
+  const candidates = buildTeamDescriptors(headers, outInjuries, hasSportsSignal);
+
+  const steamEntries = parseSteamEntriesFromEvidence(successfulEvidence, headers, candidates);
+  const injuryBalances = parseInjuryBalanceFromEvidence(successfulEvidence, headers, allInjuries, candidates);
+
+  if (steamEntries.length === 0 && injuryBalances.size === 0) {
+    return { pass: true, violations: [], flags: [] };
+  }
+
+  const violations: string[] = [];
+  const flags: string[] = [];
+  const vetoedLegs: VetoedLegTarget[] = [];
+  const vetoedClaims: string[] = [];
+
+  const addFinding = (flag: string, msg: string, target: VetoedLegTarget | null, clause?: string) => {
+    if (!flags.includes(flag)) flags.push(flag);
+    if (!violations.includes(msg)) violations.push(msg);
+    if (target) vetoedLegs.push(target);
+    if (clause && !vetoedClaims.some(c => c.toLowerCase() === clause.toLowerCase())) {
+      vetoedClaims.push(clause.slice(0, 140));
+    }
+  };
+
+  const evaluateLeg = (
+    pk: any,
+    sideText: string,
+    reasonTexts: string[]
+  ) => {
+    const combinedReasons = normalizeText(reasonTexts.filter(Boolean).join('. ')).trim();
+    if (!combinedReasons) return;
+
+    const rowMatch = sideText.match(/\b(R\d+)\b/i) || (typeof pk?.row === 'string' ? pk.row.match(/\b(R\d+)\b/i) : null);
+    const rowId = rowMatch ? rowMatch[1].toUpperCase() : undefined;
+    const rowEntry = rowId ? rowMap.get(rowId) : undefined;
+    const fullPickText = [sideText, rowEntry?.text].filter(Boolean).join(' ');
+
+    let eventId =
+      (typeof pk === 'object' ? getEventIdForPick(pk, headers) : undefined) ||
+      rowEntry?.eventId;
+    if (!eventId) {
+      const m = findTeamMentionsInText(fullPickText, candidates)[0]?.team;
+      if (m && m.eventIds.length === 1) eventId = m.eventIds[0];
+    }
+    if (!eventId && headers.length === 1) eventId = headers[0].eventId;
+
+    const header = eventId ? headers.find(h => h.eventId === eventId) : undefined;
+    const eventCands = eventId
+      ? candidates.filter(c => c.eventIds.length === 0 || c.eventIds.includes(eventId))
+      : candidates;
+    const pool = eventCands.length > 0 ? eventCands : candidates;
+    const { pickedRole, pickedDesc, pickedTeamLabel, isTotal } = inferPickedRoleAndTeam(
+      fullPickText,
+      header,
+      eventCands,
+      candidates
+    );
+
+    const clauses = combinedReasons.split(/(?<=[.!?])\s+|\n+|;\s+/).map(c => c.trim()).filter(Boolean);
+    const pickDisplay = pickedTeamLabel || rowId || sideText || 'pick';
+
+    // 1. Check contra-steam misread
+    const relevantSteam = steamEntries.filter(se => {
+      if (eventId && se.eventId && se.eventId !== eventId) return false;
+      if (isTotal) return se.marketKind === 'total';
+      if (se.marketKind === 'total') return false;
+      if (/\bML\b/i.test(fullPickText) && steamEntries.some(x => x.eventId === se.eventId && x.marketKind === 'moneyline')) {
+        return se.marketKind === 'moneyline';
+      }
+      if (/[+-]\d+(?:\.5)?/.test(fullPickText) && !/\bML\b/i.test(fullPickText) && steamEntries.some(x => x.eventId === se.eventId && x.marketKind === 'spread')) {
+        return se.marketKind === 'spread';
+      }
+      return true;
+    });
+
+    for (const se of relevantSteam) {
+      const isPickingAgainst = isTotal
+        ? (pickedRole === 'over' || pickedRole === 'under') && pickedRole === se.againstRole
+        : Boolean(
+            (pickedRole && se.againstRole && pickedRole === se.againstRole) ||
+            (pickedDesc && se.againstDesc && pickedDesc.key === se.againstDesc.key)
+          );
+      if (!isPickingAgainst) continue;
+
+      for (const clause of clauses) {
+        if (!STEAM_TOPIC_REGEX.test(clause)) continue;
+        if (CONTRA_STEAM_CONTRARIAN_REGEX.test(clause)) continue;
+        if (!FAVORABLE_STEAM_CLAIM_REGEX.test(clause)) continue;
+
+        const targetedMentions = findTeamMentionsInText(clause, pool).map(m => m.team);
+        const explicitlyTargetsTowardSide = !isTotal && se.towardDesc
+          ? targetedMentions.some(t => t.key === se.towardDesc!.key) &&
+            !(pickedDesc && targetedMentions.some(t => t.key === pickedDesc.key)) &&
+            /\b(?:toward|towards|backs?|backing|supports?|supporting|favors?|favoring|on)\s+/i.test(clause)
+          : false;
+        const explicitlyTargetsAgainstTotal = isTotal && se.towardRole && new RegExp(`\\btoward\\s+${se.towardRole}\\b`, 'i').test(clause);
+
+        if (explicitlyTargetsTowardSide || explicitlyTargetsAgainstTotal) continue;
+
+        const msg = `contra_steam_misread: Pick "${pickDisplay}" is on the Steam: AGAINST side (${se.againstTeam || se.againstRole}), yet rationale claims favorable steam ("${clause}").`;
+        addFinding(
+          'contra_steam_misread',
+          msg,
+          buildVetoTargetFromPick(pk, headers, rowMap, candidates, msg),
+          clause
+        );
+      }
+    }
+
+    // 2. Check symmetric / disadvantaged injury misread
+    const injBal = eventId ? injuryBalances.get(eventId) : undefined;
+    if (injBal && (pickedRole === 'home' || pickedRole === 'away')) {
+      const isSymmetric = injBal.healthBalance === 'symmetric';
+      const isDisadvantaged =
+        (pickedRole === 'home' && injBal.healthBalance === 'away_advantage') ||
+        (pickedRole === 'away' && injBal.healthBalance === 'home_advantage');
+      const isUncertainQ = injBal.healthBalance === 'uncertain_questionable';
+
+      if (isSymmetric || isDisadvantaged || isUncertainQ) {
+        const pickedOut = pickedRole === 'home' ? injBal.homeOut : injBal.awayOut;
+        const oppOut = pickedRole === 'home' ? injBal.awayOut : injBal.homeOut;
+        const oppHeaderName = pickedRole === 'home' ? (header?.away || injBal.awayTeam || '') : (header?.home || injBal.homeTeam || '');
+        const oppDesc = oppHeaderName
+          ? findTeamMentionsInText(oppHeaderName, pool)[0]?.team || (matchTeamByLabel(oppHeaderName) ? descriptorFromEntry(matchTeamByLabel(oppHeaderName)!) : undefined)
+          : undefined;
+
+        const injurySubClauses = combinedReasons
+          .split(/(?<=[.!?])\s+|\n+|;\s+|,\s+(?:and|but|while|whereas|with)\s+|\s+\b(?:but|while|whereas)\b\s+|\s+\band\b\s+(?=[A-Z][^.!?\n;]*\b(?:missing|out|injured|depleted|decimated|shorthanded|short-?handed|without|scratches)\b)/i)
+          .map(c => c.trim())
+          .filter(Boolean);
+
+        const wholeTextHasBalancedAck =
+          HEALTH_BALANCED_ACK_REGEX.test(combinedReasons) ||
+          (Boolean(pickedDesc) &&
+            injurySubClauses.some(
+              c =>
+                DEPLETION_MENTION_REGEX.test(c) &&
+                findTeamMentionsInText(c, pool).some(m => m.team.key === pickedDesc!.key)
+            ));
+
+        for (const subClause of injurySubClauses) {
+          if (HEALTH_ADVANTAGE_CLAIM_REGEX.test(subClause) && !HEALTH_BALANCED_ACK_REGEX.test(subClause)) {
+            const msg = `symmetric_injury_misread: Pick "${pickDisplay}" claims an injury/health advantage when Health Balance is ${injBal.healthBalance} (${injBal.homeTeam || 'Home'} ${injBal.homeOut} OUT/${injBal.homeQ} Q vs ${injBal.awayTeam || 'Away'} ${injBal.awayOut} OUT/${injBal.awayQ} Q).`;
+            addFinding(
+              'symmetric_injury_misread',
+              msg,
+              buildVetoTargetFromPick(pk, headers, rowMap, candidates, msg),
+              subClause
+            );
+            continue;
+          }
+
+          if ((isSymmetric && pickedOut >= 2 && oppOut > 0) || (isDisadvantaged && pickedOut > oppOut)) {
+            if (!wholeTextHasBalancedAck && !HEALTH_BALANCED_ACK_REGEX.test(subClause) && DEPLETION_MENTION_REGEX.test(subClause)) {
+              const clauseMentions = findTeamMentionsInText(subClause, pool).map(m => m.team);
+              const mentionsOpp = oppDesc ? clauseMentions.some(t => t.key === oppDesc.key) : false;
+              const mentionsPicked = pickedDesc ? clauseMentions.some(t => t.key === pickedDesc.key) : false;
+              if (mentionsOpp && !mentionsPicked) {
+                const msg = `symmetric_injury_misread: Pick "${pickDisplay}" cites opponent injury depletion without acknowledging symmetric/greater injuries (${pickedOut} OUT vs opp ${oppOut} OUT, Health Balance: ${injBal.healthBalance}).`;
+                addFinding(
+                  'symmetric_injury_misread',
+                  msg,
+                  buildVetoTargetFromPick(pk, headers, rowMap, candidates, msg),
+                  subClause
+                );
+              }
+            }
+          }
+        }
+      }
+    }
+  };
+
+  if (typeof proposal === 'object') {
+    if (Array.isArray(proposal.picks)) {
+      for (const pk of proposal.picks) {
+        if (!pk) continue;
+        if (typeof pk === 'string') {
+          evaluateLeg(pk, pk, [pk]);
+          continue;
+        }
+        if (typeof pk !== 'object') continue;
+        const sideText = [pk.row, pk.id, pk.side, pk.pick, pk.selection, pk.team, pk.matchup]
+          .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+          .join(' ');
+        const rTexts = [
+          pk.reason,
+          pk.rationale,
+          pk.edge,
+          pk.note,
+          pk.description,
+          pk.claim,
+          pk.summary,
+          ...(Array.isArray(pk.reasons) ? pk.reasons : [])
+        ].filter((x): x is string => typeof x === 'string' && x.trim().length > 0);
+        if (rTexts.length === 0 && typeof proposal.analysis === 'string') {
+          rTexts.push(proposal.analysis);
+        }
+        evaluateLeg(pk, sideText, rTexts);
+      }
+    }
+    if (Array.isArray(proposal.scorecards)) {
+      for (const sc of proposal.scorecards) {
+        if (!sc || typeof sc !== 'object') continue;
+        const sideText = [sc.row, sc.pick, sc.side, sc.team].filter((x): x is string => typeof x === 'string' && x.trim().length > 0).join(' ');
+        const rTexts = [
+          sc.note,
+          sc.reason,
+          sc.summary,
+          ...(Array.isArray(sc.reasons) ? sc.reasons : [])
+        ].filter((x): x is string => typeof x === 'string' && x.trim().length > 0);
+        evaluateLeg(sc, sideText, rTexts);
+      }
+    }
+    if (proposal.scorecard && typeof proposal.scorecard === 'object') {
+      const sc = proposal.scorecard;
+      const sideText = [sc.row, sc.pick, sc.side, sc.team].filter((x): x is string => typeof x === 'string' && x.trim().length > 0).join(' ');
+      const rTexts = [sc.note, sc.reason, sc.summary].filter((x): x is string => typeof x === 'string' && x.trim().length > 0);
+      evaluateLeg(sc, sideText, rTexts);
+    }
+  }
+
+  const mergedLegs = mergeVetoedLegTargets(vetoedLegs);
+  const mergedClaims = mergeVetoedClaims(vetoedClaims);
+
+  if (violations.length > 0) {
+    return {
+      pass: false,
+      violations,
+      flags,
+      feedback: `Veto (PREMISE): ${violations.join(' ')}`,
       ...(mergedLegs.length > 0 ? { vetoedLegs: mergedLegs } : {}),
       ...(mergedClaims.length > 0 ? { vetoedClaims: mergedClaims } : {})
     };

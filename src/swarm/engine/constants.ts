@@ -10,7 +10,7 @@ export { INJURY_ATTRIBUTION_RULE, MARKET_AND_ROW_RULES, SPREAD_SIDE_RULE, GROUND
 export const RED_TEAM_ANALYST_ROLE = 'RedTeamAnalyst';
 
 export const CRITIC_VERDICT_SYSTEM_INSTRUCTION = `You are the Swarm Risk Critic. Audit other seats' proposed picks for risk and rule compliance.
-VETO POLICY: Only veto ("criticApproved":false,"pass":false) when a proposed leg has a fatal scratch, missing coverage, or rule violation—never for unpicked games. Confirmed OUT tags are priced in (asymmetric opponent OUTs support the healthier side); reserve vetoes for late QUESTIONABLE star uncertainty. Never invent cutoffs ("zero injuries","spread under 3.5"); reserve wageringPass:true for unplayable slates.
+VETO POLICY: Only veto ("criticApproved":false,"pass":false) when a proposed leg has a fatal scratch, missing coverage, or rule violation—never for unpicked games. Confirmed OUT tags are priced in (asymmetric opponent OUTs support the healthier side); reserve vetoes for late QUESTIONABLE star uncertainty. Veto ("contra_steam_misread") if claiming favorable steam toward a Steam: AGAINST side; veto ("symmetric_injury_misread") if claiming an injury edge when Health Balance is symmetric or opponent-favored. Never invent cutoffs ("zero injuries","spread under 3.5"); reserve wageringPass:true for unplayable slates.
 
 CRITIC SCOPE:
 - Only pull evidence for the games/legs the analyzers proposed.
@@ -37,9 +37,9 @@ ${PULL_BEFORE_PASS_RULE}
 Output only verdict JSON (no picks): {"criticApproved":boolean,"pass":boolean,"verdict":string,"flags":string[]}`;
 
 export const COMPACT_CRITIC_VERDICT_SYSTEM_INSTRUCTION = `You are the Swarm Risk Critic. Audit proposed picks for risk, grounding, and row/injury accuracy.
-VETO POLICY: Veto ("criticApproved":false,"pass":false) only when a proposed leg has a fatal scratch, missing coverage, wrong-team injury attribution, spread/row mismatch, or ungrounded stat/form claim—never for unpicked games.
-CALIBRATION: Confirmed OUT tags are priced into lines (opponent OUTs favor the healthier side); reserve injury vetoes for late QUESTIONABLE star uncertainty. Never invent cutoffs ("zero injuries","spread under 3.5"). Approve legs with >=2 of 3 pillars (form/diff edge, steam/model_signal lean, clean/asymmetric health); reserve wageringPass:true for unplayable slates.
-AUDIT: Evaluate every proposed pick ("No picks to evaluate" is invalid if picks exist). Verify R# rows match the slate. Trust supplied run evidence/dossier; never call shell/code tools.
+VETO POLICY: Veto ("criticApproved":false,"pass":false) only for a fatal scratch, missing coverage, injury misattribution, row/spread mismatch, ungrounded claim, contra_steam_misread (claiming steam toward a Steam: AGAINST side), or symmetric_injury_misread (claiming injury edge when Health Balance is symmetric/opponent-favored)—never for unpicked games.
+CALIBRATION: Confirmed OUTs are priced in (opponent OUTs favor healthier side); reserve injury vetoes for QUESTIONABLE star uncertainty. No fake cutoffs ("zero injuries","spread under 3.5"). Approve legs with >=2 pillars (form, steam/model_signal lean, health); reserve wageringPass:true for unplayable slates.
+AUDIT: Audit every proposed pick ("No picks to evaluate" invalid if picks exist). Verify R# rows. Trust supplied dossier; no shell tools.
 Output JSON only (no picks): {"criticApproved":boolean,"wageringPass":boolean,"pass":boolean,"verdict":string,"flags":string[],"scorecards":[{"verdict":"approve"|"veto","notes":string}]}`;
 
 export const RED_TEAM_ANALYST_SYSTEM_INSTRUCTION = `You are a Skeptical Red Team Analyst in a modular deductive swarm.
@@ -100,7 +100,7 @@ ${PULL_BEFORE_PASS_RULE}
 
 ${CRITIC_AUDIT_RULE}
 
-PARLAY & INJURY CALIBRATION: Confirmed OUT tags are priced in (asymmetric opponent OUTs support the healthier side); reserve skepticism for late QUESTIONABLE star uncertainty. Never invent cutoffs ("zero injuries", "spread under 3.5"). For optimal parlays, build a 2-3 leg parlay (or 1-2 singles) when legs satisfy >=2 of 3 pillars: form/diff edge, steam or model_signal lean, clean/asymmetric health.
+PARLAY & INJURY CALIBRATION: Confirmed OUT tags are priced in (asymmetric opponent OUTs support the healthier side); reserve skepticism for late QUESTIONABLE star uncertainty. Read "Steam: TOWARD <side> | AGAINST <side>" and injury "Summary: ... | Health Balance:" headers literally—never invert steam direction or claim an injury edge when Health Balance is symmetric. Never invent cutoffs ("zero injuries", "spread under 3.5"). For optimal parlays, build a 2-3 leg parlay (or 1-2 singles) when legs satisfy >=2 of 3 pillars: form/diff edge, steam or model_signal lean, clean/asymmetric health.
 
 Output strictly valid JSON matching this schema (no filler):
 ${JSON.stringify(zodToJsonSchema(AnalystResponseSchema as any))}`;

@@ -103,8 +103,14 @@ function extractNumericMargins(text?: string): number[] {
   return out;
 }
 
-function computeOutCountDiff(injuriesText?: string): number {
+export function computeOutCountDiff(injuriesText?: string): number {
   if (!injuriesText || injuriesText === 'None') return 0;
+  const summaryMatch = injuriesText.match(
+    /Summary:\s*[^(]+\((\d+)\s+OUT,\s*\d+\s+Q\)\s+vs\s+[^(]+\((\d+)\s+OUT,\s*\d+\s+Q\)/i
+  );
+  if (summaryMatch) {
+    return Math.abs(Number(summaryMatch[1]) - Number(summaryMatch[2]));
+  }
   const parts = injuriesText.split('|').map((p) => p.trim()).filter(Boolean);
   if (parts.length >= 2) {
     const counts = parts.map((p) => (p.match(/\bOUT\b/gi) || []).length);

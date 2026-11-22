@@ -82,7 +82,7 @@ describe('Flight Recorder Audit wf-1795298894431 — The_Perfect_Swarm Regressio
       { fetchFn, env },
     );
     expect(nbaRes.summary).toContain('New York Knicks');
-    expect(nbaRes.summary).toContain('away Portland Trail Blazers (-2.0 pts)');
+    expect(nbaRes.summary).toContain('TOWARD away Portland Trail Blazers (+5.5 -> +3.5, 2.0 pts) | AGAINST home New York Knicks (-5.5 -> -3.5)');
     expect(nbaRes.summary).toContain('Divergence: single_book');
     expect(nbaRes.summary).not.toContain('Steam: neutral');
     expect(nbaRes.summary).not.toContain('(N/A)');
@@ -114,7 +114,7 @@ describe('Flight Recorder Audit wf-1795298894431 — The_Perfect_Swarm Regressio
       ],
       'Compact slate context',
     );
-    expect(evidence).toContain('Steam: away Boston Bruins ML');
+    expect(evidence).toContain('Steam: TOWARD away Boston Bruins ML');
     expect(evidence).toContain('single_book');
   });
 
