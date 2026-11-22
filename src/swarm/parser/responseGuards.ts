@@ -28,6 +28,9 @@ export function stripApproximateOdds(text: string, options?: { allowExactOdds?: 
             .replace(/\bpayout(?:\s*(?:of|:|=)?\s*\$?\d+(?:\.\d+)?)?\b/gi, '');
     }
     return out
+        .replace(/\(\s*(?:(?:->|→|–|—|-|to|,|\/|;|:)\s*)+\)/gi, '')
+        .replace(/\(\s*(?:->|→|to|,|\/|;)\s+/gi, '(')
+        .replace(/\s*(?:->|→|to|,|\/|;)\s*\)/gi, ')')
         .replace(/\(\s*\)/g, '')
         .replace(/,\s*,+/g, ',')
         .replace(/\s+([,.;:!?])/g, '$1')

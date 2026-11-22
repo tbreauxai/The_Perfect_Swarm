@@ -682,6 +682,10 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                         seat_visibility: clusterResult.seatVisibility || curatedDossier.seat_visibility || []
                     };
                     params.curatedDossier = curatedDossier;
+                    params.onStage?.({
+                        stage: 'curated_dossier',
+                        dossier: curatedDossier
+                    });
                 }
                 const baseVerifierEvidence = buildVerifierEvidence(
                     [{ toolEvidenceItems: allToolEvidenceItems }],
@@ -1030,13 +1034,30 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     dossier: curatedDossier
                 });
             }
+            const resolvedFinalSeatVisibility = Array.isArray(curatedDossier?.seat_visibility) && curatedDossier.seat_visibility.length > 0
+                ? curatedDossier.seat_visibility
+                : (Array.isArray(finalAnalysis?.curatedDossier?.seat_visibility)
+                    ? finalAnalysis.curatedDossier.seat_visibility
+                    : []);
+
             if (finalAnalysis && typeof finalAnalysis === 'object') {
                 finalAnalysis.tools_called = [...toolsCalledList];
                 if (hop1Plan && finalAnalysis.hop1Plan === undefined) {
                     finalAnalysis.hop1Plan = hop1Plan;
                 }
-                if (curatedDossier && finalAnalysis.curatedDossier === undefined) {
-                    finalAnalysis.curatedDossier = curatedDossier;
+                if (curatedDossier) {
+                    finalAnalysis.curatedDossier = finalAnalysis.curatedDossier && typeof finalAnalysis.curatedDossier === 'object'
+                        ? {
+                            ...curatedDossier,
+                            ...finalAnalysis.curatedDossier,
+                            seat_visibility: resolvedFinalSeatVisibility.length > 0
+                                ? resolvedFinalSeatVisibility
+                                : (finalAnalysis.curatedDossier.seat_visibility || [])
+                        }
+                        : curatedDossier;
+                }
+                if (resolvedFinalSeatVisibility.length > 0 && !Array.isArray(finalAnalysis.seat_visibility)) {
+                    finalAnalysis.seat_visibility = resolvedFinalSeatVisibility;
                 }
             }
 
@@ -1048,6 +1069,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 tools_called: toolsCalledList,
                 ...(hop1Plan ? { hop1Plan } : {}),
                 ...(curatedDossier ? { curatedDossier } : {}),
+                ...(resolvedFinalSeatVisibility.length > 0 ? { seat_visibility: resolvedFinalSeatVisibility } : {}),
                 events: context.events,
                 finalAnalysis,
                 metrics: learningResult.metrics,

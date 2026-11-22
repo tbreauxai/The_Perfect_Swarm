@@ -7,7 +7,7 @@ import {
   type AuthoritativeInjury,
   type EspnTeamEntry
 } from './injuryAttribution.ts';
-import { extractRowOptions, type RowOptionEntry } from './marketRowBinding.ts';
+import { checkPickRowSideBinding, extractRowOptions, type RowOptionEntry } from './marketRowBinding.ts';
 
 export const GROUNDING_RULE = `GROUNDING:
 - Do not cite a score, goals-allowed, or health claim unless it is in a successful tool result.
@@ -1666,6 +1666,7 @@ interface ParsedSteamEntry {
   againstRole?: 'home' | 'away' | 'over' | 'under';
   againstTeam?: string;
   againstDesc?: TeamDescriptor;
+  impliedShiftPp?: number;
 }
 
 interface ParsedInjuryBalanceEntry {
@@ -1676,7 +1677,14 @@ interface ParsedInjuryBalanceEntry {
   awayTeam?: string;
   awayOut: number;
   awayQ: number;
-  healthBalance: 'symmetric' | 'home_advantage' | 'away_advantage' | 'uncertain_questionable' | 'single_team_only';
+  healthBalance:
+    | 'symmetric'
+    | 'home_advantage'
+    | 'away_advantage'
+    | 'conditional_home_advantage'
+    | 'conditional_away_advantage'
+    | 'uncertain_questionable'
+    | 'single_team_only';
 }
 
 const STEAM_TOPIC_REGEX =
@@ -1766,6 +1774,62 @@ function inferPickedRoleAndTeam(
   return { pickedRole, pickedDesc, pickedTeamLabel, isTotal: false };
 }
 
+function extractImpliedShiftPpFromParen(parenText: string): number | undefined {
+  if (!parenText) return undefined;
+  const m = parenText.match(/([+-]?\d+(?:\.\d+)?)\s*(?:pp\s*implied|%\s*imp(?:lied)?)\b/i);
+  if (!m) return undefined;
+  const val = Math.abs(parseFloat(m[1]));
+  return Number.isFinite(val) ? val : undefined;
+}
+
+const FABRICATED_STEAM_SHIFT_RX =
+  /(\b(?:positive\s+|favorable\s+|negative\s+|sharp\s+|market\s+)?(?:steam|line\s+move(?:ment)?|market\s+move(?:ment)?|implied(?:\s+prob(?:ability)?)?)\b[^.;\n]{0,45}?)([+-]?\d+(?:\.\d+)?)\s*(%|pp)\s*(shift|move|swing|delta|implied(?:\s+shift)?|imp|increase|jump|gain)?/gi;
+
+function findFabricatedSteamShiftInClause(
+  clause: string,
+  actualShiftPp: number,
+): { rawClaim: string; claimed: number } | null {
+  if (!clause || !Number.isFinite(actualShiftPp)) return null;
+  FABRICATED_STEAM_SHIFT_RX.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = FABRICATED_STEAM_SHIFT_RX.exec(clause)) !== null) {
+    const prefix = m[1] || '';
+    const numStr = m[2];
+    const unit = m[3];
+    const suffix = m[4] || '';
+    const hasExplicitSteamContext =
+      Boolean(suffix) || /\bimplied\b/i.test(prefix) || /\bsteam\b/i.test(prefix);
+    if (!hasExplicitSteamContext) continue;
+    if (unit === '%' && !suffix && !/\bimplied\b/i.test(prefix)) continue;
+    const claimed = Math.abs(parseFloat(numStr));
+    if (!Number.isFinite(claimed)) continue;
+    if (Math.abs(claimed - actualShiftPp) > 2.5) {
+      return { rawClaim: `${numStr}${unit}${suffix ? ` ${suffix}` : ''}`, claimed };
+    }
+  }
+  return null;
+}
+
+function rewriteFabricatedSteamShiftInText(text: string, actualShiftPp: number): { text: string; changed: boolean } {
+  if (!text || !Number.isFinite(actualShiftPp)) return { text, changed: false };
+  const targetStr = `+${actualShiftPp.toFixed(1)}pp implied`;
+  let changed = false;
+  const next = text.replace(FABRICATED_STEAM_SHIFT_RX, (full, prefix, numStr, unit, suffix) => {
+    const hasExplicitSteamContext =
+      Boolean(suffix) || /\bimplied\b/i.test(prefix) || /\bsteam\b/i.test(prefix);
+    if (!hasExplicitSteamContext) return full;
+    if (unit === '%' && !suffix && !/\bimplied\b/i.test(prefix)) return full;
+    const claimed = Math.abs(parseFloat(numStr));
+    if (!Number.isFinite(claimed) || Math.abs(claimed - actualShiftPp) <= 2.5) {
+      return full;
+    }
+    changed = true;
+    const suffixClean = suffix && !/^(?:implied|imp)$/i.test(suffix.trim()) ? ` ${suffix.trim()}` : '';
+    return `${prefix}${targetStr}${suffixClean}`;
+  });
+  return { text: next, changed };
+}
+
 function parseSteamEntriesFromEvidence(
   successfulEvidence: string,
   headers: GameHeader[],
@@ -1792,7 +1856,7 @@ function parseSteamEntriesFromEvidence(
     for (const seg of line.split(/;\s+/)) {
       let matchedStructured = false;
       const twoWayRx =
-        /\bTOWARD\s+(home|away)\s+([^|(;\n]+?)(?:\s*(\([^)\n]*\)))?\s*\|\s*AGAINST\s+(home|away)\s+([^|(\n;]+?)(?:\s*(\([^)\n]*\)))?(?=$|;|\n)/gi;
+        /\bTOWARD\s+(home|away)\s+([^|(;\n]+?)(?:\s*(\([^)\n]*\)))?\s*\|\s*AGAINST\s+(home|away)\s+([^|(\n;]+?)(?:\s*(\([^)\n]*\)))?(?=$|;|\n|\s*\|)/gi;
       let m: RegExpExecArray | null;
       while ((m = twoWayRx.exec(seg)) !== null) {
         matchedStructured = true;
@@ -1803,8 +1867,9 @@ function parseSteamEntriesFromEvidence(
         const againstRaw = m[5].trim();
         const towardTeam = cleanSteamTeamLabel(towardRaw);
         const againstTeam = cleanSteamTeamLabel(againstRaw);
+        const impliedShiftPp = extractImpliedShiftPpFromParen(towardParen);
         const marketKind: 'moneyline' | 'spread' =
-          /\bML\b/i.test(`${towardRaw} ${againstRaw}`) || /%\s*imp/i.test(towardParen) ? 'moneyline' : 'spread';
+          /\bML\b/i.test(`${towardRaw} ${againstRaw}`) || /(?:%\s*imp|pp\s*implied)/i.test(towardParen) ? 'moneyline' : 'spread';
         const towardDesc = findTeamMentionsInText(towardTeam, pool)[0]?.team || (matchTeamByLabel(towardTeam) ? descriptorFromEntry(matchTeamByLabel(towardTeam)!) : undefined);
         const againstDesc = findTeamMentionsInText(againstTeam, pool)[0]?.team || (matchTeamByLabel(againstTeam) ? descriptorFromEntry(matchTeamByLabel(againstTeam)!) : undefined);
         entries.push({
@@ -1815,7 +1880,8 @@ function parseSteamEntriesFromEvidence(
           ...(towardDesc ? { towardDesc } : {}),
           againstRole,
           againstTeam,
-          ...(againstDesc ? { againstDesc } : {})
+          ...(againstDesc ? { againstDesc } : {}),
+          ...(impliedShiftPp !== undefined ? { impliedShiftPp } : {})
         });
       }
 
@@ -1834,8 +1900,8 @@ function parseSteamEntriesFromEvidence(
       }
 
       if (!matchedStructured) {
-        const oneWayToward = /\bTOWARD\s+(home|away)\s+([^|(;\n]+?)(?:\s*(\([^)\n]*\)))?(?=$|;|\n)/i.exec(seg);
-        const legacySteam = !oneWayToward ? /\bSteam:\s*(home|away)\s+([^(\n;]+?)(?:\s*(\([^)\n]*\)))?(?=$|;|\n)/i.exec(seg) : null;
+        const oneWayToward = /\bTOWARD\s+(home|away)\s+([^|(;\n]+?)(?:\s*(\([^)\n]*\)))?(?=$|;|\n|\s*\|)/i.exec(seg);
+        const legacySteam = !oneWayToward ? /\bSteam:\s*(home|away)\s+([^(\n;]+?)(?:\s*(\([^)\n]*\)))?(?=$|;|\n|\s*\|)/i.exec(seg) : null;
         const sm = oneWayToward || legacySteam;
         if (sm) {
           const towardRole = sm[1].toLowerCase() as 'home' | 'away';
@@ -1844,8 +1910,9 @@ function parseSteamEntriesFromEvidence(
           const towardTeam = cleanSteamTeamLabel(towardRaw);
           const againstRole: 'home' | 'away' = towardRole === 'home' ? 'away' : 'home';
           const againstTeam = hdr ? (againstRole === 'home' ? hdr.home : hdr.away) : undefined;
+          const impliedShiftPp = extractImpliedShiftPpFromParen(towardParen);
           const marketKind: 'moneyline' | 'spread' =
-            /\bML\b/i.test(towardRaw) || /%\s*imp/i.test(towardParen) ? 'moneyline' : 'spread';
+            /\bML\b/i.test(towardRaw) || /(?:%\s*imp|pp\s*implied)/i.test(towardParen) ? 'moneyline' : 'spread';
           const towardDesc = findTeamMentionsInText(towardTeam, pool)[0]?.team;
           const againstDesc = againstTeam ? findTeamMentionsInText(againstTeam, pool)[0]?.team : undefined;
           entries.push({
@@ -1856,7 +1923,8 @@ function parseSteamEntriesFromEvidence(
             ...(towardDesc ? { towardDesc } : {}),
             againstRole,
             ...(againstTeam ? { againstTeam } : {}),
-            ...(againstDesc ? { againstDesc } : {})
+            ...(againstDesc ? { againstDesc } : {}),
+            ...(impliedShiftPp !== undefined ? { impliedShiftPp } : {})
           });
         }
       }
@@ -1880,7 +1948,7 @@ function parseInjuryBalanceFromEvidence(
       const lineEv = extractLineEventId(line);
       if (lineEv) currentEventId = lineEv;
       const sm = line.match(
-        /Summary:\s*(.+?)\s*\((\d+)\s+OUT,\s*(\d+)\s+Q\)\s+vs\s+(.+?)\s*\((\d+)\s+OUT,\s*(\d+)\s+Q\)\s*\|\s*Health\s+Balance:\s*(symmetric|home_advantage|away_advantage|uncertain_questionable|single_team_only)/i
+        /Summary:\s*(.+?)\s*\((\d+)\s+OUT,\s*(\d+)\s+Q\)\s+vs\s+(.+?)\s*\((\d+)\s+OUT,\s*(\d+)\s+Q\)\s*\|\s*Health\s+Balance:\s*(symmetric|home_advantage|away_advantage|conditional_home_advantage|conditional_away_advantage|uncertain_questionable|single_team_only)/i
       );
       if (sm && (lineEv || currentEventId)) {
         const eventId = lineEv || currentEventId!;
@@ -1931,14 +1999,24 @@ function parseInjuryBalanceFromEvidence(
     if (!homeSeen || !awaySeen) continue;
     const homeTotal = homeOut + homeQ;
     const awayTotal = awayOut + awayQ;
-    const homeBetter = (awayOut - homeOut >= 2) || (awayTotal - homeTotal >= 2 && homeQ === 0);
-    const awayBetter = (homeOut - awayOut >= 2) || (homeTotal - awayTotal >= 2 && awayQ === 0);
+    const homeNominalBetter = (awayOut - homeOut >= 2) || (awayTotal - homeTotal >= 2 && homeQ === 0);
+    const awayNominalBetter = (homeOut - awayOut >= 2) || (homeTotal - awayTotal >= 2 && awayQ === 0);
+    const isFootball = /^(?:nfl|ncaaf|college-football)-|\b(?:nfl|ncaaf|americanfootball_nfl|americanfootball_ncaaf)\b/i.test(`${h.sport || ''} ${h.eventId}`);
+    const qCap = isFootball ? 3 : 2;
     let healthBalance: ParsedInjuryBalanceEntry['healthBalance'];
-    if (homeBetter && !awayBetter) {
-      healthBalance = 'home_advantage';
-    } else if (awayBetter && !homeBetter) {
-      healthBalance = 'away_advantage';
-    } else if (homeQ >= 2 && awayQ >= 2) {
+    if (homeNominalBetter && !awayNominalBetter) {
+      if (homeQ >= qCap) {
+        healthBalance = (awayOut - homeOut >= 6 && homeQ === qCap) ? 'conditional_home_advantage' : 'uncertain_questionable';
+      } else {
+        healthBalance = 'home_advantage';
+      }
+    } else if (awayNominalBetter && !homeNominalBetter) {
+      if (awayQ >= qCap) {
+        healthBalance = (homeOut - awayOut >= 6 && awayQ === qCap) ? 'conditional_away_advantage' : 'uncertain_questionable';
+      } else {
+        healthBalance = 'away_advantage';
+      }
+    } else if (homeQ >= qCap && awayQ >= qCap) {
       healthBalance = 'uncertain_questionable';
     } else {
       healthBalance = 'symmetric';
@@ -1977,7 +2055,7 @@ export function auditCriticPremiseContradictions(
     : parseGameHeaders(slateText);
   const rowMap = extractRowOptions([slateText], headers);
   const successfulEvidence = extractSuccessfulEvidenceText(evidenceText);
-  if (!successfulEvidence) return { pass: true, violations: [], flags: [] };
+  if (!successfulEvidence && rowMap.size === 0) return { pass: true, violations: [], flags: [] };
 
   const rawProposalText = typeof proposal === 'string' ? proposal : JSON.stringify(proposal);
   const hasSportsSignal =
@@ -1986,14 +2064,14 @@ export function auditCriticPremiseContradictions(
     SPORTS_CONTEXT_REGEX.test(slateText || '') ||
     Boolean(successfulEvidence);
 
-  const allInjuries = extractAuthoritativeInjuries(successfulEvidence, slateText);
+  const allInjuries = successfulEvidence ? extractAuthoritativeInjuries(successfulEvidence, slateText) : [];
   const outInjuries = allInjuries.filter(inj => /^(?:OUT|IR|INJURED\s+RESERVE|SUSPENDED)$/i.test(inj.status));
   const candidates = buildTeamDescriptors(headers, outInjuries, hasSportsSignal);
 
-  const steamEntries = parseSteamEntriesFromEvidence(successfulEvidence, headers, candidates);
-  const injuryBalances = parseInjuryBalanceFromEvidence(successfulEvidence, headers, allInjuries, candidates);
+  const steamEntries = successfulEvidence ? parseSteamEntriesFromEvidence(successfulEvidence, headers, candidates) : [];
+  const injuryBalances = successfulEvidence ? parseInjuryBalanceFromEvidence(successfulEvidence, headers, allInjuries, candidates) : new Map();
 
-  if (steamEntries.length === 0 && injuryBalances.size === 0) {
+  if (rowMap.size === 0 && steamEntries.length === 0 && injuryBalances.size === 0) {
     return { pass: true, violations: [], flags: [] };
   }
 
@@ -2016,8 +2094,28 @@ export function auditCriticPremiseContradictions(
     sideText: string,
     reasonTexts: string[]
   ) => {
+    // 0. Deterministic row_side_mismatch pre-check BEFORE resolving rowEntry.eventId,
+    // contra_steam_misread, symmetric_injury_misread, or duplicate_leg checks.
+    const rowCheck = checkPickRowSideBinding(pk, rowMap);
+    if (!rowCheck.valid && rowCheck.rowId) {
+      const msg = `row_side_mismatch: ${rowCheck.reason}`;
+      addFinding(
+        'row_side_mismatch',
+        msg,
+        {
+          rowId: rowCheck.rowId,
+          ...(rowCheck.rowEntry?.eventId ? { eventId: rowCheck.rowEntry.eventId } : {}),
+          ...(rowCheck.rowEntry?.text ? { teamLabel: rowCheck.rowEntry.text } : {}),
+          teamAliases: [],
+          reason: msg.slice(0, 140)
+        },
+        rowCheck.reason
+      );
+      return;
+    }
+
     const combinedReasons = normalizeText(reasonTexts.filter(Boolean).join('. ')).trim();
-    if (!combinedReasons) return;
+    if (!combinedReasons || (steamEntries.length === 0 && injuryBalances.size === 0)) return;
 
     const rowMatch = sideText.match(/\b(R\d+)\b/i) || (typeof pk?.row === 'string' ? pk.row.match(/\b(R\d+)\b/i) : null);
     const rowId = rowMatch ? rowMatch[1].toUpperCase() : undefined;
@@ -2096,13 +2194,30 @@ export function auditCriticPremiseContradictions(
       }
     }
 
+    // 1b. Check fabricated steam implied-probability shift percentages (e.g. "11% shift" when dossier shows +3.6pp implied)
+    const steamWithImplied = relevantSteam.find(se => typeof se.impliedShiftPp === 'number');
+    if (steamWithImplied && steamWithImplied.impliedShiftPp !== undefined) {
+      for (const clause of clauses) {
+        const fab = findFabricatedSteamShiftInClause(clause, steamWithImplied.impliedShiftPp);
+        if (fab) {
+          const msg = `fabricated_steam_shift: Pick "${pickDisplay}" claims "${fab.rawClaim}" steam shift, whereas dossier reports +${steamWithImplied.impliedShiftPp.toFixed(1)}pp implied.`;
+          addFinding(
+            'fabricated_steam_shift',
+            msg,
+            buildVetoTargetFromPick(pk, headers, rowMap, candidates, msg),
+            clause
+          );
+        }
+      }
+    }
+
     // 2. Check symmetric / disadvantaged injury misread
     const injBal = eventId ? injuryBalances.get(eventId) : undefined;
     if (injBal && (pickedRole === 'home' || pickedRole === 'away')) {
       const isSymmetric = injBal.healthBalance === 'symmetric';
       const isDisadvantaged =
-        (pickedRole === 'home' && injBal.healthBalance === 'away_advantage') ||
-        (pickedRole === 'away' && injBal.healthBalance === 'home_advantage');
+        (pickedRole === 'home' && (injBal.healthBalance === 'away_advantage' || injBal.healthBalance === 'conditional_away_advantage')) ||
+        (pickedRole === 'away' && (injBal.healthBalance === 'home_advantage' || injBal.healthBalance === 'conditional_home_advantage'));
       const isUncertainQ = injBal.healthBalance === 'uncertain_questionable';
 
       if (isSymmetric || isDisadvantaged || isUncertainQ) {
@@ -2356,6 +2471,47 @@ export function sanitizeUngroundedClaims<T extends Record<string, any>>(
 
   const rep = report as Record<string, any>;
   const stripRecs = options?.stripVetoedLegRecommendations !== false;
+
+  // Rewrite fabricated steam implied-prob shifts (e.g., "11% shift" -> "+3.6pp implied") from dossier steam entries
+  const steamEntriesForShift = parseSteamEntriesFromEvidence(successfulEvidence, headers, candidates);
+  if (steamEntriesForShift.some(se => typeof se.impliedShiftPp === 'number')) {
+    const impliedByEvent = new Map<string, number>();
+    let uniqueFallbackImplied: number | undefined;
+    const allImpliedVals = new Set<number>();
+    for (const se of steamEntriesForShift) {
+      if (typeof se.impliedShiftPp !== 'number') continue;
+      if (se.eventId) impliedByEvent.set(se.eventId, se.impliedShiftPp);
+      allImpliedVals.add(se.impliedShiftPp);
+    }
+    if (allImpliedVals.size === 1) {
+      uniqueFallbackImplied = Array.from(allImpliedVals)[0];
+    }
+    if (Array.isArray(rep.picks)) {
+      for (const pk of rep.picks) {
+        if (!pk || typeof pk !== 'object') continue;
+        const pkEvId = getEventIdForPick(pk, headers) || (typeof pk.row === 'string' ? rowMap.get(pk.row.trim().toUpperCase())?.eventId : undefined);
+        const targetShift = (pkEvId ? impliedByEvent.get(pkEvId) : undefined) ?? uniqueFallbackImplied;
+        if (typeof targetShift !== 'number') continue;
+        for (const field of ['reason', 'rationale', 'edge', 'note', 'description', 'claim'] as const) {
+          if (typeof pk[field] === 'string' && pk[field].trim()) {
+            pk[field] = rewriteFabricatedSteamShiftInText(pk[field], targetShift).text;
+          }
+        }
+        if (Array.isArray(pk.reasons)) {
+          pk.reasons = pk.reasons.map((r: any) =>
+            typeof r === 'string' ? rewriteFabricatedSteamShiftInText(r, targetShift).text : r
+          );
+        }
+      }
+    }
+    if (typeof uniqueFallbackImplied === 'number') {
+      for (const field of ['summary', 'analysis'] as const) {
+        if (typeof rep[field] === 'string' && rep[field].trim()) {
+          rep[field] = rewriteFabricatedSteamShiftInText(rep[field], uniqueFallbackImplied).text;
+        }
+      }
+    }
+  }
 
   // If a pick repeats a previously vetoed claim in its reasoning, that leg is also vetoed.
   if (Array.isArray(rep.picks) && vetoedClaims.length > 0) {

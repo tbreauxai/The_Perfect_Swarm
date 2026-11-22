@@ -26,6 +26,7 @@ import {
 } from '../tools/pullBeforePass.ts';
 import { CRITIC_EVIDENCE_RULE } from '../tools/criticEvidence.ts';
 import { CRITIC_AUDIT_RULE, enforceCriticAuditOnFinalAnalysis } from '../tools/criticAudit.ts';
+import { syncCompilerProseWithFinalPicks } from '../tools/compilerProseSync.ts';
 import type { ToolEvidenceItem } from './seatToolLoop.ts';
 import type { ToolRegistry } from '../tools/registry.ts';
 import type { GameQueryCache } from '../cache/gameQueryCache.ts';
@@ -143,6 +144,8 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
         ? finalProposal
         : guardManagerResponse(finalProposal, "Executive Swarm Synthesis");
 
+    const initialPicksSnapshot = Array.isArray(finalAnalysis?.picks) ? [...finalAnalysis.picks] : [];
+
     if (finalAnalysis && typeof finalAnalysis === 'object') {
         const combinedVerifiedToolResults = [p.toolResults, lifecycleResult?.verifiedToolEvidence]
             .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
@@ -177,7 +180,7 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
             }
         }
 
-        const initialPickCount = Array.isArray(finalAnalysis.picks) ? finalAnalysis.picks.length : 0;
+        const initialPickCount = initialPicksSnapshot.length;
         const boardSourceForSanitize = rawInput || task || headersText;
 
         if (combinedVerifiedToolResults || p.toolResults) {
@@ -290,6 +293,14 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
             finalAnalysis.ui_title = 'Insufficient data';
             finalAnalysis.reason = 'no picks with specialist coverage';
         }
+    }
+
+    if (finalAnalysis && typeof finalAnalysis === 'object' && Array.isArray(finalAnalysis.picks)) {
+        syncCompilerProseWithFinalPicks(finalAnalysis, {
+            initialPicks: initialPicksSnapshot,
+            headers: parsedHeaders,
+            slateText: rawInput || task || headersText
+        });
     }
 
     recordRunDebugSeat((context as any)?.id, 'manager', {
