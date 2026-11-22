@@ -317,7 +317,7 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
             curatedDossier: curatedDossierText,
             unifiedDossier: p.unifiedDossier,
             disableAdHocTools,
-            eventIds: params.eventIds,
+            eventIds: params.hop1Plan?.active_event_ids ?? params.eventIds,
             triageMode: (params as any).triageMode,
             onSeatVisibility: (v) => {
                 seatVisibilityList.push(v);

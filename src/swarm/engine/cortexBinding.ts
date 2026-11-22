@@ -5,6 +5,7 @@ import type { SwarmEngineSettings } from '../types.ts';
 import { ToolRegistry, globalToolRegistry } from '../tools/index.ts';
 import { sanitizeApiKey } from './utils.ts';
 import { getOrCreateDefaultCortex } from './cortex.ts';
+import { resolveCortexCollectionName } from '../memory/memorySanitizer.ts';
 
 const safeEnv = typeof process !== "undefined" ? process.env : {} as Record<string, string | undefined>;
 
@@ -20,6 +21,7 @@ export function bindCortexAndTools(
     targetAppId: string = 'perfect-swarm'
 ): CortexBindingResult {
     let memoryCortex: MemoryCortex | undefined = params.memoryCortex || params.cortex;
+    const resolvedCollectionName = resolveCortexCollectionName(settings?.qdrantCollectionName);
 
     if (!memoryCortex) {
         const qdrantUrl = settings?.qdrantUrl;
@@ -38,7 +40,7 @@ export function bindCortexAndTools(
                 memoryCortex = new MemoryCortex({
                     url: qdrantUrl,
                     apiKey: qdrantApiKey,
-                    collectionName: settings?.qdrantCollectionName,
+                    collectionName: resolvedCollectionName,
                     aiClient: cortexAiClient,
                     embeddingModel: settings?.qdrantEmbeddingModel,
                     defaultAppId: targetAppId,
@@ -49,7 +51,7 @@ export function bindCortexAndTools(
                 memoryCortex = persistPath
                     ? new MemoryCortex({
                         defaultAppId: targetAppId,
-                        collectionName: settings?.qdrantCollectionName,
+                        collectionName: resolvedCollectionName,
                         aiClient: cortexAiClient,
                         embeddingModel: settings?.qdrantEmbeddingModel,
                         persistPath,
@@ -61,7 +63,7 @@ export function bindCortexAndTools(
             memoryCortex = persistPath
                 ? new MemoryCortex({
                     defaultAppId: targetAppId,
-                    collectionName: settings?.qdrantCollectionName,
+                    collectionName: resolvedCollectionName,
                     aiClient: cortexAiClient,
                     embeddingModel: settings?.qdrantEmbeddingModel,
                     persistPath,

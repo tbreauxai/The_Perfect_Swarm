@@ -83,6 +83,7 @@ export interface AnalysisLifecycleOptions {
     toolRegistry?: ToolRegistry;
     queryCache?: GameQueryCache;
     toolOptions?: { env?: Record<string, string | undefined>; fetchFn?: typeof fetch; qdrantClient?: any };
+    activeEventIds?: string[];
 }
 
 async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
@@ -110,6 +111,7 @@ export class AnalysisLifecycle {
     private toolRegistry?: ToolRegistry;
     private queryCache?: GameQueryCache;
     private toolOptions?: { env?: Record<string, string | undefined>; fetchFn?: typeof fetch; qdrantClient?: any };
+    private activeEventIds?: string[];
 
     constructor(
         proposer: Agent,
@@ -123,6 +125,7 @@ export class AnalysisLifecycle {
         this.toolRegistry = options?.toolRegistry;
         this.queryCache = options?.queryCache;
         this.toolOptions = options?.toolOptions;
+        this.activeEventIds = options?.activeEventIds;
     }
 
     /**
@@ -878,6 +881,9 @@ export class AnalysisLifecycle {
                 const availableSportsTools = this.toolRegistry
                     ? ['get_matchup_fundamentals', 'get_injury_and_roster_delta', 'get_market_movement'].filter(t => this.toolRegistry!.has(t))
                     : [];
+                const effectiveActiveEventIds = Array.isArray(rawData?.activeEventIds)
+                    ? rawData.activeEventIds
+                    : this.activeEventIds;
                 const pullAudit = auditPullBeforePass(
                     currentProposal,
                     combinedToolSummary,
@@ -886,7 +892,8 @@ export class AnalysisLifecycle {
                         headers: allParsedHeaders,
                         toolCallTrace: accumulatedToolTrace,
                         availableTools: availableSportsTools,
-                        marketToolRecords: pulledMarketRecords
+                        marketToolRecords: pulledMarketRecords,
+                        ...(Array.isArray(effectiveActiveEventIds) ? { activeEventIds: effectiveActiveEventIds } : {})
                     }
                 );
                 let pullVetoTriggered = false;
@@ -896,7 +903,8 @@ export class AnalysisLifecycle {
                         headers: allParsedHeaders,
                         toolCallTrace: accumulatedToolTrace,
                         availableTools: availableSportsTools,
-                        marketToolRecords: pulledMarketRecords
+                        marketToolRecords: pulledMarketRecords,
+                        ...(Array.isArray(effectiveActiveEventIds) ? { activeEventIds: effectiveActiveEventIds } : {})
                     });
                     if (JSON.stringify(currentProposal) !== beforePullSanitize) {
                         zeroPickCorrections.push('removed inaccurate missing-data statement');

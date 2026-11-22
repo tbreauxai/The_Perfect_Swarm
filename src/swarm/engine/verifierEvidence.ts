@@ -10,7 +10,7 @@ const INJURY_HEADER_PREFIX = /^\[INJURY[^\]]*\]:?\s*/i;
 const MARKET_HEADER_PREFIX = /^\[MARKET MOVEMENT[^\]]*\]:?\s*/i;
 const GENERIC_TOOL_HEADER_PREFIX = /^\[(?:MATCHUP FUNDAMENTALS|MARKET MOVEMENT|PLAYER PROP|ENVIRONMENT|INJURY[^\]]*)\]:?\s*/i;
 
-function compactInjurySummary(summary: string): string {
+export function compactInjurySummary(summary: string): string {
   const lines = summary
     .split(/\r?\n/)
     .map(l => l.trim().replace(INJURY_HEADER_PREFIX, '').trim())
@@ -18,8 +18,13 @@ function compactInjurySummary(summary: string): string {
   if (lines.length === 0) return 'No injuries reported';
 
   const statusRegex = /\b(OUT|DOUBTFUL|QUESTIONABLE|IR|INJURED\s+RESERVE|SUSPENDED)\b/i;
+  const summaryLines: string[] = [];
   const keptTeams: string[] = [];
   for (const rawLine of lines) {
+    if (/^Summary:/i.test(rawLine)) {
+      summaryLines.push(rawLine.replace(/\s+/g, ' ').trim());
+      continue;
+    }
     const line = rawLine.replace(/^-\s*/, '');
     const colonIdx = line.indexOf(':');
     if (colonIdx > 0 && !/:\s*(OUT|DOUBTFUL|QUESTIONABLE|PROBABLE|IR|SUSPENDED)\b/i.test(line.slice(0, colonIdx + 12))) {
@@ -37,10 +42,11 @@ function compactInjurySummary(summary: string): string {
       keptTeams.push(line);
     }
   }
-  return (keptTeams.length > 0 ? keptTeams.join(' | ') : lines.join(' | ')).replace(/\s+/g, ' ').trim();
+  const combined = [...summaryLines, ...keptTeams];
+  return (combined.length > 0 ? combined.join(' | ') : lines.join(' | ')).replace(/\s+/g, ' ').trim();
 }
 
-function compactMarketSummary(summary: string): string {
+export function compactMarketSummary(summary: string): string {
   const lines = summary
     .split(/\r?\n/)
     .map(l => l.trim().replace(MARKET_HEADER_PREFIX, '').trim())
@@ -57,17 +63,17 @@ function compactMarketSummary(summary: string): string {
   );
   const ordered = [...primary, ...mlAndTotal, ...steamLines];
   const joined = ordered.join(' | ').replace(/\s+/g, ' ').trim();
-  if (joined.length <= 280) return joined;
+  if (joined.length <= 360) return joined;
 
   // Keep ML/Total and directional Steam intact even if primary Open/Current is verbose
   const priorityPart = [...mlAndTotal, ...steamLines].join(' | ').replace(/\s+/g, ' ').trim();
-  if (priorityPart && priorityPart.length < 250) {
-    const rem = 280 - priorityPart.length - 3;
+  if (priorityPart && priorityPart.length < 330) {
+    const rem = 360 - priorityPart.length - 3;
     const primJoined = primary.join(' | ').replace(/\s+/g, ' ').trim();
     const primCut = rem > 20 ? `${primJoined.slice(0, rem - 1).trimEnd()}…` : '';
     return primCut ? `${primCut} | ${priorityPart}` : priorityPart;
   }
-  return `${joined.slice(0, 277).trimEnd()}…`;
+  return `${joined.slice(0, 357).trimEnd()}…`;
 }
 
 export function compactToolLine(tool: string, summary: string): string {

@@ -599,11 +599,22 @@ export function extractAuthoritativeInjuries(evidenceText: string, slateText?: s
     const inlineBracketMatch = line.match(/^\[INJURY[^:\]]*:\s*([a-z0-9-]+)\]\s*(.+)$/i);
     if (inlineBracketMatch) {
       const evId = inlineBracketMatch[1].trim();
-      const rest = inlineBracketMatch[2].trim();
-      for (const seg of rest.split(';')) {
+      const rest = inlineBracketMatch[2]
+        .replace(/\|\s*Summary:\s*[^|\n]+(?:\|\s*Health\s+Balance:[^|\n]+)?/gi, '')
+        .trim();
+      for (const seg of rest.split(/[;|]/)) {
         const m = seg.trim().match(/^([^:]+):\s*([^(]+)\(([^)]+)\)/);
         if (m) {
-          addBinding(m[1].trim(), m[2].trim(), m[3].trim(), evId);
+          const teamToken = m[1].replace(/^[\|\-\s]+/, '').trim();
+          const statusToken = m[3].trim();
+          if (
+            teamToken &&
+            teamToken.length <= 42 &&
+            !/^(event_id|sport|options|task|summary|health\s+balance|analysis|pick|reason|verdict|fund|mkt|verified|pass|note|warning|veto|bottom-line|market check)/i.test(teamToken) &&
+            /^(?:OUT|DOUBTFUL|QUESTIONABLE|PROBABLE|IR|INJURED\s+RESERVE|SUSPENDED)\b/i.test(statusToken)
+          ) {
+            addBinding(teamToken, m[2].trim(), statusToken, evId);
+          }
         }
       }
     }
@@ -630,7 +641,7 @@ export function extractAuthoritativeInjuries(evidenceText: string, slateText?: s
         !candidateTeam ||
         candidateTeam.length > 42 ||
         /[\[\]]/.test(candidateTeam) ||
-        /^(event_id|sport|options|task|summary|analysis|pick|reason|verdict|fund|mkt|verified|pass|note|warning|veto|bottom-line|market check)/i.test(candidateTeam)
+        /^(event_id|sport|options|task|summary|health\s+balance|analysis|pick|reason|verdict|fund|mkt|verified|pass|note|warning|veto|bottom-line|market check)/i.test(candidateTeam)
       ) {
         continue;
       }

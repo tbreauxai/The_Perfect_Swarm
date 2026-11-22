@@ -1,6 +1,7 @@
 import { createVectorIndex, type VectorIndex, type VectorIndexMetrics } from '../../vectorIndex.ts';
 import { cosineSimilarity } from '../vectorMath.ts';
 import { normalizeDomain, type StoredMemoryPoint, type SparseVector } from '../types.ts';
+import { DEFAULT_CORTEX_COLLECTION, resolveCortexCollectionName } from '../memorySanitizer.ts';
 import { matchesScopedMemoryFilter, type StorageBackend, type StorageFilterOptions, type StorageQueryOptions, type StorageQueryResult } from './types.ts';
 
 export interface InMemoryStorageConfig {
@@ -17,15 +18,16 @@ export class InMemoryStorageAdapter implements StorageBackend {
     private points: StoredMemoryPoint[];
     private vectorIndex: VectorIndex<StoredMemoryPoint>;
 
-    static clearGlobalStore(collectionName: string = 'pwa_swarm_dev_cortex_v2'): void {
-        const store = InMemoryStorageAdapter.globalStores.get(collectionName);
+    static clearGlobalStore(collectionName: string = DEFAULT_CORTEX_COLLECTION): void {
+        const resolved = resolveCortexCollectionName(collectionName);
+        const store = InMemoryStorageAdapter.globalStores.get(resolved);
         if (store) store.length = 0;
-        const idx = InMemoryStorageAdapter.globalVectorIndexes.get(collectionName);
+        const idx = InMemoryStorageAdapter.globalVectorIndexes.get(resolved);
         if (idx) idx.clear();
     }
 
     constructor(config: InMemoryStorageConfig = {}) {
-        this.collectionName = config.collectionName || 'pwa_swarm_dev_cortex_v2';
+        this.collectionName = resolveCortexCollectionName(config.collectionName);
 
         if (config.isolatedStore) {
             this.points = [];

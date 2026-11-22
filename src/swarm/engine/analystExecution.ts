@@ -49,6 +49,7 @@ import { formatRunDebugOutputDigest, recordRunDebugSeat, recordRunDebugEdit } fr
 import { auditInjuryAttribution, sanitizeMisattributedPicksAndText } from '../tools/injuryAttribution.ts';
 import {
     auditClaimGrounding,
+    auditCriticPremiseContradictions,
     mergeVetoedClaims,
     mergeVetoedLegTargets,
     sanitizeUngroundedClaims,
@@ -907,6 +908,41 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                 }
             }
 
+            if (isCritic && proposedAuditContext) {
+                const preCheckProposal = Array.isArray(proposedAuditContext.proposerReports) && proposedAuditContext.proposerReports.length > 0
+                    ? {
+                        picks: proposedAuditContext.proposerReports.flatMap((r: any) => Array.isArray(r?.picks) ? r.picks : []),
+                        scorecards: proposedAuditContext.proposerReports.flatMap((r: any) =>
+                            Array.isArray(r?.scorecards) ? r.scorecards : (r?.scorecard ? [r.scorecard] : [])
+                        ),
+                        summary: proposedAuditContext.summaryText || ''
+                    }
+                    : {
+                        ...(Array.isArray(proposedAuditContext.proposedPicks) ? { picks: proposedAuditContext.proposedPicks } : {}),
+                        summary: proposedAuditContext.summaryText || ''
+                    };
+                const priorSummaryLines = priorRunItems.map((item: any) => item?.summary || '').filter(Boolean);
+                const preCheckEvidence = [seatDossierText, prefetchedInjurySummary, ...priorSummaryLines, config.curatedDossier || '']
+                    .filter(Boolean)
+                    .join('\n');
+                if (preCheckEvidence) {
+                    const preAudit = auditCriticPremiseContradictions(
+                        preCheckProposal,
+                        preCheckEvidence,
+                        fullRawSource || renderedHeadersText,
+                        { headers: mergedHeadersForRowCheck }
+                    );
+                    if (!preAudit.pass) {
+                        const prePrefix = '\n\n[Deterministic Pre-Check Flags]: ';
+                        const preBody = `${preAudit.flags.join(', ')}: ${preAudit.violations.join(' ')}`;
+                        const preRoom = remainingBudget() - prePrefix.length;
+                        if (preRoom >= 40) {
+                            seatPrompt += `${prePrefix}${trimAtCleanBoundary(preBody, preRoom)}`;
+                        }
+                    }
+                }
+            }
+
             try {
                 if (scorecardMode) {
                     const scorecardInstruction = renderScorecardInstruction(seat);
@@ -1129,6 +1165,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                         { headers: mergedHeadersForRowCheck }
                     );
                 }
+                const activeEventIdsForPull = config.eventIds ?? (config.unifiedDossier as any)?.active_event_ids;
                 const availableToolsForSanitize = [
                     'get_matchup_fundamentals',
                     'get_injury_and_roster_delta',
@@ -1143,7 +1180,8 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                         headers: mergedHeadersForRowCheck,
                         toolCallTrace: seatToolTrace,
                         ...(availableToolsForSanitize.length > 0 ? { availableTools: availableToolsForSanitize } : {}),
-                        marketToolRecords
+                        marketToolRecords,
+                        ...(Array.isArray(activeEventIdsForPull) ? { activeEventIds: activeEventIdsForPull } : {})
                     }
                 );
                 const afterPull = JSON.stringify(resData);
@@ -1271,6 +1309,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                     if (!audit.pass) {
                         injuryAuditPassed = false;
                         (resData as any).pass = false;
+                        (resData as any).criticApproved = false;
                         const msg = audit.feedback || 'Veto: Proposed pick attributed an injury to the wrong team.';
                         (resData as any).verdict = msg;
                         (resData as any).summary = msg;
@@ -1292,6 +1331,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                 );
                 if (!marketRowAudit.pass) {
                     (resData as any).pass = false;
+                    (resData as any).criticApproved = false;
                     const msg = marketRowAudit.feedback || 'Veto: Row side mismatch or missing market coverage.';
                     const nextSummary = injuryAuditPassed ? msg : `${(resData as any).summary} ${msg}`.trim();
                     (resData as any).verdict = nextSummary;
@@ -1312,24 +1352,40 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                     fullRawSource || renderedHeadersText,
                     { headers: mergedHeadersForRowCheck }
                 );
-                const groundingAuditPassed = groundingAudit.pass;
+                const premiseEvidence = [
+                    criticGroundingEvidence,
+                    seatDossierText,
+                    prefetchedInjurySummary,
+                    config.curatedDossier || ''
+                ].filter(Boolean).join('\n');
+                const premiseAudit = auditCriticPremiseContradictions(
+                    groundingTargetProposal,
+                    premiseEvidence,
+                    fullRawSource || renderedHeadersText,
+                    { headers: mergedHeadersForRowCheck }
+                );
+                const groundingAuditPassed = groundingAudit.pass && premiseAudit.pass;
                 if (!groundingAuditPassed) {
                     (resData as any).pass = false;
-                    const gMsg = groundingAudit.feedback || 'Veto (GROUNDING): Ungrounded form or health claim.';
+                    (resData as any).criticApproved = false;
+                    const gMsgs = [groundingAudit.pass ? '' : groundingAudit.feedback, premiseAudit.pass ? '' : premiseAudit.feedback].filter(Boolean);
+                    const gMsg = gMsgs.join(' ').trim() || 'Veto (GROUNDING): Ungrounded form or health claim.';
                     const hasPriorVeto = !injuryAuditPassed || !marketRowAudit.pass;
                     const nextSummary = hasPriorVeto ? `${(resData as any).summary} ${gMsg}`.trim() : gMsg;
                     (resData as any).verdict = nextSummary;
                     (resData as any).summary = nextSummary;
                     (resData as any).analysis = nextSummary;
                     if (!Array.isArray((resData as any).flags)) (resData as any).flags = [];
-                    for (const f of groundingAudit.flags) {
+                    for (const f of [...groundingAudit.flags, ...premiseAudit.flags]) {
                         if (!(resData as any).flags.includes(f)) (resData as any).flags.push(f);
                     }
-                    if (Array.isArray(groundingAudit.vetoedLegs) && groundingAudit.vetoedLegs.length > 0) {
-                        stage2VetoedLegs = mergeVetoedLegTargets(stage2VetoedLegs, groundingAudit.vetoedLegs);
+                    const combinedVetoedLegs = [...(groundingAudit.vetoedLegs || []), ...(premiseAudit.vetoedLegs || [])];
+                    if (combinedVetoedLegs.length > 0) {
+                        stage2VetoedLegs = mergeVetoedLegTargets(stage2VetoedLegs, combinedVetoedLegs);
                     }
-                    if (Array.isArray(groundingAudit.vetoedClaims) && groundingAudit.vetoedClaims.length > 0) {
-                        stage2VetoedClaims = mergeVetoedClaims(stage2VetoedClaims, groundingAudit.vetoedClaims);
+                    const combinedVetoedClaims = [...(groundingAudit.vetoedClaims || []), ...(premiseAudit.vetoedClaims || [])];
+                    if (combinedVetoedClaims.length > 0) {
+                        stage2VetoedClaims = mergeVetoedClaims(stage2VetoedClaims, combinedVetoedClaims);
                     }
                 }
 
@@ -1339,6 +1395,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                       )
                     : [];
                 const unionToolTrace = mergeToolCallTraceEntries([...proposerToolTrace, ...seatToolTrace]);
+                const activeEventIdsForAudit = config.eventIds ?? (config.unifiedDossier as any)?.active_event_ids;
                 const availableSportsTools = [
                     'get_matchup_fundamentals',
                     'get_injury_and_roster_delta',
@@ -1352,11 +1409,13 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                         headers: mergedHeadersForRowCheck,
                         toolCallTrace: unionToolTrace,
                         availableTools: availableSportsTools,
-                        marketToolRecords
+                        marketToolRecords,
+                        ...(Array.isArray(activeEventIdsForAudit) ? { activeEventIds: activeEventIdsForAudit } : {})
                     }
                 );
                 if (!pullAudit.pass) {
                     (resData as any).pass = false;
+                    (resData as any).criticApproved = false;
                     const pMsg = pullAudit.feedback || 'Veto (PULL BEFORE PASS): Tools must be called before passing or claiming missing data.';
                     const hasPriorVeto = !injuryAuditPassed || !marketRowAudit.pass || !groundingAuditPassed;
                     const nextSummary = hasPriorVeto ? `${(resData as any).summary} ${pMsg}`.trim() : pMsg;

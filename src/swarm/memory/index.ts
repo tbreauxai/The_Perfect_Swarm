@@ -1,4 +1,5 @@
 export * from './types.ts';
+export * from './memorySanitizer.ts';
 export * from './tokenizer.ts';
 export * from './embeddings.ts';
 export * from './vectorMath.ts';

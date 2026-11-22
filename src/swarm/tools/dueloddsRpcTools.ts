@@ -130,6 +130,138 @@ export async function callSupabaseRpc<T = any>(
   }
 }
 
+type ShortSportKey = 'nba' | 'nfl' | 'nhl' | 'mlb' | 'wnba' | 'ncaaf' | 'ncaab';
+
+const SPORT_SCOPED_TEAM_ABBR_ALIASES: Readonly<Record<ShortSportKey, Readonly<Record<string, string>>>> = {
+  nba: {
+    NO: 'NOP',
+    NOP: 'NOP',
+    NY: 'NYK',
+    NYK: 'NYK',
+    GS: 'GSW',
+    GSW: 'GSW',
+    SA: 'SAS',
+    SAS: 'SAS',
+    UTAH: 'UTA',
+    UTH: 'UTA',
+    UTA: 'UTA',
+    WSH: 'WAS',
+    WAS: 'WAS',
+    PHO: 'PHX',
+    PHX: 'PHX',
+    BK: 'BKN',
+    BRK: 'BKN',
+    BKN: 'BKN',
+    CHO: 'CHA',
+    CHA: 'CHA',
+  },
+  nfl: {
+    NO: 'NO',
+    NOR: 'NO',
+    NOP: 'NO',
+    TB: 'TB',
+    TAM: 'TB',
+    TBL: 'TB',
+    SF: 'SF',
+    SFO: 'SF',
+    KC: 'KC',
+    KAN: 'KC',
+    GB: 'GB',
+    GNB: 'GB',
+    NE: 'NE',
+    NWE: 'NE',
+    LV: 'LV',
+    LVR: 'LV',
+    JAC: 'JAX',
+    JAX: 'JAX',
+    WSH: 'WAS',
+    WAS: 'WAS',
+    LA: 'LAR',
+    LAK: 'LA',
+  },
+  nhl: {
+    TB: 'TBL',
+    TBL: 'TBL',
+    SJ: 'SJS',
+    SJS: 'SJS',
+    LA: 'LAK',
+    LAK: 'LAK',
+    NJ: 'NJD',
+    NJD: 'NJD',
+    MON: 'MTL',
+    MTL: 'MTL',
+    UTAH: 'UTA',
+    UTH: 'UTA',
+    UTA: 'UTA',
+    WSH: 'WSH',
+    WAS: 'WAS',
+  },
+  mlb: {
+    CWS: 'CHW',
+    CHW: 'CHW',
+    AZ: 'ARI',
+    ARI: 'ARI',
+    KC: 'KCR',
+    KCR: 'KCR',
+    SD: 'SDP',
+    SDP: 'SDP',
+    SF: 'SFG',
+    SFG: 'SFG',
+    TB: 'TBR',
+    TBR: 'TBR',
+  },
+  wnba: {},
+  ncaaf: {},
+  ncaab: {},
+};
+
+const FALLBACK_TEAM_ABBR_ALIASES: Readonly<Record<string, string>> = {
+  GS: 'GSW',
+  SA: 'SAS',
+  UTAH: 'UTA',
+  UTH: 'UTA',
+  GNB: 'GB',
+  KAN: 'KC',
+  NWE: 'NE',
+  SFO: 'SF',
+  JAC: 'JAX',
+  LVR: 'LV',
+  BK: 'BKN',
+  BRK: 'BKN',
+  CHO: 'CHA',
+  PHO: 'PHX',
+};
+
+function inferShortSportFromHint(sportOrGameId?: string): ShortSportKey | null {
+  const raw = String(sportOrGameId || '').trim().toLowerCase();
+  if (!raw) return null;
+  if (raw === 'nba' || raw === 'basketball_nba' || raw.startsWith('nba-')) return 'nba';
+  if (raw === 'nfl' || raw === 'americanfootball_nfl' || raw.startsWith('nfl-')) return 'nfl';
+  if (raw === 'nhl' || raw === 'icehockey_nhl' || raw.startsWith('nhl-')) return 'nhl';
+  if (raw === 'mlb' || raw === 'baseball_mlb' || raw.startsWith('mlb-')) return 'mlb';
+  if (raw === 'wnba' || raw === 'basketball_wnba' || raw.startsWith('wnba-')) return 'wnba';
+  if (raw.includes('ncaaf') || raw.includes('college-football')) return 'ncaaf';
+  if (raw.includes('ncaab') || raw.includes('college-basketball')) return 'ncaab';
+  return null;
+}
+
+/**
+ * Normalizes team abbreviations strictly within their sport context so cross-sport
+ * collisions (e.g. NFL New Orleans 'NO' vs NBA 'NOP', NFL 'TB' vs NHL 'TBL') never leak.
+ */
+export function normalizeSportTeamAbbr(rawAbbr: string, sportOrGameId?: string): string {
+  const trimmed = String(rawAbbr || '').trim();
+  if (!trimmed || /\s/.test(trimmed)) return trimmed;
+  if (trimmed === 'Home' || trimmed === 'Away' || trimmed === 'Unknown' || trimmed === 'N/A') {
+    return trimmed;
+  }
+  const upper = trimmed.toUpperCase();
+  const sport = inferShortSportFromHint(sportOrGameId);
+  const map = sport ? SPORT_SCOPED_TEAM_ABBR_ALIASES[sport] : FALLBACK_TEAM_ABBR_ALIASES;
+  if (map && map[upper]) return map[upper];
+  return upper;
+}
+
 /**
  * Tool 1: get_matchup_fundamentals
  * Parameters: game_id: string, window?: 'L5' | 'L10' | 'season'
@@ -224,55 +356,49 @@ export const getMatchupFundamentalsTool: SwarmTool = {
     const homeObj = typeof d.home === 'object' && d.home !== null ? d.home : (typeof d.home_team_stats === 'object' && d.home_team_stats !== null ? d.home_team_stats : {});
     const awayObj = typeof d.away === 'object' && d.away !== null ? d.away : (typeof d.away_team_stats === 'object' && d.away_team_stats !== null ? d.away_team_stats : {});
 
-    const formatH2h = (h2h: any): string => {
+    const sportHint = String(d.sport || gameId || '');
+
+    const formatH2h = (h2h: any, sportOrGame: string = sportHint): string => {
       if (!Array.isArray(h2h) || h2h.length === 0) return '';
-      return h2h.map((g: any) => {
-        const date = g.game_date ? `${g.game_date}: ` : '';
-        const score = (g.team_score !== undefined && g.opponent_score !== undefined)
-          ? ` ${g.team_score}-${g.opponent_score}`
-          : '';
+      const deduped = new Map<string, { formatted: string; isWin: boolean }>();
+      for (const g of h2h) {
+        if (!g || typeof g !== 'object') continue;
+        const dateVal = String(g.game_date || '').trim();
+        const datePrefix = dateVal ? `${dateVal}: ` : '';
+        const t1 = g.team_abbr ? normalizeSportTeamAbbr(String(g.team_abbr), sportOrGame) : '';
+        const t2 = g.opponent_abbr ? normalizeSportTeamAbbr(String(g.opponent_abbr), sportOrGame) : '';
+        const hasScores = g.team_score !== undefined && g.opponent_score !== undefined;
+        const score = hasScores ? ` ${g.team_score}-${g.opponent_score}` : '';
         const res = g.result ? ` (${g.result})` : '';
-        const match = g.team_abbr && g.opponent_abbr ? `${g.team_abbr} vs ${g.opponent_abbr}` : '';
-        return `${date}${match}${score}${res}`.trim();
-      }).join('; ');
+        const match = t1 && t2 ? `${t1} vs ${t2}` : '';
+        const formatted = `${datePrefix}${match}${score}${res}`.trim();
+        if (!formatted) continue;
+
+        if (t1 && t2) {
+          const teamPair = [t1.toUpperCase(), t2.toUpperCase()].sort().join('_');
+          const scorePair = hasScores
+            ? [Number(g.team_score), Number(g.opponent_score)]
+                .sort((a, b) => a - b)
+                .join('-')
+            : '';
+          const key = `${dateVal}|${teamPair}|${scorePair}`;
+          const isWin = String(g.result || '').trim().toUpperCase() === 'W';
+          const prev = deduped.get(key);
+          if (!prev || (isWin && !prev.isWin)) {
+            deduped.set(key, { formatted, isWin });
+          }
+        } else {
+          deduped.set(`raw|${deduped.size}|${formatted}`, { formatted, isWin: false });
+        }
+      }
+      return Array.from(deduped.values())
+        .slice(0, 5)
+        .map((entry) => entry.formatted)
+        .join('; ');
     };
 
-const SNAPSHOT_TEAM_CANONICAL_ALIAS: Readonly<Record<string, string>> = {
-  NO: 'NOP',
-  NOP: 'NOP',
-  GS: 'GSW',
-  GSW: 'GSW',
-  SA: 'SAS',
-  SAS: 'SAS',
-  NY: 'NYK',
-  NYK: 'NYK',
-  UTAH: 'UTA',
-  UTA: 'UTA',
-  UTH: 'UTA',
-  WSH: 'WAS',
-  WAS: 'WAS',
-  PHO: 'PHX',
-  PHX: 'PHX',
-  BK: 'BKN',
-  BRK: 'BKN',
-  BKN: 'BKN',
-  CHO: 'CHA',
-  CHA: 'CHA',
-  SJ: 'SJS',
-  SJS: 'SJS',
-  LA: 'LAK',
-  LAK: 'LAK',
-  NJ: 'NJD',
-  NJD: 'NJD',
-  TB: 'TBL',
-  TBL: 'TBL',
-  MON: 'MTL',
-  MTL: 'MTL',
-  JAC: 'JAX',
-  JAX: 'JAX',
-};
-
-function matchesSnapshotTeamKey(teamKey: string, label?: string, sportHint?: string): boolean {
+function matchesSnapshotTeamKey(teamKey: string, label?: string, localSportHint?: string): boolean {
+  const effectiveSport = localSportHint || sportHint;
   const a = String(teamKey || '').trim();
   const b = String(label || '').trim();
   if (!a || !b) return false;
@@ -280,22 +406,22 @@ function matchesSnapshotTeamKey(teamKey: string, label?: string, sportHint?: str
   const ub = b.replace(/_/g, ' ').trim().toUpperCase();
   if (ua === ub) return true;
 
-  const ca = SNAPSHOT_TEAM_CANONICAL_ALIAS[ua] ?? ua;
-  const cb = SNAPSHOT_TEAM_CANONICAL_ALIAS[ub] ?? ub;
+  const ca = normalizeSportTeamAbbr(ua, effectiveSport);
+  const cb = normalizeSportTeamAbbr(ub, effectiveSport);
   if (ca === cb) return true;
 
-  const entryA = matchTeamByLabel(a.replace(/_/g, ' '), sportHint);
-  const entryB = matchTeamByLabel(b.replace(/_/g, ' '), sportHint);
+  const entryA = matchTeamByLabel(a.replace(/_/g, ' '), effectiveSport);
+  const entryB = matchTeamByLabel(b.replace(/_/g, ' '), effectiveSport);
   if (entryA && entryB) {
     if (entryA.sport === entryB.sport && entryA.id === entryB.id) return true;
     return false;
   }
   if (entryA) {
-    const abbrA = SNAPSHOT_TEAM_CANONICAL_ALIAS[entryA.abbr.toUpperCase()] ?? entryA.abbr.toUpperCase();
+    const abbrA = normalizeSportTeamAbbr(entryA.abbr, entryA.sport || effectiveSport);
     if (abbrA === cb) return true;
   }
   if (entryB) {
-    const abbrB = SNAPSHOT_TEAM_CANONICAL_ALIAS[entryB.abbr.toUpperCase()] ?? entryB.abbr.toUpperCase();
+    const abbrB = normalizeSportTeamAbbr(entryB.abbr, entryB.sport || effectiveSport);
     if (abbrB === ca) return true;
   }
 
@@ -420,7 +546,7 @@ function matchesSnapshotTeamKey(teamKey: string, label?: string, sportHint?: str
           ? (typeof d.form === 'object' ? JSON.stringify(mapFormValue(d.form)) : String(d.form))
           : `Home: ${d.home_form ?? homeObj.form ?? 'N/A'} | Away: ${d.away_form ?? awayObj.form ?? 'N/A'}`;
       }
-      const h2hText = formatH2h(d.h2h);
+      const h2hText = formatH2h(d.h2h, sportHint);
       const summary = [
         `[MATCHUP FUNDAMENTALS: ${gameId} (${displayWindow}) | source: snapshot]`,
         `Form: ${formText}`,
@@ -435,8 +561,12 @@ function matchesSnapshotTeamKey(teamKey: string, label?: string, sportHint?: str
       };
     }
 
-    const homeTeam = homeObj.team || d.home_team || (context as any)?.game?.home_team || 'Home';
-    const awayTeam = awayObj.team || d.away_team || (context as any)?.game?.away_team || 'Away';
+    const homeTeamRaw = String(homeObj.team || d.home_team || (context as any)?.game?.home_team || 'Home');
+    const awayTeamRaw = String(awayObj.team || d.away_team || (context as any)?.game?.away_team || 'Away');
+    const homeTeam = normalizeSportTeamAbbr(homeTeamRaw, sportHint);
+    const awayTeam = normalizeSportTeamAbbr(awayTeamRaw, sportHint);
+    const homeHasL5 = Array.isArray(homeObj.last5_results) && homeObj.last5_results.length > 0;
+    const awayHasL5 = Array.isArray(awayObj.last5_results) && awayObj.last5_results.length > 0;
     const homeWl = (homeObj.wins !== undefined && homeObj.losses !== undefined) ? `${homeObj.wins}-${homeObj.losses}` : 'N/A';
     const awayWl = (awayObj.wins !== undefined && awayObj.losses !== undefined) ? `${awayObj.wins}-${awayObj.losses}` : 'N/A';
     const homePfPa = (homeObj.points_for_avg !== undefined || homeObj.points_against_avg !== undefined)
@@ -480,11 +610,11 @@ function matchesSnapshotTeamKey(teamKey: string, label?: string, sportHint?: str
     const homeExtra = formatExtraTeamContext(homeObj, 'home_record', 'Home');
     const awayExtra = formatExtraTeamContext(awayObj, 'away_record', 'Away');
 
-    const h2hText = formatH2h(d.h2h);
+    const h2hText = formatH2h(d.h2h, sportHint);
     const summaryLines = [
       `[MATCHUP FUNDAMENTALS: ${gameId} (${displayWindow})]`,
-      `Home (${homeTeam}): W-L ${homeWl} | PF/PA ${homePfPa} | Net Margin ${homeNet} | Recent ${homeRecent}${homeExtra}`,
-      `Away (${awayTeam}): W-L ${awayWl} | PF/PA ${awayPfPa} | Net Margin ${awayNet} | Recent ${awayRecent}${awayExtra}`
+      `Home (${homeTeam}): W-L ${homeWl} | PF/PA ${homePfPa} | Net Margin ${homeNet}${homeHasL5 ? '' : ` | Recent ${homeRecent}`}${homeExtra}`,
+      `Away (${awayTeam}): W-L ${awayWl} | PF/PA ${awayPfPa} | Net Margin ${awayNet}${awayHasL5 ? '' : ` | Recent ${awayRecent}`}${awayExtra}`
     ];
     if (h2hText) {
       summaryLines.push(`H2H: ${h2hText}`);
@@ -500,6 +630,67 @@ function matchesSnapshotTeamKey(teamKey: string, label?: string, sportHint?: str
     };
   }
 };
+
+export type HealthBalanceClassification =
+  | 'home_advantage'
+  | 'away_advantage'
+  | 'uncertain_questionable'
+  | 'symmetric';
+
+export interface InjuryHealthSummaryResult {
+  balance: HealthBalanceClassification;
+  label: string;
+  homeTeam: string;
+  awayTeam: string;
+  homeOut: number;
+  homeQ: number;
+  awayOut: number;
+  awayQ: number;
+  line: string;
+}
+
+export function classifyInjuryHealthBalance(params: {
+  homeTeam: string;
+  awayTeam: string;
+  homeOut: number;
+  homeQ: number;
+  awayOut: number;
+  awayQ: number;
+}): InjuryHealthSummaryResult {
+  const { homeTeam, awayTeam, homeOut, homeQ, awayOut, awayQ } = params;
+  const homeTotal = homeOut + homeQ;
+  const awayTotal = awayOut + awayQ;
+  const homeBetter = (awayOut - homeOut >= 2) || (awayTotal - homeTotal >= 2 && homeQ === 0);
+  const awayBetter = (homeOut - awayOut >= 2) || (homeTotal - awayTotal >= 2 && awayQ === 0);
+
+  let balance: HealthBalanceClassification;
+  let label: string;
+  if (homeBetter && !awayBetter) {
+    balance = 'home_advantage';
+    label = `home_advantage (${homeTeam})`;
+  } else if (awayBetter && !homeBetter) {
+    balance = 'away_advantage';
+    label = `away_advantage (${awayTeam})`;
+  } else if (homeQ >= 2 && awayQ >= 2) {
+    balance = 'uncertain_questionable';
+    label = 'uncertain_questionable';
+  } else {
+    balance = 'symmetric';
+    label = 'symmetric';
+  }
+
+  return {
+    balance,
+    label,
+    homeTeam,
+    awayTeam,
+    homeOut,
+    homeQ,
+    awayOut,
+    awayQ,
+    line: `Summary: ${homeTeam} (${homeOut} OUT, ${homeQ} Q) vs ${awayTeam} (${awayOut} OUT, ${awayQ} Q) | Health Balance: ${label}`
+  };
+}
 
 /**
  * Tool 2: get_injury_and_roster_delta
@@ -664,8 +855,57 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
       grouped.get(groupKey)!.items.push(enriched);
     }
 
+    const isOutTag = (statusRaw: unknown): boolean =>
+      /^(?:out|ir|injured\s+reserve|suspended)$/i.test(String(statusRaw || '').trim());
+    const isQTag = (statusRaw: unknown): boolean =>
+      /^(?:questionable|doubtful|day[- ]to[- ]day|gtd|game[- ]time\s+decision)$/i.test(String(statusRaw || '').trim());
+
+    const resolveFullTeamDisplay = (raw: unknown): string | undefined => {
+      if (typeof raw !== 'string' || !raw.trim()) return undefined;
+      const trimmed = raw.trim();
+      const matched = matchTeamByLabel(trimmed, sportHint);
+      return matched ? matched.name : trimmed;
+    };
+
+    let homeTeamDisplay =
+      resolveFullTeamDisplay(d.home_team) ??
+      resolveFullTeamDisplay(d.home?.name) ??
+      resolveFullTeamDisplay(ctxAny?.game?.home_team) ??
+      resolveFullTeamDisplay(d.home_team_abbr ?? d.home_abbr ?? d.home?.abbr ?? ctxAny?.game?.home_team_abbr);
+    let awayTeamDisplay =
+      resolveFullTeamDisplay(d.away_team) ??
+      resolveFullTeamDisplay(d.away?.name) ??
+      resolveFullTeamDisplay(ctxAny?.game?.away_team) ??
+      resolveFullTeamDisplay(d.away_team_abbr ?? d.away_abbr ?? d.away?.abbr ?? ctxAny?.game?.away_team_abbr);
+
+    const groupStats: Array<{
+      groupKey: string;
+      label: string;
+      name: string;
+      abbr: string;
+      outCount: number;
+      qCount: number;
+    }> = [];
     const injuryLines: string[] = [];
-    for (const { label, items } of grouped.values()) {
+    for (const [groupKey, { label, items }] of grouped.entries()) {
+      let outCount = 0;
+      let qCount = 0;
+      for (const p of items) {
+        const st = p.status || p.injury_status || 'OUT';
+        if (isOutTag(st)) outCount++;
+        else if (isQTag(st)) qCount++;
+      }
+      const firstName = items[0]?.team_name || label.replace(/\s*\([^)]*\)\s*$/, '').trim();
+      const matchedEntry = matchTeamByLabel(firstName, sportHint) || matchTeamByLabel(groupKey, sportHint);
+      groupStats.push({
+        groupKey,
+        label,
+        name: matchedEntry?.name || firstName,
+        abbr: matchedEntry?.abbr || items[0]?.team_abbr || groupKey,
+        outCount,
+        qCount
+      });
+
       const sorted = items
         .map((p, idx) => ({ p, idx, rank: statusRank(p.status || p.injury_status || 'OUT') }))
         .sort((a, b) => a.rank - b.rank || a.idx - b.idx)
@@ -683,6 +923,51 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
       }
     }
 
+    if (!homeTeamDisplay && !awayTeamDisplay && groupStats.length >= 2) {
+      homeTeamDisplay = groupStats[0].name;
+      awayTeamDisplay = groupStats[1].name;
+    }
+
+    const matchesTeamDisplay = (stat: typeof groupStats[number], targetName?: string): boolean => {
+      if (!targetName) return false;
+      const tLower = targetName.toLowerCase();
+      if (stat.name.toLowerCase() === tLower || stat.label.toLowerCase() === tLower) return true;
+      const tEntry = matchTeamByLabel(targetName, sportHint);
+      const sEntry = matchTeamByLabel(stat.name, sportHint) || matchTeamByLabel(stat.abbr, sportHint);
+      if (tEntry && sEntry && tEntry.abbr === sEntry.abbr) return true;
+      return stat.name.toLowerCase().includes(tLower) || tLower.includes(stat.name.toLowerCase());
+    };
+
+    let summaryHeaderLine: string | null = null;
+    let healthSummaryObj: InjuryHealthSummaryResult | null = null;
+    if (homeTeamDisplay && awayTeamDisplay) {
+      let homeOut = 0;
+      let homeQ = 0;
+      let awayOut = 0;
+      let awayQ = 0;
+      for (const st of groupStats) {
+        if (matchesTeamDisplay(st, homeTeamDisplay)) {
+          homeOut += st.outCount;
+          homeQ += st.qCount;
+        } else if (matchesTeamDisplay(st, awayTeamDisplay)) {
+          awayOut += st.outCount;
+          awayQ += st.qCount;
+        }
+      }
+      healthSummaryObj = classifyInjuryHealthBalance({
+        homeTeam: homeTeamDisplay,
+        awayTeam: awayTeamDisplay,
+        homeOut,
+        homeQ,
+        awayOut,
+        awayQ
+      });
+      summaryHeaderLine = healthSummaryObj.line;
+    } else if (groupStats.length === 1) {
+      const only = groupStats[0];
+      summaryHeaderLine = `Summary: ${only.name} (${only.outCount} OUT, ${only.qCount} Q) | Health Balance: single_team_only`;
+    }
+
     const stripSourceRef = (val: any): any => {
       if (Array.isArray(val)) return val.map(stripSourceRef);
       if (val && typeof val === 'object') {
@@ -698,12 +983,26 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
           ...d,
           total_injuries: strippedKept.length,
           raw_total_injuries: rawTotalInjuries,
+          ...(healthSummaryObj
+            ? {
+                health_balance: healthSummaryObj.label,
+                injury_counts: {
+                  home_team: healthSummaryObj.homeTeam,
+                  home_out: healthSummaryObj.homeOut,
+                  home_q: healthSummaryObj.homeQ,
+                  away_team: healthSummaryObj.awayTeam,
+                  away_out: healthSummaryObj.awayOut,
+                  away_q: healthSummaryObj.awayQ
+                }
+              }
+            : {}),
           ...(Array.isArray(d.injuries) ? { injuries: strippedKept } : {}),
           ...(Array.isArray(d.players) ? { players: strippedKept } : {})
         };
 
     const summary = [
       `[INJURY & ROSTER DELTA: ${gameId}${positionGroup ? ` | ${positionGroup}` : ''}]`,
+      ...(summaryHeaderLine ? [summaryHeaderLine] : []),
       injuryLines.length > 0 ? injuryLines.join('\n') : 'No significant roster deltas or injury tags reported.'
     ].join('\n');
 
@@ -1509,62 +1808,86 @@ export const getMarketMovementTool: SwarmTool = {
 
     const detectSpreadSteam = (): string | null => {
       if (spreadDeltaHome === null || Math.abs(spreadDeltaHome) < spreadThreshold) return null;
-      if (spreadDeltaHome < 0) {
-        return `home ${homeLabel} (${spreadDeltaHome.toFixed(1)} pts)`;
+      const pts = Math.abs(spreadDeltaHome).toFixed(1);
+      if (openResolved && currResolved && 'home' in openResolved && 'home' in currResolved) {
+        const homeRange = `${fmtSigned(openResolved.home)} -> ${fmtSigned(currResolved.home)}`;
+        const awayRange = `${fmtSigned(openResolved.away)} -> ${fmtSigned(currResolved.away)}`;
+        if (spreadDeltaHome < 0) {
+          return `TOWARD home ${homeLabel} (${homeRange}, ${pts} pts) | AGAINST away ${awayLabel} (${awayRange})`;
+        }
+        return `TOWARD away ${awayLabel} (${awayRange}, ${pts} pts) | AGAINST home ${homeLabel} (${homeRange})`;
       }
-      return `away ${awayLabel} (-${Math.abs(spreadDeltaHome).toFixed(1)} pts)`;
+      if (spreadDeltaHome < 0) {
+        return `TOWARD home ${homeLabel} (${pts} pts) | AGAINST away ${awayLabel}`;
+      }
+      return `TOWARD away ${awayLabel} (${pts} pts) | AGAINST home ${homeLabel}`;
     };
 
     const detectMlSteam = (): string | null => {
-      let useHome = openMlHomeNum !== null && currMlHomeNum !== null && openMlHomeNum !== currMlHomeNum;
-      let useAway = openMlAwayNum !== null && currMlAwayNum !== null && openMlAwayNum !== currMlAwayNum;
+      const useHome = openMlHomeNum !== null && currMlHomeNum !== null && openMlHomeNum !== currMlHomeNum;
+      const useAway = openMlAwayNum !== null && currMlAwayNum !== null && openMlAwayNum !== currMlAwayNum;
       if (!useHome && !useAway) return null;
 
-      let impShiftPct = 0;
+      let homeImpShiftPct = 0;
+      let awayImpShiftPct = 0;
       let inMidBand = false;
       let centShift = 0;
       if (useHome && openMlHomeNum !== null && currMlHomeNum !== null) {
         const pOpen = americanToImpliedProb(openMlHomeNum);
         const pCurr = americanToImpliedProb(currMlHomeNum);
         if (pOpen !== null && pCurr !== null) {
-          impShiftPct = (pCurr - pOpen) * 100;
+          homeImpShiftPct = (pCurr - pOpen) * 100;
         }
         inMidBand = Math.abs(openMlHomeNum) <= 150 && Math.abs(currMlHomeNum) <= 150;
-        centShift = Math.abs(toCentScale(currMlHomeNum) - toCentScale(openMlHomeNum));
-      } else if (useAway && openMlAwayNum !== null && currMlAwayNum !== null) {
+        centShift = Math.max(centShift, Math.abs(toCentScale(currMlHomeNum) - toCentScale(openMlHomeNum)));
+      }
+      if (useAway && openMlAwayNum !== null && currMlAwayNum !== null) {
         const pOpen = americanToImpliedProb(openMlAwayNum);
         const pCurr = americanToImpliedProb(currMlAwayNum);
         if (pOpen !== null && pCurr !== null) {
-          impShiftPct = -((pCurr - pOpen) * 100);
+          awayImpShiftPct = (pCurr - pOpen) * 100;
         }
-        inMidBand = Math.abs(openMlAwayNum) <= 150 && Math.abs(currMlAwayNum) <= 150;
-        centShift = Math.abs(toCentScale(currMlAwayNum) - toCentScale(openMlAwayNum));
+        inMidBand = inMidBand || (Math.abs(openMlAwayNum) <= 150 && Math.abs(currMlAwayNum) <= 150);
+        centShift = Math.max(centShift, Math.abs(toCentScale(currMlAwayNum) - toCentScale(openMlAwayNum)));
       }
+
+      const impShiftPct =
+        useHome && (!useAway || Math.abs(homeImpShiftPct) >= Math.abs(awayImpShiftPct))
+          ? homeImpShiftPct
+          : -awayImpShiftPct;
 
       if (Math.abs(impShiftPct) < 2.5 && !(inMidBand && centShift >= 15)) {
         return null;
       }
       const impAbs = Math.abs(impShiftPct).toFixed(1);
-      if (impShiftPct > 0 || (!useAway && openMlHomeNum !== null && currMlHomeNum !== null && toCentScale(currMlHomeNum) < toCentScale(openMlHomeNum))) {
-        if (openMlHomeNum !== null && currMlHomeNum !== null) {
-          return `home ${homeLabel} ML (${fmtOddsOrLine(openMlHomeNum)} -> ${fmtOddsOrLine(currMlHomeNum)}, +${impAbs}% imp)`;
-        }
-        return `home ${homeLabel} ML (+${impAbs}% imp)`;
+      const isHomeFavoredMove =
+        impShiftPct > 0 ||
+        (useHome && !useAway && openMlHomeNum !== null && currMlHomeNum !== null && toCentScale(currMlHomeNum) < toCentScale(openMlHomeNum));
+      if (isHomeFavoredMove) {
+        const toward = openMlHomeNum !== null && currMlHomeNum !== null
+          ? `TOWARD home ${homeLabel} ML (${fmtOddsOrLine(openMlHomeNum)} -> ${fmtOddsOrLine(currMlHomeNum)}, +${impAbs}% imp)`
+          : `TOWARD home ${homeLabel} ML (+${impAbs}% imp)`;
+        const against = openMlAwayNum !== null && currMlAwayNum !== null
+          ? `AGAINST away ${awayLabel} ML (${fmtOddsOrLine(openMlAwayNum)} -> ${fmtOddsOrLine(currMlAwayNum)})`
+          : `AGAINST away ${awayLabel} ML`;
+        return `${toward} | ${against}`;
       }
-      if (openMlAwayNum !== null && currMlAwayNum !== null) {
-        return `away ${awayLabel} ML (${fmtOddsOrLine(openMlAwayNum)} -> ${fmtOddsOrLine(currMlAwayNum)}, +${impAbs}% imp)`;
-      }
-      if (openMlHomeNum !== null && currMlHomeNum !== null) {
-        return `away ${awayLabel} ML (home ${fmtOddsOrLine(openMlHomeNum)} -> ${fmtOddsOrLine(currMlHomeNum)}, +${impAbs}% imp)`;
-      }
-      return `away ${awayLabel} ML (+${impAbs}% imp)`;
+      const toward = openMlAwayNum !== null && currMlAwayNum !== null
+        ? `TOWARD away ${awayLabel} ML (${fmtOddsOrLine(openMlAwayNum)} -> ${fmtOddsOrLine(currMlAwayNum)}, +${impAbs}% imp)`
+        : openMlHomeNum !== null && currMlHomeNum !== null
+          ? `TOWARD away ${awayLabel} ML (home ${fmtOddsOrLine(openMlHomeNum)} -> ${fmtOddsOrLine(currMlHomeNum)}, +${impAbs}% imp)`
+          : `TOWARD away ${awayLabel} ML (+${impAbs}% imp)`;
+      const against = openMlHomeNum !== null && currMlHomeNum !== null
+        ? `AGAINST home ${homeLabel} ML (${fmtOddsOrLine(openMlHomeNum)} -> ${fmtOddsOrLine(currMlHomeNum)})`
+        : `AGAINST home ${homeLabel} ML`;
+      return `${toward} | ${against}`;
     };
 
     const detectTotalSteam = (): string | null => {
       if (totalDeltaVal === null || Math.abs(totalDeltaVal) < totalThreshold) return null;
-      const side = totalDeltaVal > 0 ? 'over' : 'under';
+      const side = totalDeltaVal > 0 ? 'Over' : 'Under';
       const signed = totalDeltaVal > 0 ? `+${totalDeltaVal.toFixed(1)}` : totalDeltaVal.toFixed(1);
-      return `${side} (${openTotalNum} -> ${currTotalNum}, ${signed} pts)`;
+      return `TOWARD ${side} (${openTotalNum} -> ${currTotalNum}, ${signed} pts)`;
     };
 
     const orderedSteam = isMlRequested

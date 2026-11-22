@@ -14,6 +14,15 @@ import { RrfRanker } from './ranking/rrfRanker.ts';
 import { CortexPersistenceManager } from './persistence/cortexPersistence.ts';
 import { CortexConsolidator } from './consolidation/cortexConsolidator.ts';
 import {
+    DEFAULT_CORTEX_COLLECTION,
+    isGradedWagerLoss,
+    isGradedWagerWin,
+    isSafeExemplarRecord,
+    isSafeRetrievedBaseline,
+    resolveCortexCollectionName,
+    sanitizeMemoryWrite
+} from './memorySanitizer.ts';
+import {
     type MemoryMetadata,
     type RetrievalOptions,
     type ConsolidationOptions,
@@ -45,6 +54,7 @@ export class MemoryCortex {
     private collectionNameTemplate?: string;
     private defaultAppId: string;
     private initialized: boolean = false;
+    private persistenceLoaded: boolean = false;
     private storesSinceConsolidation: number = 0;
     private autoConsolidateThreshold: number = 50;
     private autoConsolidationOptions?: ConsolidationOptions;
@@ -53,8 +63,8 @@ export class MemoryCortex {
     private semanticCache: SemanticCacheInterceptor;
     private actionPlanCache: ActionPlanCacheInterceptor;
 
-    static clearFallbackStore(collectionName: string = 'pwa_swarm_dev_cortex_v2'): void {
-        InMemoryStorageAdapter.clearGlobalStore(collectionName);
+    static clearFallbackStore(collectionName: string = DEFAULT_CORTEX_COLLECTION): void {
+        InMemoryStorageAdapter.clearGlobalStore(resolveCortexCollectionName(collectionName));
     }
 
     constructor(config: MemoryCortexConfig) {
@@ -62,7 +72,7 @@ export class MemoryCortex {
         const url = config.url !== undefined ? config.url : (config.isolatedStore ? undefined : safeEnv.QDRANT_URL);
         const apiKey = config.apiKey !== undefined ? config.apiKey : (config.isolatedStore ? undefined : safeEnv.QDRANT_API_KEY);
         this.collectionNameTemplate = config.collectionNameTemplate;
-        this.collectionName = config.collectionName || 'pwa_swarm_dev_cortex_v2';
+        this.collectionName = resolveCortexCollectionName(config.collectionName);
         this.defaultAppId = config.defaultAppId || 'default';
         this.autoConsolidateThreshold = config.autoConsolidateThreshold !== undefined ? config.autoConsolidateThreshold : 50;
         this.autoConsolidationOptions = config.autoConsolidationOptions;
@@ -176,20 +186,19 @@ export class MemoryCortex {
         }
     }
 
-    async initialize(appId?: string): Promise<boolean> {
-        if (this.initialized) return true;
-
+    async initialize(appId?: string, options?: { createIfMissing?: boolean }): Promise<boolean> {
+        const createIfMissing = options?.createIfMissing !== false;
         if (this.qdrantStorage && this.qdrantStorage.isAvailable) {
-            const success = await this.qdrantStorage.initialize(appId);
-            if (success) {
-                this.initialized = true;
-                await this.persistence.autoLoadIfConfigured();
-                return true;
-            }
+            await this.qdrantStorage.initialize(appId, { createIfMissing });
         }
 
-        this.initialized = true;
-        await this.persistence.autoLoadIfConfigured();
+        if (!this.persistenceLoaded) {
+            this.persistenceLoaded = true;
+            await this.persistence.autoLoadIfConfigured();
+        }
+        if (createIfMissing) {
+            this.initialized = true;
+        }
         return true;
     }
 
@@ -198,22 +207,26 @@ export class MemoryCortex {
     }
 
     async store(content: string, metadata: MemoryMetadata, deduplicate: boolean = true): Promise<string | null> {
-        await this.initialize();
-        const originApp = metadata.originApp || metadata.appId || this.defaultAppId;
+        const sanitized = sanitizeMemoryWrite(content, metadata as Record<string, any>);
+        if (sanitized.blocked) {
+            return null;
+        }
+        const originApp = sanitized.metadata.originApp || sanitized.metadata.appId || this.defaultAppId;
+        await this.initialize(originApp, { createIfMissing: true });
         const appId = originApp;
-        const domain = metadata.domain ? normalizeDomain(metadata.domain, content) : 'general';
-        const memoryType = normalizeMemoryType(metadata.memoryType, metadata);
-        const entityIds = extractEntityIds(content, metadata.entityIds);
+        const domain = sanitized.metadata.domain ? normalizeDomain(sanitized.metadata.domain, sanitized.content) : 'general';
+        const memoryType = normalizeMemoryType(sanitized.metadata.memoryType, sanitized.metadata);
+        const entityIds = extractEntityIds(sanitized.content, sanitized.metadata.entityIds);
         const now = new Date().toISOString();
 
         const pointPayload = {
-            content,
             frequency: 1,
-            qualityRating: metadata.qualityRating ?? 0.5,
+            qualityRating: sanitized.metadata.qualityRating ?? 0.5,
             verified: memoryType === 'fact',
             timestamp: now,
             lastSeen: now,
-            ...metadata,
+            ...sanitized.metadata,
+            content: sanitized.content,
             originApp,
             appId,
             domain,
@@ -221,8 +234,8 @@ export class MemoryCortex {
             entityIds
         };
 
-        const denseVector = await this.safeEmbed(content);
-        const sparseVector = SparseTokenizer.encode(content);
+        const denseVector = await this.safeEmbed(sanitized.content);
+        const sparseVector = SparseTokenizer.encode(sanitized.content);
         const pointId = crypto.randomUUID();
 
         const point: StoredMemoryPoint = {
@@ -256,33 +269,39 @@ export class MemoryCortex {
     }
 
     async storeBatch(memories: { content: string; metadata: MemoryMetadata }[]): Promise<string[]> {
-        await this.initialize();
         if (memories.length === 0) return [];
+        const sanitizedItems = memories
+            .map((m) => sanitizeMemoryWrite(m.content, m.metadata as Record<string, any>))
+            .filter((item) => !item.blocked);
+        if (sanitizedItems.length === 0) return [];
+
+        const firstApp = sanitizedItems[0].metadata.originApp || sanitizedItems[0].metadata.appId || this.defaultAppId;
+        await this.initialize(firstApp, { createIfMissing: true });
         const now = new Date().toISOString();
 
         const points: StoredMemoryPoint[] = await Promise.all(
-            memories.map(async (memory) => {
-                const denseVector = await this.safeEmbed(memory.content);
-                const sparseVector = SparseTokenizer.encode(memory.content);
+            sanitizedItems.map(async (item) => {
+                const denseVector = await this.safeEmbed(item.content);
+                const sparseVector = SparseTokenizer.encode(item.content);
                 const id = crypto.randomUUID();
-                const originApp = memory.metadata.originApp || memory.metadata.appId || this.defaultAppId;
+                const originApp = item.metadata.originApp || item.metadata.appId || this.defaultAppId;
                 const appId = originApp;
-                const domain = memory.metadata.domain ? normalizeDomain(memory.metadata.domain, memory.content) : 'general';
-                const memoryType = normalizeMemoryType(memory.metadata.memoryType, memory.metadata);
-                const entityIds = extractEntityIds(memory.content, memory.metadata.entityIds);
+                const domain = item.metadata.domain ? normalizeDomain(item.metadata.domain, item.content) : 'general';
+                const memoryType = normalizeMemoryType(item.metadata.memoryType, item.metadata);
+                const entityIds = extractEntityIds(item.content, item.metadata.entityIds);
 
                 return {
                     id,
                     denseVector,
                     sparseVector,
                     payload: {
-                        content: memory.content,
                         frequency: 1,
-                        qualityRating: memory.metadata.qualityRating ?? 0.5,
+                        qualityRating: item.metadata.qualityRating ?? 0.5,
                         verified: memoryType === 'fact',
                         timestamp: now,
                         lastSeen: now,
-                        ...memory.metadata,
+                        ...item.metadata,
+                        content: item.content,
                         originApp,
                         appId,
                         domain,
@@ -441,7 +460,6 @@ export class MemoryCortex {
         limit: number = 3
     ): Promise<any[]> {
         const startTime = Date.now();
-        await this.initialize();
 
         let options: RetrievalOptions = {};
         if (typeof optionsOrDomain === 'string') {
@@ -452,8 +470,10 @@ export class MemoryCortex {
             options = { limit };
         }
 
-        const queryDense = await this.safeEmbed(query);
         const readerApp = options.appId || options.originApp || this.defaultAppId;
+        await this.initialize(readerApp, { createIfMissing: false });
+
+        const queryDense = await this.safeEmbed(query);
         const requestedDomain = options.domain ? normalizeDomain(options.domain) : undefined;
         const hasScopeConstraints = Boolean(
             options.asOf ||
@@ -523,7 +543,7 @@ export class MemoryCortex {
             this.defaultAppId
         );
         const results = rankedResults.filter((item: any) =>
-            matchesScopedMemoryFilter(item, effectiveQueryOptions)
+            matchesScopedMemoryFilter(item, effectiveQueryOptions) && isSafeRetrievedBaseline(item)
         );
 
         if (results.length > 0) {
@@ -537,20 +557,26 @@ export class MemoryCortex {
     }
 
     async retrieveExemplars(task: string, options?: RetrievalOptions): Promise<string> {
+        const requestedLimit = options?.limit || 2;
         const topMemories = await this.retrieve(task, {
             ...options,
             minRating: options?.minRating ?? 0.7,
-            limit: options?.limit || 2
+            limit: Math.max(requestedLimit * 4, 8)
         });
 
-        return this.consolidator.formatExemplars(topMemories);
+        const safeMemories = topMemories
+            .filter((m) => isSafeExemplarRecord(m))
+            .slice(0, requestedLimit);
+
+        return this.consolidator.formatExemplars(safeMemories);
     }
 
     async retrieveContrastivePostMortems(
         task: string,
         options?: RetrievalOptions
     ): Promise<{ wins: any[]; losses: any[]; formattedBlock: string }> {
-        await this.initialize();
+        const readerApp = options?.appId || options?.originApp || this.defaultAppId;
+        await this.initialize(readerApp, { createIfMissing: false });
         const limit = options?.limit || 2;
         const candidates = await this.retrieve(task, {
             ...options,
@@ -560,19 +586,12 @@ export class MemoryCortex {
         const fallbackCandidates: any[] = [];
         const effectiveContrastiveOpts: RetrievalOptions = {
             ...options,
-            appId: options?.appId || options?.originApp || this.defaultAppId
+            appId: readerApp
         };
         for (const pt of this.fallbackStore) {
             const p: Record<string, any> = (pt.payload || {}) as Record<string, any>;
             if (!matchesScopedMemoryFilter(p, effectiveContrastiveOpts)) continue;
-            const isGradedLoss =
-                p.outcome === 'loss' ||
-                (typeof p.brierScore === 'number' && p.brierScore >= 0.28) ||
-                (p.feedbackProcessed === true && typeof p.qualityRating === 'number' && p.qualityRating <= 0.25);
-            const isGradedWin =
-                p.outcome === 'win' ||
-                (p.feedbackProcessed === true && typeof p.qualityRating === 'number' && p.qualityRating >= 0.8);
-            if (!isGradedLoss && !isGradedWin) continue;
+            if (!isGradedWagerLoss(p) && !isGradedWagerWin(p)) continue;
 
             fallbackCandidates.push({
                 id: pt.id,
@@ -590,15 +609,11 @@ export class MemoryCortex {
 
         const all = Array.from(mergedMap.values());
         const wins = all
-            .filter(m => m.outcome === 'win' || (m.qualityRating !== undefined && m.qualityRating >= 0.75 && m.outcome !== 'loss'))
+            .filter(m => isGradedWagerWin(m))
             .slice(0, limit);
 
         const losses = all
-            .filter(m =>
-                m.outcome === 'loss' ||
-                (typeof m.brierScore === 'number' && m.brierScore >= 0.28) ||
-                (m.feedbackProcessed === true && typeof m.qualityRating === 'number' && m.qualityRating <= 0.25)
-            )
+            .filter(m => isGradedWagerLoss(m))
             .slice(0, limit);
 
         const formattedBlock = this.consolidator.formatContrastivePostMortems(wins, losses);

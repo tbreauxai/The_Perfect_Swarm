@@ -1,5 +1,6 @@
 import type { StorageBackend } from '../storage/types.ts';
 import { SparseTokenizer } from '../tokenizer.ts';
+import { resolveCortexCollectionName } from '../memorySanitizer.ts';
 import type {
     ExportMemoriesOptions,
     MemorySnapshotPoint,
@@ -32,7 +33,7 @@ export class CortexPersistenceManager {
         this.storage = config.storage;
         this.persistPath = config.persistPath;
         this.autoSave = config.autoSave !== false;
-        this.collectionName = config.collectionName || 'pwa_swarm_dev_cortex_v2';
+        this.collectionName = resolveCortexCollectionName(config.collectionName);
         this.defaultAppId = config.defaultAppId || 'default';
         this.embedder = config.embedder;
     }

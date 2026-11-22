@@ -129,6 +129,112 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
 
         const { memoryCortex, toolRegistry } = bindCortexAndTools(params, params.settings || settings, defaultAi, targetAppId);
 
+        const isTwoHopSlateRun =
+            !params.seedManifest &&
+            (params.triageMode === 'two-hop' || (typeof data === 'string' && data.includes('=== COMPACT SLATE ===')));
+
+        if (isTwoHopSlateRun) {
+            const rawSlateSource = typeof data === 'string' && data.length > 0 ? data : (data ? JSON.stringify(data) : '');
+            const parsedSlateHeaders = parseGameHeaders(rawSlateSource, params.eventIds);
+            const hasNoUpcomingMarker = /\bNo upcoming games\b/i.test(rawSlateSource);
+            const hasExplicitEmptyEventIds = Array.isArray(params.eventIds) && params.eventIds.length === 0;
+            const activeEventSet = Array.isArray(params.eventIds) && params.eventIds.length > 0
+                ? new Set(params.eventIds.map((id) => String(id).trim()).filter(Boolean))
+                : null;
+            const activeSlateHeaders =
+                hasNoUpcomingMarker || hasExplicitEmptyEventIds
+                    ? []
+                    : (activeEventSet && activeEventSet.size > 0
+                        ? parsedSlateHeaders.filter((h) => activeEventSet.has(h.eventId))
+                        : parsedSlateHeaders);
+
+            if (activeSlateHeaders.length === 0) {
+                const emptyHop1Plan = {
+                    mode: 'two-hop-slate',
+                    triageMode: params.triageMode || 'two-hop',
+                    active_event_ids: [] as string[],
+                    slate_games_count: 0,
+                    priced_games_count: 0,
+                    r_id_count: 0,
+                    selected_tools: [] as string[],
+                    reasoning: 'Empty pregame slate (0 upcoming games); short-circuited prior to Qdrant retrieval and LLM execution.'
+                };
+                const emptyDossier = {
+                    mode: 'two-hop-slate',
+                    active_event_ids: [] as string[],
+                    sections: [] as any[],
+                    tool_call_trace: [] as any[],
+                    seat_visibility: [] as any[],
+                    markdown: '',
+                    tokenEstimate: 0,
+                    totalDurationMs: 0
+                };
+                const passMsg = 'All games on this pregame slate have already started (0 upcoming events). Switch to Live mode for in-progress games or check tomorrow\'s slate.';
+                const emptyFinalAnalysis: any = {
+                    ui_title: 'No Upcoming Pregame Games',
+                    analysis: passMsg,
+                    summary: passMsg,
+                    picks: [],
+                    pass: true,
+                    wageringPass: true,
+                    criticApproved: true,
+                    verified: true,
+                    tools_called: [],
+                    hop1Plan: emptyHop1Plan,
+                    curatedDossier: emptyDossier,
+                    components: [
+                        {
+                            type: 'InsightList',
+                            props: {
+                                title: 'Pregame Slate Empty',
+                                insights: [{ type: 'info', message: passMsg }]
+                            }
+                        }
+                    ]
+                };
+                params.hop1Plan = emptyHop1Plan;
+                params.curatedDossier = emptyDossier;
+                params.onStage?.({
+                    stage: 'hop1_plan',
+                    plan: emptyHop1Plan,
+                    selected_tools: []
+                });
+                params.onStage?.({
+                    stage: 'curated_dossier',
+                    dossier: emptyDossier
+                });
+                params.onStage?.({
+                    stage: 'completed',
+                    task,
+                    finalAnalysis: emptyFinalAnalysis
+                });
+                context.addEvent({
+                    agentRole: 'System Orchestrator',
+                    action: 'Empty Slate Short-Circuit',
+                    modelName: 'Local/TypeScript',
+                    prompt: 'Two-hop slate contained 0 upcoming event IDs; skipping Qdrant and LLM calls.',
+                    output: {
+                        activeEventIds: [],
+                        wageringPass: true,
+                        criticApproved: true
+                    },
+                    durationMs: Date.now() - workflowStartTime
+                });
+                return {
+                    workflowId: (context as any).id,
+                    status: 'complete',
+                    partial: false,
+                    degraded: [],
+                    tools_called: [],
+                    hop1Plan: emptyHop1Plan,
+                    curatedDossier: emptyDossier,
+                    events: context.events,
+                    finalAnalysis: emptyFinalAnalysis,
+                    metrics: globalMetricsCollector.getBaselineReport()
+                };
+            }
+        }
+
         // 0. Infer Task Complexity via ModelRouter
         // R2: scorecard mode always runs the full swarm (the fast path has no scorecards or blackboard).
         const forceFullSwarm = scorecardMode || (params.forceFullSwarm ?? settings?.forceFullSwarm ?? settings?.disableFastPath ?? false);
@@ -280,9 +386,6 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             let curatedDossier: CuratedDossier | any | undefined = params.curatedDossier;
             let unifiedSlateDossier: UnifiedSlateDossier | undefined;
             const env = typeof process !== "undefined" ? process.env : {} as Record<string, string | undefined>;
-            const isTwoHopSlateRun =
-                !params.seedManifest &&
-                (params.triageMode === 'two-hop' || (typeof data === 'string' && data.includes('=== COMPACT SLATE ===')));
             if (params.seedManifest && !curatedDossier) {
                 // 1. Triage Plan
                 const plan = await planTriage(params.seedManifest, {
@@ -758,6 +861,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                 onStage: params.onStage
                             });
                         } else if (deepAnalysisRequested && (analysts.length > 0 || dedicatedCriticAgent)) {
+                            const activeIdsForVerification = hop1Plan?.active_event_ids ?? params.eventIds;
                             const verificationResult = await runDeepAnalysisVerification({
                                 task,
                                 rawInput: profilingResult.rawInput,
@@ -772,6 +876,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                 coveredEventIds: coveredEventIdsList,
                                 toolRegistry,
                                 queryCache: globalGameQueryCache,
+                                ...(Array.isArray(activeIdsForVerification) ? { activeEventIds: activeIdsForVerification } : {}),
                                 ...(marketToolRecords.length > 0 ? { marketToolRecords } : {}),
                                 ...(allToolCallTrace.length > 0 ? { toolCallTrace: allToolCallTrace } : {}),
                                 ...(stage2CriticVetoes.length > 0 ? { criticVetoes: stage2CriticVetoes } : {}),
@@ -815,7 +920,10 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                     ...(stage2AuditNote ? { auditNote: stage2AuditNote } : {}),
                                     rawBoard: profilingResult.rawInput,
                                     ...(allToolCallTrace.length > 0 ? { toolCallTrace: allToolCallTrace } : {}),
-                                    ...(availableTools && availableTools.length > 0 ? { availableTools } : {})
+                                    ...(availableTools && availableTools.length > 0 ? { availableTools } : {}),
+                                    ...(Array.isArray(hop1Plan?.active_event_ids ?? params.eventIds)
+                                        ? { activeEventIds: hop1Plan?.active_event_ids ?? params.eventIds }
+                                        : {})
                                 }
                             );
                         }
