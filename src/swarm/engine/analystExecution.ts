@@ -594,7 +594,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
         const passAuditTargetIds = hasAuditContext && auditTargetIds.length === 0
             ? (hasUnifiedDossier
                 ? selectTopPassAuditEventIds(unifiedDossier!.entries, mergedHeadersForRowCheck, 4)
-                : (config.triageMode === 'two-hop' || fullRawSource.includes('rows=R')
+                : (config.triageMode === 'two-hop' || String(fullRawSource || '').includes('rows=R')
                     ? (activeEventIdList.length > 0
                         ? filterHeadersByEventIds(mergedHeadersForRowCheck, activeEventIdList).map(h => h.eventId)
                         : activeScopedHeaders.map(h => h.eventId))

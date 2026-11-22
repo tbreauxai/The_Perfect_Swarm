@@ -1,7 +1,7 @@
 import { Agent } from './agent.ts';
 import { SwarmContext } from './context.ts';
 import { parseJsonSafe, guardVerificationResult } from './parser.ts';
-import { redactForLog } from './parser/responseGuards.ts';
+import { redactForLog, sanitizeCompilerProposalOddsAndSummary } from './parser/responseGuards.ts';
 import { groqPromptCharCap } from './providers/groq.ts';
 import { seatBudget } from './context/promptBudget.ts';
 import { formatRunDebugOutputDigest, recordRunDebugSeat, recordRunDebugDrop, recordRunDebugEdit } from './engine/runDebugRecord.ts';
@@ -267,6 +267,9 @@ export class AnalysisLifecycle {
             });
             
             currentProposal = parseJsonSafe(proposalRaw, { rawText: proposalRaw, error: "Failed to parse JSON" });
+            if (currentProposal && typeof currentProposal === 'object') {
+                sanitizeCompilerProposalOddsAndSummary(currentProposal);
+            }
             const initialPicksSnapshot = Array.isArray(currentProposal?.picks)
                 ? [...currentProposal.picks]
                 : [];
@@ -298,6 +301,7 @@ export class AnalysisLifecycle {
                     headers: allParsedHeaders,
                     slateText: rawSlateForSync
                 });
+                sanitizeCompilerProposalOddsAndSummary(currentProposal);
             }
 
             // 2. Critic verifies

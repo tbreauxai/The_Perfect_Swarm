@@ -316,7 +316,7 @@ function extractSpreadNumber(text: string): number | null {
   if (/\b(?:ml|moneyline|money\s*line|h2h)\b/i.test(cleaned) && !/[+-]\d+(?:\.5|\.0)\b/.test(cleaned)) {
     return null;
   }
-  const matches = cleaned.match(/(?:^|[\s,:(])([+-]\d+(?:\.\d+)?)(?=$|[\s,);.!])/g);
+  const matches = cleaned.match(/(?:^|[\s,:(])([+-]\d+(?:\.\d+)?)(?=$|[\s,);!?:\]"'/(\-—–]|\.(?!\d))/g);
   if (!matches) return null;
   for (const m of matches) {
     const numMatch = m.match(/([+-]\d+(?:\.\d+)?)/);

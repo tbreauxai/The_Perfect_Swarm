@@ -648,7 +648,545 @@ export interface InjuryHealthSummaryResult {
   homeQ: number;
   awayOut: number;
   awayQ: number;
+  homeOutImpact?: number;
+  awayOutImpact?: number;
+  homeQImpact?: number;
+  awayQImpact?: number;
+  tier1QuestionablePlayers?: string[];
   line: string;
+}
+
+export interface PlayerGameLogRow {
+  player_id?: string | number | null;
+  player_name?: string | null;
+  name?: string | null;
+  team_abbr?: string | null;
+  team?: string | null;
+  team_name?: string | null;
+  team_id?: string | number | null;
+  position?: string | null;
+  pos?: string | null;
+  sport?: string | null;
+  league?: string | null;
+  minutes?: number | string | null;
+  min?: number | string | null;
+  mpg?: number | string | null;
+  avg_minutes?: number | string | null;
+  points?: number | string | null;
+  pts?: number | string | null;
+  ppg?: number | string | null;
+  avg_points?: number | string | null;
+  toi?: number | string | null;
+  time_on_ice?: number | string | null;
+  toi_minutes?: number | string | null;
+  avg_toi?: number | string | null;
+  goals?: number | string | null;
+  assists?: number | string | null;
+  pass_attempts?: number | string | null;
+  passing_attempts?: number | string | null;
+  pass_att?: number | string | null;
+  attempts?: number | string | null;
+  rush_attempts?: number | string | null;
+  rushing_attempts?: number | string | null;
+  targets?: number | string | null;
+  receptions?: number | string | null;
+  games_started?: number | string | null;
+  starts?: number | string | null;
+  started?: boolean | number | null;
+  snap_pct?: number | string | null;
+  snaps?: number | string | null;
+  is_starter?: boolean | null;
+  starter?: boolean | null;
+  depth_chart_order?: number | string | null;
+  impact_tier?: number | null;
+  impact_weight?: number | null;
+}
+
+type NormalizedInjurySport = 'nba' | 'nhl' | 'nfl' | 'ncaaf' | 'other';
+
+function normalizeInjurySport(sportHint?: string, gameId?: string): NormalizedInjurySport {
+  const scope = `${sportHint || ''} ${gameId || ''}`.toLowerCase();
+  if (/\b(?:nba|basketball_nba)\b|^nba-/.test(scope)) return 'nba';
+  if (/\b(?:nhl|icehockey_nhl)\b|^nhl-/.test(scope)) return 'nhl';
+  if (/\b(?:ncaaf|college-football|americanfootball_ncaaf)\b|^(?:ncaaf|college-football)-/.test(scope)) return 'ncaaf';
+  if (/\b(?:nfl|americanfootball_nfl)\b|^nfl-/.test(scope)) return 'nfl';
+  return 'other';
+}
+
+function parseNumericStat(raw: unknown): number | null {
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    // Handle MM:SS time-on-ice / minutes strings (e.g. "19:30" -> 19.5)
+    const mmss = trimmed.match(/^(\d+):(\d{2})$/);
+    if (mmss) {
+      return Number(mmss[1]) + Number(mmss[2]) / 60;
+    }
+    const n = Number(trimmed);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+function normalizePlayerNameKey(raw: unknown): string {
+  return String(raw || '')
+    .toLowerCase()
+    .replace(/['’.]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+interface AggregatedPlayerLogStats {
+  playerKey: string;
+  playerId?: string;
+  playerName: string;
+  teamKeys: Set<string>;
+  position: string;
+  games: number;
+  mpg: number | null;
+  ppg: number | null;
+  toi: number | null;
+  totalPoints: number;
+  totalPassAttempts: number;
+  totalTouches: number;
+  starts: number;
+  snapPct: number | null;
+  isStarter: boolean;
+  depthChartOrder: number | null;
+}
+
+interface TeamLogIndex {
+  hasLogs: boolean;
+  playersByName: Map<string, AggregatedPlayerLogStats>;
+  playersById: Map<string, AggregatedPlayerLogStats>;
+  topPasserKey?: string;
+  topGoalieKey?: string;
+  top4ScorerKeys: Set<string>;
+  top3RotationKeys: Set<string>;
+}
+
+const MODULE_PLAYER_LOGS_CACHE = new Map<string, { expiresAt: number; promise: Promise<PlayerGameLogRow[]> }>();
+const PLAYER_LOGS_CACHE_TTL_MS = 60_000;
+
+async function fetchBatchedPlayerGameLogs(
+  envInput?: Record<string, string | undefined>,
+  fetchFn?: typeof fetch,
+  runCache?: Map<string, Promise<PlayerGameLogRow[]>>
+): Promise<PlayerGameLogRow[]> {
+  const env = envInput || (typeof process !== 'undefined' ? process.env : {});
+  const supabaseUrl = env.SUPABASE_URL?.trim().replace(/\/+$/, '');
+  const serviceKey = (env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY || '').trim();
+  if (!supabaseUrl || !serviceKey) return [];
+
+  const cacheKey = `${supabaseUrl}::player_game_logs`;
+  if (runCache?.has(cacheKey)) {
+    return runCache.get(cacheKey)!;
+  }
+
+  const useModuleCache = !fetchFn;
+  if (useModuleCache) {
+    const cached = MODULE_PLAYER_LOGS_CACHE.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.promise;
+    }
+  }
+
+  const execFetch = fetchFn || globalThis.fetch;
+  if (typeof execFetch !== 'function') return [];
+
+  const loader = (async (): Promise<PlayerGameLogRow[]> => {
+    const headers = {
+      apikey: serviceKey,
+      Authorization: `Bearer ${serviceKey}`,
+      Accept: 'application/json'
+    };
+    const urls = [
+      `${supabaseUrl}/rest/v1/player_game_logs?order=game_date.desc&limit=800`,
+      `${supabaseUrl}/rest/v1/player_game_logs?limit=800`
+    ];
+    for (const url of urls) {
+      try {
+        const res = await execFetch(url, { method: 'GET', headers });
+        if (!res.ok) continue;
+        const json = await res.json();
+        if (Array.isArray(json)) return json as PlayerGameLogRow[];
+        return [];
+      } catch {
+        // Fall back gracefully when logs table is unavailable or unreachable
+      }
+    }
+    return [];
+  })();
+
+  if (runCache) {
+    runCache.set(cacheKey, loader);
+  }
+  if (useModuleCache) {
+    MODULE_PLAYER_LOGS_CACHE.set(cacheKey, { expiresAt: Date.now() + PLAYER_LOGS_CACHE_TTL_MS, promise: loader });
+  }
+  return loader;
+}
+
+function buildTeamLogIndex(
+  logs: PlayerGameLogRow[],
+  targetTeamLabels: string[],
+  sportHint: string
+): TeamLogIndex {
+  const targetTokens = new Set<string>();
+  for (const lbl of targetTeamLabels) {
+    const clean = String(lbl || '').trim().toLowerCase();
+    if (!clean) continue;
+    targetTokens.add(clean);
+    const matched = matchTeamByLabel(lbl, sportHint);
+    if (matched) {
+      targetTokens.add(matched.abbr.toLowerCase());
+      targetTokens.add(matched.name.toLowerCase());
+    }
+  }
+
+  const acc = new Map<
+    string,
+    {
+      playerId?: string;
+      playerName: string;
+      teamKeys: Set<string>;
+      position: string;
+      games: number;
+      minSum: number;
+      minCnt: number;
+      ptsSum: number;
+      ptsCnt: number;
+      toiSum: number;
+      toiCnt: number;
+      totalPoints: number;
+      totalPassAttempts: number;
+      totalTouches: number;
+      starts: number;
+      snapMax: number | null;
+      isStarter: boolean;
+      depthChartOrder: number | null;
+    }
+  >();
+
+  let matchedAnyRow = false;
+  for (const row of logs) {
+    if (!row || typeof row !== 'object') continue;
+    const rawTeamVals = [row.team_abbr, row.team, row.team_name, row.team_id !== undefined && row.team_id !== null ? String(row.team_id) : '']
+      .map((v) => String(v || '').trim())
+      .filter(Boolean);
+    if (targetTokens.size > 0 && rawTeamVals.length > 0) {
+      const teamMatches = rawTeamVals.some((tv) => {
+        const lower = tv.toLowerCase();
+        if (targetTokens.has(lower)) return true;
+        const m = matchTeamByLabel(tv, sportHint);
+        return Boolean(m && (targetTokens.has(m.abbr.toLowerCase()) || targetTokens.has(m.name.toLowerCase())));
+      });
+      if (!teamMatches) continue;
+    }
+
+    const nameRaw = String(row.player_name || row.name || '').trim();
+    const pidRaw = row.player_id !== undefined && row.player_id !== null ? String(row.player_id).trim() : '';
+    const key = normalizePlayerNameKey(nameRaw) || pidRaw.toLowerCase();
+    if (!key) continue;
+
+    matchedAnyRow = true;
+    let entry = acc.get(key);
+    if (!entry) {
+      entry = {
+        ...(pidRaw ? { playerId: pidRaw } : {}),
+        playerName: nameRaw || pidRaw,
+        teamKeys: new Set<string>(),
+        position: String(row.position || row.pos || '').trim().toUpperCase(),
+        games: 0,
+        minSum: 0,
+        minCnt: 0,
+        ptsSum: 0,
+        ptsCnt: 0,
+        toiSum: 0,
+        toiCnt: 0,
+        totalPoints: 0,
+        totalPassAttempts: 0,
+        totalTouches: 0,
+        starts: 0,
+        snapMax: null,
+        isStarter: false,
+        depthChartOrder: null
+      };
+      acc.set(key, entry);
+    }
+    for (const tv of rawTeamVals) entry.teamKeys.add(tv.toLowerCase());
+    if (!entry.position && (row.position || row.pos)) {
+      entry.position = String(row.position || row.pos).trim().toUpperCase();
+    }
+    entry.games += 1;
+
+    const minVal = parseNumericStat(row.mpg ?? row.avg_minutes ?? row.minutes ?? row.min);
+    if (minVal !== null) {
+      entry.minSum += minVal;
+      entry.minCnt += 1;
+    }
+    const ptsVal = parseNumericStat(row.ppg ?? row.avg_points ?? row.points ?? row.pts);
+    const goalsVal = parseNumericStat(row.goals);
+    const assistsVal = parseNumericStat(row.assists);
+    if (ptsVal !== null) {
+      entry.ptsSum += ptsVal;
+      entry.ptsCnt += 1;
+      entry.totalPoints += ptsVal;
+    } else if (goalsVal !== null || assistsVal !== null) {
+      const comb = (goalsVal ?? 0) + (assistsVal ?? 0);
+      entry.ptsSum += comb;
+      entry.ptsCnt += 1;
+      entry.totalPoints += comb;
+    }
+
+    const toiVal = parseNumericStat(row.avg_toi ?? row.toi_minutes ?? row.toi ?? row.time_on_ice);
+    if (toiVal !== null) {
+      entry.toiSum += toiVal;
+      entry.toiCnt += 1;
+    }
+
+    const passAtt = parseNumericStat(row.pass_attempts ?? row.passing_attempts ?? row.pass_att ?? row.attempts);
+    if (passAtt !== null) entry.totalPassAttempts += passAtt;
+
+    const rushAtt = parseNumericStat(row.rush_attempts ?? row.rushing_attempts) ?? 0;
+    const targets = parseNumericStat(row.targets) ?? 0;
+    const rec = parseNumericStat(row.receptions) ?? 0;
+    entry.totalTouches += rushAtt + Math.max(targets, rec);
+
+    const startsNum = parseNumericStat(row.games_started ?? row.starts);
+    if (startsNum !== null) entry.starts += startsNum;
+    else if (row.started === true || row.started === 1) entry.starts += 1;
+
+    const snapPct = parseNumericStat(row.snap_pct);
+    if (snapPct !== null) {
+      entry.snapMax = entry.snapMax === null ? snapPct : Math.max(entry.snapMax, snapPct);
+    }
+    if (row.is_starter === true || row.starter === true) entry.isStarter = true;
+    const depthOrd = parseNumericStat(row.depth_chart_order);
+    if (depthOrd !== null) {
+      entry.depthChartOrder = entry.depthChartOrder === null ? depthOrd : Math.min(entry.depthChartOrder, depthOrd);
+    }
+  }
+
+  const playersByName = new Map<string, AggregatedPlayerLogStats>();
+  const playersById = new Map<string, AggregatedPlayerLogStats>();
+  const allStats: AggregatedPlayerLogStats[] = [];
+
+  for (const [key, e] of acc.entries()) {
+    const agg: AggregatedPlayerLogStats = {
+      playerKey: key,
+      ...(e.playerId ? { playerId: e.playerId } : {}),
+      playerName: e.playerName,
+      teamKeys: e.teamKeys,
+      position: e.position,
+      games: e.games,
+      mpg: e.minCnt > 0 ? e.minSum / e.minCnt : null,
+      ppg: e.ptsCnt > 0 ? e.ptsSum / e.ptsCnt : null,
+      toi: e.toiCnt > 0 ? e.toiSum / e.toiCnt : null,
+      totalPoints: e.totalPoints,
+      totalPassAttempts: e.totalPassAttempts,
+      totalTouches: e.totalTouches,
+      starts: e.starts,
+      snapPct: e.snapMax,
+      isStarter: e.isStarter,
+      depthChartOrder: e.depthChartOrder
+    };
+    playersByName.set(key, agg);
+    if (agg.playerId) playersById.set(agg.playerId.toLowerCase(), agg);
+    allStats.push(agg);
+  }
+
+  let topPasserKey: string | undefined;
+  let maxPass = 0;
+  for (const s of allStats) {
+    if (s.totalPassAttempts > maxPass && (!s.position || s.position === 'QB')) {
+      maxPass = s.totalPassAttempts;
+      topPasserKey = s.playerKey;
+    }
+  }
+
+  let topGoalieKey: string | undefined;
+  let maxGoalieScore = 0;
+  for (const s of allStats) {
+    if (/^(?:G|GK|GOALIE|GOALTENDER)$/.test(s.position)) {
+      const score = s.starts * 100 + (s.toi ?? 0) + s.games;
+      if (score > maxGoalieScore) {
+        maxGoalieScore = score;
+        topGoalieKey = s.playerKey;
+      }
+    }
+  }
+
+  const top4ScorerKeys = new Set(
+    allStats
+      .filter((s) => !/^(?:G|GK|GOALIE|GOALTENDER)$/.test(s.position) && s.totalPoints > 0)
+      .sort((a, b) => b.totalPoints - a.totalPoints)
+      .slice(0, 4)
+      .map((s) => s.playerKey)
+  );
+
+  const top3RotationKeys = new Set(
+    allStats
+      .filter((s) => (s.mpg ?? 0) >= 24)
+      .sort((a, b) => (b.mpg ?? 0) - (a.mpg ?? 0))
+      .slice(0, 3)
+      .map((s) => s.playerKey)
+  );
+
+  return {
+    hasLogs: matchedAnyRow,
+    playersByName,
+    playersById,
+    topPasserKey,
+    topGoalieKey,
+    top4ScorerKeys,
+    top3RotationKeys
+  };
+}
+
+function classifyPlayerInjuryImpact(
+  player: any,
+  sport: NormalizedInjurySport,
+  teamIndex: TeamLogIndex
+): { tier: 1 | 2 | 3; weight: number; usedWeightedScoring: boolean } {
+  const pos = String(player?.position || player?.pos || '').trim().toUpperCase();
+  const isQb = /^QB$/i.test(pos);
+  const isGoalie = /^(?:G|GK|GOALIE|GOALTENDER)$/i.test(pos);
+
+  // Explicit override fields on payload/fixture
+  const explicitWeight = parseNumericStat(player?.impact_weight);
+  if (explicitWeight !== null && explicitWeight > 0) {
+    const tier: 1 | 2 | 3 = explicitWeight >= 3.0 ? 1 : (explicitWeight >= 1.5 ? 2 : 3);
+    return { tier, weight: explicitWeight, usedWeightedScoring: true };
+  }
+  const explicitTier = parseNumericStat(player?.impact_tier ?? player?.tier);
+  if (explicitTier === 1 || explicitTier === 2 || explicitTier === 3) {
+    const w =
+      explicitTier === 1
+        ? (sport === 'nfl' && isQb ? 5.0 : sport === 'nhl' && isGoalie ? 4.0 : 3.0)
+        : explicitTier === 2
+          ? 1.5
+          : 0.5;
+    return { tier: explicitTier, weight: w, usedWeightedScoring: true };
+  }
+
+  const nameKey = normalizePlayerNameKey(player?.player_name || player?.name);
+  const pidKey = player?.player_id !== undefined && player?.player_id !== null ? String(player.player_id).trim().toLowerCase() : '';
+  const logStats =
+    (pidKey ? teamIndex.playersById.get(pidKey) : undefined) ||
+    (nameKey ? teamIndex.playersByName.get(nameKey) : undefined);
+
+  // Merge inline stats on the injury item itself if present
+  const inlineMpg = parseNumericStat(player?.mpg ?? player?.avg_minutes ?? player?.minutes);
+  const inlinePpg = parseNumericStat(player?.ppg ?? player?.avg_points ?? player?.points);
+  const inlineToi = parseNumericStat(player?.avg_toi ?? player?.toi_minutes ?? player?.toi ?? player?.time_on_ice);
+  const inlinePassAtt = parseNumericStat(player?.pass_attempts ?? player?.passing_attempts ?? player?.pass_att);
+  const inlineStarts = parseNumericStat(player?.games_started ?? player?.starts);
+  const inlineSnapPct = parseNumericStat(player?.snap_pct);
+  const inlineDepth = parseNumericStat(player?.depth_chart_order);
+  const inlineStarter = player?.is_starter === true || player?.starter === true || inlineDepth === 1;
+
+  const hasInlineStat =
+    inlineMpg !== null ||
+    inlinePpg !== null ||
+    inlineToi !== null ||
+    inlinePassAtt !== null ||
+    inlineStarts !== null ||
+    inlineSnapPct !== null ||
+    inlineDepth !== null ||
+    inlineStarter;
+
+  // Flat 1.0 fallback ONLY when the entire team has zero player_game_logs rows AND no inline stats/starter metadata
+  if (!teamIndex.hasLogs && !hasInlineStat) {
+    return { tier: 2, weight: 1.0, usedWeightedScoring: false };
+  }
+
+  const effPos = pos || logStats?.position || '';
+  const effIsQb = /^QB$/i.test(effPos);
+  const effIsGoalie = /^(?:G|GK|GOALIE|GOALTENDER)$/i.test(effPos);
+  const mpg = inlineMpg ?? logStats?.mpg ?? null;
+  const ppg = inlinePpg ?? logStats?.ppg ?? null;
+  const toi = inlineToi ?? logStats?.toi ?? null;
+  const passAtt = inlinePassAtt ?? logStats?.totalPassAttempts ?? 0;
+  const starts = inlineStarts ?? logStats?.starts ?? 0;
+  const snapPct = inlineSnapPct ?? logStats?.snapPct ?? null;
+  const isStarter = inlineStarter || Boolean(logStats?.isStarter) || logStats?.depthChartOrder === 1;
+  const touchesPerGame = logStats && logStats.games > 0 ? logStats.totalTouches / logStats.games : 0;
+
+  if (sport === 'nfl') {
+    if (effIsQb) {
+      const isQb1 =
+        (logStats && teamIndex.topPasserKey === logStats.playerKey) ||
+        isStarter ||
+        passAtt >= 15 ||
+        starts >= 1;
+      if (isQb1) return { tier: 1, weight: 5.0, usedWeightedScoring: true };
+      if (logStats && logStats.games > 0) return { tier: 2, weight: 1.5, usedWeightedScoring: true };
+      return { tier: 3, weight: 0.5, usedWeightedScoring: true };
+    }
+    if (isStarter || (snapPct !== null && snapPct >= 65) || touchesPerGame >= 8) {
+      return { tier: 1, weight: 3.0, usedWeightedScoring: true };
+    }
+    if ((snapPct !== null && snapPct >= 30) || touchesPerGame >= 2.5 || (logStats && logStats.games >= 2)) {
+      return { tier: 2, weight: 1.5, usedWeightedScoring: true };
+    }
+    return { tier: 3, weight: 0.5, usedWeightedScoring: true };
+  }
+
+  if (sport === 'nhl') {
+    if (effIsGoalie) {
+      const isStartingG =
+        (logStats && teamIndex.topGoalieKey === logStats.playerKey) ||
+        isStarter ||
+        starts >= 2 ||
+        (toi !== null && toi >= 45);
+      if (isStartingG) return { tier: 1, weight: 4.0, usedWeightedScoring: true };
+      if (logStats && logStats.games > 0) return { tier: 2, weight: 1.5, usedWeightedScoring: true };
+      return { tier: 3, weight: 0.5, usedWeightedScoring: true };
+    }
+    const isTop4Points = Boolean(logStats && teamIndex.top4ScorerKeys.has(logStats.playerKey) && logStats.totalPoints >= 3);
+    if ((toi !== null && toi >= 18) || isTop4Points) {
+      return { tier: 1, weight: 3.0, usedWeightedScoring: true };
+    }
+    if (toi !== null && toi >= 12) {
+      return { tier: 2, weight: 1.5, usedWeightedScoring: true };
+    }
+    return { tier: 3, weight: 0.5, usedWeightedScoring: true };
+  }
+
+  if (sport === 'nba') {
+    if ((mpg !== null && mpg >= 28) || (ppg !== null && ppg >= 15)) {
+      return { tier: 1, weight: 3.0, usedWeightedScoring: true };
+    }
+    if ((mpg !== null && mpg >= 15) || (ppg !== null && ppg >= 8)) {
+      return { tier: 2, weight: 1.5, usedWeightedScoring: true };
+    }
+    return { tier: 3, weight: 0.5, usedWeightedScoring: true };
+  }
+
+  // NCAAF / other sports when logs or inline starter tags exist
+  if (isStarter) return { tier: 1, weight: 3.0, usedWeightedScoring: true };
+  if (logStats && logStats.games > 0) return { tier: 2, weight: 1.5, usedWeightedScoring: true };
+  return { tier: 3, weight: 0.5, usedWeightedScoring: true };
+}
+
+function formatImpactDetailSegment(
+  outCount: number,
+  outImpact: number,
+  namedOutPlayers: string[],
+  depthOutCount: number,
+  weightedMode: boolean
+): string {
+  if (!weightedMode) return `${outCount} OUT`;
+  const names = namedOutPlayers.slice(0, 4);
+  const parts: string[] = [];
+  if (names.length > 0) parts.push(names.join(', '));
+  if (depthOutCount > 0) {
+    parts.push(names.length > 0 ? `+ ${depthOutCount} depth` : `${depthOutCount} depth`);
+  }
+  const detailStr = parts.length > 0 ? `: ${parts.join(' ')}` : '';
+  return `${outCount} OUT [impact ${outImpact.toFixed(1)}${detailStr}]`;
 }
 
 export function classifyInjuryHealthBalance(params: {
@@ -660,18 +1198,136 @@ export function classifyInjuryHealthBalance(params: {
   awayQ: number;
   sport?: string;
   gameId?: string;
+  homeOutImpact?: number;
+  awayOutImpact?: number;
+  homeQImpact?: number;
+  awayQImpact?: number;
+  homeNamedOut?: string[];
+  homeDepthOut?: number;
+  awayNamedOut?: string[];
+  awayDepthOut?: number;
+  homeTier1Q?: string[];
+  awayTier1Q?: string[];
+  weightedMode?: boolean;
 }): InjuryHealthSummaryResult {
   const { homeTeam, awayTeam, homeOut, homeQ, awayOut, awayQ, sport, gameId } = params;
+  const sportScope = `${sport || ''} ${gameId || ''}`;
+  const isFootball = /^(?:\s*)(?:nfl|ncaaf|college-football)-|\b(?:nfl|ncaaf|americanfootball_nfl|americanfootball_ncaaf)\b/i.test(sportScope);
+  const qCap = isFootball ? 3 : 2;
+
+  const hasWeighted =
+    typeof params.homeOutImpact === 'number' &&
+    Number.isFinite(params.homeOutImpact) &&
+    typeof params.awayOutImpact === 'number' &&
+    Number.isFinite(params.awayOutImpact);
+
+  if (hasWeighted) {
+    const homeOutImpact = Math.round(params.homeOutImpact! * 10) / 10;
+    const awayOutImpact = Math.round(params.awayOutImpact! * 10) / 10;
+    const homeQImpact = Math.round((params.homeQImpact ?? 0) * 10) / 10;
+    const awayQImpact = Math.round((params.awayQImpact ?? 0) * 10) / 10;
+    const homeTier1Q = Array.isArray(params.homeTier1Q) ? params.homeTier1Q.filter(Boolean) : [];
+    const awayTier1Q = Array.isArray(params.awayTier1Q) ? params.awayTier1Q.filter(Boolean) : [];
+    const weightedMode = params.weightedMode !== false;
+
+    const homeGap = Math.round((awayOutImpact - homeOutImpact) * 10) / 10;
+    const awayGap = Math.round((homeOutImpact - awayOutImpact) * 10) / 10;
+
+    let balance: HealthBalanceClassification;
+    let label: string;
+
+    if (homeGap >= 2.5) {
+      if (homeTier1Q.length > 0) {
+        balance = 'uncertain_questionable';
+        label = `uncertain_questionable (${homeTeam}: Tier-1 Q ${homeTier1Q.join(', ')})`;
+      } else if (homeQ >= qCap) {
+        if (homeGap >= 6.0) {
+          balance = 'conditional_home_advantage';
+          label = weightedMode
+            ? `conditional_home_advantage (${homeTeam}, +${homeGap.toFixed(1)} impact edge — watch ${homeQ} Q)`
+            : `conditional_home_advantage (${homeTeam} — watch ${homeQ} Q)`;
+        } else {
+          balance = 'uncertain_questionable';
+          label = `uncertain_questionable (${homeTeam}: ${homeQ} Q)`;
+        }
+      } else {
+        balance = 'home_advantage';
+        label = weightedMode
+          ? `home_advantage (${homeTeam}, +${homeGap.toFixed(1)} impact edge)`
+          : `home_advantage (${homeTeam})`;
+      }
+    } else if (awayGap >= 2.5) {
+      if (awayTier1Q.length > 0) {
+        balance = 'uncertain_questionable';
+        label = `uncertain_questionable (${awayTeam}: Tier-1 Q ${awayTier1Q.join(', ')})`;
+      } else if (awayQ >= qCap) {
+        if (awayGap >= 6.0) {
+          balance = 'conditional_away_advantage';
+          label = weightedMode
+            ? `conditional_away_advantage (${awayTeam}, +${awayGap.toFixed(1)} impact edge — watch ${awayQ} Q)`
+            : `conditional_away_advantage (${awayTeam} — watch ${awayQ} Q)`;
+        } else {
+          balance = 'uncertain_questionable';
+          label = `uncertain_questionable (${awayTeam}: ${awayQ} Q)`;
+        }
+      } else {
+        balance = 'away_advantage';
+        label = weightedMode
+          ? `away_advantage (${awayTeam}, +${awayGap.toFixed(1)} impact edge)`
+          : `away_advantage (${awayTeam})`;
+      }
+    } else if (homeTier1Q.length > 0 || awayTier1Q.length > 0) {
+      balance = 'uncertain_questionable';
+      const tier1Notes: string[] = [];
+      if (homeTier1Q.length > 0) tier1Notes.push(`${homeTeam}: Tier-1 Q ${homeTier1Q.join(', ')}`);
+      if (awayTier1Q.length > 0) tier1Notes.push(`${awayTeam}: Tier-1 Q ${awayTier1Q.join(', ')}`);
+      label = `uncertain_questionable (${tier1Notes.join('; ')})`;
+    } else if (homeQ >= qCap && awayQ >= qCap) {
+      balance = 'uncertain_questionable';
+      label = 'uncertain_questionable';
+    } else {
+      balance = 'symmetric';
+      label = 'symmetric';
+    }
+
+    const homeSeg = formatImpactDetailSegment(
+      homeOut,
+      homeOutImpact,
+      params.homeNamedOut || [],
+      params.homeDepthOut || 0,
+      weightedMode
+    );
+    const awaySeg = formatImpactDetailSegment(
+      awayOut,
+      awayOutImpact,
+      params.awayNamedOut || [],
+      params.awayDepthOut || 0,
+      weightedMode
+    );
+
+    return {
+      balance,
+      label,
+      homeTeam,
+      awayTeam,
+      homeOut,
+      homeQ,
+      awayOut,
+      awayQ,
+      homeOutImpact,
+      awayOutImpact,
+      homeQImpact,
+      awayQImpact,
+      tier1QuestionablePlayers: [...homeTier1Q, ...awayTier1Q],
+      line: `Summary: ${homeTeam} (${homeSeg}, ${homeQ} Q) vs ${awayTeam} (${awaySeg}, ${awayQ} Q) | Health Balance: ${label}`
+    };
+  }
+
+  // Legacy headcount-only path when caller invokes classifyInjuryHealthBalance directly without weighted impacts
   const homeTotal = homeOut + homeQ;
   const awayTotal = awayOut + awayQ;
   const homeNominalBetter = (awayOut - homeOut >= 2) || (awayTotal - homeTotal >= 2 && homeQ === 0);
   const awayNominalBetter = (homeOut - awayOut >= 2) || (homeTotal - awayTotal >= 2 && awayQ === 0);
-
-  // Sport-aware QUESTIONABLE risk cap: NFL/NCAAF >= 3 Q and NBA/NHL/default >= 2 Q
-  // cannot be labeled a clean home_advantage or away_advantage.
-  const sportScope = `${sport || ''} ${gameId || ''}`;
-  const isFootball = /^(?:\s*)(?:nfl|ncaaf|college-football)-|\b(?:nfl|ncaaf|americanfootball_nfl|americanfootball_ncaaf)\b/i.test(sportScope);
-  const qCap = isFootball ? 3 : 2;
 
   let balance: HealthBalanceClassification;
   let label: string;
@@ -908,6 +1564,15 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
       resolveFullTeamDisplay(ctxAny?.game?.away_team) ??
       resolveFullTeamDisplay(d.away_team_abbr ?? d.away_abbr ?? d.away?.abbr ?? ctxAny?.game?.away_team_abbr);
 
+    const normalizedSport = normalizeInjurySport(sportHint || d.sport || ctxAny?.game?.sport, gameId);
+    const suppliedPlayerLogs: PlayerGameLogRow[] = Array.isArray(ctxAny?.playerGameLogs)
+      ? ctxAny.playerGameLogs
+      : Array.isArray(d.player_game_logs)
+        ? d.player_game_logs
+        : keptInjuries.length > 0
+          ? await fetchBatchedPlayerGameLogs(context?.env, context?.fetchFn, ctxAny?.playerLogsCache)
+          : [];
+
     const groupStats: Array<{
       groupKey: string;
       label: string;
@@ -915,30 +1580,84 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
       abbr: string;
       outCount: number;
       qCount: number;
+      outImpact: number;
+      qImpact: number;
+      namedOut: string[];
+      depthOut: number;
+      tier1Q: string[];
+      usedWeightedScoring: boolean;
     }> = [];
     const injuryLines: string[] = [];
     for (const [groupKey, { label, items }] of grouped.entries()) {
-      let outCount = 0;
-      let qCount = 0;
-      for (const p of items) {
-        const st = p.status || p.injury_status || 'OUT';
-        if (isOutTag(st)) outCount++;
-        else if (isQTag(st)) qCount++;
-      }
       const firstName = items[0]?.team_name || label.replace(/\s*\([^)]*\)\s*$/, '').trim();
       const matchedEntry = matchTeamByLabel(firstName, sportHint) || matchTeamByLabel(groupKey, sportHint);
+      const teamNameResolved = matchedEntry?.name || firstName;
+      const teamAbbrResolved = matchedEntry?.abbr || items[0]?.team_abbr || groupKey;
+      const teamLogIndex = buildTeamLogIndex(
+        suppliedPlayerLogs,
+        [teamNameResolved, teamAbbrResolved, groupKey, label],
+        sportHint
+      );
+
+      let outCount = 0;
+      let qCount = 0;
+      let outImpact = 0;
+      let qImpact = 0;
+      const namedOut: Array<{ name: string; weight: number }> = [];
+      let depthOut = 0;
+      const tier1Q: string[] = [];
+      let usedWeightedScoring = teamLogIndex.hasLogs;
+
+      for (const p of items) {
+        const st = p.status || p.injury_status || 'OUT';
+        const playerName = String(p.player_name || p.name || p.player_id || 'Unknown').trim();
+        const impact = classifyPlayerInjuryImpact(p, normalizedSport, teamLogIndex);
+        if (impact.usedWeightedScoring) usedWeightedScoring = true;
+        p.impact_tier = impact.tier;
+        p.impact_weight = impact.weight;
+
+        if (isOutTag(st)) {
+          outCount++;
+          outImpact += impact.weight;
+          if (impact.tier === 1 || impact.tier === 2) {
+            namedOut.push({ name: playerName, weight: impact.weight });
+          } else {
+            depthOut++;
+          }
+        } else if (isQTag(st)) {
+          qCount++;
+          qImpact += impact.weight * 0.5;
+          if (impact.tier === 1 && playerName) {
+            tier1Q.push(playerName);
+          }
+        }
+      }
+
+      namedOut.sort((a, b) => b.weight - a.weight);
+
       groupStats.push({
         groupKey,
         label,
-        name: matchedEntry?.name || firstName,
-        abbr: matchedEntry?.abbr || items[0]?.team_abbr || groupKey,
+        name: teamNameResolved,
+        abbr: teamAbbrResolved,
         outCount,
-        qCount
+        qCount,
+        outImpact: Math.round(outImpact * 10) / 10,
+        qImpact: Math.round(qImpact * 10) / 10,
+        namedOut: namedOut.map((n) => n.name),
+        depthOut,
+        tier1Q,
+        usedWeightedScoring
       });
 
       const sorted = items
-        .map((p, idx) => ({ p, idx, rank: statusRank(p.status || p.injury_status || 'OUT') }))
-        .sort((a, b) => a.rank - b.rank || a.idx - b.idx)
+        .map((p, idx) => ({
+          p,
+          idx,
+          rank: statusRank(p.status || p.injury_status || 'OUT'),
+          weight: typeof p.impact_weight === 'number' ? p.impact_weight : 1
+        }))
+        .sort((a, b) => a.rank - b.rank || b.weight - a.weight || a.idx - b.idx)
         .slice(0, 5)
         .map(({ p }) => {
           const name = p.player_name || p.name || p.player_id || 'Unknown';
@@ -975,13 +1694,36 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
       let homeQ = 0;
       let awayOut = 0;
       let awayQ = 0;
+      let homeOutImpact = 0;
+      let awayOutImpact = 0;
+      let homeQImpact = 0;
+      let awayQImpact = 0;
+      const homeNamedOut: string[] = [];
+      let homeDepthOut = 0;
+      const awayNamedOut: string[] = [];
+      let awayDepthOut = 0;
+      const homeTier1Q: string[] = [];
+      const awayTier1Q: string[] = [];
+      let anyWeightedScoring = false;
+
       for (const st of groupStats) {
+        if (st.usedWeightedScoring) anyWeightedScoring = true;
         if (matchesTeamDisplay(st, homeTeamDisplay)) {
           homeOut += st.outCount;
           homeQ += st.qCount;
+          homeOutImpact += st.outImpact;
+          homeQImpact += st.qImpact;
+          homeNamedOut.push(...st.namedOut);
+          homeDepthOut += st.depthOut;
+          homeTier1Q.push(...st.tier1Q);
         } else if (matchesTeamDisplay(st, awayTeamDisplay)) {
           awayOut += st.outCount;
           awayQ += st.qCount;
+          awayOutImpact += st.outImpact;
+          awayQImpact += st.qImpact;
+          awayNamedOut.push(...st.namedOut);
+          awayDepthOut += st.depthOut;
+          awayTier1Q.push(...st.tier1Q);
         }
       }
       healthSummaryObj = classifyInjuryHealthBalance({
@@ -992,12 +1734,34 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
         awayOut,
         awayQ,
         sport: sportHint || d.sport || ctxAny?.game?.sport,
-        gameId
+        gameId,
+        ...(anyWeightedScoring
+          ? {
+              homeOutImpact,
+              awayOutImpact,
+              homeQImpact,
+              awayQImpact,
+              homeNamedOut,
+              homeDepthOut,
+              awayNamedOut,
+              awayDepthOut,
+              homeTier1Q,
+              awayTier1Q,
+              weightedMode: true
+            }
+          : {})
       });
       summaryHeaderLine = healthSummaryObj.line;
     } else if (groupStats.length === 1) {
       const only = groupStats[0];
-      summaryHeaderLine = `Summary: ${only.name} (${only.outCount} OUT, ${only.qCount} Q) | Health Balance: single_team_only`;
+      const seg = formatImpactDetailSegment(
+        only.outCount,
+        only.outImpact,
+        only.namedOut,
+        only.depthOut,
+        only.usedWeightedScoring
+      );
+      summaryHeaderLine = `Summary: ${only.name} (${seg}, ${only.qCount} Q) | Health Balance: single_team_only`;
     }
 
     const stripSourceRef = (val: any): any => {
@@ -1024,7 +1788,14 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
                   home_q: healthSummaryObj.homeQ,
                   away_team: healthSummaryObj.awayTeam,
                   away_out: healthSummaryObj.awayOut,
-                  away_q: healthSummaryObj.awayQ
+                  away_q: healthSummaryObj.awayQ,
+                  ...(healthSummaryObj.homeOutImpact !== undefined ? { home_out_impact: healthSummaryObj.homeOutImpact } : {}),
+                  ...(healthSummaryObj.awayOutImpact !== undefined ? { away_out_impact: healthSummaryObj.awayOutImpact } : {}),
+                  ...(healthSummaryObj.homeQImpact !== undefined ? { home_q_impact: healthSummaryObj.homeQImpact } : {}),
+                  ...(healthSummaryObj.awayQImpact !== undefined ? { away_q_impact: healthSummaryObj.awayQImpact } : {}),
+                  ...(healthSummaryObj.tier1QuestionablePlayers && healthSummaryObj.tier1QuestionablePlayers.length > 0
+                    ? { tier1_questionable: healthSummaryObj.tier1QuestionablePlayers }
+                    : {})
                 }
               }
             : {}),
@@ -1855,7 +2626,7 @@ export const getMarketMovementTool: SwarmTool = {
       return `TOWARD away ${awayLabel} (${pts} pts) | AGAINST home ${homeLabel}`;
     };
 
-    const detectMlSteam = (): string | null => {
+    const detectMlSteam = (): { text: string; impShiftAbs: number } | null => {
       const useHome = openMlHomeNum !== null && currMlHomeNum !== null && openMlHomeNum !== currMlHomeNum;
       const useAway = openMlAwayNum !== null && currMlAwayNum !== null && openMlAwayNum !== currMlAwayNum;
       if (!useHome && !useAway) return null;
@@ -1887,11 +2658,12 @@ export const getMarketMovementTool: SwarmTool = {
         useHome && (!useAway || Math.abs(homeImpShiftPct) >= Math.abs(awayImpShiftPct))
           ? homeImpShiftPct
           : -awayImpShiftPct;
+      const impShiftAbs = Math.abs(impShiftPct);
 
-      if (Math.abs(impShiftPct) < 2.5 && !(inMidBand && centShift >= 15)) {
+      if (impShiftAbs < 2.5 && !(inMidBand && centShift >= 15)) {
         return null;
       }
-      const impAbs = Math.abs(impShiftPct).toFixed(1);
+      const impAbs = impShiftAbs.toFixed(1);
       const isHomeFavoredMove =
         impShiftPct > 0 ||
         (useHome && !useAway && openMlHomeNum !== null && currMlHomeNum !== null && toCentScale(currMlHomeNum) < toCentScale(openMlHomeNum));
@@ -1902,7 +2674,7 @@ export const getMarketMovementTool: SwarmTool = {
         const against = openMlAwayNum !== null && currMlAwayNum !== null
           ? `AGAINST away ${awayLabel} ML (${fmtOddsOrLine(openMlAwayNum)} -> ${fmtOddsOrLine(currMlAwayNum)})`
           : `AGAINST away ${awayLabel} ML`;
-        return `${toward} | ${against}`;
+        return { text: `${toward} | ${against}`, impShiftAbs };
       }
       const toward = openMlAwayNum !== null && currMlAwayNum !== null
         ? `TOWARD away ${awayLabel} ML (${fmtOddsOrLine(openMlAwayNum)} -> ${fmtOddsOrLine(currMlAwayNum)}, +${impAbs}pp implied)`
@@ -1912,7 +2684,7 @@ export const getMarketMovementTool: SwarmTool = {
       const against = openMlHomeNum !== null && currMlHomeNum !== null
         ? `AGAINST home ${homeLabel} ML (${fmtOddsOrLine(openMlHomeNum)} -> ${fmtOddsOrLine(currMlHomeNum)})`
         : `AGAINST home ${homeLabel} ML`;
-      return `${toward} | ${against}`;
+      return { text: `${toward} | ${against}`, impShiftAbs };
     };
 
     const detectTotalSteam = (): string | null => {
@@ -1922,11 +2694,25 @@ export const getMarketMovementTool: SwarmTool = {
       return `TOWARD ${side} (${openTotalNum} -> ${currTotalNum}, ${signed} pts)`;
     };
 
-    const orderedSteam = isMlRequested
-      ? (detectMlSteam() || detectSpreadSteam() || detectTotalSteam())
-      : isTotalRequested
-        ? (detectTotalSteam() || detectSpreadSteam() || detectMlSteam())
-        : (detectSpreadSteam() || detectMlSteam() || detectTotalSteam());
+    const spreadSteamText = detectSpreadSteam();
+    const mlSteamObj = detectMlSteam();
+    const totalSteamText = detectTotalSteam();
+
+    let orderedSteam: string | null = null;
+    let activeSteamKind: 'spread' | 'ml' | 'total' | null = null;
+    if (isMlRequested) {
+      if (mlSteamObj) { orderedSteam = mlSteamObj.text; activeSteamKind = 'ml'; }
+      else if (spreadSteamText) { orderedSteam = spreadSteamText; activeSteamKind = 'spread'; }
+      else if (totalSteamText) { orderedSteam = totalSteamText; activeSteamKind = 'total'; }
+    } else if (isTotalRequested) {
+      if (totalSteamText) { orderedSteam = totalSteamText; activeSteamKind = 'total'; }
+      else if (spreadSteamText) { orderedSteam = spreadSteamText; activeSteamKind = 'spread'; }
+      else if (mlSteamObj) { orderedSteam = mlSteamObj.text; activeSteamKind = 'ml'; }
+    } else {
+      if (spreadSteamText) { orderedSteam = spreadSteamText; activeSteamKind = 'spread'; }
+      else if (mlSteamObj) { orderedSteam = mlSteamObj.text; activeSteamKind = 'ml'; }
+      else if (totalSteamText) { orderedSteam = totalSteamText; activeSteamKind = 'total'; }
+    }
 
     const explicitNonNeutralSteam =
       typeof (d.steam_direction || d.steam_dir) === 'string' &&
@@ -1963,6 +2749,26 @@ export const getMarketMovementTool: SwarmTool = {
       (rawBook === 'fanduel' && distinctBooksFromSnaps.size < 2);
     const divergence = explicitDivergence ?? (isSingleBook ? 'single_book' : 'none');
 
+    const isNbaOrNfl =
+      sportKey === 'basketball_nba' ||
+      sportKey === 'americanfootball_nfl' ||
+      /^(?:nba|nfl)-/i.test(gameId);
+    const isExtendedSingleBookSpread =
+      isSingleBook &&
+      activeSteamKind === 'spread' &&
+      isNbaOrNfl &&
+      spreadDeltaHome !== null &&
+      Math.abs(spreadDeltaHome) >= 2.0;
+    const isExtendedSingleBookMl =
+      isSingleBook &&
+      activeSteamKind === 'ml' &&
+      mlSteamObj !== null &&
+      mlSteamObj.impShiftAbs >= 5.0;
+    const extendedMoveTag =
+      isExtendedSingleBookSpread || isExtendedSingleBookMl
+        ? ' [extended_move: verify remaining value]'
+        : '';
+
     const deltaSuffix = typeof delta === 'number' ? ` | Delta: ${delta}` : '';
     const summaryLines = [
       `[MARKET MOVEMENT: ${gameId} | ${marketType}]`,
@@ -1971,7 +2777,7 @@ export const getMarketMovementTool: SwarmTool = {
     if (extraMarketParts.length > 0) {
       summaryLines.push(extraMarketParts.join(' | '));
     }
-    summaryLines.push(`Steam: ${steamDisplay} | Divergence: ${divergence}`);
+    summaryLines.push(`Steam: ${steamDisplay} | Divergence: ${divergence}${extendedMoveTag}`);
 
     return {
       success: true,

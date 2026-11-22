@@ -369,7 +369,9 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 retrievalContext: params.retrievalContext,
                 snapshotRefs: params.snapshotRefs,
                 retrievalScope: params.retrievalScope,
-                preloadedGameContext: params.preloadedGameContext
+                preloadedGameContext: params.preloadedGameContext,
+                triageMode: params.triageMode || (isTwoHopSlateRun ? 'two-hop' : undefined),
+                curatedDossierActive: Boolean(params.curatedDossier || params.seedManifest || isTwoHopSlateRun)
             });
 
             const mathBlock = profilingResult.mathGroundingReport?.promptBlock;

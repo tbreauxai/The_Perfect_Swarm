@@ -1948,7 +1948,7 @@ function parseInjuryBalanceFromEvidence(
       const lineEv = extractLineEventId(line);
       if (lineEv) currentEventId = lineEv;
       const sm = line.match(
-        /Summary:\s*(.+?)\s*\((\d+)\s+OUT,\s*(\d+)\s+Q\)\s+vs\s+(.+?)\s*\((\d+)\s+OUT,\s*(\d+)\s+Q\)\s*\|\s*Health\s+Balance:\s*(symmetric|home_advantage|away_advantage|conditional_home_advantage|conditional_away_advantage|uncertain_questionable|single_team_only)/i
+        /Summary:\s*(.+?)\s*\((\d+)\s+OUT(?:\s*\[[^\]]*\])?,\s*(\d+)\s+Q\)\s+vs\s+(.+?)\s*\((\d+)\s+OUT(?:\s*\[[^\]]*\])?,\s*(\d+)\s+Q\)\s*\|\s*Health\s+Balance:\s*(symmetric|home_advantage|away_advantage|conditional_home_advantage|conditional_away_advantage|uncertain_questionable|single_team_only)/i
       );
       if (sm && (lineEv || currentEventId)) {
         const eventId = lineEv || currentEventId!;
@@ -2254,7 +2254,7 @@ export function auditCriticPremiseContradictions(
             continue;
           }
 
-          if ((isSymmetric && pickedOut >= 2 && oppOut > 0) || (isDisadvantaged && pickedOut > oppOut)) {
+          if ((isSymmetric && pickedOut >= 2 && oppOut > 0) || isDisadvantaged) {
             if (!wholeTextHasBalancedAck && !HEALTH_BALANCED_ACK_REGEX.test(subClause) && DEPLETION_MENTION_REGEX.test(subClause)) {
               const clauseMentions = findTeamMentionsInText(subClause, pool).map(m => m.team);
               const mentionsOpp = oppDesc ? clauseMentions.some(t => t.key === oppDesc.key) : false;

@@ -325,10 +325,17 @@ function extractNumericMargins(text?: string): number[] {
 export function computeOutCountDiff(injuriesText?: string): number {
   if (!injuriesText || injuriesText === 'None') return 0;
   const summaryMatch = injuriesText.match(
-    /Summary:\s*[^(]+\((\d+)\s+OUT,\s*\d+\s+Q\)\s+vs\s+[^(]+\((\d+)\s+OUT,\s*\d+\s+Q\)/i
+    /Summary:\s*[^(]+\((\d+)\s+OUT(?:\s*\[impact\s+(\d+(?:\.\d+)?)[^\]]*\]|\s*\[[^\]]*\])?,\s*\d+\s+Q\)\s+vs\s+[^(]+\((\d+)\s+OUT(?:\s*\[impact\s+(\d+(?:\.\d+)?)[^\]]*\]|\s*\[[^\]]*\])?,\s*\d+\s+Q\)/i
   );
   if (summaryMatch) {
-    return Math.abs(Number(summaryMatch[1]) - Number(summaryMatch[2]));
+    const rawDiff = Math.abs(Number(summaryMatch[1]) - Number(summaryMatch[3]));
+    if (summaryMatch[2] !== undefined && summaryMatch[4] !== undefined) {
+      const impactDiff = Math.abs(Number(summaryMatch[2]) - Number(summaryMatch[4]));
+      if (Number.isFinite(impactDiff)) {
+        return Math.max(rawDiff, Math.round(impactDiff * 10) / 10);
+      }
+    }
+    return rawDiff;
   }
   const parts = injuriesText.split('|').map((p) => p.trim()).filter(Boolean);
   if (parts.length >= 2) {
@@ -419,6 +426,7 @@ export async function fetchTwoHopSlateDossier(
     }
   }
 
+  const runPlayerLogsCache = new Map<string, Promise<any[]>>();
   const executed = await runWithConcurrencyLimit(calls, 6, async (c) => {
     const res = await executeToolWithCacheAndTimeout(
       { tool: c.tool, parameters: c.parameters },
@@ -430,6 +438,7 @@ export async function fetchTwoHopSlateDossier(
         env: options?.env,
         fetchFn: options?.fetchFn,
         qdrantClient: options?.qdrantClient,
+        playerLogsCache: runPlayerLogsCache,
         game: {
           event_id: c.header.eventId,
           sport: c.header.sport,
@@ -439,7 +448,7 @@ export async function fetchTwoHopSlateDossier(
           away_team_abbr: c.header.away,
           ...(Array.isArray(c.header.options) && c.header.options.length > 0 ? { options: c.header.options } : {}),
         },
-      },
+      } as any,
     );
 
     if (context?.addEvent) {
@@ -735,19 +744,27 @@ export function formatUnifiedPerGameDossier(
     }
   }
 
-  const avgRowsOverhead = Math.ceil(
-    sorted.reduce((sum, item) => sum + (item.entry.rows ? item.entry.rows.trim().length + 7 : 0), 0) /
-      Math.max(1, sorted.length),
-  );
-  const overheadPerGame = 105 + avgRowsOverhead;
+  const measureFixedOverhead = (omitRows: boolean): number => {
+    const sepOverhead = Math.max(0, sorted.length - 1) * 2;
+    const perEntries = sorted.reduce((sum, item) => {
+      const hdrLen = `=== GAME DOSSIER: ${item.entry.eventId} (${item.entry.matchup}) ===`.length;
+      const rowsLen = !omitRows && item.entry.rows && item.entry.rows.trim()
+        ? 1 + `Rows: ${item.entry.rows.trim()}`.length
+        : 0;
+      // \nFundamentals: \nInjuries: \nMarket:  => 37 chars
+      return sum + hdrLen + rowsLen + 37;
+    }, 0);
+    return perEntries + sepOverhead;
+  };
+
   const headerCost = indexHeader ? indexHeader.length + 2 : 0;
-  const totalBodyBudget = maxChars - headerCost - sorted.length * overheadPerGame;
+  const totalBodyBudget = maxChars - headerCost - measureFixedOverhead(false);
   const perGameBody = Math.floor(totalBodyBudget / sorted.length);
   const minPerGameBody = options?.compactInjuriesOnTightBudget ? 90 : 160;
   if (perGameBody >= minPerGameBody) {
-    const fundCap = Math.max(options?.compactInjuriesOnTightBudget ? 40 : 70, Math.floor(perGameBody * 0.43));
-    const injCap = Math.max(options?.compactInjuriesOnTightBudget ? 35 : 60, Math.floor(perGameBody * 0.30));
-    const mktCap = Math.max(options?.compactInjuriesOnTightBudget ? 35 : 55, perGameBody - fundCap - injCap);
+    const fundCap = Math.max(options?.compactInjuriesOnTightBudget ? 30 : 70, Math.floor(perGameBody * 0.42));
+    const injCap = Math.max(options?.compactInjuriesOnTightBudget ? 30 : 60, Math.floor(perGameBody * 0.30));
+    const mktCap = Math.max(options?.compactInjuriesOnTightBudget ? 25 : 55, perGameBody - fundCap - injCap);
     const pass2 = assemble(
       { fund: fundCap, inj: injCap, mkt: mktCap },
       options?.compactInjuriesOnTightBudget ? { compactInjuries: true } : undefined,
@@ -761,16 +778,16 @@ export function formatUnifiedPerGameDossier(
   }
 
   if (options?.compactInjuriesOnTightBudget) {
-    const noRowsBodyBudget = maxChars - headerCost - sorted.length * 95;
-    const noRowsPerGameBody = Math.max(60, Math.floor(noRowsBodyBudget / sorted.length));
-    const fundCap = Math.max(25, Math.floor(noRowsPerGameBody * 0.42));
-    const injCap = Math.max(20, Math.floor(noRowsPerGameBody * 0.28));
-    const mktCap = Math.max(20, noRowsPerGameBody - fundCap - injCap);
+    const noRowsBodyBudget = maxChars - headerCost - measureFixedOverhead(true);
+    const noRowsPerGameBody = Math.max(45, Math.floor(noRowsBodyBudget / sorted.length));
+    const fundCap = Math.max(15, Math.floor(noRowsPerGameBody * 0.40));
+    const injCap = Math.max(15, Math.floor(noRowsPerGameBody * 0.30));
+    const mktCap = Math.max(15, noRowsPerGameBody - fundCap - injCap);
     const pass3 = assemble(
       { fund: fundCap, inj: injCap, mkt: mktCap },
       { compactInjuries: true, omitRows: true },
     );
-    if (pass3.sectionsIncluded >= pass1.sectionsIncluded) {
+    if (!pass3.truncated || pass3.sectionsIncluded >= pass1.sectionsIncluded) {
       return pass3;
     }
   }

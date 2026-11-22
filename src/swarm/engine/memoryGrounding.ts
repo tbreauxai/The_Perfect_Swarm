@@ -52,6 +52,8 @@ export interface MemoryGroundingParams {
     snapshotRefs?: SnapshotRef[];
     retrievalScope?: TrustedRetrievalScope;
     preloadedGameContext?: GameContextStoreReadResult;
+    triageMode?: 'two-hop' | 'legacy';
+    curatedDossierActive?: boolean;
 }
 
 export interface MemoryGroundingResult {
@@ -436,7 +438,12 @@ export async function resolveMemoryGrounding(
                 }
 
                 // On-demand Supabase pull for DuelOdds / sports workflows when not already populated by context store or runMorningSlate
+                // Disabled in two-hop / curatedDossier mode so stale Supabase snapshots never contradict COMPACT SLATE or get_market_movement.
                 const supaCfg = getSupabaseConfig();
+                const isTwoHopOrCurated =
+                    p.triageMode === 'two-hop' ||
+                    Boolean(p.curatedDossierActive) ||
+                    (typeof p.data === 'string' && p.data.includes('=== COMPACT SLATE ==='));
                 const alreadyHasSupabaseContext =
                     contextStoreInjected ||
                     task.includes('[SUPABASE LIVE MARKET STEAM') ||
@@ -446,7 +453,7 @@ export async function resolveMemoryGrounding(
                     (typeof readDomain === 'string' && /sport|bet|odds/i.test(readDomain)) ||
                     /\b(event_?id|spread|moneyline|over\/under|duelodds)\b/i.test(task);
 
-                if (!disableMemoryRetrieval && !alreadyHasSupabaseContext && isSportsOrDuelOdds) {
+                if (!disableMemoryRetrieval && !alreadyHasSupabaseContext && !isTwoHopOrCurated && isSportsOrDuelOdds) {
                     if (!supaCfg) {
                         console.warn(
                             '[MemoryGrounding] sports/duelodds task without Supabase config; on-demand pull skipped'

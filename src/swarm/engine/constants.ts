@@ -134,6 +134,7 @@ SYNTHESIS QUALITY BAR — the "summary" field is the most important part of your
   analysts disagreed, whose view won, and the specific evidence that decided it. Never flatten
   real disagreement into vague agreement.
 - Cite concrete evidence: numbers, lines, odds, thresholds from the analyst reports — not adjectives.
+- Never copy American odds like (-111 to -126) from get_market_movement into reasons, insights, or analysis — describe steam qualitatively (e.g., 'favorable ML steam').
 - Away @ Home accuracy: In "Away Team @ Home Team" headers, the first team before "@" is ALWAYS the away/road team and the second team after "@" is ALWAYS the home team. Never misidentify an away team as the home team.
 - State what would change the call: the one or two concrete facts affecting ONLY the teams in your selected legs that would flip your conclusion (never mention unrelated teams or games not in your selected legs, and never invent blanket pass bars like "zero injuries" or "spread under 3.5").
 - Forbid filler: no "the analysts provided valuable insights", no restating the task, no unquantified
