@@ -443,21 +443,56 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     toolCallTrace: allToolCallTrace
                 });
                 if (!curatedDossier && (isTwoHopSlateRun || hop1Plan)) {
-                    const dossierMarkdown = allToolEvidenceItems.map((i) => i.summary).join('\n\n');
+                    const dossierSections = allToolEvidenceItems.map((item) => ({
+                        tool: item.tool,
+                        event_id: item.eventId,
+                        status: 'ok' as const,
+                        summary: item.summary,
+                        tokenCost: Math.ceil((item.summary?.length || 0) / 4)
+                    }));
+                    const sectionIndexByExact = new Map<string, number>();
+                    const sectionIndexByPair = new Map<string, number>();
+                    dossierSections.forEach((sec, idx) => {
+                        const exactKey = `${sec.tool}|${sec.event_id}|${sec.summary || ''}`;
+                        if (!sectionIndexByExact.has(exactKey)) sectionIndexByExact.set(exactKey, idx);
+                        const pairKey = `${sec.tool}|${sec.event_id}`;
+                        if (!sectionIndexByPair.has(pairKey)) sectionIndexByPair.set(pairKey, idx);
+                    });
+                    const compactToolCallTrace = allToolCallTrace.map((t: any) => {
+                        const summaryStr = typeof t?.summary === 'string' ? t.summary : '';
+                        const exactKey = `${t?.tool || ''}|${t?.eventId || ''}|${summaryStr}`;
+                        const pairKey = `${t?.tool || ''}|${t?.eventId || ''}`;
+                        const matchedIdx =
+                            sectionIndexByExact.get(exactKey) ??
+                            sectionIndexByPair.get(pairKey);
+                        const sectionIndex = matchedIdx !== undefined ? matchedIdx : null;
+                        const sectionCost =
+                            typeof sectionIndex === 'number' ? dossierSections[sectionIndex].tokenCost : 0;
+                        const tokenCost =
+                            typeof t?.tokenCost === 'number' && Number.isFinite(t.tokenCost)
+                                ? t.tokenCost
+                                : summaryStr
+                                    ? Math.ceil(summaryStr.length / 4)
+                                    : sectionCost;
+                        return {
+                            tool: String(t?.tool || ''),
+                            eventId: String(t?.eventId || ''),
+                            status: t?.status || 'ok',
+                            tokenCost,
+                            sectionIndex,
+                            ...(typeof t?.durationMs === 'number' ? { durationMs: t.durationMs } : {}),
+                            ...(typeof t?.cached === 'boolean' ? { cached: t.cached } : {}),
+                            ...(typeof t?.attempt === 'number' ? { attempt: t.attempt } : {}),
+                        };
+                    });
+                    const totalSummaryChars = dossierSections.reduce((acc, s) => acc + (s.summary?.length || 0), 0);
                     curatedDossier = {
                         mode: 'two-hop-slate',
                         active_event_ids: hop1Plan?.active_event_ids || params.eventIds || [],
-                        sections: allToolEvidenceItems.map((item) => ({
-                            tool: item.tool,
-                            event_id: item.eventId,
-                            status: 'ok',
-                            summary: item.summary,
-                            tokenCost: Math.ceil((item.summary?.length || 0) / 4)
-                        })),
-                        tool_call_trace: allToolCallTrace,
+                        sections: dossierSections,
+                        tool_call_trace: compactToolCallTrace,
                         seat_visibility: clusterResult.seatVisibility || [],
-                        markdown: dossierMarkdown,
-                        tokenEstimate: Math.ceil(dossierMarkdown.length / 4),
+                        tokenEstimate: Math.ceil(totalSummaryChars / 4),
                         totalDurationMs: allToolCallTrace.reduce((acc, t: any) => acc + (Number(t?.durationMs) || 0), 0)
                     };
                     params.curatedDossier = curatedDossier;

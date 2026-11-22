@@ -241,8 +241,20 @@ export const getMatchupFundamentalsTool: SwarmTool = {
       const idToLabel = new Map<string, string>();
       const homeId = d.home_team_id ?? homeObj.team_id ?? homeObj.id;
       const awayId = d.away_team_id ?? awayObj.team_id ?? awayObj.id;
-      const homeLbl = d.home_team_abbr ?? d.home_team ?? homeObj.abbr ?? homeObj.team;
-      const awayLbl = d.away_team_abbr ?? d.away_team ?? awayObj.abbr ?? awayObj.team;
+      const homeLbl =
+        d.home_team_abbr ??
+        d.home_team ??
+        homeObj.abbr ??
+        homeObj.team ??
+        (context as any)?.game?.home_team_abbr ??
+        (context as any)?.game?.home_team;
+      const awayLbl =
+        d.away_team_abbr ??
+        d.away_team ??
+        awayObj.abbr ??
+        awayObj.team ??
+        (context as any)?.game?.away_team_abbr ??
+        (context as any)?.game?.away_team;
       if (homeId !== undefined && homeId !== null && homeLbl) idToLabel.set(String(homeId), String(homeLbl));
       if (awayId !== undefined && awayId !== null && awayLbl) idToLabel.set(String(awayId), String(awayLbl));
       const mapFormValue = (val: any): any => {
@@ -261,6 +273,22 @@ export const getMatchupFundamentalsTool: SwarmTool = {
         }
         return val;
       };
+      const formatSideEnrichment = (obj: any, splitKey: 'home_record' | 'away_record', splitSuffix: 'Home' | 'Away'): string => {
+        if (!obj || typeof obj !== 'object') return '';
+        const sw = obj.season_wins ?? obj.wins;
+        const sl = obj.season_losses ?? obj.losses;
+        const splitRec = obj[splitKey];
+        const diffRaw = obj.season_net_margin ?? obj.net_margin;
+        const parts: string[] = [];
+        if (sw !== undefined && sl !== undefined) parts.push(`${sw}-${sl}`);
+        const sub: string[] = [];
+        if (splitRec) sub.push(`${splitRec} ${splitSuffix}`);
+        if (diffRaw !== undefined && diffRaw !== null && Number.isFinite(Number(diffRaw))) {
+          const dn = Number(diffRaw);
+          sub.push(`Diff ${dn > 0 ? `+${dn}` : dn}`);
+        }
+        return parts.length > 0 ? `${parts[0]}${sub.length > 0 ? ` (${sub.join(', ')})` : ''}` : '';
+      };
       let formText: string;
       if (Array.isArray(d.form?.items) && d.form.items.length > 0) {
         const mappedItems = mapFormValue(d.form.items) as any[];
@@ -270,6 +298,14 @@ export const getMatchupFundamentalsTool: SwarmTool = {
           const list = byTeam.get(team);
           if (list) list.push(item);
           else byTeam.set(team, [item]);
+        }
+        if (homeLbl && !byTeam.has(String(homeLbl))) {
+          const homeMatched = Array.from(byTeam.keys()).find(k => k.toLowerCase() === String(homeLbl).toLowerCase());
+          if (!homeMatched) byTeam.set(String(homeLbl), []);
+        }
+        if (awayLbl && !byTeam.has(String(awayLbl))) {
+          const awayMatched = Array.from(byTeam.keys()).find(k => k.toLowerCase() === String(awayLbl).toLowerCase());
+          if (!awayMatched) byTeam.set(String(awayLbl), []);
         }
         const parts: string[] = [];
         for (const [team, items] of byTeam.entries()) {
@@ -281,7 +317,15 @@ export const getMatchupFundamentalsTool: SwarmTool = {
             .filter(Boolean);
           const wins = results.filter((r) => r === 'W').length;
           const losses = results.filter((r) => r === 'L').length;
-          parts.push(`${team} ${wins}-${losses} last${results.length} ${results.join('')}`);
+          const isHomeSide = homeLbl && team.toLowerCase() === String(homeLbl).toLowerCase();
+          const isAwaySide = awayLbl && team.toLowerCase() === String(awayLbl).toLowerCase();
+          const meta = isHomeSide
+            ? formatSideEnrichment(homeObj, 'home_record', 'Home')
+            : isAwaySide
+              ? formatSideEnrichment(awayObj, 'away_record', 'Away')
+              : '';
+          const formPart = results.length > 0 ? `L${results.length}: ${wins}-${losses} ${results.join('')}` : '0-0 last0';
+          parts.push(meta ? `${team} ${meta} | ${formPart}` : `${team} ${wins}-${losses} last${results.length} ${results.join('')}`.trim());
         }
         formText = parts.join('; ');
       } else {
@@ -304,8 +348,8 @@ export const getMatchupFundamentalsTool: SwarmTool = {
       };
     }
 
-    const homeTeam = homeObj.team || d.home_team || 'Home';
-    const awayTeam = awayObj.team || d.away_team || 'Away';
+    const homeTeam = homeObj.team || d.home_team || (context as any)?.game?.home_team || 'Home';
+    const awayTeam = awayObj.team || d.away_team || (context as any)?.game?.away_team || 'Away';
     const homeWl = (homeObj.wins !== undefined && homeObj.losses !== undefined) ? `${homeObj.wins}-${homeObj.losses}` : 'N/A';
     const awayWl = (awayObj.wins !== undefined && awayObj.losses !== undefined) ? `${awayObj.wins}-${awayObj.losses}` : 'N/A';
     const homePfPa = (homeObj.points_for_avg !== undefined || homeObj.points_against_avg !== undefined)
@@ -314,8 +358,8 @@ export const getMatchupFundamentalsTool: SwarmTool = {
     const awayPfPa = (awayObj.points_for_avg !== undefined || awayObj.points_against_avg !== undefined)
       ? `${awayObj.points_for_avg ?? 'N/A'} / ${awayObj.points_against_avg ?? 'N/A'}`
       : 'N/A';
-    const homeNet = homeObj.net_margin !== undefined ? String(homeObj.net_margin) : 'N/A';
-    const awayNet = awayObj.net_margin !== undefined ? String(awayObj.net_margin) : 'N/A';
+    const homeNet = homeObj.net_margin !== undefined && homeObj.net_margin !== null ? String(homeObj.net_margin) : 'N/A';
+    const awayNet = awayObj.net_margin !== undefined && awayObj.net_margin !== null ? String(awayObj.net_margin) : 'N/A';
     const homeRecent = Array.isArray(homeObj.recent_results)
       ? homeObj.recent_results.join(',')
       : (homeObj.recent_results ?? 'N/A');
@@ -323,11 +367,37 @@ export const getMatchupFundamentalsTool: SwarmTool = {
       ? awayObj.recent_results.join(',')
       : (awayObj.recent_results ?? 'N/A');
 
+    const formatExtraTeamContext = (obj: any, splitKey: 'home_record' | 'away_record', splitSuffix: 'Home' | 'Away'): string => {
+      const parts: string[] = [];
+      const hasSeason = obj.season_wins !== undefined && obj.season_losses !== undefined;
+      if (hasSeason) {
+        const sub: string[] = [];
+        if (obj[splitKey]) sub.push(`${obj[splitKey]} ${splitSuffix}`);
+        if (obj.season_net_margin !== undefined && obj.season_net_margin !== null && Number.isFinite(Number(obj.season_net_margin))) {
+          const dn = Number(obj.season_net_margin);
+          sub.push(`Diff ${dn > 0 ? `+${dn}` : dn}`);
+        }
+        parts.push(`Season ${obj.season_wins}-${obj.season_losses}${sub.length > 0 ? ` (${sub.join(', ')})` : ''}`);
+      } else if (obj[splitKey]) {
+        parts.push(`${obj[splitKey]} ${splitSuffix}`);
+      }
+      if (Array.isArray(obj.last5_results) && obj.last5_results.length > 0) {
+        const l5Res = obj.last5_results.map((r: unknown) => String(r || '').trim().toUpperCase()).filter(Boolean);
+        const l5W = obj.last5_wins ?? l5Res.filter((r: string) => r === 'W').length;
+        const l5L = obj.last5_losses ?? l5Res.filter((r: string) => r === 'L').length;
+        parts.push(`L5: ${l5W}-${l5L} ${l5Res.join('')}`);
+      }
+      return parts.length > 0 ? ` | ${parts.join(' | ')}` : '';
+    };
+
+    const homeExtra = formatExtraTeamContext(homeObj, 'home_record', 'Home');
+    const awayExtra = formatExtraTeamContext(awayObj, 'away_record', 'Away');
+
     const h2hText = formatH2h(d.h2h);
     const summaryLines = [
       `[MATCHUP FUNDAMENTALS: ${gameId} (${displayWindow})]`,
-      `Home (${homeTeam}): W-L ${homeWl} | PF/PA ${homePfPa} | Net Margin ${homeNet} | Recent ${homeRecent}`,
-      `Away (${awayTeam}): W-L ${awayWl} | PF/PA ${awayPfPa} | Net Margin ${awayNet} | Recent ${awayRecent}`
+      `Home (${homeTeam}): W-L ${homeWl} | PF/PA ${homePfPa} | Net Margin ${homeNet} | Recent ${homeRecent}${homeExtra}`,
+      `Away (${awayTeam}): W-L ${awayWl} | PF/PA ${awayPfPa} | Net Margin ${awayNet} | Recent ${awayRecent}${awayExtra}`
     ];
     if (h2hText) {
       summaryLines.push(`H2H: ${h2hText}`);
@@ -983,8 +1053,8 @@ export const getMarketMovementTool: SwarmTool = {
     if (hasVal(openTotal) || hasVal(currTotal)) marketsCovered.push('total');
     if (hasVal(openMlHome) || hasVal(currMlHome) || hasVal(openMlAway) || hasVal(currMlAway)) marketsCovered.push('ml');
 
-    const homeLabel = d.home_team_abbr ?? d.home_team ?? (context as any)?.game?.home_team_abbr ?? (context as any)?.game?.home_team ?? 'HOME';
-    const awayLabel = d.away_team_abbr ?? d.away_team ?? (context as any)?.game?.away_team_abbr ?? (context as any)?.game?.away_team ?? 'AWAY';
+    const homeLabel = d.home_team ?? (context as any)?.game?.home_team ?? d.home_team_abbr ?? (context as any)?.game?.home_team_abbr ?? 'HOME';
+    const awayLabel = d.away_team ?? (context as any)?.game?.away_team ?? d.away_team_abbr ?? (context as any)?.game?.away_team_abbr ?? 'AWAY';
     const fmtSigned = (n: number): string => (n > 0 ? `+${n}` : `${n}`);
     const fmtOddsOrLine = (v: unknown): string => {
       if (!hasVal(v)) return 'N/A';
@@ -1000,8 +1070,6 @@ export const getMarketMovementTool: SwarmTool = {
       return parts.length > 0 ? parts.join(' / ') : 'N/A';
     };
 
-    const openPrice = opening.price ?? d.open_price ?? d.opening_price ?? 'N/A';
-    const currPrice = latest.price ?? d.current_price ?? 'N/A';
     const steamDirHint = String(d.steam_direction || d.steam_dir || '').toLowerCase();
 
     // Infer whether a bare `spread` number belongs to Home or Away using slate rows, spread_team, or ML favorite/underdog
@@ -1164,18 +1232,18 @@ export const getMarketMovementTool: SwarmTool = {
           return { home: bare, away: -bare };
         }
         if (mlH !== null) {
-          if (mlH <= -135) {
+          if (mlH <= -115) {
             return bare > 0 ? { home: -bare, away: bare } : { home: bare, away: -bare };
           }
-          if (mlH >= 135) {
+          if (mlH >= 115) {
             return bare < 0 ? { home: -bare, away: bare } : { home: bare, away: -bare };
           }
         }
         if (mlA !== null) {
-          if (mlA <= -135) {
+          if (mlA <= -115) {
             return bare < 0 ? { home: -bare, away: bare } : { home: bare, away: -bare };
           }
-          if (mlA >= 135) {
+          if (mlA >= 115) {
             return bare > 0 ? { home: -bare, away: bare } : { home: bare, away: -bare };
           }
         }
@@ -1221,6 +1289,27 @@ export const getMarketMovementTool: SwarmTool = {
       currLine = latest.line ?? d.current_line ?? 'N/A';
     }
 
+    const rawOpenPrice = isSpreadPrimary
+      ? pickFirst(opening.price, d.open_price, d.opening_price, opening.spread_home_price, firstSnap.spread_home_price)
+      : isTotalRequested
+        ? pickFirst(opening.price, d.open_price, d.opening_price, opening.total_over_price, firstSnap.total_over_price)
+        : pickFirst(opening.price, d.open_price, d.opening_price);
+    const rawCurrPrice = isSpreadPrimary
+      ? pickFirst(latest.price, d.current_price, latest.spread_home_price, lastSnap.spread_home_price)
+      : isTotalRequested
+        ? pickFirst(latest.price, d.current_price, latest.total_over_price, lastSnap.total_over_price)
+        : pickFirst(latest.price, d.current_price);
+    const openPrice = rawOpenPrice ?? 'N/A';
+    const currPrice = rawCurrPrice ?? 'N/A';
+    const formatPriceSuffix = (val: unknown): string => {
+      if (!hasVal(val)) return '';
+      const str = String(val).trim();
+      if (/^n\/a$/i.test(str)) return '';
+      return ` (${fmtOddsOrLine(val)})`;
+    };
+    const openPriceSuffix = formatPriceSuffix(rawOpenPrice);
+    const currPriceSuffix = formatPriceSuffix(rawCurrPrice);
+
     const openResolved = isSpreadPrimary
       ? resolveSpreadPair(explicitOpenSpreadHome ?? firstSnap.spread_home, openSpreadAway, bareOpenSpread ?? opening.line ?? d.open_line, openMlHome ?? currMlHome, openMlAway ?? currMlAway)
       : null;
@@ -1231,7 +1320,10 @@ export const getMarketMovementTool: SwarmTool = {
     const formatResolvedLine = (resolved: { home: number; away: number } | { raw: number } | null, fallbackVal: unknown): string => {
       if (isSpreadPrimary && resolved) {
         if ('raw' in resolved) {
-          return `spread ${fmtSigned(resolved.raw)}`;
+          const teamPrefix = homeLabel !== 'HOME' && awayLabel !== 'AWAY'
+            ? `${awayLabel} @ ${homeLabel} `
+            : '';
+          return `${teamPrefix}spread ${fmtSigned(resolved.raw)}`;
         }
         return `home ${homeLabel} ${fmtSigned(resolved.home)} / away ${awayLabel} ${fmtSigned(resolved.away)}`;
       }
@@ -1262,8 +1354,8 @@ export const getMarketMovementTool: SwarmTool = {
 
     if (snapshotsTracked === 1 || snapshotsTracked < 2) {
       const lineDisplay = currLine !== 'N/A' || currPrice !== 'N/A'
-        ? `Current: ${currDisplay} (${currPrice})`
-        : `Line: ${openDisplay} (${openPrice})`;
+        ? `Current: ${currDisplay}${currPriceSuffix}`
+        : `Line: ${openDisplay}${openPriceSuffix}`;
       const summaryLines = [
         `[MARKET MOVEMENT: ${gameId} | ${marketType}] 1 snapshot, no history.`,
         lineDisplay
@@ -1289,18 +1381,151 @@ export const getMarketMovementTool: SwarmTool = {
             ? Number((currLine - openLine).toFixed(2))
             : 'N/A')
     );
-    const steamDir = d.steam_direction || d.steam_dir || 'neutral';
-    const steamMag = d.steam_magnitude ?? (typeof delta === 'number' ? Math.abs(delta) : 'N/A');
-    const divergence = d.cross_book_divergence || d.divergence || 'none';
 
+    const inferSportKey = (): string => {
+      const raw = String(d.sport ?? (context as any)?.game?.sport ?? gameId ?? '').toLowerCase();
+      if (raw.includes('ncaaf') || raw.startsWith('college-football')) return 'americanfootball_ncaaf';
+      if (raw.includes('ncaab') || raw.startsWith('mens-college-basketball') || raw.startsWith('college-basketball')) return 'basketball_ncaab';
+      if (raw.includes('nfl') || raw.startsWith('nfl-')) return 'americanfootball_nfl';
+      if (raw.includes('nba') || raw.startsWith('nba-')) return 'basketball_nba';
+      if (raw.includes('nhl') || raw.startsWith('nhl-') || raw.includes('hockey')) return 'icehockey_nhl';
+      if (raw.includes('mlb') || raw.startsWith('mlb-') || raw.includes('baseball')) return 'baseball_mlb';
+      return 'basketball_nba';
+    };
+    const sportKey = inferSportKey();
+    const spreadThreshold = (sportKey === 'americanfootball_nfl' || sportKey === 'icehockey_nhl' || sportKey === 'baseball_mlb') ? 1.0 : 1.5;
+    const totalThreshold = (sportKey === 'icehockey_nhl' || sportKey === 'baseball_mlb') ? 0.5 : 1.0;
+
+    const americanToImpliedProb = (odds: number): number | null => {
+      if (!Number.isFinite(odds) || odds === 0) return null;
+      if (odds <= -100) return Math.abs(odds) / (Math.abs(odds) + 100);
+      if (odds >= 100) return 100 / (odds + 100);
+      return null;
+    };
+    const toCentScale = (ml: number): number => (ml < 0 ? ml + 100 : ml - 100);
+
+    const spreadDeltaHome =
+      openResolved && currResolved && 'home' in openResolved && 'home' in currResolved
+        ? Number((currResolved.home - openResolved.home).toFixed(2))
+        : (typeof delta === 'number' && isSpreadPrimary ? delta : null);
+
+    const openTotalNum = toNum(openTotal);
+    const currTotalNum = toNum(currTotal);
+    const totalDeltaVal = openTotalNum !== null && currTotalNum !== null
+      ? Number((currTotalNum - openTotalNum).toFixed(2))
+      : null;
+
+    const openMlHomeNum = toNum(openMlHome);
+    const currMlHomeNum = toNum(currMlHome);
+    const openMlAwayNum = toNum(openMlAway);
+    const currMlAwayNum = toNum(currMlAway);
+
+    const detectSpreadSteam = (): string | null => {
+      if (spreadDeltaHome === null || Math.abs(spreadDeltaHome) < spreadThreshold) return null;
+      if (spreadDeltaHome < 0) {
+        return `home ${homeLabel} (${spreadDeltaHome.toFixed(1)} pts)`;
+      }
+      return `away ${awayLabel} (-${Math.abs(spreadDeltaHome).toFixed(1)} pts)`;
+    };
+
+    const detectMlSteam = (): string | null => {
+      let useHome = openMlHomeNum !== null && currMlHomeNum !== null && openMlHomeNum !== currMlHomeNum;
+      let useAway = openMlAwayNum !== null && currMlAwayNum !== null && openMlAwayNum !== currMlAwayNum;
+      if (!useHome && !useAway) return null;
+
+      let impShiftPct = 0;
+      let inMidBand = false;
+      let centShift = 0;
+      if (useHome && openMlHomeNum !== null && currMlHomeNum !== null) {
+        const pOpen = americanToImpliedProb(openMlHomeNum);
+        const pCurr = americanToImpliedProb(currMlHomeNum);
+        if (pOpen !== null && pCurr !== null) {
+          impShiftPct = (pCurr - pOpen) * 100;
+        }
+        inMidBand = Math.abs(openMlHomeNum) <= 150 && Math.abs(currMlHomeNum) <= 150;
+        centShift = Math.abs(toCentScale(currMlHomeNum) - toCentScale(openMlHomeNum));
+      } else if (useAway && openMlAwayNum !== null && currMlAwayNum !== null) {
+        const pOpen = americanToImpliedProb(openMlAwayNum);
+        const pCurr = americanToImpliedProb(currMlAwayNum);
+        if (pOpen !== null && pCurr !== null) {
+          impShiftPct = -((pCurr - pOpen) * 100);
+        }
+        inMidBand = Math.abs(openMlAwayNum) <= 150 && Math.abs(currMlAwayNum) <= 150;
+        centShift = Math.abs(toCentScale(currMlAwayNum) - toCentScale(openMlAwayNum));
+      }
+
+      if (Math.abs(impShiftPct) < 2.5 && !(inMidBand && centShift >= 15)) {
+        return null;
+      }
+      const impAbs = Math.abs(impShiftPct).toFixed(1);
+      if (impShiftPct > 0 || (!useAway && openMlHomeNum !== null && currMlHomeNum !== null && toCentScale(currMlHomeNum) < toCentScale(openMlHomeNum))) {
+        if (openMlHomeNum !== null && currMlHomeNum !== null) {
+          return `home ${homeLabel} ML (${fmtOddsOrLine(openMlHomeNum)} -> ${fmtOddsOrLine(currMlHomeNum)}, +${impAbs}% imp)`;
+        }
+        return `home ${homeLabel} ML (+${impAbs}% imp)`;
+      }
+      if (openMlAwayNum !== null && currMlAwayNum !== null) {
+        return `away ${awayLabel} ML (${fmtOddsOrLine(openMlAwayNum)} -> ${fmtOddsOrLine(currMlAwayNum)}, +${impAbs}% imp)`;
+      }
+      if (openMlHomeNum !== null && currMlHomeNum !== null) {
+        return `away ${awayLabel} ML (home ${fmtOddsOrLine(openMlHomeNum)} -> ${fmtOddsOrLine(currMlHomeNum)}, +${impAbs}% imp)`;
+      }
+      return `away ${awayLabel} ML (+${impAbs}% imp)`;
+    };
+
+    const detectTotalSteam = (): string | null => {
+      if (totalDeltaVal === null || Math.abs(totalDeltaVal) < totalThreshold) return null;
+      const side = totalDeltaVal > 0 ? 'over' : 'under';
+      const signed = totalDeltaVal > 0 ? `+${totalDeltaVal.toFixed(1)}` : totalDeltaVal.toFixed(1);
+      return `${side} (${openTotalNum} -> ${currTotalNum}, ${signed} pts)`;
+    };
+
+    const orderedSteam = isMlRequested
+      ? (detectMlSteam() || detectSpreadSteam() || detectTotalSteam())
+      : isTotalRequested
+        ? (detectTotalSteam() || detectSpreadSteam() || detectMlSteam())
+        : (detectSpreadSteam() || detectMlSteam() || detectTotalSteam());
+
+    const explicitNonNeutralSteam =
+      typeof (d.steam_direction || d.steam_dir) === 'string' &&
+      String(d.steam_direction || d.steam_dir).trim() !== '' &&
+      !/^neutral$/i.test(String(d.steam_direction || d.steam_dir).trim())
+        ? String(d.steam_direction || d.steam_dir).trim()
+        : null;
+
+    const steamMag = d.steam_magnitude ?? (typeof delta === 'number' ? Math.abs(delta) : 'N/A');
+    const steamDisplay = orderedSteam
+      ? orderedSteam
+      : explicitNonNeutralSteam
+        ? `${explicitNonNeutralSteam}${typeof steamMag === 'number' ? ` (${steamMag} pts)` : ''}`
+        : `neutral${typeof steamMag === 'number' ? ` (${steamMag} pts)` : ''}`;
+
+    const distinctBooksFromSnaps = new Set(
+      lineSnapshots
+        .map((s: any) => String(s?.book ?? '').trim().toLowerCase())
+        .filter(Boolean)
+    );
+    const booksTrackedRaw = toNum(d.books_tracked ?? d.distinct_books);
+    const booksTracked = booksTrackedRaw !== null
+      ? booksTrackedRaw
+      : (distinctBooksFromSnaps.size > 0 ? distinctBooksFromSnaps.size : 1);
+    const explicitDivergence =
+      typeof (d.cross_book_divergence || d.divergence) === 'string' &&
+      String(d.cross_book_divergence || d.divergence).trim() !== '' &&
+      !/^none$/i.test(String(d.cross_book_divergence || d.divergence).trim())
+        ? String(d.cross_book_divergence || d.divergence).trim()
+        : null;
+    const divergence = explicitDivergence ?? (booksTracked >= 2 ? 'none' : 'single_book_only');
+
+    const deltaSuffix = typeof delta === 'number' ? ` | Delta: ${delta}` : '';
     const summaryLines = [
       `[MARKET MOVEMENT: ${gameId} | ${marketType}]`,
-      `Open: ${openDisplay} (${openPrice}) -> Current: ${currDisplay} (${currPrice}) | Delta: ${delta}`
+      `Open: ${openDisplay}${openPriceSuffix} -> Current: ${currDisplay}${currPriceSuffix}${deltaSuffix}`
     ];
     if (extraMarketParts.length > 0) {
       summaryLines.push(extraMarketParts.join(' | '));
     }
-    summaryLines.push(`Steam: ${steamDir} (${steamMag} pts) | Divergence: ${divergence}`);
+    summaryLines.push(`Steam: ${steamDisplay} | Divergence: ${divergence}`);
 
     return {
       success: true,

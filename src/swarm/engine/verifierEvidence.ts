@@ -48,20 +48,26 @@ function compactMarketSummary(summary: string): string {
   if (lines.length === 0) return summary.replace(/\s+/g, ' ').trim().slice(0, 220);
 
   const mlAndTotal = lines.filter(l => /^(?:ML|Total):/i.test(l) || /\b(?:ml_home|ml_away)\b/i.test(l));
-  const primary = lines.filter(l => !mlAndTotal.includes(l) && !/^Steam:\s*neutral\s*\([^)]*\)\s*\|\s*Divergence:\s*none$/i.test(l));
-  const ordered = [...primary, ...mlAndTotal];
+  const steamLines = lines.filter(l => /^Steam:\s*(?!neutral\b)/i.test(l));
+  const primary = lines.filter(
+    l =>
+      !mlAndTotal.includes(l) &&
+      !steamLines.includes(l) &&
+      !/^Steam:\s*neutral\b[^|]*\|\s*Divergence:\s*(?:none|single_book_only)$/i.test(l)
+  );
+  const ordered = [...primary, ...mlAndTotal, ...steamLines];
   const joined = ordered.join(' | ').replace(/\s+/g, ' ').trim();
-  if (joined.length <= 240) return joined;
+  if (joined.length <= 280) return joined;
 
-  // Keep ML/Total intact even if primary Open/Current is verbose
-  const mlPart = mlAndTotal.join(' | ').replace(/\s+/g, ' ').trim();
-  if (mlPart && mlPart.length < 220) {
-    const rem = 240 - mlPart.length - 3;
+  // Keep ML/Total and directional Steam intact even if primary Open/Current is verbose
+  const priorityPart = [...mlAndTotal, ...steamLines].join(' | ').replace(/\s+/g, ' ').trim();
+  if (priorityPart && priorityPart.length < 250) {
+    const rem = 280 - priorityPart.length - 3;
     const primJoined = primary.join(' | ').replace(/\s+/g, ' ').trim();
     const primCut = rem > 20 ? `${primJoined.slice(0, rem - 1).trimEnd()}…` : '';
-    return primCut ? `${primCut} | ${mlPart}` : mlPart;
+    return primCut ? `${primCut} | ${priorityPart}` : priorityPart;
   }
-  return `${joined.slice(0, 237).trimEnd()}…`;
+  return `${joined.slice(0, 277).trimEnd()}…`;
 }
 
 export function compactToolLine(tool: string, summary: string): string {
@@ -80,7 +86,7 @@ export function compactToolLine(tool: string, summary: string): string {
     .replace(/\s+/g, ' ')
     .trim();
   const body = stripped || summary.replace(/\s+/g, ' ').trim();
-  const maxLen = normTool === 'get_matchup_fundamentals' ? 200 : 140;
+  const maxLen = normTool === 'get_matchup_fundamentals' ? 280 : 140;
   const cut = body.length > maxLen ? `${body.slice(0, maxLen - 3).trimEnd()}…` : body;
   if (normTool === 'get_matchup_fundamentals') return `FUND: ${cut}`;
   return `${normTool}: ${cut}`;

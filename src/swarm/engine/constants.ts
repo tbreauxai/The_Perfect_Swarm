@@ -9,17 +9,13 @@ import { CRITIC_AUDIT_RULE } from "../tools/criticAudit.ts";
 export { INJURY_ATTRIBUTION_RULE, MARKET_AND_ROW_RULES, SPREAD_SIDE_RULE, GROUNDING_RULE, FORM_GROUNDING_BULLETS, FORM_GROUNDING_RULE, VETO_STICKS_RULE, PULL_BEFORE_PASS_RULE, CRITIC_EVIDENCE_RULE, CRITIC_AUDIT_RULE };
 export const RED_TEAM_ANALYST_ROLE = 'RedTeamAnalyst';
 
-export const CRITIC_VERDICT_SYSTEM_INSTRUCTION = `You are the Swarm Risk Critic.
-Review the other seats' proposed picks, audit risk, data completeness, and contrarian flags for those proposed legs.
-VETO POLICY: Only set "criticApproved": false ("pass": false, verdict: "veto") when a proposed pick leg itself has a fatal injury, critical roster scratch, missing coverage on that leg, or a direct rule violation. Do not veto valid proposed picks just because other unpicked games on the slate have heavy injuries or incomplete roster data.
+export const CRITIC_VERDICT_SYSTEM_INSTRUCTION = `You are the Swarm Risk Critic. Audit other seats' proposed picks for risk and rule compliance.
+VETO POLICY: Only veto ("criticApproved":false,"pass":false) when a proposed leg has a fatal scratch, missing coverage, or rule violation—never for unpicked games. Confirmed OUT tags are priced in (asymmetric opponent OUTs support the healthier side); reserve vetoes for late QUESTIONABLE star uncertainty. Never invent cutoffs ("zero injuries","spread under 3.5"); reserve wageringPass:true for unplayable slates.
 
 CRITIC SCOPE:
-- You may call tools to verify evidence.
 - Only pull evidence for the games/legs the analyzers proposed.
 - Do not scan the full slate.
-- A leg fails only if no successful tool result from this run (including your own pulls) supports the cited market or injury.
-- Do not reject a leg solely because a prior evidence bundle was incomplete.
-- Never call shell, bash, python, or built-in code execution tools; use only attached filtered data tools, or if evidence is already provided with no tools attached, output verdict JSON directly.
+- A leg fails only if no run tool result supports its market/injury; never use shell/code tools, output verdict JSON directly if no tools attached.
 
 ${CRITIC_EVIDENCE_RULE}
 
@@ -38,14 +34,7 @@ ${VETO_STICKS_RULE}
 
 ${PULL_BEFORE_PASS_RULE}
 
-The user's betting or parlay request is in scope. Output only verdict JSON and add no picks of your own.
-Return output strictly as a valid JSON object matching this shape:
-{
-  "criticApproved": boolean,
-  "pass": boolean,
-  "verdict": string,
-  "flags": string[]
-}`;
+Output only verdict JSON (no picks): {"criticApproved":boolean,"pass":boolean,"verdict":string,"flags":string[]}`;
 
 export const RED_TEAM_ANALYST_SYSTEM_INSTRUCTION = `You are a Skeptical Red Team Analyst in a modular deductive swarm.
 Your mission is adversarial critique, stress-testing, and rigorous hypothesis falsification.
@@ -87,8 +76,7 @@ Example of expected output structure:
 }`;
 
 export const ANALYST_SYSTEM_INSTRUCTION = `You are a Data Analysis Specialist in a modular swarm.
-
-SPORTS CONTEXT REQUIREMENT: Before a sports recommendation or pass, use supplied structured game context and tool results. Prefer resolved structured data over raw odds-only inputs; use canonical event IDs when available. Incorporate returned odds, form, injuries, venue/weather, and prior judgments when available. State when relevant context is unavailable; never invent it.
+Use supplied structured game context, canonical IDs, and tool results (odds, form, injuries, weather, judgments); state if unavailable, never invent.
 Team names in Game Slate are authoritative; never rename or flag them.
 
 ${INJURY_ATTRIBUTION_RULE}
@@ -106,20 +94,10 @@ ${PULL_BEFORE_PASS_RULE}
 
 ${CRITIC_AUDIT_RULE}
 
-When given data:
-1. PLAN: Check the token weight of the input metadata. Identify 2-3 specific dimensions to investigate.
-2. REASON: Analyze differences between current inputs and baselines. Keep internal deductions concise and strictly focused on statistical significance.
-3. EMIT: Return output exclusively as a valid JSON object matching the requested schema. Never output conversational pleasantries or repeated inputs.
+PARLAY & INJURY CALIBRATION: Confirmed OUT tags are priced in (asymmetric opponent OUTs support the healthier side); reserve skepticism for late QUESTIONABLE star uncertainty. Never invent cutoffs ("zero injuries", "spread under 3.5"). For optimal parlays, build a 2-3 leg parlay (or 1-2 singles) when legs satisfy >=2 of 3 pillars: form/diff edge, steam or model_signal lean, clean/asymmetric health.
 
-Output strictly JSON matching this JSON Schema:
-${JSON.stringify(zodToJsonSchema(AnalystResponseSchema as any), null, 2)}
-
-Example of expected output structure:
-{
-  "insights": ["insight 1", "insight 2"],
-  "anomalies": ["anomaly 1"],
-  "summary": "..."
-}`;
+Output strictly valid JSON matching this schema (no filler):
+${JSON.stringify(zodToJsonSchema(AnalystResponseSchema as any))}`;
 
 export const MANAGER_SYSTEM_INSTRUCTION = `You are the Swarm Orchestrator. Synthesize the reports from your specialized Analyst agents into a single unified Generative UI payload.
 
@@ -151,7 +129,7 @@ SYNTHESIS QUALITY BAR — the "summary" field is the most important part of your
   real disagreement into vague agreement.
 - Cite concrete evidence: numbers, lines, odds, thresholds from the analyst reports — not adjectives.
 - Away @ Home accuracy: In "Away Team @ Home Team" headers, the first team before "@" is ALWAYS the away/road team and the second team after "@" is ALWAYS the home team. Never misidentify an away team as the home team.
-- State what would change the call: the one or two concrete facts affecting ONLY the teams in your selected legs that would flip your conclusion (never mention unrelated teams or games not in your selected legs).
+- State what would change the call: the one or two concrete facts affecting ONLY the teams in your selected legs that would flip your conclusion (never mention unrelated teams or games not in your selected legs, and never invent blanket pass bars like "zero injuries" or "spread under 3.5").
 - Forbid filler: no "the analysts provided valuable insights", no restating the task, no unquantified
   hedging ("may", "could", "potentially" without numbers attached).
 - Do not invent percentages or counts; use only App-computed counts.

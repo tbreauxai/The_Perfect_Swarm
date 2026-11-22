@@ -15,6 +15,7 @@ export interface GameHeader {
   away: string;
   home: string;
   commence?: string;
+  modelSignal?: string;
   options: GameHeaderOption[];
 }
 
@@ -85,6 +86,7 @@ export function parseGameHeaders(data: unknown, fallbackEventIds?: string[]): Ga
         let away = 'Away';
         let home = 'Home';
         let commence: string | undefined = undefined;
+        let modelSignal: string | undefined = undefined;
         const options: GameHeaderOption[] = [];
         let spRaw: string | undefined;
         let mlRaw: string | undefined;
@@ -97,6 +99,8 @@ export function parseGameHeaders(data: unknown, fallbackEventIds?: string[]): Ga
             sport = p.replace('sport=', '').trim();
           } else if (p.startsWith('commence=')) {
             commence = p.replace('commence=', '').trim();
+          } else if (p.startsWith('model_signal=')) {
+            modelSignal = p.replace('model_signal=', '').trim();
           } else if (p.includes('@')) {
             const teams = p.split('@').map(t => t.trim());
             if (teams.length === 2 && teams[0] && teams[1]) {
@@ -158,7 +162,7 @@ export function parseGameHeaders(data: unknown, fallbackEventIds?: string[]): Ga
               });
             }
           }
-          headers.push({ eventId, sport, away, home, commence, options });
+          headers.push({ eventId, sport, away, home, commence, ...(modelSignal ? { modelSignal } : {}), options });
         }
       } else if (line.includes('|') && line.includes('@')) {
         const parts = line.split('|').map(p => p.trim());
@@ -234,7 +238,10 @@ export function renderHeaders(headers: GameHeader[], maxChars: number = 1600): s
     const opts = (h.options || []).slice(0, maxOpts);
     const optsStr = opts.length > 0 ? ` | options: ${opts.map(o => `${o.id ? o.id + ' ' : ''}${o.text}`).join(', ')}` : '';
     const commenceStr = h.commence ? ` | ${h.commence}` : '';
-    return `event_id=${h.eventId} | ${h.sport} | ${h.away} @ ${h.home}${commenceStr}${optsStr}`;
+    const signalStr = h.modelSignal && (h.modelSignal === 'lean_home' || h.modelSignal === 'lean_away')
+      ? ` | model_signal=${h.modelSignal}`
+      : '';
+    return `event_id=${h.eventId} | ${h.sport} | ${h.away} @ ${h.home}${commenceStr}${signalStr}${optsStr}`;
   };
 
   for (let maxOpts = 6; maxOpts >= 1; maxOpts--) {
