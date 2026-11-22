@@ -732,7 +732,9 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
 
                 const proposedAuditContext = {
                     summaryText: orderedSummaryLines.join('\n').slice(0, 1200),
-                    targetGameIds: resolveSelectedGameIds(auditProposerReports, parsedChunkHeaders),
+                    targetGameIds: collectedProposedPicks.length > 0
+                        ? resolveSelectedGameIds(collectedProposedPicks, parsedChunkHeaders)
+                        : resolveSelectedGameIds(auditProposerReports, parsedChunkHeaders),
                     proposerReports: auditProposerReports,
                     proposedPicks: collectedProposedPicks
                 };

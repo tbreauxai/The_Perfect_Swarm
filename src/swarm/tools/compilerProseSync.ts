@@ -1,6 +1,7 @@
 import { parseGameHeaders, type GameHeader } from '../context/gameHeaders.ts';
 import { matchTeamByLabel } from './injuryAttribution.ts';
 import { extractRowOptions, type RowOptionEntry } from './marketRowBinding.ts';
+import { splitSentencesSafe } from '../parser/responseGuards.ts';
 import {
   stripVetoedLegsFromParlayText,
   type VetoedLegTarget,
@@ -163,7 +164,7 @@ function stripOrphanReferencesFromProse(
     Array.from(activeRowIds).some((rid) => new RegExp(`\\b${escapeRegExp(rid)}\\b`, 'i').test(s));
   const containsOrphan = (s: string) => orphanTargets.some((t) => targetMatchesSpanSafe(s, t));
 
-  const sentences = working.split(/(?<=[.!?])\s+|\n+/);
+  const sentences = splitSentencesSafe(working);
   const kept: string[] = [];
 
   for (const rawSentence of sentences) {

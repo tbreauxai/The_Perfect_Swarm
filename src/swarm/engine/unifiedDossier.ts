@@ -588,14 +588,28 @@ function trimFieldPreservingSignal(value: string, maxChars: number): string {
   return `${text.slice(0, Math.max(12, maxChars - 1)).trimEnd()}…`;
 }
 
+function compactInjuryForTightBudget(injRaw: string): string {
+  if (!injRaw || injRaw === 'None') return 'None';
+  const segments = injRaw.split(/\s*\|\s*/).filter(Boolean);
+  const summaryAndBalance = segments.filter((s) =>
+    /^(?:Summary:|Health\s*Balance:)/i.test(s.trim()),
+  );
+  if (summaryAndBalance.length > 0) {
+    return summaryAndBalance.join(' | ');
+  }
+  return injRaw;
+}
+
 function formatSingleGameEntry(
   entry: UnifiedGameDossierEntry,
   caps?: { fund: number; inj: number; mkt: number },
+  entryOpts?: { compactInjuries?: boolean; omitRows?: boolean },
 ): string {
   const fundRaw = compressDossierPillarSummary('get_matchup_fundamentals', entry.fundamentals || 'Unavailable');
-  const injRaw = entry.injuries === 'None'
+  const injBase = entry.injuries === 'None'
     ? 'None'
     : compressDossierPillarSummary('get_injury_and_roster_delta', entry.injuries || 'None');
+  const injRaw = entryOpts?.compactInjuries ? compactInjuryForTightBudget(injBase) : injBase;
   const mktRaw = compressDossierPillarSummary('get_market_movement', entry.market || 'Unavailable');
 
   const fund = caps ? trimFieldPreservingSignal(fundRaw, caps.fund) : fundRaw;
@@ -603,11 +617,17 @@ function formatSingleGameEntry(
   const mkt = caps ? trimFieldPreservingSignal(mktRaw, caps.mkt) : mktRaw;
 
   const lines = [`=== GAME DOSSIER: ${entry.eventId} (${entry.matchup}) ===`];
-  if (entry.rows && entry.rows.trim()) {
+  if (!entryOpts?.omitRows && entry.rows && entry.rows.trim()) {
     lines.push(`Rows: ${entry.rows.trim()}`);
   }
   lines.push(`Fundamentals: ${fund}`, `Injuries: ${inj}`, `Market: ${mkt}`);
   return lines.join('\n');
+}
+
+export interface FormatUnifiedDossierOptions {
+  preserveOrder?: boolean;
+  omitIndexHeader?: boolean;
+  compactInjuriesOnTightBudget?: boolean;
 }
 
 /**
@@ -618,6 +638,7 @@ function formatSingleGameEntry(
 export function formatUnifiedPerGameDossier(
   entries: UnifiedGameDossierEntry[],
   maxChars?: number,
+  options?: FormatUnifiedDossierOptions,
 ): FormattedUnifiedDossier {
   if (!Array.isArray(entries) || entries.length === 0) {
     return { text: '', sectionsIncluded: 0, truncated: false };
@@ -629,53 +650,60 @@ export function formatUnifiedPerGameDossier(
     eval: evaluateQualitativePillars(entry),
   }));
 
-  const sorted = [...evaluated].sort((a, b) => {
-    if (b.eval.alignedPillarCount !== a.eval.alignedPillarCount) {
-      return b.eval.alignedPillarCount - a.eval.alignedPillarCount;
-    }
-    if (b.eval.pillarCount !== a.eval.pillarCount) {
-      return b.eval.pillarCount - a.eval.pillarCount;
-    }
-    const steamA = a.eval.hasDirectionalSteam ? 1 : 0;
-    const steamB = b.eval.hasDirectionalSteam ? 1 : 0;
-    if (steamB !== steamA) return steamB - steamA;
-    if (b.eval.outCountDiff !== a.eval.outCountDiff) {
-      return b.eval.outCountDiff - a.eval.outCountDiff;
-    }
-    if (b.eval.weightedMarginRank !== a.eval.weightedMarginRank) {
-      return b.eval.weightedMarginRank - a.eval.weightedMarginRank;
-    }
-    return a.idx - b.idx;
-  });
+  const sorted = options?.preserveOrder
+    ? evaluated
+    : [...evaluated].sort((a, b) => {
+        if (b.eval.alignedPillarCount !== a.eval.alignedPillarCount) {
+          return b.eval.alignedPillarCount - a.eval.alignedPillarCount;
+        }
+        if (b.eval.pillarCount !== a.eval.pillarCount) {
+          return b.eval.pillarCount - a.eval.pillarCount;
+        }
+        const steamA = a.eval.hasDirectionalSteam ? 1 : 0;
+        const steamB = b.eval.hasDirectionalSteam ? 1 : 0;
+        if (steamB !== steamA) return steamB - steamA;
+        if (b.eval.outCountDiff !== a.eval.outCountDiff) {
+          return b.eval.outCountDiff - a.eval.outCountDiff;
+        }
+        if (b.eval.weightedMarginRank !== a.eval.weightedMarginRank) {
+          return b.eval.weightedMarginRank - a.eval.weightedMarginRank;
+        }
+        return a.idx - b.idx;
+      });
 
   let indexHeader = '';
-  const strongCandidates = sorted.filter((item) => item.eval.pillarCount >= 2);
-  const headerPool =
-    strongCandidates.length > 0
-      ? strongCandidates.slice(0, 8)
-      : sorted.filter((item) => item.eval.pillarCount >= 1).slice(0, 5);
-  if (headerPool.length > 0 && (typeof maxChars !== 'number' || maxChars >= 600)) {
-    const headerLines = [
-      '=== TOP PILLAR CANDIDATES (QUALITATIVE) ===',
-      ...headerPool.map(
-        (item) =>
-          `- ${item.entry.eventId} [${item.eval.pillarCount} pillar${item.eval.pillarCount === 1 ? '' : 's'}: ${item.eval.tags.join(', ')}]`,
-      ),
-    ];
-    const candidateHeader = headerLines.join('\n');
-    if (typeof maxChars !== 'number' || candidateHeader.length + 220 <= maxChars) {
-      indexHeader = candidateHeader;
+  if (!options?.omitIndexHeader) {
+    const strongCandidates = sorted.filter((item) => item.eval.pillarCount >= 2);
+    const headerPool =
+      strongCandidates.length > 0
+        ? strongCandidates.slice(0, 8)
+        : sorted.filter((item) => item.eval.pillarCount >= 1).slice(0, 5);
+    if (headerPool.length > 0 && (typeof maxChars !== 'number' || maxChars >= 600)) {
+      const headerLines = [
+        '=== TOP PILLAR CANDIDATES (QUALITATIVE) ===',
+        ...headerPool.map(
+          (item) =>
+            `- ${item.entry.eventId} [${item.eval.pillarCount} pillar${item.eval.pillarCount === 1 ? '' : 's'}: ${item.eval.tags.join(', ')}]`,
+        ),
+      ];
+      const candidateHeader = headerLines.join('\n');
+      if (typeof maxChars !== 'number' || candidateHeader.length + 220 <= maxChars) {
+        indexHeader = candidateHeader;
+      }
     }
   }
 
-  const assemble = (caps?: { fund: number; inj: number; mkt: number }): FormattedUnifiedDossier => {
+  const assemble = (
+    caps?: { fund: number; inj: number; mkt: number },
+    entryOpts?: { compactInjuries?: boolean; omitRows?: boolean },
+  ): FormattedUnifiedDossier => {
     const parts: string[] = indexHeader ? [indexHeader] : [];
     let used = indexHeader ? indexHeader.length : 0;
     let gameBlocksIncluded = 0;
     let truncated = false;
 
     for (const item of sorted) {
-      const block = formatSingleGameEntry(item.entry, caps);
+      const block = formatSingleGameEntry(item.entry, caps, entryOpts);
       const sep = parts.length > 0 ? 2 : 0;
       if (typeof maxChars === 'number' && maxChars > 0 && used + sep + block.length > maxChars) {
         truncated = true;
@@ -700,6 +728,13 @@ export function formatUnifiedPerGameDossier(
     return pass1;
   }
 
+  if (options?.compactInjuriesOnTightBudget) {
+    const compactInjPass = assemble(undefined, { compactInjuries: true });
+    if (!compactInjPass.truncated) {
+      return compactInjPass;
+    }
+  }
+
   const avgRowsOverhead = Math.ceil(
     sorted.reduce((sum, item) => sum + (item.entry.rows ? item.entry.rows.trim().length + 7 : 0), 0) /
       Math.max(1, sorted.length),
@@ -708,13 +743,35 @@ export function formatUnifiedPerGameDossier(
   const headerCost = indexHeader ? indexHeader.length + 2 : 0;
   const totalBodyBudget = maxChars - headerCost - sorted.length * overheadPerGame;
   const perGameBody = Math.floor(totalBodyBudget / sorted.length);
-  if (perGameBody >= 160) {
-    const fundCap = Math.max(70, Math.floor(perGameBody * 0.43));
-    const injCap = Math.max(60, Math.floor(perGameBody * 0.30));
-    const mktCap = Math.max(55, perGameBody - fundCap - injCap);
-    const pass2 = assemble({ fund: fundCap, inj: injCap, mkt: mktCap });
-    if (pass2.sectionsIncluded >= pass1.sectionsIncluded) {
+  const minPerGameBody = options?.compactInjuriesOnTightBudget ? 90 : 160;
+  if (perGameBody >= minPerGameBody) {
+    const fundCap = Math.max(options?.compactInjuriesOnTightBudget ? 40 : 70, Math.floor(perGameBody * 0.43));
+    const injCap = Math.max(options?.compactInjuriesOnTightBudget ? 35 : 60, Math.floor(perGameBody * 0.30));
+    const mktCap = Math.max(options?.compactInjuriesOnTightBudget ? 35 : 55, perGameBody - fundCap - injCap);
+    const pass2 = assemble(
+      { fund: fundCap, inj: injCap, mkt: mktCap },
+      options?.compactInjuriesOnTightBudget ? { compactInjuries: true } : undefined,
+    );
+    if (!pass2.truncated) {
       return pass2;
+    }
+    if (!options?.compactInjuriesOnTightBudget && pass2.sectionsIncluded >= pass1.sectionsIncluded) {
+      return pass2;
+    }
+  }
+
+  if (options?.compactInjuriesOnTightBudget) {
+    const noRowsBodyBudget = maxChars - headerCost - sorted.length * 95;
+    const noRowsPerGameBody = Math.max(60, Math.floor(noRowsBodyBudget / sorted.length));
+    const fundCap = Math.max(25, Math.floor(noRowsPerGameBody * 0.42));
+    const injCap = Math.max(20, Math.floor(noRowsPerGameBody * 0.28));
+    const mktCap = Math.max(20, noRowsPerGameBody - fundCap - injCap);
+    const pass3 = assemble(
+      { fund: fundCap, inj: injCap, mkt: mktCap },
+      { compactInjuries: true, omitRows: true },
+    );
+    if (pass3.sectionsIncluded >= pass1.sectionsIncluded) {
+      return pass3;
     }
   }
 
@@ -723,7 +780,7 @@ export function formatUnifiedPerGameDossier(
 
 /**
  * Builds a scoped merged dossier containing only the specified target event IDs
- * (in canonical entry order), respecting optional maxChars at whole-game boundaries.
+ * (in exact targetEventIds order), fitting <= 4 proposed games within tight Critic budgets.
  */
 export function buildScopedUnifiedDossier(
   entries: UnifiedGameDossierEntry[],
@@ -733,9 +790,29 @@ export function buildScopedUnifiedDossier(
   if (!Array.isArray(entries) || entries.length === 0 || !Array.isArray(targetEventIds) || targetEventIds.length === 0) {
     return { text: '', sectionsIncluded: 0, truncated: false };
   }
-  const targetSet = new Set(targetEventIds.map((id) => String(id).trim()).filter(Boolean));
-  const scoped = entries.filter((e) => targetSet.has(e.eventId));
-  return formatUnifiedPerGameDossier(scoped, maxChars);
+  const byId = new Map<string, UnifiedGameDossierEntry>();
+  for (const e of entries) {
+    if (e?.eventId && !byId.has(e.eventId)) {
+      byId.set(e.eventId, e);
+    }
+  }
+  const seen = new Set<string>();
+  const scoped: UnifiedGameDossierEntry[] = [];
+  for (const rawId of targetEventIds) {
+    const id = String(rawId || '').trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const entry = byId.get(id);
+    if (entry) scoped.push(entry);
+  }
+  if (scoped.length === 0) {
+    return { text: '', sectionsIncluded: 0, truncated: false };
+  }
+  return formatUnifiedPerGameDossier(scoped, maxChars, {
+    preserveOrder: true,
+    omitIndexHeader: true,
+    compactInjuriesOnTightBudget: true,
+  });
 }
 
 /**
