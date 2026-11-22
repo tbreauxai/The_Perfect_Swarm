@@ -63,18 +63,25 @@ export interface FormattedUnifiedDossier {
   truncated: boolean;
 }
 
-const TOOL_BANNER_PREFIX_RE =
-  /^\[(?:MATCHUP FUNDAMENTALS|INJURY\s*&\s*ROSTER DELTA|MARKET MOVEMENT)[^\]]*\]:?\s*/i;
+const TOOL_BANNER_ANYWHERE_RE =
+  /\[(?:MATCHUP FUNDAMENTALS|INJURY\s*&\s*ROSTER DELTA|MARKET MOVEMENT)[^\]]*\]:?\s*/gi;
 
 /**
  * Strips repeated per-tool header banners and normalizes empty injury boilerplate
- * so per-game dossiers remain compact (~30% fewer tokens) without losing facts.
+ * so per-game dossiers remain compact (~30-40% fewer tokens) without losing facts,
+ * while strictly preserving Health Balance and two-sided Steam tags.
  */
 export function compressDossierPillarSummary(tool: string, summary: string): string {
   const normTool = tool.replace(/_v1$/i, '').trim();
   const lines = String(summary || '')
     .split(/\r?\n/)
-    .map((l) => l.trim().replace(TOOL_BANNER_PREFIX_RE, '').trim())
+    .map((l) => {
+      let cleaned = l.trim().replace(TOOL_BANNER_ANYWHERE_RE, '').trim();
+      if (/\bL5:\s*\d+-\d+/i.test(cleaned)) {
+        cleaned = cleaned.replace(/\s*\|\s*Recent\s+[WL,\s]+(?=\s*\||$)/gi, '');
+      }
+      return cleaned.replace(/\bBooks\s+Tracked:\s*/gi, 'Books: ').trim();
+    })
     .filter(Boolean);
 
   if (lines.length === 0) {
@@ -90,6 +97,194 @@ export function compressDossierPillarSummary(tool: string, summary: string): str
     return 'None';
   }
   return joined;
+}
+
+export interface QualitativePillarEvaluation {
+  pillarCount: number;
+  alignedPillarCount: number;
+  tags: string[];
+  hasDirectionalSteam: boolean;
+  outCountDiff: number;
+  netMarginGap: number;
+  weightedMarginRank: number;
+}
+
+interface ParsedTeamLine {
+  abbr: string;
+  wins: number;
+  losses: number;
+  pfAvg: number | null;
+  netMargin: number | null;
+  l5Wins: number | null;
+  l5Losses: number | null;
+}
+
+function parseSideLineFromFundamentals(text: string, prefix: 'Home' | 'Away'): ParsedTeamLine | null {
+  const re = new RegExp(
+    `${prefix}\\s*\\(([^)]+)\\)\\s*:\\s*(?:W-L\\s*)?(\\d+)-(\\d+)` +
+      `(?:[^|\\n]*\\|\\s*PF\\/PA\\s*([\\d.]+)\\s*\\/\\s*[\\d.]+)?` +
+      `[^\\n]*?(?:Net\\s*Margin|Net|Diff)\\s*:?\\s*([+-]?\\d+(?:\\.\\d+)?)` +
+      `(?:[^\\n]*?\\bL5:\\s*(\\d+)-(\\d+))?`,
+    'i',
+  );
+  const m = text.match(re);
+  if (!m) return null;
+  const wins = Number(m[2]);
+  const losses = Number(m[3]);
+  const pfAvg = m[4] !== undefined ? Number(m[4]) : null;
+  const netMargin = m[5] !== undefined ? Number(m[5]) : null;
+  const l5Wins = m[6] !== undefined ? Number(m[6]) : null;
+  const l5Losses = m[7] !== undefined ? Number(m[7]) : null;
+  return {
+    abbr: m[1].trim(),
+    wins,
+    losses,
+    pfAvg: Number.isFinite(pfAvg) ? pfAvg : null,
+    netMargin: Number.isFinite(netMargin) ? netMargin : null,
+    l5Wins: Number.isFinite(l5Wins) ? l5Wins : null,
+    l5Losses: Number.isFinite(l5Losses) ? l5Losses : null,
+  };
+}
+
+function teamNameMatchesLabel(label: string, abbr: string, matchupPart: string): boolean {
+  const norm = (s: string) =>
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  const nl = norm(label);
+  if (!nl) return false;
+  const na = norm(abbr);
+  if (na && (nl === na || nl.split(' ').includes(na))) return true;
+  const tokens = norm(matchupPart)
+    .split(' ')
+    .filter((t) => t.length >= 3);
+  return tokens.some((tok) => nl === tok || nl.includes(tok));
+}
+
+/**
+ * Evaluates purely qualitative matchup strength across 3 independent pillars
+ * (form_edge, steam_edge, health_edge) without computing EV or implied probability.
+ */
+export function evaluateQualitativePillars(entry: UnifiedGameDossierEntry): QualitativePillarEvaluation {
+  const fund = String(entry.fundamentals || '');
+  const inj = String(entry.injuries || '');
+  const mkt = String(entry.market || '');
+  const matchupParts = String(entry.matchup || '').split('@');
+  const awayMatchupName = (matchupParts[0] || '').trim();
+  const homeMatchupName = (matchupParts[1] || '').trim();
+
+  const homeSide = parseSideLineFromFundamentals(fund, 'Home');
+  const awaySide = parseSideLineFromFundamentals(fund, 'Away');
+  const rawMargins = extractNumericMargins(fund);
+
+  const avgPf =
+    homeSide?.pfAvg != null && awaySide?.pfAvg != null
+      ? (homeSide.pfAvg + awaySide.pfAvg) / 2
+      : homeSide?.pfAvg ?? awaySide?.pfAvg ?? null;
+  const isLowScoringSport =
+    /^(?:nhl|mlb)-/i.test(entry.eventId) ||
+    /\b(?:nhl|icehockey_nhl|mlb|baseball_mlb)\b/i.test(entry.sport) ||
+    (avgPf !== null && avgPf > 0 && avgPf < 12);
+
+  let formSide: 'home' | 'away' | null = null;
+  let formTeam = '';
+  let netMarginGap = entry.netMarginGap || 0;
+
+  if (homeSide && awaySide) {
+    const hNet = homeSide.netMargin ?? 0;
+    const aNet = awaySide.netMargin ?? 0;
+    netMarginGap = Math.abs(hNet - aNet);
+    const hGp = homeSide.wins + homeSide.losses;
+    const aGp = awaySide.wins + awaySide.losses;
+    const winPctGap =
+      hGp > 0 && aGp > 0 ? Math.abs(homeSide.wins / hGp - awaySide.wins / aGp) : 0;
+    const l5WinGap =
+      homeSide.l5Wins !== null && awaySide.l5Wins !== null
+        ? Math.abs(homeSide.l5Wins - awaySide.l5Wins)
+        : 0;
+    const clearMargin = isLowScoringSport ? netMarginGap >= 0.7 : netMarginGap >= 2.5;
+    if (clearMargin || l5WinGap >= 2 || winPctGap >= 0.25) {
+      if (hNet !== aNet) {
+        formSide = hNet > aNet ? 'home' : 'away';
+      } else if (homeSide.l5Wins !== null && awaySide.l5Wins !== null && homeSide.l5Wins !== awaySide.l5Wins) {
+        formSide = homeSide.l5Wins > awaySide.l5Wins ? 'home' : 'away';
+      } else {
+        formSide = homeSide.wins / Math.max(1, hGp) >= awaySide.wins / Math.max(1, aGp) ? 'home' : 'away';
+      }
+      formTeam = formSide === 'home' ? homeSide.abbr : awaySide.abbr;
+    }
+  } else if (rawMargins.length >= 2) {
+    netMarginGap = Math.abs(rawMargins[0] - rawMargins[1]);
+    const clearMargin = isLowScoringSport ? netMarginGap >= 0.7 : netMarginGap >= 2.5;
+    if (clearMargin) {
+      formSide = rawMargins[0] >= rawMargins[1] ? 'home' : 'away';
+      formTeam =
+        formSide === 'home'
+          ? (homeMatchupName.split(/\s+/).pop() || 'Home')
+          : (awayMatchupName.split(/\s+/).pop() || 'Away');
+    }
+  }
+
+  let steamSide: 'home' | 'away' | 'total' | null = null;
+  let steamTarget = '';
+  const steamMatch = mkt.match(/Steam:\s*TOWARD\s+([^|\n;]+)/i);
+  if (steamMatch) {
+    const rawTarget = steamMatch[1]
+      .replace(/\s*\([^)]*\)\s*$/g, '')
+      .trim();
+    if (rawTarget && !/^(?:NEUTRAL|NONE|MIXED|N\/A)$/i.test(rawTarget)) {
+      steamTarget = rawTarget;
+      const matchesHome = teamNameMatchesLabel(rawTarget, homeSide?.abbr || '', homeMatchupName);
+      const matchesAway = teamNameMatchesLabel(rawTarget, awaySide?.abbr || '', awayMatchupName);
+      if (matchesHome && !matchesAway) steamSide = 'home';
+      else if (matchesAway && !matchesHome) steamSide = 'away';
+      else steamSide = 'total';
+    }
+  }
+
+  let healthSide: 'home' | 'away' | null = null;
+  let healthLabel = '';
+  const healthMatch = inj.match(/Health\s*Balance:\s*(home_advantage|away_advantage)(?:\s*\(([^)]+)\))?/i);
+  if (healthMatch) {
+    const cls = healthMatch[1].toLowerCase();
+    healthSide = cls === 'home_advantage' ? 'home' : 'away';
+    healthLabel = cls;
+  }
+
+  const tags: string[] = [];
+  if (formSide && formTeam) tags.push(`form=${formTeam}`);
+  if (steamSide && steamTarget) tags.push(`steam=TOWARD ${steamTarget}`);
+  if (healthSide && healthLabel) tags.push(`health=${healthLabel}`);
+
+  const homeAligned =
+    (formSide === 'home' ? 1 : 0) +
+    (steamSide === 'home' ? 1 : 0) +
+    (healthSide === 'home' ? 1 : 0);
+  const awayAligned =
+    (formSide === 'away' ? 1 : 0) +
+    (steamSide === 'away' ? 1 : 0) +
+    (healthSide === 'away' ? 1 : 0);
+  const bestDirectionalAligned = Math.max(homeAligned, awayAligned);
+  const alignedPillarCount =
+    steamSide === 'total' && bestDirectionalAligned > 0
+      ? bestDirectionalAligned + 1
+      : bestDirectionalAligned;
+
+  const hasDirectionalSteam = entry.hasDirectionalSteam || steamSide !== null;
+  const outCountDiff = Math.max(entry.outCountDiff || 0, computeOutCountDiff(inj));
+  const weightedMarginRank = isLowScoringSport ? netMarginGap * 4 : netMarginGap;
+
+  return {
+    pillarCount: tags.length,
+    alignedPillarCount,
+    tags,
+    hasDirectionalSteam,
+    outCountDiff,
+    netMarginGap,
+    weightedMarginRank,
+  };
 }
 
 function extractNumericMargins(text?: string): number[] {
@@ -341,18 +536,54 @@ export async function fetchTwoHopSlateDossier(
   };
 }
 
-function formatSingleGameEntry(entry: UnifiedGameDossierEntry): string {
+function trimFieldPreservingSignal(value: string, maxChars: number): string {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (maxChars <= 0 || text.length <= maxChars) return text;
+  const segments = text.split(/\s*\|\s*/).filter(Boolean);
+  if (segments.length > 1) {
+    const isPrioritySeg = (seg: string): boolean =>
+      /^(?:Home\s*\(|Away\s*\(|Summary:|Health\s*Balance:|Steam:|Divergence:|L5:)/i.test(seg);
+    const prioritized = [...segments.filter(isPrioritySeg), ...segments.filter((s) => !isPrioritySeg(s))];
+    const kept: string[] = [];
+    for (const seg of prioritized) {
+      const candidate = kept.length > 0 ? `${kept.join(' | ')} | ${seg}` : seg;
+      if (candidate.length <= maxChars) {
+        kept.push(seg);
+      } else if (kept.length === 0) {
+        return seg.length > maxChars ? `${seg.slice(0, Math.max(12, maxChars - 1))}…` : seg;
+      }
+    }
+    if (kept.length > 0) return kept.join(' | ');
+  }
+  return `${text.slice(0, Math.max(12, maxChars - 1)).trimEnd()}…`;
+}
+
+function formatSingleGameEntry(
+  entry: UnifiedGameDossierEntry,
+  caps?: { fund: number; inj: number; mkt: number },
+): string {
+  const fundRaw = compressDossierPillarSummary('get_matchup_fundamentals', entry.fundamentals || 'Unavailable');
+  const injRaw = entry.injuries === 'None'
+    ? 'None'
+    : compressDossierPillarSummary('get_injury_and_roster_delta', entry.injuries || 'None');
+  const mktRaw = compressDossierPillarSummary('get_market_movement', entry.market || 'Unavailable');
+
+  const fund = caps ? trimFieldPreservingSignal(fundRaw, caps.fund) : fundRaw;
+  const inj = caps ? trimFieldPreservingSignal(injRaw, caps.inj) : injRaw;
+  const mkt = caps ? trimFieldPreservingSignal(mktRaw, caps.mkt) : mktRaw;
+
   return [
     `=== GAME DOSSIER: ${entry.eventId} (${entry.matchup}) ===`,
-    `Fundamentals: ${entry.fundamentals || 'Unavailable'}`,
-    `Injuries: ${entry.injuries || 'None'}`,
-    `Market: ${entry.market || 'Unavailable'}`,
+    `Fundamentals: ${fund}`,
+    `Injuries: ${inj}`,
+    `Market: ${mkt}`,
   ].join('\n');
 }
 
 /**
- * Formats per-game merged dossiers in canonical event order.
- * Only omits trailing whole game blocks if maxChars is exceeded (never mid-word).
+ * Formats per-game merged dossiers ordered by descending qualitative pillar alignment/count,
+ * prepending a compact TOP PILLAR CANDIDATES (QUALITATIVE) index and dynamically fitting full slates
+ * inside provider budgets when possible without emitting numeric EV/probabilities.
  */
 export function formatUnifiedPerGameDossier(
   entries: UnifiedGameDossierEntry[],
@@ -361,26 +592,99 @@ export function formatUnifiedPerGameDossier(
   if (!Array.isArray(entries) || entries.length === 0) {
     return { text: '', sectionsIncluded: 0, truncated: false };
   }
-  const blocks: string[] = [];
-  let used = 0;
-  let truncated = false;
 
-  for (const entry of entries) {
-    const block = formatSingleGameEntry(entry);
-    const sep = blocks.length > 0 ? 2 : 0;
-    if (typeof maxChars === 'number' && maxChars > 0 && used + sep + block.length > maxChars) {
-      truncated = true;
-      break;
+  const evaluated = entries.map((entry, idx) => ({
+    entry,
+    idx,
+    eval: evaluateQualitativePillars(entry),
+  }));
+
+  const sorted = [...evaluated].sort((a, b) => {
+    if (b.eval.alignedPillarCount !== a.eval.alignedPillarCount) {
+      return b.eval.alignedPillarCount - a.eval.alignedPillarCount;
     }
-    used += sep + block.length;
-    blocks.push(block);
+    if (b.eval.pillarCount !== a.eval.pillarCount) {
+      return b.eval.pillarCount - a.eval.pillarCount;
+    }
+    const steamA = a.eval.hasDirectionalSteam ? 1 : 0;
+    const steamB = b.eval.hasDirectionalSteam ? 1 : 0;
+    if (steamB !== steamA) return steamB - steamA;
+    if (b.eval.outCountDiff !== a.eval.outCountDiff) {
+      return b.eval.outCountDiff - a.eval.outCountDiff;
+    }
+    if (b.eval.weightedMarginRank !== a.eval.weightedMarginRank) {
+      return b.eval.weightedMarginRank - a.eval.weightedMarginRank;
+    }
+    return a.idx - b.idx;
+  });
+
+  let indexHeader = '';
+  const strongCandidates = sorted.filter((item) => item.eval.pillarCount >= 2);
+  const headerPool =
+    strongCandidates.length > 0
+      ? strongCandidates.slice(0, 8)
+      : sorted.filter((item) => item.eval.pillarCount >= 1).slice(0, 5);
+  if (headerPool.length > 0 && (typeof maxChars !== 'number' || maxChars >= 600)) {
+    const headerLines = [
+      '=== TOP PILLAR CANDIDATES (QUALITATIVE) ===',
+      ...headerPool.map(
+        (item) =>
+          `- ${item.entry.eventId} [${item.eval.pillarCount} pillar${item.eval.pillarCount === 1 ? '' : 's'}: ${item.eval.tags.join(', ')}]`,
+      ),
+    ];
+    const candidateHeader = headerLines.join('\n');
+    if (typeof maxChars !== 'number' || candidateHeader.length + 220 <= maxChars) {
+      indexHeader = candidateHeader;
+    }
   }
 
-  return {
-    text: blocks.join('\n\n'),
-    sectionsIncluded: blocks.length,
-    truncated,
+  const assemble = (caps?: { fund: number; inj: number; mkt: number }): FormattedUnifiedDossier => {
+    const parts: string[] = indexHeader ? [indexHeader] : [];
+    let used = indexHeader ? indexHeader.length : 0;
+    let gameBlocksIncluded = 0;
+    let truncated = false;
+
+    for (const item of sorted) {
+      const block = formatSingleGameEntry(item.entry, caps);
+      const sep = parts.length > 0 ? 2 : 0;
+      if (typeof maxChars === 'number' && maxChars > 0 && used + sep + block.length > maxChars) {
+        truncated = true;
+        break;
+      }
+      used += sep + block.length;
+      parts.push(block);
+      gameBlocksIncluded++;
+    }
+
+    return {
+      text: parts.join('\n\n'),
+      sectionsIncluded: gameBlocksIncluded,
+      truncated,
+    };
   };
+
+  const pass1 = assemble(
+    sorted.length >= 8 ? { fund: 290, inj: 215, mkt: 195 } : undefined,
+  );
+  if (!pass1.truncated || typeof maxChars !== 'number' || sorted.length <= 1) {
+    return pass1;
+  }
+
+  const overheadPerGame = 105;
+  const headerCost = indexHeader ? indexHeader.length + 2 : 0;
+  const totalBodyBudget = maxChars - headerCost - sorted.length * overheadPerGame;
+  const perGameBody = Math.floor(totalBodyBudget / sorted.length);
+  if (perGameBody >= 220) {
+    const fundCap = Math.max(100, Math.floor(perGameBody * 0.43));
+    const injCap = Math.max(95, Math.floor(perGameBody * 0.30));
+    const mktCap = Math.max(85, perGameBody - fundCap - injCap);
+    const pass2 = assemble({ fund: fundCap, inj: injCap, mkt: mktCap });
+    if (pass2.sectionsIncluded >= pass1.sectionsIncluded) {
+      return pass2;
+    }
+  }
+
+  return pass1;
 }
 
 /**

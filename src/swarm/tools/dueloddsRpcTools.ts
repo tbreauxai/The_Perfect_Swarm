@@ -130,6 +130,138 @@ export async function callSupabaseRpc<T = any>(
   }
 }
 
+type ShortSportKey = 'nba' | 'nfl' | 'nhl' | 'mlb' | 'wnba' | 'ncaaf' | 'ncaab';
+
+const SPORT_SCOPED_TEAM_ABBR_ALIASES: Readonly<Record<ShortSportKey, Readonly<Record<string, string>>>> = {
+  nba: {
+    NO: 'NOP',
+    NOP: 'NOP',
+    NY: 'NYK',
+    NYK: 'NYK',
+    GS: 'GSW',
+    GSW: 'GSW',
+    SA: 'SAS',
+    SAS: 'SAS',
+    UTAH: 'UTA',
+    UTH: 'UTA',
+    UTA: 'UTA',
+    WSH: 'WAS',
+    WAS: 'WAS',
+    PHO: 'PHX',
+    PHX: 'PHX',
+    BK: 'BKN',
+    BRK: 'BKN',
+    BKN: 'BKN',
+    CHO: 'CHA',
+    CHA: 'CHA',
+  },
+  nfl: {
+    NO: 'NO',
+    NOR: 'NO',
+    NOP: 'NO',
+    TB: 'TB',
+    TAM: 'TB',
+    TBL: 'TB',
+    SF: 'SF',
+    SFO: 'SF',
+    KC: 'KC',
+    KAN: 'KC',
+    GB: 'GB',
+    GNB: 'GB',
+    NE: 'NE',
+    NWE: 'NE',
+    LV: 'LV',
+    LVR: 'LV',
+    JAC: 'JAX',
+    JAX: 'JAX',
+    WSH: 'WAS',
+    WAS: 'WAS',
+    LA: 'LAR',
+    LAK: 'LA',
+  },
+  nhl: {
+    TB: 'TBL',
+    TBL: 'TBL',
+    SJ: 'SJS',
+    SJS: 'SJS',
+    LA: 'LAK',
+    LAK: 'LAK',
+    NJ: 'NJD',
+    NJD: 'NJD',
+    MON: 'MTL',
+    MTL: 'MTL',
+    UTAH: 'UTA',
+    UTH: 'UTA',
+    UTA: 'UTA',
+    WSH: 'WSH',
+    WAS: 'WAS',
+  },
+  mlb: {
+    CWS: 'CHW',
+    CHW: 'CHW',
+    AZ: 'ARI',
+    ARI: 'ARI',
+    KC: 'KCR',
+    KCR: 'KCR',
+    SD: 'SDP',
+    SDP: 'SDP',
+    SF: 'SFG',
+    SFG: 'SFG',
+    TB: 'TBR',
+    TBR: 'TBR',
+  },
+  wnba: {},
+  ncaaf: {},
+  ncaab: {},
+};
+
+const FALLBACK_TEAM_ABBR_ALIASES: Readonly<Record<string, string>> = {
+  GS: 'GSW',
+  SA: 'SAS',
+  UTAH: 'UTA',
+  UTH: 'UTA',
+  GNB: 'GB',
+  KAN: 'KC',
+  NWE: 'NE',
+  SFO: 'SF',
+  JAC: 'JAX',
+  LVR: 'LV',
+  BK: 'BKN',
+  BRK: 'BKN',
+  CHO: 'CHA',
+  PHO: 'PHX',
+};
+
+function inferShortSportFromHint(sportOrGameId?: string): ShortSportKey | null {
+  const raw = String(sportOrGameId || '').trim().toLowerCase();
+  if (!raw) return null;
+  if (raw === 'nba' || raw === 'basketball_nba' || raw.startsWith('nba-')) return 'nba';
+  if (raw === 'nfl' || raw === 'americanfootball_nfl' || raw.startsWith('nfl-')) return 'nfl';
+  if (raw === 'nhl' || raw === 'icehockey_nhl' || raw.startsWith('nhl-')) return 'nhl';
+  if (raw === 'mlb' || raw === 'baseball_mlb' || raw.startsWith('mlb-')) return 'mlb';
+  if (raw === 'wnba' || raw === 'basketball_wnba' || raw.startsWith('wnba-')) return 'wnba';
+  if (raw.includes('ncaaf') || raw.includes('college-football')) return 'ncaaf';
+  if (raw.includes('ncaab') || raw.includes('college-basketball')) return 'ncaab';
+  return null;
+}
+
+/**
+ * Normalizes team abbreviations strictly within their sport context so cross-sport
+ * collisions (e.g. NFL New Orleans 'NO' vs NBA 'NOP', NFL 'TB' vs NHL 'TBL') never leak.
+ */
+export function normalizeSportTeamAbbr(rawAbbr: string, sportOrGameId?: string): string {
+  const trimmed = String(rawAbbr || '').trim();
+  if (!trimmed || /\s/.test(trimmed)) return trimmed;
+  if (trimmed === 'Home' || trimmed === 'Away' || trimmed === 'Unknown' || trimmed === 'N/A') {
+    return trimmed;
+  }
+  const upper = trimmed.toUpperCase();
+  const sport = inferShortSportFromHint(sportOrGameId);
+  const map = sport ? SPORT_SCOPED_TEAM_ABBR_ALIASES[sport] : FALLBACK_TEAM_ABBR_ALIASES;
+  if (map && map[upper]) return map[upper];
+  return upper;
+}
+
 /**
  * Tool 1: get_matchup_fundamentals
  * Parameters: game_id: string, window?: 'L5' | 'L10' | 'season'
@@ -224,55 +356,49 @@ export const getMatchupFundamentalsTool: SwarmTool = {
     const homeObj = typeof d.home === 'object' && d.home !== null ? d.home : (typeof d.home_team_stats === 'object' && d.home_team_stats !== null ? d.home_team_stats : {});
     const awayObj = typeof d.away === 'object' && d.away !== null ? d.away : (typeof d.away_team_stats === 'object' && d.away_team_stats !== null ? d.away_team_stats : {});
 
-    const formatH2h = (h2h: any): string => {
+    const sportHint = String(d.sport || gameId || '');
+
+    const formatH2h = (h2h: any, sportOrGame: string = sportHint): string => {
       if (!Array.isArray(h2h) || h2h.length === 0) return '';
-      return h2h.map((g: any) => {
-        const date = g.game_date ? `${g.game_date}: ` : '';
-        const score = (g.team_score !== undefined && g.opponent_score !== undefined)
-          ? ` ${g.team_score}-${g.opponent_score}`
-          : '';
+      const deduped = new Map<string, { formatted: string; isWin: boolean }>();
+      for (const g of h2h) {
+        if (!g || typeof g !== 'object') continue;
+        const dateVal = String(g.game_date || '').trim();
+        const datePrefix = dateVal ? `${dateVal}: ` : '';
+        const t1 = g.team_abbr ? normalizeSportTeamAbbr(String(g.team_abbr), sportOrGame) : '';
+        const t2 = g.opponent_abbr ? normalizeSportTeamAbbr(String(g.opponent_abbr), sportOrGame) : '';
+        const hasScores = g.team_score !== undefined && g.opponent_score !== undefined;
+        const score = hasScores ? ` ${g.team_score}-${g.opponent_score}` : '';
         const res = g.result ? ` (${g.result})` : '';
-        const match = g.team_abbr && g.opponent_abbr ? `${g.team_abbr} vs ${g.opponent_abbr}` : '';
-        return `${date}${match}${score}${res}`.trim();
-      }).join('; ');
+        const match = t1 && t2 ? `${t1} vs ${t2}` : '';
+        const formatted = `${datePrefix}${match}${score}${res}`.trim();
+        if (!formatted) continue;
+
+        if (t1 && t2) {
+          const teamPair = [t1.toUpperCase(), t2.toUpperCase()].sort().join('_');
+          const scorePair = hasScores
+            ? [Number(g.team_score), Number(g.opponent_score)]
+                .sort((a, b) => a - b)
+                .join('-')
+            : '';
+          const key = `${dateVal}|${teamPair}|${scorePair}`;
+          const isWin = String(g.result || '').trim().toUpperCase() === 'W';
+          const prev = deduped.get(key);
+          if (!prev || (isWin && !prev.isWin)) {
+            deduped.set(key, { formatted, isWin });
+          }
+        } else {
+          deduped.set(`raw|${deduped.size}|${formatted}`, { formatted, isWin: false });
+        }
+      }
+      return Array.from(deduped.values())
+        .slice(0, 5)
+        .map((entry) => entry.formatted)
+        .join('; ');
     };
 
-const SNAPSHOT_TEAM_CANONICAL_ALIAS: Readonly<Record<string, string>> = {
-  NO: 'NOP',
-  NOP: 'NOP',
-  GS: 'GSW',
-  GSW: 'GSW',
-  SA: 'SAS',
-  SAS: 'SAS',
-  NY: 'NYK',
-  NYK: 'NYK',
-  UTAH: 'UTA',
-  UTA: 'UTA',
-  UTH: 'UTA',
-  WSH: 'WAS',
-  WAS: 'WAS',
-  PHO: 'PHX',
-  PHX: 'PHX',
-  BK: 'BKN',
-  BRK: 'BKN',
-  BKN: 'BKN',
-  CHO: 'CHA',
-  CHA: 'CHA',
-  SJ: 'SJS',
-  SJS: 'SJS',
-  LA: 'LAK',
-  LAK: 'LAK',
-  NJ: 'NJD',
-  NJD: 'NJD',
-  TB: 'TBL',
-  TBL: 'TBL',
-  MON: 'MTL',
-  MTL: 'MTL',
-  JAC: 'JAX',
-  JAX: 'JAX',
-};
-
-function matchesSnapshotTeamKey(teamKey: string, label?: string, sportHint?: string): boolean {
+function matchesSnapshotTeamKey(teamKey: string, label?: string, localSportHint?: string): boolean {
+  const effectiveSport = localSportHint || sportHint;
   const a = String(teamKey || '').trim();
   const b = String(label || '').trim();
   if (!a || !b) return false;
@@ -280,22 +406,22 @@ function matchesSnapshotTeamKey(teamKey: string, label?: string, sportHint?: str
   const ub = b.replace(/_/g, ' ').trim().toUpperCase();
   if (ua === ub) return true;
 
-  const ca = SNAPSHOT_TEAM_CANONICAL_ALIAS[ua] ?? ua;
-  const cb = SNAPSHOT_TEAM_CANONICAL_ALIAS[ub] ?? ub;
+  const ca = normalizeSportTeamAbbr(ua, effectiveSport);
+  const cb = normalizeSportTeamAbbr(ub, effectiveSport);
   if (ca === cb) return true;
 
-  const entryA = matchTeamByLabel(a.replace(/_/g, ' '), sportHint);
-  const entryB = matchTeamByLabel(b.replace(/_/g, ' '), sportHint);
+  const entryA = matchTeamByLabel(a.replace(/_/g, ' '), effectiveSport);
+  const entryB = matchTeamByLabel(b.replace(/_/g, ' '), effectiveSport);
   if (entryA && entryB) {
     if (entryA.sport === entryB.sport && entryA.id === entryB.id) return true;
     return false;
   }
   if (entryA) {
-    const abbrA = SNAPSHOT_TEAM_CANONICAL_ALIAS[entryA.abbr.toUpperCase()] ?? entryA.abbr.toUpperCase();
+    const abbrA = normalizeSportTeamAbbr(entryA.abbr, entryA.sport || effectiveSport);
     if (abbrA === cb) return true;
   }
   if (entryB) {
-    const abbrB = SNAPSHOT_TEAM_CANONICAL_ALIAS[entryB.abbr.toUpperCase()] ?? entryB.abbr.toUpperCase();
+    const abbrB = normalizeSportTeamAbbr(entryB.abbr, entryB.sport || effectiveSport);
     if (abbrB === ca) return true;
   }
 
@@ -420,7 +546,7 @@ function matchesSnapshotTeamKey(teamKey: string, label?: string, sportHint?: str
           ? (typeof d.form === 'object' ? JSON.stringify(mapFormValue(d.form)) : String(d.form))
           : `Home: ${d.home_form ?? homeObj.form ?? 'N/A'} | Away: ${d.away_form ?? awayObj.form ?? 'N/A'}`;
       }
-      const h2hText = formatH2h(d.h2h);
+      const h2hText = formatH2h(d.h2h, sportHint);
       const summary = [
         `[MATCHUP FUNDAMENTALS: ${gameId} (${displayWindow}) | source: snapshot]`,
         `Form: ${formText}`,
@@ -435,8 +561,12 @@ function matchesSnapshotTeamKey(teamKey: string, label?: string, sportHint?: str
       };
     }
 
-    const homeTeam = homeObj.team || d.home_team || (context as any)?.game?.home_team || 'Home';
-    const awayTeam = awayObj.team || d.away_team || (context as any)?.game?.away_team || 'Away';
+    const homeTeamRaw = String(homeObj.team || d.home_team || (context as any)?.game?.home_team || 'Home');
+    const awayTeamRaw = String(awayObj.team || d.away_team || (context as any)?.game?.away_team || 'Away');
+    const homeTeam = normalizeSportTeamAbbr(homeTeamRaw, sportHint);
+    const awayTeam = normalizeSportTeamAbbr(awayTeamRaw, sportHint);
+    const homeHasL5 = Array.isArray(homeObj.last5_results) && homeObj.last5_results.length > 0;
+    const awayHasL5 = Array.isArray(awayObj.last5_results) && awayObj.last5_results.length > 0;
     const homeWl = (homeObj.wins !== undefined && homeObj.losses !== undefined) ? `${homeObj.wins}-${homeObj.losses}` : 'N/A';
     const awayWl = (awayObj.wins !== undefined && awayObj.losses !== undefined) ? `${awayObj.wins}-${awayObj.losses}` : 'N/A';
     const homePfPa = (homeObj.points_for_avg !== undefined || homeObj.points_against_avg !== undefined)
@@ -480,11 +610,11 @@ function matchesSnapshotTeamKey(teamKey: string, label?: string, sportHint?: str
     const homeExtra = formatExtraTeamContext(homeObj, 'home_record', 'Home');
     const awayExtra = formatExtraTeamContext(awayObj, 'away_record', 'Away');
 
-    const h2hText = formatH2h(d.h2h);
+    const h2hText = formatH2h(d.h2h, sportHint);
     const summaryLines = [
       `[MATCHUP FUNDAMENTALS: ${gameId} (${displayWindow})]`,
-      `Home (${homeTeam}): W-L ${homeWl} | PF/PA ${homePfPa} | Net Margin ${homeNet} | Recent ${homeRecent}${homeExtra}`,
-      `Away (${awayTeam}): W-L ${awayWl} | PF/PA ${awayPfPa} | Net Margin ${awayNet} | Recent ${awayRecent}${awayExtra}`
+      `Home (${homeTeam}): W-L ${homeWl} | PF/PA ${homePfPa} | Net Margin ${homeNet}${homeHasL5 ? '' : ` | Recent ${homeRecent}`}${homeExtra}`,
+      `Away (${awayTeam}): W-L ${awayWl} | PF/PA ${awayPfPa} | Net Margin ${awayNet}${awayHasL5 ? '' : ` | Recent ${awayRecent}`}${awayExtra}`
     ];
     if (h2hText) {
       summaryLines.push(`H2H: ${h2hText}`);
