@@ -1392,6 +1392,83 @@ function buildSpreadVetoLegTarget(entry: AuthoritativeTeamSpread, reason: string
   };
 }
 
+export function checkPickRowSideBinding(
+  pk: any,
+  rowMap: Map<string, RowOptionEntry>,
+): {
+  valid: boolean;
+  rowId?: string;
+  rowEntry?: RowOptionEntry;
+  reason?: string;
+  isSignFlipOnly?: boolean;
+  isValueMismatch?: boolean;
+  isCrossGameMismatch?: boolean;
+} {
+  if (!pk || rowMap.size === 0) return { valid: true };
+  let rowId: string | undefined;
+  let sideText = '';
+  let marketField: string | undefined;
+  let explicitEventId: string | undefined;
+
+  if (typeof pk === 'string') {
+    const m = pk.match(/\b(R\d+)\b/i);
+    rowId = m ? m[1].toUpperCase() : undefined;
+    sideText = pk.trim();
+  } else if (typeof pk === 'object') {
+    if (typeof pk.row === 'string' && /^R\d+$/i.test(pk.row.trim())) {
+      rowId = pk.row.trim().toUpperCase();
+    } else if (typeof pk.id === 'string' && /^R\d+$/i.test(pk.id.trim())) {
+      rowId = pk.id.trim().toUpperCase();
+    }
+    sideText = [pk.side, pk.pick, pk.selection, pk.team, pk.note]
+      .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+      .join(' ')
+      .trim();
+    if (!rowId && sideText) {
+      const m = sideText.match(/\b(R\d+)\b/i);
+      if (m) rowId = m[1].toUpperCase();
+    }
+    marketField = typeof pk.market === 'string' ? pk.market : undefined;
+    for (const evCand of [pk.event_id, pk.eventId, pk.reasonSource]) {
+      if (typeof evCand === 'string' && /^[a-z][a-z0-9_-]*-\d+$/i.test(evCand.trim())) {
+        explicitEventId = evCand.trim();
+        break;
+      }
+    }
+  }
+
+  if (!rowId) return { valid: true };
+  const rowEntry = rowMap.get(rowId);
+  if (!rowEntry) return { valid: true, rowId };
+
+  if (
+    explicitEventId &&
+    rowEntry.eventId &&
+    explicitEventId.toLowerCase() !== rowEntry.eventId.toLowerCase()
+  ) {
+    return {
+      valid: false,
+      rowId,
+      rowEntry,
+      isCrossGameMismatch: true,
+      reason: `Row ${rowId} belongs to ${rowEntry.eventId} ("${rowEntry.text}"), not ${explicitEventId}${sideText ? ` ("${sideText}")` : ''}.`,
+    };
+  }
+
+  const check = checkRowSideBinding(rowId, sideText, rowEntry, marketField);
+  if (!check.valid) {
+    return {
+      valid: false,
+      rowId,
+      rowEntry,
+      reason: check.reason,
+      isSignFlipOnly: check.isSignFlipOnly,
+      isValueMismatch: check.isValueMismatch,
+    };
+  }
+  return { valid: true, rowId, rowEntry };
+}
+
 /**
  * Deterministic Critic audit for:
  *  A) Market coverage (ML is covered when ml_home or ml_away is present; fails if tool checked and market truly absent)
@@ -1418,35 +1495,33 @@ export function auditMarketCoverageAndRowBinding(
   const flags: string[] = [];
 
   for (const item of picks) {
-    // 1. Row Side Binding Check
+    // 1. Row Side Binding Check (including cross-game event_id / reasonSource mismatch)
     if (item.rowId && rowMap.has(item.rowId)) {
       const rowEntry = rowMap.get(item.rowId)!;
-      const check = checkRowSideBinding(item.rowId, item.sideText, rowEntry, item.marketField);
+      const pkObj = typeof item.pick === 'object' && item.pick
+        ? item.pick
+        : { row: item.rowId, side: item.sideText, ...(item.marketField ? { market: item.marketField } : {}) };
+      const check = checkPickRowSideBinding(pkObj, rowMap);
       if (!check.valid) {
         flags.push('row_side_mismatch');
         if (check.isValueMismatch) flags.push('spread_value_mismatch');
         const msg = `Veto: Row side mismatch — ${check.reason}`;
-        if (check.isValueMismatch) {
-          const contextTeams = [rowEntry.away, rowEntry.home].filter((t): t is string => Boolean(t));
-          const resolved = resolveTeamFromText(item.sideText || rowEntry.text, rowEntry.sport, contextTeams);
-          const target: MarketVetoLegTarget = {
-            rowId: item.rowId,
-            ...(item.eventId ? { eventId: item.eventId } : (rowEntry.eventId ? { eventId: rowEntry.eventId } : {})),
-            ...(resolved?.name ? { teamLabel: resolved.name } : {}),
-            teamAliases: resolved ? [resolved.name.toLowerCase()] : [],
-            reason: msg.slice(0, 140)
-          };
-          return {
-            pass: false,
-            feedback: msg,
-            flags,
-            vetoedLegs: [target]
-          };
-        }
+        const contextTeams = [rowEntry.away, rowEntry.home].filter((t): t is string => Boolean(t));
+        const resolved = check.isValueMismatch
+          ? resolveTeamFromText(item.sideText || rowEntry.text, rowEntry.sport, contextTeams)
+          : undefined;
+        const target: MarketVetoLegTarget = {
+          rowId: item.rowId,
+          ...(rowEntry.eventId ? { eventId: rowEntry.eventId } : (item.eventId ? { eventId: item.eventId } : {})),
+          ...(resolved?.name ? { teamLabel: resolved.name } : { teamLabel: rowEntry.text }),
+          teamAliases: check.isValueMismatch && resolved ? [resolved.name.toLowerCase()] : [],
+          reason: msg.slice(0, 140)
+        };
         return {
           pass: false,
           feedback: msg,
-          flags
+          flags,
+          vetoedLegs: [target]
         };
       }
     }

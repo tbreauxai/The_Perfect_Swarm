@@ -24,13 +24,14 @@ import {
     type VetoedLegTarget
 } from './tools/claimGrounding.ts';
 import {
+    sanitizeRowMismatchedPicks,
     auditMarketCoverageAndRowBinding,
     extractRowOptions,
     isFalseMissingMoneylineCritique,
     scrubFalseMissingMarketClause,
-    sanitizeRowMismatchedPicks,
     type MarketToolRecord
 } from './tools/marketRowBinding.ts';
+import { syncCompilerProseWithFinalPicks } from './tools/compilerProseSync.ts';
 import {
     auditPullBeforePass,
     isEmptyToolSummary,
@@ -266,23 +267,37 @@ export class AnalysisLifecycle {
             });
             
             currentProposal = parseJsonSafe(proposalRaw, { rawText: proposalRaw, error: "Failed to parse JSON" });
+            const initialPicksSnapshot = Array.isArray(currentProposal?.picks)
+                ? [...currentProposal.picks]
+                : [];
             recordRunDebugSeat((context as any)?.id, 'manager', {
                 outputDigest: formatRunDebugOutputDigest(currentProposal)
             });
 
+            const allParsedHeaders: GameHeader[] = Array.isArray((rawData as any)?.allHeaders) && (rawData as any).allHeaders.length > 0
+                ? ((rawData as any).allHeaders as GameHeader[])
+                : parseGameHeaders((rawData as any)?.fullBoard || rawData);
+            const rawSlateForSync = typeof (rawData as any)?.fullBoard === 'string'
+                ? (rawData as any).fullBoard
+                : (typeof rawData === 'string' ? rawData : '');
+
             if (effectiveCoveredEventIds && currentProposal && Array.isArray(currentProposal.picks)) {
-                const headers = Array.isArray((rawData as any)?.allHeaders) && (rawData as any).allHeaders.length > 0
-                    ? (rawData as any).allHeaders
-                    : parseGameHeaders((rawData as any)?.fullBoard || rawData);
                 const originalCount = currentProposal.picks.length;
                 const allowedCoverageIds = verifiedEventIdsSet.size > 0
                     ? Array.from(verifiedEventIdsSet)
                     : effectiveCoveredEventIds;
-                currentProposal.picks = filterPicksByCoverage(currentProposal.picks, allowedCoverageIds, headers);
+                currentProposal.picks = filterPicksByCoverage(currentProposal.picks, allowedCoverageIds, allParsedHeaders);
                 if (currentProposal.picks.length === 0 && originalCount > 0) {
                     currentProposal.ui_title = 'Insufficient data';
                     currentProposal.reason = 'no picks with specialist coverage';
                 }
+            }
+            if (currentProposal && typeof currentProposal === 'object' && Array.isArray(currentProposal.picks)) {
+                syncCompilerProseWithFinalPicks(currentProposal, {
+                    initialPicks: initialPicksSnapshot,
+                    headers: allParsedHeaders,
+                    slateText: rawSlateForSync
+                });
             }
 
             // 2. Critic verifies
@@ -322,9 +337,6 @@ export class AnalysisLifecycle {
                 prePassedDataKeys.add(normalizeToolKey(item.tool, item.eventId));
             }
 
-            const allParsedHeaders: GameHeader[] = Array.isArray((rawData as any)?.allHeaders) && (rawData as any).allHeaders.length > 0
-                ? ((rawData as any).allHeaders as GameHeader[])
-                : parseGameHeaders((rawData as any)?.fullBoard || rawData);
             const hasEmptyPicks = Boolean(
                 currentProposal &&
                 typeof currentProposal === 'object' &&

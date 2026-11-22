@@ -634,6 +634,8 @@ function matchesSnapshotTeamKey(teamKey: string, label?: string, localSportHint?
 export type HealthBalanceClassification =
   | 'home_advantage'
   | 'away_advantage'
+  | 'conditional_home_advantage'
+  | 'conditional_away_advantage'
   | 'uncertain_questionable'
   | 'symmetric';
 
@@ -656,22 +658,50 @@ export function classifyInjuryHealthBalance(params: {
   homeQ: number;
   awayOut: number;
   awayQ: number;
+  sport?: string;
+  gameId?: string;
 }): InjuryHealthSummaryResult {
-  const { homeTeam, awayTeam, homeOut, homeQ, awayOut, awayQ } = params;
+  const { homeTeam, awayTeam, homeOut, homeQ, awayOut, awayQ, sport, gameId } = params;
   const homeTotal = homeOut + homeQ;
   const awayTotal = awayOut + awayQ;
-  const homeBetter = (awayOut - homeOut >= 2) || (awayTotal - homeTotal >= 2 && homeQ === 0);
-  const awayBetter = (homeOut - awayOut >= 2) || (homeTotal - awayTotal >= 2 && awayQ === 0);
+  const homeNominalBetter = (awayOut - homeOut >= 2) || (awayTotal - homeTotal >= 2 && homeQ === 0);
+  const awayNominalBetter = (homeOut - awayOut >= 2) || (homeTotal - awayTotal >= 2 && awayQ === 0);
+
+  // Sport-aware QUESTIONABLE risk cap: NFL/NCAAF >= 3 Q and NBA/NHL/default >= 2 Q
+  // cannot be labeled a clean home_advantage or away_advantage.
+  const sportScope = `${sport || ''} ${gameId || ''}`;
+  const isFootball = /^(?:\s*)(?:nfl|ncaaf|college-football)-|\b(?:nfl|ncaaf|americanfootball_nfl|americanfootball_ncaaf)\b/i.test(sportScope);
+  const qCap = isFootball ? 3 : 2;
 
   let balance: HealthBalanceClassification;
   let label: string;
-  if (homeBetter && !awayBetter) {
-    balance = 'home_advantage';
-    label = `home_advantage (${homeTeam})`;
-  } else if (awayBetter && !homeBetter) {
-    balance = 'away_advantage';
-    label = `away_advantage (${awayTeam})`;
-  } else if (homeQ >= 2 && awayQ >= 2) {
+  if (homeNominalBetter && !awayNominalBetter) {
+    if (homeQ >= qCap) {
+      if (awayOut - homeOut >= 6 && homeQ === qCap) {
+        balance = 'conditional_home_advantage';
+        label = `conditional_home_advantage (${homeTeam} — watch ${homeQ} Q)`;
+      } else {
+        balance = 'uncertain_questionable';
+        label = `uncertain_questionable (${homeTeam}: ${homeQ} Q)`;
+      }
+    } else {
+      balance = 'home_advantage';
+      label = `home_advantage (${homeTeam})`;
+    }
+  } else if (awayNominalBetter && !homeNominalBetter) {
+    if (awayQ >= qCap) {
+      if (homeOut - awayOut >= 6 && awayQ === qCap) {
+        balance = 'conditional_away_advantage';
+        label = `conditional_away_advantage (${awayTeam} — watch ${awayQ} Q)`;
+      } else {
+        balance = 'uncertain_questionable';
+        label = `uncertain_questionable (${awayTeam}: ${awayQ} Q)`;
+      }
+    } else {
+      balance = 'away_advantage';
+      label = `away_advantage (${awayTeam})`;
+    }
+  } else if (homeQ >= qCap && awayQ >= qCap) {
     balance = 'uncertain_questionable';
     label = 'uncertain_questionable';
   } else {
@@ -960,7 +990,9 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
         homeOut,
         homeQ,
         awayOut,
-        awayQ
+        awayQ,
+        sport: sportHint || d.sport || ctxAny?.game?.sport,
+        gameId
       });
       summaryHeaderLine = healthSummaryObj.line;
     } else if (groupStats.length === 1) {
@@ -1865,18 +1897,18 @@ export const getMarketMovementTool: SwarmTool = {
         (useHome && !useAway && openMlHomeNum !== null && currMlHomeNum !== null && toCentScale(currMlHomeNum) < toCentScale(openMlHomeNum));
       if (isHomeFavoredMove) {
         const toward = openMlHomeNum !== null && currMlHomeNum !== null
-          ? `TOWARD home ${homeLabel} ML (${fmtOddsOrLine(openMlHomeNum)} -> ${fmtOddsOrLine(currMlHomeNum)}, +${impAbs}% imp)`
-          : `TOWARD home ${homeLabel} ML (+${impAbs}% imp)`;
+          ? `TOWARD home ${homeLabel} ML (${fmtOddsOrLine(openMlHomeNum)} -> ${fmtOddsOrLine(currMlHomeNum)}, +${impAbs}pp implied)`
+          : `TOWARD home ${homeLabel} ML (+${impAbs}pp implied)`;
         const against = openMlAwayNum !== null && currMlAwayNum !== null
           ? `AGAINST away ${awayLabel} ML (${fmtOddsOrLine(openMlAwayNum)} -> ${fmtOddsOrLine(currMlAwayNum)})`
           : `AGAINST away ${awayLabel} ML`;
         return `${toward} | ${against}`;
       }
       const toward = openMlAwayNum !== null && currMlAwayNum !== null
-        ? `TOWARD away ${awayLabel} ML (${fmtOddsOrLine(openMlAwayNum)} -> ${fmtOddsOrLine(currMlAwayNum)}, +${impAbs}% imp)`
+        ? `TOWARD away ${awayLabel} ML (${fmtOddsOrLine(openMlAwayNum)} -> ${fmtOddsOrLine(currMlAwayNum)}, +${impAbs}pp implied)`
         : openMlHomeNum !== null && currMlHomeNum !== null
-          ? `TOWARD away ${awayLabel} ML (home ${fmtOddsOrLine(openMlHomeNum)} -> ${fmtOddsOrLine(currMlHomeNum)}, +${impAbs}% imp)`
-          : `TOWARD away ${awayLabel} ML (+${impAbs}% imp)`;
+          ? `TOWARD away ${awayLabel} ML (home ${fmtOddsOrLine(openMlHomeNum)} -> ${fmtOddsOrLine(currMlHomeNum)}, +${impAbs}pp implied)`
+          : `TOWARD away ${awayLabel} ML (+${impAbs}pp implied)`;
       const against = openMlHomeNum !== null && currMlHomeNum !== null
         ? `AGAINST home ${homeLabel} ML (${fmtOddsOrLine(openMlHomeNum)} -> ${fmtOddsOrLine(currMlHomeNum)})`
         : `AGAINST home ${homeLabel} ML`;

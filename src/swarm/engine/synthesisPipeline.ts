@@ -30,6 +30,7 @@ import {
     type ToolCallTraceEntry
 } from '../tools/pullBeforePass.ts';
 import { enforceCriticAuditOnFinalAnalysis } from '../tools/criticAudit.ts';
+import { syncCompilerProseWithFinalPicks } from '../tools/compilerProseSync.ts';
 
 export interface SynthesisPipelineParams {
     task: string;
@@ -619,6 +620,7 @@ export async function executeManagerSynthesis(
     const finalResult = (isMorningJudge || (parsedManagerOutput && typeof parsedManagerOutput === 'object' && ('winProbHome' in parsedManagerOutput || 'win_prob_home' in parsedManagerOutput)))
         ? parsedManagerOutput
         : guardManagerResponse(parsedManagerOutput, "Executive Swarm Synthesis");
+    const initialPicksSnapshot = Array.isArray(finalResult?.picks) ? [...finalResult.picks] : [];
 
     if (finalResult && typeof finalResult === 'object') {
         const initialPickCount = Array.isArray(finalResult.picks) ? finalResult.picks.length : 0;
@@ -701,6 +703,15 @@ export async function executeManagerSynthesis(
             finalResult.ui_title = 'Insufficient data';
             finalResult.reason = 'no picks with specialist coverage';
         }
+    }
+
+    if (finalResult && typeof finalResult === 'object' && Array.isArray(finalResult.picks)) {
+        const syncBoardSource = groundingContext?.rawBoard || safeDynamicPrompt;
+        syncCompilerProseWithFinalPicks(finalResult, {
+            initialPicks: initialPicksSnapshot,
+            headers: parseGameHeaders(syncBoardSource),
+            slateText: syncBoardSource
+        });
     }
 
     if (groundingContext?.agreementLevel) {

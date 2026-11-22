@@ -35,12 +35,36 @@ export interface UnifiedGameDossierEntry {
   eventId: string;
   matchup: string;
   sport: string;
+  rows?: string;
   fundamentals?: string;
   injuries?: string;
   market?: string;
   hasDirectionalSteam: boolean;
   outCountDiff: number;
   netMarginGap: number;
+}
+
+/**
+ * Formats compact R# row mappings (excluding volatile American odds prices)
+ * for inline display directly beneath each game's unified dossier header.
+ */
+export function formatCompactDossierRows(header: GameHeader): string {
+  if (!header || !Array.isArray(header.options) || header.options.length === 0) {
+    return '';
+  }
+  return header.options
+    .map((opt) => {
+      const id = String(opt?.id || '').trim().toUpperCase();
+      const rawText = String(opt?.text || '').trim();
+      if (!id || !rawText) return '';
+      const cleanedText = rawText
+        .replace(/\s*\(\s*[+-]\d{3,4}\s*\)\s*/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      return cleanedText ? `${id}:${cleanedText}` : '';
+    })
+    .filter(Boolean)
+    .join(' | ');
 }
 
 export interface UnifiedSlateDossier {
@@ -354,14 +378,18 @@ export async function fetchTwoHopSlateDossier(
       active_event_ids: activeEventIds,
       sections: [],
       tool_call_trace: [],
-      entries: activeHeaders.map((h) => ({
-        eventId: h.eventId,
-        matchup: `${h.away} @ ${h.home}`,
-        sport: h.sport,
-        hasDirectionalSteam: false,
-        outCountDiff: 0,
-        netMarginGap: 0,
-      })),
+      entries: activeHeaders.map((h) => {
+        const compactRows = formatCompactDossierRows(h);
+        return {
+          eventId: h.eventId,
+          matchup: `${h.away} @ ${h.home}`,
+          sport: h.sport,
+          ...(compactRows ? { rows: compactRows } : {}),
+          hasDirectionalSteam: false,
+          outCountDiff: 0,
+          netMarginGap: 0,
+        };
+      }),
       toolEvidenceItems: [],
       marketToolRecords: [],
       rawToolCallTrace: [],
@@ -438,10 +466,12 @@ export async function fetchTwoHopSlateDossier(
   const entryById = new Map<string, UnifiedGameDossierEntry>();
 
   for (const h of activeHeaders) {
+    const compactRows = formatCompactDossierRows(h);
     entryById.set(h.eventId, {
       eventId: h.eventId,
       matchup: `${h.away} @ ${h.home}`,
       sport: h.sport,
+      ...(compactRows ? { rows: compactRows } : {}),
       hasDirectionalSteam: false,
       outCountDiff: 0,
       netMarginGap: 0,
@@ -572,12 +602,12 @@ function formatSingleGameEntry(
   const inj = caps ? trimFieldPreservingSignal(injRaw, caps.inj) : injRaw;
   const mkt = caps ? trimFieldPreservingSignal(mktRaw, caps.mkt) : mktRaw;
 
-  return [
-    `=== GAME DOSSIER: ${entry.eventId} (${entry.matchup}) ===`,
-    `Fundamentals: ${fund}`,
-    `Injuries: ${inj}`,
-    `Market: ${mkt}`,
-  ].join('\n');
+  const lines = [`=== GAME DOSSIER: ${entry.eventId} (${entry.matchup}) ===`];
+  if (entry.rows && entry.rows.trim()) {
+    lines.push(`Rows: ${entry.rows.trim()}`);
+  }
+  lines.push(`Fundamentals: ${fund}`, `Injuries: ${inj}`, `Market: ${mkt}`);
+  return lines.join('\n');
 }
 
 /**
@@ -670,14 +700,18 @@ export function formatUnifiedPerGameDossier(
     return pass1;
   }
 
-  const overheadPerGame = 105;
+  const avgRowsOverhead = Math.ceil(
+    sorted.reduce((sum, item) => sum + (item.entry.rows ? item.entry.rows.trim().length + 7 : 0), 0) /
+      Math.max(1, sorted.length),
+  );
+  const overheadPerGame = 105 + avgRowsOverhead;
   const headerCost = indexHeader ? indexHeader.length + 2 : 0;
   const totalBodyBudget = maxChars - headerCost - sorted.length * overheadPerGame;
   const perGameBody = Math.floor(totalBodyBudget / sorted.length);
-  if (perGameBody >= 220) {
-    const fundCap = Math.max(100, Math.floor(perGameBody * 0.43));
-    const injCap = Math.max(95, Math.floor(perGameBody * 0.30));
-    const mktCap = Math.max(85, perGameBody - fundCap - injCap);
+  if (perGameBody >= 160) {
+    const fundCap = Math.max(70, Math.floor(perGameBody * 0.43));
+    const injCap = Math.max(60, Math.floor(perGameBody * 0.30));
+    const mktCap = Math.max(55, perGameBody - fundCap - injCap);
     const pass2 = assemble({ fund: fundCap, inj: injCap, mkt: mktCap });
     if (pass2.sectionsIncluded >= pass1.sectionsIncluded) {
       return pass2;

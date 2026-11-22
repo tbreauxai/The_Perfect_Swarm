@@ -55,7 +55,7 @@ describe('wf-1795367633040 P0-2: Two-sided steam, injury Health Balance, and Cri
     );
     expect(mlRes.success).toBe(true);
     expect(mlRes.summary).toContain(
-      'Steam: TOWARD home Atlanta Hawks ML (+114 -> +100, +3.3% imp) | AGAINST away Detroit Pistons ML (-134 -> -118)',
+      'Steam: TOWARD home Atlanta Hawks ML (+114 -> +100, +3.3pp implied) | AGAINST away Detroit Pistons ML (-134 -> -118)',
     );
 
     const spreadFetch = vi.fn(async () =>
