@@ -416,6 +416,7 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
 
                 params = {
                     task,
+                    ...(typeof body.userPrompt === 'string' && body.userPrompt.trim() ? { userPrompt: body.userPrompt.trim() } : {}),
                     data: prependCalibrationToData(data, originApp),
                     originApp,
                     callerAppId,
@@ -474,8 +475,10 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
                     c.req.header('cache-bypass') === '1' ||
                     c.req.header('x-cache-bypass') === '1' ||
                     c.req.header('nocache') === '1';
+                const getUserPrompt = url.searchParams.get('userPrompt')?.trim();
                 params = {
                     task,
+                    ...(getUserPrompt ? { userPrompt: getUserPrompt } : {}),
                     data: prependCalibrationToData(data, originApp),
                     originApp,
                     callerAppId,
@@ -705,6 +708,7 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
             const workflowParams: SwarmWorkflowParams = {
                 context,
                 task,
+                ...(typeof body.userPrompt === 'string' && body.userPrompt.trim() ? { userPrompt: body.userPrompt.trim() } : {}),
                 data: prependCalibrationToData(data, originApp),
                 originApp,
                 callerAppId,

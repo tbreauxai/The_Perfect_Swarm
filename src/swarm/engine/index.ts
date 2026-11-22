@@ -48,6 +48,11 @@ import { isDataRequest } from "../parser/responseGuards.ts";
 import { planTriage, type TriagePlan } from "./triagePlanner.ts";
 import { executeTriage, type CuratedDossier } from "./triageExecutor.ts";
 import { globalGameQueryCache } from "../cache/gameQueryCache.ts";
+import {
+    fetchTwoHopSlateDossier,
+    toSerializableCuratedDossier,
+    type UnifiedSlateDossier
+} from "./unifiedDossier.ts";
 export { planTriage, executeTriage, globalGameQueryCache };
 export type { TriagePlan, CuratedDossier };
 
@@ -273,6 +278,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
             // Hop 1: Two-Hop Triage & Fetch (when SeedManifest is provided or triageMode === 'two-hop')
             let hop1Plan: any = params.hop1Plan;
             let curatedDossier: CuratedDossier | any | undefined = params.curatedDossier;
+            let unifiedSlateDossier: UnifiedSlateDossier | undefined;
             const env = typeof process !== "undefined" ? process.env : {} as Record<string, string | undefined>;
             const isTwoHopSlateRun =
                 !params.seedManifest &&
@@ -319,8 +325,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     : parsedSlateHeaders;
                 const activeHeaders = scopedHeaders.length > 0 ? scopedHeaders : parsedSlateHeaders;
                 const selectedTools = [
-                    'get_injury_and_roster_delta',
                     'get_matchup_fundamentals',
+                    'get_injury_and_roster_delta',
                     'get_market_movement'
                 ].filter((t) => toolRegistry.has(t));
                 hop1Plan = {
@@ -334,7 +340,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                         0
                     ),
                     selected_tools: selectedTools,
-                    reasoning: 'Two-hop compact slate triage preserving R# pricing rows across activeEventIds with scoped tool prefetch.'
+                    reasoning: 'Two-hop compact slate triage preserving R# pricing rows across activeEventIds with unified 3-tool Hop 1 dossier prefetch.'
                 };
                 params.hop1Plan = hop1Plan;
                 params.onStage?.({
@@ -342,6 +348,27 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     plan: hop1Plan,
                     selected_tools: selectedTools
                 });
+
+                if (!curatedDossier && activeHeaders.length > 0 && selectedTools.length > 0) {
+                    unifiedSlateDossier = await fetchTwoHopSlateDossier(
+                        activeHeaders,
+                        toolRegistry,
+                        globalGameQueryCache,
+                        context,
+                        { env }
+                    );
+                    curatedDossier = toSerializableCuratedDossier(unifiedSlateDossier, []);
+                    params.curatedDossier = curatedDossier;
+                    params.onStage?.({
+                        stage: 'hop1_exec',
+                        sections: curatedDossier.sections,
+                        durationMs: curatedDossier.totalDurationMs
+                    });
+                    params.onStage?.({
+                        stage: 'curated_dossier',
+                        dossier: curatedDossier
+                    });
+                }
             }
 
             // Hop 2 Specialist Debate Start Event
@@ -372,7 +399,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 params,
                 optimizationEnabled,
                 coordinationEnabled,
-                bypassCache
+                bypassCache,
+                unifiedDossier: unifiedSlateDossier
             });
 
             // PS1: only ZERO analyst outputs is fatal (surfaces as swarm_error / HTTP 500).
@@ -435,11 +463,15 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                         return r;
                     });
                 });
-                const allToolCallTrace: ToolCallTraceEntry[] = mergeToolCallTraceEntries(
-                    flatReports.flatMap((r: any) => (Array.isArray(r?.toolCallTrace) ? r.toolCallTrace : []))
-                );
+                const allToolCallTrace: ToolCallTraceEntry[] = mergeToolCallTraceEntries([
+                    ...(unifiedSlateDossier?.rawToolCallTrace ?? []),
+                    ...flatReports.flatMap((r: any) => (Array.isArray(r?.toolCallTrace) ? r.toolCallTrace : []))
+                ]);
                 const allToolEvidenceItems = collectSuccessfulEvidenceItems({
-                    prePassedItems: flatReports.flatMap((r: any) => (Array.isArray(r?.toolEvidenceItems) ? r.toolEvidenceItems : [])),
+                    prePassedItems: [
+                        ...(unifiedSlateDossier?.toolEvidenceItems ?? []),
+                        ...flatReports.flatMap((r: any) => (Array.isArray(r?.toolEvidenceItems) ? r.toolEvidenceItems : []))
+                    ],
                     toolCallTrace: allToolCallTrace
                 });
                 if (!curatedDossier && (isTwoHopSlateRun || hop1Plan)) {
@@ -500,10 +532,51 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                         stage: 'curated_dossier',
                         dossier: curatedDossier
                     });
-                } else if (curatedDossier && clusterResult.seatVisibility && clusterResult.seatVisibility.length > 0) {
+                } else if (curatedDossier) {
+                    const existingSections = Array.isArray(curatedDossier.sections) ? [...curatedDossier.sections] : [];
+                    const existingTraces = Array.isArray(curatedDossier.tool_call_trace) ? [...curatedDossier.tool_call_trace] : [];
+                    const existingSectionByPair = new Map<string, number>();
+                    existingSections.forEach((sec: any, idx: number) => {
+                        existingSectionByPair.set(`${sec.tool}|${sec.event_id}`, idx);
+                    });
+                    const existingTracePairs = new Set<string>(
+                        existingTraces.map((t: any) => `${t.tool}|${t.eventId}`)
+                    );
+                    for (const item of allToolEvidenceItems) {
+                        const pair = `${item.tool}|${item.eventId}`;
+                        if (!existingSectionByPair.has(pair)) {
+                            const idx = existingSections.length;
+                            existingSectionByPair.set(pair, idx);
+                            existingSections.push({
+                                tool: item.tool,
+                                event_id: item.eventId,
+                                status: 'ok',
+                                summary: item.summary,
+                                tokenCost: Math.ceil((item.summary?.length || 0) / 4)
+                            });
+                        }
+                    }
+                    for (const t of allToolCallTrace) {
+                        const pair = `${t.tool}|${t.eventId}`;
+                        if (!existingTracePairs.has(pair)) {
+                            existingTracePairs.add(pair);
+                            const matchedIdx = existingSectionByPair.get(pair) ?? null;
+                            existingTraces.push({
+                                tool: String(t.tool || ''),
+                                eventId: String(t.eventId || ''),
+                                status: t.status || 'ok',
+                                tokenCost: typeof matchedIdx === 'number' ? existingSections[matchedIdx].tokenCost : 0,
+                                sectionIndex: matchedIdx,
+                                ...(typeof (t as any).durationMs === 'number' ? { durationMs: (t as any).durationMs } : {}),
+                                ...(typeof (t as any).cached === 'boolean' ? { cached: (t as any).cached } : {})
+                            });
+                        }
+                    }
                     curatedDossier = {
                         ...curatedDossier,
-                        seat_visibility: clusterResult.seatVisibility
+                        sections: existingSections,
+                        tool_call_trace: existingTraces,
+                        seat_visibility: clusterResult.seatVisibility || curatedDossier.seat_visibility || []
                     };
                     params.curatedDossier = curatedDossier;
                 }

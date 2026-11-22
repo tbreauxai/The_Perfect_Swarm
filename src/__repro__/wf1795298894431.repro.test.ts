@@ -73,7 +73,7 @@ describe('Flight Recorder Audit wf-1795298894431 — The_Perfect_Swarm Regressio
     );
     expect(cfbRes.summary).toContain('Kansas State Wildcats');
     expect(cfbRes.summary).toContain('Utah Utes');
-    expect(cfbRes.summary).toContain('Divergence: single_book_only');
+    expect(cfbRes.summary).toContain('Divergence: single_book');
     expect(cfbRes.summary).not.toContain('Steam: neutral');
     expect(cfbRes.summary).not.toContain('(N/A)');
 
@@ -83,7 +83,7 @@ describe('Flight Recorder Audit wf-1795298894431 — The_Perfect_Swarm Regressio
     );
     expect(nbaRes.summary).toContain('New York Knicks');
     expect(nbaRes.summary).toContain('away Portland Trail Blazers (-2.0 pts)');
-    expect(nbaRes.summary).toContain('Divergence: single_book_only');
+    expect(nbaRes.summary).toContain('Divergence: single_book');
     expect(nbaRes.summary).not.toContain('Steam: neutral');
     expect(nbaRes.summary).not.toContain('(N/A)');
 
@@ -92,7 +92,7 @@ describe('Flight Recorder Audit wf-1795298894431 — The_Perfect_Swarm Regressio
       { fetchFn, env },
     );
     expect(nhlRes.summary).toContain('away Boston Bruins ML (-120 -> -134');
-    expect(nhlRes.summary).toContain('Divergence: single_book_only');
+    expect(nhlRes.summary).toContain('Divergence: single_book');
     expect(nhlRes.summary).not.toContain('Steam: neutral');
     expect(nhlRes.summary).not.toContain('(N/A)');
 
@@ -115,7 +115,7 @@ describe('Flight Recorder Audit wf-1795298894431 — The_Perfect_Swarm Regressio
       'Compact slate context',
     );
     expect(evidence).toContain('Steam: away Boston Bruins ML');
-    expect(evidence).toContain('single_book_only');
+    expect(evidence).toContain('single_book');
   });
 
   it('P0-3: calibrates Risk Critic & Analyst instructions within Groq 5600 budget and preserves model_signal headers', () => {

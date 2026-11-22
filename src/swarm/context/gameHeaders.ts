@@ -267,7 +267,27 @@ export function renderHeaders(headers: GameHeader[], maxChars: number = 1600): s
     return upgraded.join('\n');
   }
 
-  return baseLines.join('\n').slice(0, maxChars);
+  // Whole-line packing fallback: never slice a game header mid-line/mid-word
+  const lines: string[] = [];
+  let packedLen = 0;
+  for (const h of headers) {
+    const withOneOpt = (h.options && h.options.length > 0) ? formatLine(h, 1) : formatLine(h, 0);
+    const zeroOpt = formatLine(h, 0);
+    const minimal = `event_id=${h.eventId} | ${h.away} @ ${h.home}`;
+    const sep = lines.length > 0 ? 1 : 0;
+    let chosen: string | null = null;
+    if (packedLen + sep + withOneOpt.length <= maxChars) {
+      chosen = withOneOpt;
+    } else if (packedLen + sep + zeroOpt.length <= maxChars) {
+      chosen = zeroOpt;
+    } else if (lines.length === 0 && minimal.length <= maxChars) {
+      chosen = minimal;
+    }
+    if (!chosen) break;
+    packedLen += sep + chosen.length;
+    lines.push(chosen);
+  }
+  return lines.join('\n');
 }
 
 /**

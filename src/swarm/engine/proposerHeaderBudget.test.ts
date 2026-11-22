@@ -3,10 +3,13 @@ import { proposerHeaderBudget } from './analystExecution.ts';
 import { seatBudget } from '../context/promptBudget.ts';
 
 describe('proposerHeaderBudget (S2)', () => {
-  it('returns 1680 for groq (5600 * 0.3) and 4200 for 14000-char providers', () => {
+  it('returns 1680 for groq, 2160 for mistral, 6600 for openrouter/cloudflare, and 8400 for nvidia/gemini', () => {
     expect(proposerHeaderBudget('groq')).toBe(1680);
-    expect(proposerHeaderBudget('openrouter')).toBe(4200);
-    expect(proposerHeaderBudget('nvidia')).toBe(4200);
+    expect(proposerHeaderBudget('mistral')).toBe(2160);
+    expect(proposerHeaderBudget('openrouter')).toBe(6600);
+    expect(proposerHeaderBudget('cloudflare')).toBe(6600);
+    expect(proposerHeaderBudget('nvidia')).toBe(8400);
+    expect(proposerHeaderBudget('gemini')).toBe(8400);
   });
 
   it('never exceeds seat maxPromptChars for any provider', () => {

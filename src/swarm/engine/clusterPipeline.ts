@@ -46,6 +46,7 @@ import { TokenEstimator } from '../compression/tokenEstimator.ts';
 import { globalProviderLimiter, PROVIDER_LIMITS } from '../providers/limiter.ts';
 import { isScorecardMode } from './scorecard.ts';
 import { evaluateEarlyExit } from './earlyExit.ts';
+import type { UnifiedSlateDossier } from './unifiedDossier.ts';
 
 export interface ClusterPipelineParams {
     task: string;
@@ -66,6 +67,7 @@ export interface ClusterPipelineParams {
     optimizationEnabled: boolean;
     coordinationEnabled: boolean;
     bypassCache: boolean;
+    unifiedDossier?: UnifiedSlateDossier;
 }
 
 export interface ClusterPipelineResult {
@@ -94,6 +96,9 @@ export interface ClusterPipelineResult {
         slateChars: number;
         rIdCount: number;
         coveredEventIds: string[];
+        dossierChars: number;
+        dossierSectionsIncluded: number;
+        dossierTruncated: boolean;
     }>;
 }
 
@@ -294,6 +299,7 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
 
         const executeAnalyst = createAnalystExecutor({
             task,
+            userPrompt: params.userPrompt ?? params.userQuestion,
             chunks,
             profile,
             historicalContext,
@@ -309,6 +315,7 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
             scorecardMode: isScorecardMode(params, settings),
             onStage: params.onStage,
             curatedDossier: curatedDossierText,
+            unifiedDossier: p.unifiedDossier,
             disableAdHocTools,
             eventIds: params.eventIds,
             triageMode: (params as any).triageMode,
@@ -649,7 +656,7 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
                 : allChunkHeaders;
             const parsedChunkHeaders = scopedChunkHeaders.length > 0 ? scopedChunkHeaders : allChunkHeaders;
             const rawChunk = chunks[0];
-            const headerCap = (params as any)?.triageMode === 'two-hop' || (rawChunk && rawChunk.includes('rows=R')) ? 4200 : 1600;
+            const headerCap = (params as any)?.triageMode === 'two-hop' || (rawChunk && rawChunk.includes('rows=R')) ? 8400 : 1600;
             const cappedChunk = rawChunk && rawChunk.length > headerCap ? rawChunk.slice(0, headerCap) : rawChunk;
             const headersPayload = parsedChunkHeaders.length > 0
                 ? renderHeaders(parsedChunkHeaders, headerCap)
