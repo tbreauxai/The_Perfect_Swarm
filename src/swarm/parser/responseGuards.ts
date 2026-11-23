@@ -9,13 +9,47 @@ import {
 import type { VerificationResult } from '../types.ts';
 import { parseJsonSafe, parseJsonSafeWithStatus } from './parseJsonSafe.ts';
 
+const POLICY_PRICE_BAND_REGEXES: RegExp[] = [
+    /\bbetween\s+[+-]\d{3,4}(?!\.\d)\s+and\s+[+-]\d{3,4}(?!\.\d)\b/gi,
+    /\b(?:within|inside|in)\s+(?:the\s+|a\s+)?(?:policy\s+|price\s+|odds\s+)?[+-]\d{3,4}(?!\.\d)\s*(?:to|–|—|-)\s*[+-]\d{3,4}(?!\.\d)(?:\s+(?:window|band|range|corridor|zone|limit|cap|pricing|odds|policy))?\b/gi,
+    /(?<![(\dA-Za-z.-])[+-]\d{3,4}(?!\.\d)\s+to\s+[+-]\d{3,4}(?!\.\d)\s+(?:window|band|range|corridor|zone|limit|cap|pricing|odds|policy)\b/gi,
+    /\b(?:steeper|heavier|juicier|worse|shorter|longer|capped|floor|ceiling|max(?:imum)?|min(?:imum)?)\s+(?:than|at|of)\s+[+-]\d{3,4}(?!\.\d)\b/gi
+];
+
+const BARE_POLICY_PRICE_BAND_REGEX =
+    /(?<![(\dA-Za-z.-])-\d{3,4}(?!\.\d)\s+to\s+\+\d{3,4}(?!\.\d)\b/gi;
+
+function protectPolicyPriceBands(
+    text: string,
+    includeBareOppositeSignBand: boolean
+): { masked: string; tokens: string[] } {
+    const tokens: string[] = [];
+    const patterns = includeBareOppositeSignBand
+        ? [...POLICY_PRICE_BAND_REGEXES, BARE_POLICY_PRICE_BAND_REGEX]
+        : POLICY_PRICE_BAND_REGEXES;
+    let masked = text;
+    for (const rx of patterns) {
+        masked = masked.replace(rx, (match) => {
+            const idx = tokens.push(match) - 1;
+            return `__POLICY_PRICE_BAND_${idx}__`;
+        });
+    }
+    return { masked, tokens };
+}
+
+function restorePolicyPriceBands(text: string, tokens: string[]): string {
+    if (tokens.length === 0) return text;
+    return text.replace(/__POLICY_PRICE_BAND_(\d+)__/g, (_m, idxStr) => tokens[Number(idxStr)] ?? '');
+}
+
 /**
  * Strips approximate odds, percents, and payouts (e.g. ~65%, ~+650, ~=, "about +650")
  * from model-generated analysis/summary text without replacing them with defaults.
  */
 export function stripApproximateOdds(text: string, options?: { allowExactOdds?: boolean }): string {
     if (!text || typeof text !== 'string') return text;
-    let out = text
+    const { masked, tokens } = protectPolicyPriceBands(text, true);
+    let out = masked
         .replace(/(?:~=|~|≈)\s*[+-]?\d+(?:\.\d+)?%?/g, '')
         .replace(/~=/g, '')
         .replace(/\b(?:about|approx\.?|approximately|around|roughly)\s*(?:[+-]\d{3,4}|\d+(?:\.\d+)?%|\$\d+(?:\.\d+)?)/gi, '');
@@ -40,6 +74,7 @@ export function stripApproximateOdds(text: string, options?: { allowExactOdds?: 
             .trim();
         return cleanedInner ? `(${cleanedInner})` : '';
     });
+    out = restorePolicyPriceBands(out, tokens);
     return out
         .replace(/,\s*,+/g, ',')
         .replace(/\s+([,.;:!?])/g, '$1')
@@ -56,10 +91,11 @@ export function stripApproximateOdds(text: string, options?: { allowExactOdds?: 
 export function sanitizeMoneylinePriceMoves(text: string): string {
     if (!text || typeof text !== 'string') return text;
 
+    const { masked, tokens } = protectPolicyPriceBands(text, true);
     const alreadyMentionsSteam = (prefix: string): boolean => /\bsteam\b/i.test(prefix.slice(-64));
 
     // 1. Parenthetical American ML move ranges: (-111 to -126), (-111 -> -126, +3.6pp implied), (home -111 -> -126)
-    let out = text.replace(
+    let out = masked.replace(
         /\(\s*(?:(?:home|away)\s+)?[+-]\d{3,4}(?!\.\d)\s*(?:->|→|to|–|—)\s*[+-]\d{3,4}(?!\.\d)(?:\s*,\s*([^()]+))?\s*\)/gi,
         (_full, trailingNote: string | undefined, offset: number, fullStr: string) => {
             const prefix = fullStr.slice(0, offset);
@@ -81,6 +117,7 @@ export function sanitizeMoneylinePriceMoves(text: string): string {
         }
     );
 
+    out = restorePolicyPriceBands(out, tokens);
     return out
         .replace(/\(\s*\)/g, '')
         .replace(/\s+([,.;:!?])/g, '$1')

@@ -362,6 +362,14 @@ async function runWithConcurrencyLimit<T, R>(
   return results;
 }
 
+export const HOP1_TOOL_EXECUTION_TIMEOUT_MS = 4000;
+export const HOP1_MAX_CONCURRENCY = 6;
+const HOP1_HARD_MAX_CONCURRENCY = 8;
+
+function isHop1TimeoutError(error?: string): boolean {
+  return /\b(?:timeout|timed\s+out|exceeded\s+\d+ms|AbortError)\b/i.test(String(error || ''));
+}
+
 /**
  * Hop 1 Unified 3-Tool Dossier Fetcher:
  * Concurrently executes get_matchup_fundamentals, get_injury_and_roster_delta,
@@ -372,12 +380,22 @@ export async function fetchTwoHopSlateDossier(
   toolRegistry: ToolRegistry,
   cache: GameQueryCache,
   context?: SwarmContext,
-  options?: { env?: Record<string, string | undefined>; fetchFn?: typeof fetch; qdrantClient?: any; timeoutMs?: number },
+  options?: {
+    env?: Record<string, string | undefined>;
+    fetchFn?: typeof fetch;
+    qdrantClient?: any;
+    timeoutMs?: number;
+    maxConcurrency?: number;
+  },
 ): Promise<UnifiedSlateDossier> {
   const startTime = Date.now();
   const availableTools = TWO_HOP_DOSSIER_TOOLS.filter((t) => toolRegistry.has(t));
   const activeEventIds = activeHeaders.map((h) => h.eventId).filter(Boolean);
-  const timeoutMs = options?.timeoutMs ?? TOOL_EXECUTION_TIMEOUT_MS;
+  const timeoutMs = options?.timeoutMs ?? HOP1_TOOL_EXECUTION_TIMEOUT_MS;
+  const maxConcurrency = Math.max(
+    1,
+    Math.min(options?.maxConcurrency ?? HOP1_MAX_CONCURRENCY, HOP1_HARD_MAX_CONCURRENCY)
+  );
 
   if (activeHeaders.length === 0 || availableTools.length === 0) {
     return {
@@ -427,29 +445,48 @@ export async function fetchTwoHopSlateDossier(
   }
 
   const runPlayerLogsCache = new Map<string, Promise<any[]>>();
-  const executed = await runWithConcurrencyLimit(calls, 6, async (c) => {
-    const res = await executeToolWithCacheAndTimeout(
+  const executed = await runWithConcurrencyLimit(calls, maxConcurrency, async (c) => {
+    const execOpts = {
+      env: options?.env,
+      fetchFn: options?.fetchFn,
+      qdrantClient: options?.qdrantClient,
+      playerLogsCache: runPlayerLogsCache,
+      game: {
+        event_id: c.header.eventId,
+        sport: c.header.sport,
+        home_team: c.header.home,
+        away_team: c.header.away,
+        home_team_abbr: c.header.home,
+        away_team_abbr: c.header.away,
+        ...(Array.isArray(c.header.options) && c.header.options.length > 0 ? { options: c.header.options } : {}),
+      },
+    };
+
+    let res = await executeToolWithCacheAndTimeout(
       { tool: c.tool, parameters: c.parameters },
       { game_id: c.header.eventId },
       toolRegistry,
       cache,
       timeoutMs,
-      {
-        env: options?.env,
-        fetchFn: options?.fetchFn,
-        qdrantClient: options?.qdrantClient,
-        playerLogsCache: runPlayerLogsCache,
-        game: {
-          event_id: c.header.eventId,
-          sport: c.header.sport,
-          home_team: c.header.home,
-          away_team: c.header.away,
-          home_team_abbr: c.header.home,
-          away_team_abbr: c.header.away,
-          ...(Array.isArray(c.header.options) && c.header.options.length > 0 ? { options: c.header.options } : {}),
-        },
-      } as any,
+      execOpts,
     );
+
+    // P0-5: Retry once automatically on timeout before recording status: "error".
+    if (!res.success && isHop1TimeoutError(res.error)) {
+      cache.delete(c.header.eventId, c.tool, c.parameters);
+      const retryRes = await executeToolWithCacheAndTimeout(
+        { tool: c.tool, parameters: c.parameters },
+        { game_id: c.header.eventId },
+        toolRegistry,
+        cache,
+        timeoutMs,
+        execOpts,
+      );
+      res = {
+        ...retryRes,
+        durationMs: (res.durationMs ?? 0) + (retryRes.durationMs ?? 0),
+      };
+    }
 
     if (context?.addEvent) {
       context.addEvent({

@@ -700,6 +700,7 @@ export interface PlayerGameLogRow {
   depth_chart_order?: number | string | null;
   impact_tier?: number | null;
   impact_weight?: number | null;
+  stats?: Record<string, any> | null;
 }
 
 type NormalizedInjurySport = 'nba' | 'nhl' | 'nfl' | 'ncaaf' | 'other';
@@ -774,10 +775,22 @@ async function fetchBatchedPlayerGameLogs(
   fetchFn?: typeof fetch,
   runCache?: Map<string, Promise<PlayerGameLogRow[]>>
 ): Promise<PlayerGameLogRow[]> {
-  const env = envInput || (typeof process !== 'undefined' ? process.env : {});
-  const supabaseUrl = env.SUPABASE_URL?.trim().replace(/\/+$/, '');
-  const serviceKey = (env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY || '').trim();
-  if (!supabaseUrl || !serviceKey) return [];
+  const procEnv = typeof process !== 'undefined' ? process.env : {};
+  const env = envInput || procEnv;
+  const supabaseUrl = (env.SUPABASE_URL || (!fetchFn ? procEnv.SUPABASE_URL : '') || '').trim().replace(/\/+$/, '');
+  const explicitServiceKey = (env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY || '').trim();
+  const runtimeFallbackKey = !fetchFn
+    ? (
+        procEnv.SUPABASE_SERVICE_ROLE_KEY ||
+        procEnv.SUPABASE_SERVICE_KEY ||
+        env.SUPABASE_ANON_KEY ||
+        env.SUPABASE_PUBLISHABLE_KEY ||
+        procEnv.SUPABASE_ANON_KEY ||
+        ''
+      ).trim()
+    : '';
+  const apiKey = explicitServiceKey || runtimeFallbackKey;
+  if (!supabaseUrl || !apiKey) return [];
 
   const cacheKey = `${supabaseUrl}::player_game_logs`;
   if (runCache?.has(cacheKey)) {
@@ -797,13 +810,14 @@ async function fetchBatchedPlayerGameLogs(
 
   const loader = (async (): Promise<PlayerGameLogRow[]> => {
     const headers = {
-      apikey: serviceKey,
-      Authorization: `Bearer ${serviceKey}`,
+      apikey: apiKey,
+      Authorization: `Bearer ${apiKey}`,
       Accept: 'application/json'
     };
     const urls = [
-      `${supabaseUrl}/rest/v1/player_game_logs?order=game_date.desc&limit=800`,
-      `${supabaseUrl}/rest/v1/player_game_logs?limit=800`
+      `${supabaseUrl}/rest/v1/player_game_logs?order=game_date.desc&limit=2500`,
+      `${supabaseUrl}/rest/v1/player_game_logs?order=created_at.desc&limit=2500`,
+      `${supabaseUrl}/rest/v1/player_game_logs?limit=2500`
     ];
     for (const url of urls) {
       try {
@@ -921,14 +935,15 @@ function buildTeamLogIndex(
     }
     entry.games += 1;
 
-    const minVal = parseNumericStat(row.mpg ?? row.avg_minutes ?? row.minutes ?? row.min);
+    const stObj = (row.stats && typeof row.stats === 'object') ? row.stats : {};
+    const minVal = parseNumericStat(row.mpg ?? row.avg_minutes ?? row.minutes ?? row.min ?? stObj.mpg ?? stObj.minutes ?? stObj.min);
     if (minVal !== null) {
       entry.minSum += minVal;
       entry.minCnt += 1;
     }
-    const ptsVal = parseNumericStat(row.ppg ?? row.avg_points ?? row.points ?? row.pts);
-    const goalsVal = parseNumericStat(row.goals);
-    const assistsVal = parseNumericStat(row.assists);
+    const ptsVal = parseNumericStat(row.ppg ?? row.avg_points ?? row.points ?? row.pts ?? stObj.ppg ?? stObj.points ?? stObj.pts);
+    const goalsVal = parseNumericStat(row.goals ?? stObj.goals ?? stObj.g);
+    const assistsVal = parseNumericStat(row.assists ?? stObj.assists ?? stObj.a);
     if (ptsVal !== null) {
       entry.ptsSum += ptsVal;
       entry.ptsCnt += 1;
@@ -940,30 +955,30 @@ function buildTeamLogIndex(
       entry.totalPoints += comb;
     }
 
-    const toiVal = parseNumericStat(row.avg_toi ?? row.toi_minutes ?? row.toi ?? row.time_on_ice);
+    const toiVal = parseNumericStat(row.avg_toi ?? row.toi_minutes ?? row.toi ?? row.time_on_ice ?? stObj.toi ?? stObj.time_on_ice ?? stObj.toi_minutes);
     if (toiVal !== null) {
       entry.toiSum += toiVal;
       entry.toiCnt += 1;
     }
 
-    const passAtt = parseNumericStat(row.pass_attempts ?? row.passing_attempts ?? row.pass_att ?? row.attempts);
+    const passAtt = parseNumericStat(row.pass_attempts ?? row.passing_attempts ?? row.pass_att ?? row.attempts ?? stObj.pass_attempts ?? stObj.pass_att);
     if (passAtt !== null) entry.totalPassAttempts += passAtt;
 
-    const rushAtt = parseNumericStat(row.rush_attempts ?? row.rushing_attempts) ?? 0;
-    const targets = parseNumericStat(row.targets) ?? 0;
-    const rec = parseNumericStat(row.receptions) ?? 0;
+    const rushAtt = parseNumericStat(row.rush_attempts ?? row.rushing_attempts ?? stObj.rush_attempts ?? stObj.rush_att) ?? 0;
+    const targets = parseNumericStat(row.targets ?? stObj.targets) ?? 0;
+    const rec = parseNumericStat(row.receptions ?? stObj.receptions ?? stObj.rec) ?? 0;
     entry.totalTouches += rushAtt + Math.max(targets, rec);
 
-    const startsNum = parseNumericStat(row.games_started ?? row.starts);
+    const startsNum = parseNumericStat(row.games_started ?? row.starts ?? stObj.games_started ?? stObj.starts);
     if (startsNum !== null) entry.starts += startsNum;
-    else if (row.started === true || row.started === 1) entry.starts += 1;
+    else if (row.started === true || row.started === 1 || stObj.started === true || stObj.started === 1) entry.starts += 1;
 
-    const snapPct = parseNumericStat(row.snap_pct);
+    const snapPct = parseNumericStat(row.snap_pct ?? stObj.snap_pct);
     if (snapPct !== null) {
       entry.snapMax = entry.snapMax === null ? snapPct : Math.max(entry.snapMax, snapPct);
     }
-    if (row.is_starter === true || row.starter === true) entry.isStarter = true;
-    const depthOrd = parseNumericStat(row.depth_chart_order);
+    if (row.is_starter === true || row.starter === true || stObj.is_starter === true || stObj.starter === true) entry.isStarter = true;
+    const depthOrd = parseNumericStat(row.depth_chart_order ?? stObj.depth_chart_order);
     if (depthOrd !== null) {
       entry.depthChartOrder = entry.depthChartOrder === null ? depthOrd : Math.min(entry.depthChartOrder, depthOrd);
     }
@@ -1087,6 +1102,8 @@ function classifyPlayerInjuryImpact(
   const inlineDepth = parseNumericStat(player?.depth_chart_order);
   const inlineStarter = player?.is_starter === true || player?.starter === true || inlineDepth === 1;
 
+  const inlineTierNum = parseNumericStat(player?.impact_tier);
+  const hasExplicitTier = inlineTierNum === 1 || inlineTierNum === 2 || inlineTierNum === 3;
   const hasInlineStat =
     inlineMpg !== null ||
     inlinePpg !== null ||
@@ -1097,7 +1114,20 @@ function classifyPlayerInjuryImpact(
     inlineDepth !== null ||
     inlineStarter;
 
-  // Flat 1.0 fallback ONLY when the entire team has zero player_game_logs rows AND no inline stats/starter metadata
+  // If upstream payload already classified an explicit impact_tier (1/2/3) without game logs,
+  // apply proper tier weights (QB1 5.0, Starting G 4.0, Tier 1 3.0, Tier 2 1.5, Tier 3 0.5) instead of flat 1.0.
+  if (!teamIndex.hasLogs && !hasInlineStat && hasExplicitTier) {
+    const t = inlineTierNum as 1 | 2 | 3;
+    if (t === 1) {
+      if (sport === 'nfl' && /^QB$/i.test(pos)) return { tier: 1, weight: 5.0, usedWeightedScoring: true };
+      if (sport === 'nhl' && /^(?:G|GK|GOALIE|GOALTENDER)$/i.test(pos)) return { tier: 1, weight: 4.0, usedWeightedScoring: true };
+      return { tier: 1, weight: 3.0, usedWeightedScoring: true };
+    }
+    if (t === 2) return { tier: 2, weight: 1.5, usedWeightedScoring: true };
+    return { tier: 3, weight: 0.5, usedWeightedScoring: true };
+  }
+
+  // Flat 1.0 fallback ONLY when the entire team has zero player_game_logs rows AND no inline stats/starter/tier metadata
   if (!teamIndex.hasLogs && !hasInlineStat) {
     return { tier: 2, weight: 1.0, usedWeightedScoring: false };
   }
@@ -1236,11 +1266,14 @@ export function classifyInjuryHealthBalance(params: {
     let balance: HealthBalanceClassification;
     let label: string;
 
-    if (homeGap >= 2.5) {
-      if (homeTier1Q.length > 0) {
-        balance = 'uncertain_questionable';
-        label = `uncertain_questionable (${homeTeam}: Tier-1 Q ${homeTier1Q.join(', ')})`;
-      } else if (homeQ >= qCap) {
+    if (homeTier1Q.length > 0 || awayTier1Q.length > 0) {
+      balance = 'uncertain_questionable';
+      const tier1Notes: string[] = [];
+      if (homeTier1Q.length > 0) tier1Notes.push(`${homeTeam}: Tier-1 Q ${homeTier1Q.join(', ')}`);
+      if (awayTier1Q.length > 0) tier1Notes.push(`${awayTeam}: Tier-1 Q ${awayTier1Q.join(', ')}`);
+      label = `uncertain_questionable (${tier1Notes.join('; ')})`;
+    } else if (homeGap >= 2.5) {
+      if (homeQ >= qCap) {
         if (homeGap >= 6.0) {
           balance = 'conditional_home_advantage';
           label = weightedMode
@@ -1257,10 +1290,7 @@ export function classifyInjuryHealthBalance(params: {
           : `home_advantage (${homeTeam})`;
       }
     } else if (awayGap >= 2.5) {
-      if (awayTier1Q.length > 0) {
-        balance = 'uncertain_questionable';
-        label = `uncertain_questionable (${awayTeam}: Tier-1 Q ${awayTier1Q.join(', ')})`;
-      } else if (awayQ >= qCap) {
+      if (awayQ >= qCap) {
         if (awayGap >= 6.0) {
           balance = 'conditional_away_advantage';
           label = weightedMode
@@ -1276,12 +1306,6 @@ export function classifyInjuryHealthBalance(params: {
           ? `away_advantage (${awayTeam}, +${awayGap.toFixed(1)} impact edge)`
           : `away_advantage (${awayTeam})`;
       }
-    } else if (homeTier1Q.length > 0 || awayTier1Q.length > 0) {
-      balance = 'uncertain_questionable';
-      const tier1Notes: string[] = [];
-      if (homeTier1Q.length > 0) tier1Notes.push(`${homeTeam}: Tier-1 Q ${homeTier1Q.join(', ')}`);
-      if (awayTier1Q.length > 0) tier1Notes.push(`${awayTeam}: Tier-1 Q ${awayTier1Q.join(', ')}`);
-      label = `uncertain_questionable (${tier1Notes.join('; ')})`;
     } else if (homeQ >= qCap && awayQ >= qCap) {
       balance = 'uncertain_questionable';
       label = 'uncertain_questionable';
@@ -1948,6 +1972,34 @@ export const getPlayerPropSplitsTool: SwarmTool = {
 };
 
 /**
+ * P1-2: Returns true for indoor leagues (NBA, NHL, NCAAB, WNBA) where weather is irrelevant
+ * and get_environment_and_weather must never be called during Critic or verification loops.
+ */
+export function isIndoorLeagueGame(eventId?: string, sport?: string): boolean {
+  const idNorm = String(eventId || '').trim().toLowerCase();
+  if (/^(?:nba|nhl|ncaab|wnba|mens-college-basketball|womens-college-basketball|college-basketball)-/.test(idNorm)) {
+    return true;
+  }
+  if (/^(?:nfl|ncaaf|mlb|soccer|epl|mls|cfb|college-football)-/.test(idNorm)) {
+    return false;
+  }
+  const sportNorm = String(sport || '').trim().toLowerCase();
+  if (
+    sportNorm === 'nba' ||
+    sportNorm === 'nhl' ||
+    sportNorm === 'ncaab' ||
+    sportNorm === 'wnba' ||
+    sportNorm === 'basketball_nba' ||
+    sportNorm === 'basketball_ncaab' ||
+    sportNorm === 'basketball_wnba' ||
+    sportNorm === 'icehockey_nhl'
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * Tool 4: get_environment_and_weather
  * Parameters: game_id: string, is_dome?: boolean
  * Short-circuits when is_dome: true (either passed as argument or returned by RPC).
@@ -2579,10 +2631,18 @@ export const getMarketMovementTool: SwarmTool = {
       if (raw.includes('nba') || raw.startsWith('nba-')) return 'basketball_nba';
       if (raw.includes('nhl') || raw.startsWith('nhl-') || raw.includes('hockey')) return 'icehockey_nhl';
       if (raw.includes('mlb') || raw.startsWith('mlb-') || raw.includes('baseball')) return 'baseball_mlb';
-      return 'basketball_nba';
+      return 'unknown';
     };
     const sportKey = inferSportKey();
-    const spreadThreshold = (sportKey === 'americanfootball_nfl' || sportKey === 'icehockey_nhl' || sportKey === 'baseball_mlb') ? 1.0 : 1.5;
+    // P0-3: NBA/NFL spread steam threshold is 1.0 pt (or >= 0.5 key-number move in NFL/NHL/MLB).
+    const spreadThreshold = (
+      sportKey === 'basketball_nba' ||
+      sportKey === 'americanfootball_nfl' ||
+      sportKey === 'icehockey_nhl' ||
+      sportKey === 'baseball_mlb'
+    )
+      ? 1.0
+      : 1.5;
     const totalThreshold = (sportKey === 'icehockey_nhl' || sportKey === 'baseball_mlb') ? 0.5 : 1.0;
 
     const americanToImpliedProb = (odds: number): number | null => {
@@ -2609,21 +2669,38 @@ export const getMarketMovementTool: SwarmTool = {
     const openMlAwayNum = toNum(openMlAway);
     const currMlAwayNum = toNum(currMlAway);
 
+    const crossesNflKeyNumber = (): boolean => {
+      if (sportKey !== 'americanfootball_nfl' || !openResolved || !currResolved || !('home' in openResolved) || !('home' in currResolved)) {
+        return false;
+      }
+      const a = Math.abs(openResolved.home);
+      const b = Math.abs(currResolved.home);
+      if (Math.abs(a - b) < 0.5) return false;
+      const lo = Math.min(a, b);
+      const hi = Math.max(a, b);
+      return (lo <= 3 && hi >= 3 && (a === 3 || b === 3 || (lo < 3 && hi > 3))) ||
+        (lo <= 7 && hi >= 7 && (a === 7 || b === 7 || (lo < 7 && hi > 7)));
+    };
+
     const detectSpreadSteam = (): string | null => {
-      if (spreadDeltaHome === null || Math.abs(spreadDeltaHome) < spreadThreshold) return null;
-      const pts = Math.abs(spreadDeltaHome).toFixed(1);
+      if (spreadDeltaHome === null) return null;
+      const absMove = Math.abs(spreadDeltaHome);
+      const qualifies = absMove >= spreadThreshold || (absMove >= 0.5 && (crossesNflKeyNumber() || sportKey === 'icehockey_nhl' || sportKey === 'baseball_mlb'));
+      if (!qualifies) return null;
+      const pts = absMove.toFixed(1);
+      const ptUnit = pts === '1.0' ? 'pt' : 'pts';
       if (openResolved && currResolved && 'home' in openResolved && 'home' in currResolved) {
         const homeRange = `${fmtSigned(openResolved.home)} -> ${fmtSigned(currResolved.home)}`;
         const awayRange = `${fmtSigned(openResolved.away)} -> ${fmtSigned(currResolved.away)}`;
         if (spreadDeltaHome < 0) {
-          return `TOWARD home ${homeLabel} (${homeRange}, ${pts} pts) | AGAINST away ${awayLabel} (${awayRange})`;
+          return `TOWARD home ${homeLabel} (${homeRange}, ${pts} ${ptUnit}) | AGAINST away ${awayLabel} (${awayRange})`;
         }
-        return `TOWARD away ${awayLabel} (${awayRange}, ${pts} pts) | AGAINST home ${homeLabel} (${homeRange})`;
+        return `TOWARD away ${awayLabel} (${awayRange}, ${pts} ${ptUnit}) | AGAINST home ${homeLabel} (${homeRange})`;
       }
       if (spreadDeltaHome < 0) {
-        return `TOWARD home ${homeLabel} (${pts} pts) | AGAINST away ${awayLabel}`;
+        return `TOWARD home ${homeLabel} (${pts} ${ptUnit}) | AGAINST away ${awayLabel}`;
       }
-      return `TOWARD away ${awayLabel} (${pts} pts) | AGAINST home ${homeLabel}`;
+      return `TOWARD away ${awayLabel} (${pts} ${ptUnit}) | AGAINST home ${homeLabel}`;
     };
 
     const detectMlSteam = (): { text: string; impShiftAbs: number } | null => {
@@ -2698,20 +2775,31 @@ export const getMarketMovementTool: SwarmTool = {
     const mlSteamObj = detectMlSteam();
     const totalSteamText = detectTotalSteam();
 
+    // P0-3: Compute side steam (spread or ML) and total steam independently.
+    // Whenever BOTH move, emit both on the Steam: line instead of letting one hide the other.
+    let sideSteamText: string | null = null;
+    let sideSteamKind: 'spread' | 'ml' | null = null;
+    if (isMlRequested) {
+      if (mlSteamObj) { sideSteamText = mlSteamObj.text; sideSteamKind = 'ml'; }
+      else if (spreadSteamText) { sideSteamText = spreadSteamText; sideSteamKind = 'spread'; }
+    } else {
+      if (spreadSteamText) { sideSteamText = spreadSteamText; sideSteamKind = 'spread'; }
+      else if (mlSteamObj) { sideSteamText = mlSteamObj.text; sideSteamKind = 'ml'; }
+    }
+
     let orderedSteam: string | null = null;
     let activeSteamKind: 'spread' | 'ml' | 'total' | null = null;
-    if (isMlRequested) {
-      if (mlSteamObj) { orderedSteam = mlSteamObj.text; activeSteamKind = 'ml'; }
-      else if (spreadSteamText) { orderedSteam = spreadSteamText; activeSteamKind = 'spread'; }
-      else if (totalSteamText) { orderedSteam = totalSteamText; activeSteamKind = 'total'; }
-    } else if (isTotalRequested) {
-      if (totalSteamText) { orderedSteam = totalSteamText; activeSteamKind = 'total'; }
-      else if (spreadSteamText) { orderedSteam = spreadSteamText; activeSteamKind = 'spread'; }
-      else if (mlSteamObj) { orderedSteam = mlSteamObj.text; activeSteamKind = 'ml'; }
-    } else {
-      if (spreadSteamText) { orderedSteam = spreadSteamText; activeSteamKind = 'spread'; }
-      else if (mlSteamObj) { orderedSteam = mlSteamObj.text; activeSteamKind = 'ml'; }
-      else if (totalSteamText) { orderedSteam = totalSteamText; activeSteamKind = 'total'; }
+    if (sideSteamText && totalSteamText) {
+      orderedSteam = isTotalRequested
+        ? `Total ${totalSteamText} | Side ${sideSteamText}`
+        : `Side ${sideSteamText} | Total ${totalSteamText}`;
+      activeSteamKind = sideSteamKind;
+    } else if (sideSteamText) {
+      orderedSteam = sideSteamText;
+      activeSteamKind = sideSteamKind;
+    } else if (totalSteamText) {
+      orderedSteam = totalSteamText;
+      activeSteamKind = 'total';
     }
 
     const explicitNonNeutralSteam =

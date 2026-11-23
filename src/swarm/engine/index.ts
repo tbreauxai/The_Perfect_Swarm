@@ -817,8 +817,22 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     })
                     .filter(Boolean)
                     .join('\n\n');
-                const baseJoinedEvidence = [joinedToolEvidence, calibrationBlock].filter(Boolean).join('\n\n');
-                const verifierToolResults = verifierEvidence || baseJoinedEvidence;
+                const hop1CuratedDossierEvidence = (
+                    (curatedDossier && Array.isArray((curatedDossier as any).sections) ? (curatedDossier as any).sections : null) ??
+                    (unifiedSlateDossier && Array.isArray(unifiedSlateDossier.sections) ? unifiedSlateDossier.sections : [])
+                )
+                    .map((sec: any) => {
+                        const sum = typeof sec?.summary === 'string' ? sec.summary.trim() : '';
+                        if (!sum) return '';
+                        const evId = typeof sec?.event_id === 'string' ? sec.event_id.trim() : '';
+                        return evId && !sum.includes(evId) ? `EVENT ${evId}\n${sum}` : sum;
+                    })
+                    .filter(Boolean)
+                    .join('\n\n');
+                const baseJoinedEvidence = [hop1CuratedDossierEvidence, joinedToolEvidence, calibrationBlock].filter(Boolean).join('\n\n');
+                const verifierToolResults = [hop1CuratedDossierEvidence, verifierEvidence || baseJoinedEvidence]
+                    .filter((part, idx, arr) => Boolean(part) && (idx === 0 || !arr[0].includes(part)))
+                    .join('\n\n');
 
                 if (allPlaceholderOrDataRequest) {
                     const criticParts: string[] = [];

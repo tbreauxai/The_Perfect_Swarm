@@ -235,6 +235,7 @@ export function syncCompilerProseWithFinalPicks<T extends Record<string, any>>(
     headers?: GameHeader[];
     rowMap?: Map<string, RowOptionEntry>;
     slateText?: string;
+    vetoedLegs?: VetoedLegTarget[];
   },
 ): {
   report: T;
@@ -272,13 +273,16 @@ export function syncCompilerProseWithFinalPicks<T extends Record<string, any>>(
   }
 
   const orphanTargetsMap = new Map<string, VetoedLegTarget>();
-  const registerOrphan = (rowId?: string, labelHint?: string) => {
+  const registerOrphan = (rowId?: string, labelHint?: string, extraAliases?: string[]) => {
     const normRow = rowId ? rowId.toUpperCase() : undefined;
     if (normRow && activeRowIds.has(normRow)) return;
     const rowText = normRow ? rowMap.get(normRow)?.text : undefined;
     const combinedLabel = [labelHint, rowText].filter(Boolean).join(' ').trim();
-    const rawAliases = buildAliasesForText(combinedLabel);
-    const filteredAliases = rawAliases.filter((a) => !activeAliases.has(a));
+    const rawAliases = [
+      ...buildAliasesForText(combinedLabel),
+      ...(Array.isArray(extraAliases) ? extraAliases.map((a) => a.toLowerCase().trim()).filter(Boolean) : [])
+    ];
+    const filteredAliases = Array.from(new Set(rawAliases.filter((a) => !activeAliases.has(a))));
     const key = normRow || filteredAliases[0] || combinedLabel.toLowerCase();
     if (!key) return;
     const prev = orphanTargetsMap.get(key);
@@ -305,6 +309,18 @@ export function syncCompilerProseWithFinalPicks<T extends Record<string, any>>(
       (!rid && side && activeSidesNorm.has(side.toLowerCase()));
     if (!matchesActive && (rid || side)) {
       registerOrphan(rid, side);
+    }
+  }
+
+  for (const vLeg of options?.vetoedLegs || []) {
+    if (!vLeg) continue;
+    const rid = vLeg.rowId ? vLeg.rowId.toUpperCase() : undefined;
+    const aliases = Array.isArray(vLeg.teamAliases) ? vLeg.teamAliases : [];
+    const matchesActive =
+      (rid && activeRowIds.has(rid)) ||
+      (aliases.length > 0 && aliases.some((a) => activeAliases.has(a.toLowerCase().trim())));
+    if (!matchesActive) {
+      registerOrphan(rid, vLeg.teamLabel, aliases);
     }
   }
 

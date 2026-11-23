@@ -182,14 +182,14 @@ function extractRecordsFromSegment(seg: string): Set<string> {
   const norm = normalizeText(seg);
 
   const prefixRx =
-    /\b(?:W-L|L\d{1,2}|last[\s_]?\d{1,2}|record|ATS|SU|home|away|road|overall|form)\b["']?\s*[:="']?\s*(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?\b/gi;
+    /\b(?:W-L|L\d{1,2}|last[\s_]?\d{1,2}|record|ATS|SU|home|away|road|overall|form|season)\b["']?\s*[:="']?\s*(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?\b/gi;
   let m: RegExpExecArray | null;
   while ((m = prefixRx.exec(norm)) !== null) {
     addGroundedRecordValue(records, m[1], m[2], m[3]);
   }
 
   const suffixRx =
-    /\b(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?\s*(?:L\d{1,2}|W-L|ATS|SU|record|last\s+\d+)\b/gi;
+    /\b(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?\s*(?:L\d{1,2}|W-L|ATS|SU|record|last\s+\d+|home|away|road|overall|season)\b/gi;
   while ((m = suffixRx.exec(norm)) !== null) {
     addGroundedRecordValue(records, m[1], m[2], m[3]);
   }
@@ -272,7 +272,9 @@ function extractGroundedRecords(
   const recordsByTeamKey = new Map<string, Set<string>>();
   const recordsByEventId = new Map<string, Set<string>>();
   const unscopedRecords = new Set<string>();
-  if (!successfulEvidence) return { allRecords, recordsByTeamKey, recordsByEventId, unscopedRecords };
+  if (typeof successfulEvidence !== 'string' || !successfulEvidence) {
+    return { allRecords, recordsByTeamKey, recordsByEventId, unscopedRecords };
+  }
 
   const addToMapSet = (map: Map<string, Set<string>>, key: string, recs: Set<string>) => {
     let set = map.get(key);
@@ -305,6 +307,7 @@ function extractGroundedRecords(
 
     const evLineMatch =
       line.match(/^EVENT\s+([a-z0-9-]+)/i) ||
+      line.match(/^===\s*GAME\s+DOSSIER:\s*([a-z0-9-]+)/i) ||
       line.match(/\[(?:MATCHUP FUNDAMENTALS|MARKET MOVEMENT|INJURY(?:\s*&\s*ROSTER\s*DELTA)?):\s*([a-z0-9-]+)/i) ||
       line.match(/\bevent_id\s*=\s*([a-z0-9-]+)/i);
     if (evLineMatch && evLineMatch[1]) {
@@ -529,7 +532,7 @@ function findUngroundedFormClaimDetailInClause(
   }
 
   const recordPatterns: RegExp[] = [
-    /\b(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?\s*(?:(?:in\s+(?:their\s+|the\s+)?|over\s+(?:their\s+|the\s+)?)?(?:last|past)\s+\d{1,2}\b|(?:(?:in|over|across)\s+(?:their\s+|the\s+)?)?L\d{1,2}\b|W-L\b|ATS\b|SU\b|overall\b|record\b|on\s+the\s+(?:season|year|road)\b|at\s+home\b|form\b)/gi,
+    /\b(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?\s*(?:(?:in\s+(?:their\s+|the\s+)?|over\s+(?:their\s+|the\s+)?)?(?:last|past)\s+\d{1,2}\b|(?:(?:in|over|across)\s+(?:their\s+|the\s+)?)?L\d{1,2}\b|W-L\b|ATS\b|SU\b|overall\b|(?:(?:away|home|road|season|overall)\s+)?record\b|on\s+the\s+(?:season|year|road)\b|at\s+home\b|form\b)/gi,
     /\b(?:L\d{1,2}|(?:last|past)\s+\d{1,2}\b|W-L|record(?:\s+of)?|ATS(?:\s+record)?|recent\s+form|form(?:\s+of)?)\s*(?::|=|is|are|was|were|at|of)?\s*(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?\b/gi
   ];
   if (hasSportsSignal) {
@@ -1097,7 +1100,7 @@ export function extractVetoedLegTargets(
 }
 
 const EXPLICIT_VETO_EXPLANATION_REGEX =
-  /\b(?:was\s+vetoed|were\s+vetoed|is\s+vetoed|vetoed\s+(?:from|for|due|and)|rejected|remov(?:ed|ing)|drop(?:ped|ping)|exclud(?:ed|ing)|disqualif(?:ied|y)|off\s+the\s+card|not\s+recommend(?:ed|ing)|do\s+not\s+(?:bet|play|back|pick|recommend)|cannot\s+(?:bet|play|back|pick|recommend)|must\s+be\s+removed|avoid(?:ed|ing)?|skip(?:ped|ping)?|pass(?:ed|ing)?\s+on)\b/i;
+  /\b(?:was\s+vetoed|were\s+vetoed|is\s+vetoed|vetoed|ruled\s+out|rejected|remov(?:ed|ing)|drop(?:ped|ping)|exclud(?:ed|ing)|prun(?:ed|ing)|stripp(?:ed|ing)|omitt(?:ed|ing)|filter(?:ed|ing)\s+out|disqualif(?:ied|y)|off\s+the\s+card|not\s+included|no\s+longer\s+(?:included|recommended|on\s+the\s+card)|not\s+recommend(?:ed|ing)|do\s+not\s+(?:bet|play|back|pick|recommend)|cannot\s+(?:bet|play|back|pick|recommend)|must\s+be\s+removed|avoid(?:ed|ing)?|skip(?:ped|ping)?|pass(?:ed|ing)?\s+on)\b/i;
 
 const LEG_REC_CONTEXT_REGEX =
   /\b(?:parlay|recommend(?:ed|ing|s)?|recommended\s+bets?|play(?:ing)?|back(?:ing)?|take|taking|pick(?:ed|s|ing)?|bet(?:s|ting)?|ticket|card|leg|legs)\b/i;
@@ -1173,6 +1176,7 @@ function findSingleBetRewriteViolationInClause(
     const sub = subClauses[i];
     SINGLE_BET_REC_REGEX.lastIndex = 0;
     if (!SINGLE_BET_REC_REGEX.test(sub) || NEGATED_SINGLE_BET_REGEX.test(sub)) continue;
+    if (EXPLICIT_VETO_EXPLANATION_REGEX.test(sub) && !/\b(?:as\s+a\s+single|recommended\s+single|standalone\s+(?:bet|play|wager)|play\s+(?:it|that\s+leg)\s+as\s+a\s+single)\b/i.test(sub)) continue;
 
     // Look directly in this sub-clause for a vetoed target (taking care if both vetoed & non-vetoed appear, use segment right before single-bet phrase)
     const mSingle = SINGLE_BET_REC_REGEX.exec(sub);
@@ -1258,12 +1262,15 @@ export function stripVetoedLegsFromParlayText(text: string, vetoedTargets: Vetoe
 
 function findVetoedLegRecommendationInClause(
   clause: string,
-  vetoedTargets: VetoedLegTarget[]
+  vetoedTargets: VetoedLegTarget[],
+  options?: { isInActiveTicketOrInsights?: boolean }
 ): { target: VetoedLegTarget; subClause: string } | null {
   if (!clause || vetoedTargets.length === 0) return null;
   const norm = normalizeText(clause);
   const subClauses = norm
-    .split(/,\s*(?=(?:so|leaving|making|which\s+leaves|instead|after|while|whereas)\b)|;\s+/i)
+    .split(
+      /,\s*(?=(?:so|leaving|making|which\s+leaves|instead|after|while|whereas|because|since|although|though|but|however|following)\b)|;\s+|\s+(?=(?:after|because|since|while|whereas|although|though)\s+[^.;]{0,120}\b(?:vetoed|rejected|dropped|excluded|removed|ruled\s+out|pruned|stripped|omitted)\b)/i
+    )
     .map(s => s.trim())
     .filter(Boolean);
 
@@ -1271,6 +1278,12 @@ function findVetoedLegRecommendationInClause(
     if (EXPLICIT_VETO_EXPLANATION_REGEX.test(sub)) continue;
     const matched = vetoedTargets.find(t => targetMatchesTextSpan(sub, t));
     if (!matched) continue;
+
+    // P0-2: If the vetoed leg is absent from picks[], Selected Wagers, and InsightList,
+    // and the enclosing clause is a rejection/explanation clause, do not treat it as an active recommendation.
+    if (!options?.isInActiveTicketOrInsights && EXPLICIT_VETO_EXPLANATION_REGEX.test(norm)) {
+      continue;
+    }
 
     // Flag if sub-clause either lists it as a "+" parlay leg, includes bet syntax (ML/+1.5/R-id),
     // or explicitly recommends/plays/picks/backs it.
@@ -1395,6 +1408,7 @@ export function auditClaimGrounding(
     vetoTexts?: string[];
     vetoedLegs?: VetoedLegTarget[];
     vetoedClaims?: string[];
+    curatedDossier?: string | { sections?: Array<{ tool?: string; event_id?: string; summary?: string }> };
   }
 ): GroundingAuditResult {
   if (!proposal) return { pass: true, violations: [], flags: [] };
@@ -1404,7 +1418,22 @@ export function auditClaimGrounding(
     : parseGameHeaders(slateText);
   const rowMap = extractRowOptions([slateText], headers);
 
-  const successfulEvidence = extractSuccessfulEvidenceText(evidenceText);
+  let curatedDossierText = '';
+  if (typeof options?.curatedDossier === 'string') {
+    curatedDossierText = options.curatedDossier.trim();
+  } else if (options?.curatedDossier && Array.isArray(options.curatedDossier.sections)) {
+    curatedDossierText = options.curatedDossier.sections
+      .map(s => {
+        const sum = typeof s?.summary === 'string' ? s.summary.trim() : '';
+        if (!sum) return '';
+        return s.event_id && !sum.includes(s.event_id) ? `EVENT ${s.event_id}\n${sum}` : sum;
+      })
+      .filter(Boolean)
+      .join('\n\n');
+  }
+  const combinedEvidenceInput = [curatedDossierText, evidenceText].filter(Boolean).join('\n\n');
+
+  const successfulEvidence = extractSuccessfulEvidenceText(combinedEvidenceInput);
   const cleanEvidence = buildCleanEvidenceForNumericCheck(successfulEvidence);
 
   const rawProposalText = typeof proposal === 'string' ? proposal : JSON.stringify(proposal);
@@ -1417,7 +1446,28 @@ export function auditClaimGrounding(
   const allInjuries = extractAuthoritativeInjuries(successfulEvidence, slateText);
   const outInjuries = allInjuries.filter(inj => /^(?:OUT|IR|INJURED\s+RESERVE|SUSPENDED)$/i.test(inj.status));
   const candidates = buildTeamDescriptors(headers, outInjuries, hasSportsSignal);
+  // P0-1: Build record corpus from authoritative Hop-1 curatedDossier/tool summaries unioned with COMPACT SLATE.
   const groundedRecords = extractGroundedRecords(successfulEvidence, candidates, headers);
+  if (typeof slateText === 'string' && slateText.trim().length > 0) {
+    const slateRecords = extractGroundedRecords(slateText, candidates, headers);
+    for (const r of slateRecords.allRecords) groundedRecords.allRecords.add(r);
+    for (const [k, recs] of slateRecords.recordsByTeamKey.entries()) {
+      let set = groundedRecords.recordsByTeamKey.get(k);
+      if (!set) {
+        set = new Set<string>();
+        groundedRecords.recordsByTeamKey.set(k, set);
+      }
+      for (const r of recs) set.add(r);
+    }
+    for (const [ev, recs] of slateRecords.recordsByEventId.entries()) {
+      let set = groundedRecords.recordsByEventId.get(ev);
+      if (!set) {
+        set = new Set<string>();
+        groundedRecords.recordsByEventId.set(ev, set);
+      }
+      for (const r of recs) set.add(r);
+    }
+  }
   const injuryCoverage = collectSuccessfulInjuryCoverage(successfulEvidence, candidates);
   const vetoedTargets = mergeVetoedLegTargets(
     options?.vetoedLegs,
@@ -1449,15 +1499,38 @@ export function auditClaimGrounding(
     detectedVetoedLegs.push(target);
   };
 
-  if (typeof proposal === 'object' && Array.isArray(proposal.picks) && vetoedTargets.length > 0) {
-    for (const pk of proposal.picks) {
-      const matched = vetoedTargets.find(t => pickMatchesVetoedTarget(pk, t));
-      if (matched) {
-        addViolation(
-          'vetoed_leg_kept',
-          `Vetoed leg (${matched.rowId || matched.teamLabel || 'pick'}) must be removed from picks.`
-        );
-        recordVetoedLeg(matched);
+  let vetoedInActiveTicketOrInsights = false;
+  if (typeof proposal === 'object' && vetoedTargets.length > 0) {
+    if (Array.isArray(proposal.picks)) {
+      for (const pk of proposal.picks) {
+        const matched = vetoedTargets.find(t => pickMatchesVetoedTarget(pk, t));
+        if (matched) {
+          vetoedInActiveTicketOrInsights = true;
+          addViolation(
+            'vetoed_leg_kept',
+            `Vetoed leg (${matched.rowId || matched.teamLabel || 'pick'}) must be removed from picks.`
+          );
+          recordVetoedLeg(matched);
+        }
+      }
+    }
+    if (Array.isArray(proposal.components)) {
+      for (const comp of proposal.components) {
+        if (!comp || typeof comp !== 'object' || !comp.props) continue;
+        if (comp.type === 'DataTable' && isRecommendationTable(comp) && Array.isArray(comp.props.rows)) {
+          for (const row of comp.props.rows) {
+            if (row && typeof row === 'object' && vetoedTargets.some(t => dataTableRowMatchesTarget(row, t))) {
+              vetoedInActiveTicketOrInsights = true;
+            }
+          }
+        } else if (comp.type === 'InsightList' && Array.isArray(comp.props.insights)) {
+          for (const ins of comp.props.insights) {
+            const msg = typeof ins === 'string' ? ins : ins?.message;
+            if (typeof msg === 'string' && !EXPLICIT_VETO_EXPLANATION_REGEX.test(msg) && vetoedTargets.some(t => targetMatchesTextSpan(msg, t))) {
+              vetoedInActiveTicketOrInsights = true;
+            }
+          }
+        }
       }
     }
   }
@@ -1516,7 +1589,9 @@ export function auditClaimGrounding(
       if (singleBetRes.violation) {
         addViolation('vetoed_leg_rewritten', singleBetRes.violation);
       } else if (checkLegRec && vetoedTargets.length > 0) {
-        const legRec = findVetoedLegRecommendationInClause(clause, vetoedTargets);
+        const legRec = findVetoedLegRecommendationInClause(clause, vetoedTargets, {
+          isInActiveTicketOrInsights: vetoedInActiveTicketOrInsights
+        });
         if (legRec) {
           const label = legRec.target.rowId || legRec.target.teamLabel || 'vetoed leg';
           addViolation(
@@ -2970,3 +3045,162 @@ export function normalizePassIfAllLegsVetoed<T extends Record<string, any>>(
   }
   return report;
 }
+
+export interface IntraSeatDuplicateLegViolation {
+  seat: string;
+  eventId: string;
+  rows: string[];
+  sides: string[];
+}
+
+export interface IntraSeatDuplicateLegsResult {
+  pass: boolean;
+  flags: string[];
+  violations: IntraSeatDuplicateLegViolation[];
+  feedback?: string;
+}
+
+/**
+ * P0-4: Scopes `duplicate_leg` strictly within a SINGLE seat's picks[] (or the compiled picks[]).
+ * Two different proposer seats agreeing on the same row/side (e.g. a1: R39, a2: R39) is consensus,
+ * NEVER `duplicate_leg`. Triggers ONLY when a single seat's picks[] (or compiled picks[]) contains
+ * >= 2 legs sharing the same canonical event_id.
+ */
+export function detectIntraSeatDuplicateLegs(
+  input: {
+    seatReports?: Array<{ seat?: string; role?: string; picks?: any[] }>;
+    picks?: any[];
+  },
+  headers: GameHeader[] = [],
+  slateText?: string,
+  rowMapOverride?: Map<string, RowOptionEntry>
+): IntraSeatDuplicateLegsResult {
+  const effectiveHeaders = headers.length > 0 ? headers : parseGameHeaders(slateText);
+  const rowMap = rowMapOverride ?? extractRowOptions(slateText ? [slateText] : [], effectiveHeaders);
+  // Also index compact "EVENT <id>" + "R<n>: <side>" lines if not already in rowMap
+  if (typeof slateText === 'string' && slateText.trim()) {
+    let curEv = '';
+    for (const rawLine of slateText.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      const evM = line.match(/^EVENT\s+([a-z0-9-]+)/i);
+      if (evM?.[1]) {
+        curEv = evM[1].trim();
+        continue;
+      }
+      if (!curEv) continue;
+      const rx = /\b(R\d+)\s*:\s*([^|\n]+)/gi;
+      let rm: RegExpExecArray | null;
+      while ((rm = rx.exec(line)) !== null) {
+        const rid = rm[1].toUpperCase();
+        const existing = rowMap.get(rid);
+        if (!existing || !existing.eventId) {
+          rowMap.set(rid, { rowId: rid, eventId: curEv, text: existing?.text || rm[2].trim() });
+        }
+      }
+    }
+  }
+  const candidates = buildTeamDescriptors(effectiveHeaders, [], effectiveHeaders.length > 0);
+
+  const resolveCanonicalEventIdForPick = (pk: any): { eventId?: string; rowId?: string; side: string } => {
+    if (!pk) return { side: '' };
+    if (typeof pk === 'string') {
+      const rMatch = pk.match(/\b(R\d+)\b/i);
+      const rowId = rMatch ? rMatch[1].toUpperCase() : undefined;
+      const rowEntry = rowId ? rowMap.get(rowId) : undefined;
+      let eventId = rowEntry?.eventId;
+      if (!eventId) {
+        const tm = findTeamMentionsInText(pk, candidates)[0]?.team;
+        if (tm && tm.eventIds.length === 1) eventId = tm.eventIds[0];
+      }
+      return { ...(eventId ? { eventId } : {}), ...(rowId ? { rowId } : {}), side: pk.trim() };
+    }
+    if (typeof pk !== 'object') return { side: '' };
+
+    const rawRow = pk.row ?? pk.Row ?? pk.rowId ?? pk.id ?? pk.ID;
+    const rawSide = [pk.side, pk.pick, pk.selection, pk.team, pk.Side, pk.Pick]
+      .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+      .join(' ')
+      .trim();
+    const rowIdFromField = typeof rawRow === 'string' && /^R\d+$/i.test(rawRow.trim())
+      ? rawRow.trim().toUpperCase()
+      : undefined;
+    const rowIdFromSide = !rowIdFromField ? rawSide.match(/\b(R\d+)\b/i)?.[1]?.toUpperCase() : undefined;
+    const rowId = rowIdFromField || rowIdFromSide;
+
+    const explicitEventId = typeof pk.event_id === 'string' && pk.event_id.trim()
+      ? pk.event_id.trim()
+      : (typeof pk.eventId === 'string' && pk.eventId.trim()
+        ? pk.eventId.trim()
+        : (typeof pk.game_id === 'string' && pk.game_id.trim() ? pk.game_id.trim() : undefined));
+    const rowEntry = rowId ? rowMap.get(rowId) : undefined;
+    let eventId = explicitEventId || rowEntry?.eventId;
+    if (!eventId && rawSide) {
+      const tm = findTeamMentionsInText(rawSide, candidates)[0]?.team;
+      if (tm && tm.eventIds.length === 1) eventId = tm.eventIds[0];
+    }
+    return { ...(eventId ? { eventId } : {}), ...(rowId ? { rowId } : {}), side: rawSide || rowId || '' };
+  };
+
+  const buckets: Array<{ seat: string; picks: any[] }> = [];
+  if (Array.isArray(input?.seatReports) && input.seatReports.length > 0) {
+    input.seatReports.forEach((rep, idx) => {
+      const picks = Array.isArray(rep?.picks) ? rep.picks : [];
+      if (picks.length >= 2) {
+        buckets.push({
+          seat: String(rep?.seat || rep?.role || `seat_${idx + 1}`),
+          picks
+        });
+      }
+    });
+  } else if (Array.isArray(input?.picks) && input.picks.length >= 2) {
+    buckets.push({ seat: 'compiled', picks: input.picks });
+  }
+
+  const violations: IntraSeatDuplicateLegViolation[] = [];
+  for (const bucket of buckets) {
+    const byEvent = new Map<string, { rows: string[]; sides: string[] }>();
+    for (const pk of bucket.picks) {
+      const resolved = resolveCanonicalEventIdForPick(pk);
+      if (!resolved.eventId) continue;
+      const normEv = resolved.eventId.toLowerCase();
+      let entry = byEvent.get(normEv);
+      if (!entry) {
+        entry = { rows: [], sides: [] };
+        byEvent.set(normEv, entry);
+      }
+      if (resolved.rowId) entry.rows.push(resolved.rowId);
+      if (resolved.side) entry.sides.push(resolved.side);
+      else entry.sides.push(resolved.rowId || resolved.eventId);
+    }
+
+    for (const [normEv, info] of byEvent.entries()) {
+      const legCount = Math.max(info.rows.length, info.sides.length);
+      if (legCount >= 2) {
+        const canonicalEv =
+          effectiveHeaders.find(h => h.eventId.toLowerCase() === normEv)?.eventId || normEv;
+        violations.push({
+          seat: bucket.seat,
+          eventId: canonicalEv,
+          rows: info.rows,
+          sides: info.sides
+        });
+      }
+    }
+  }
+
+  if (violations.length === 0) {
+    return { pass: true, flags: [], violations: [] };
+  }
+
+  const desc = violations
+    .map(v => `${v.seat} has ${Math.max(v.rows.length, v.sides.length)} legs on ${v.eventId} (${(v.rows.length > 0 ? v.rows : v.sides).join(', ')})`)
+    .join('; ');
+
+  return {
+    pass: false,
+    flags: ['duplicate_leg'],
+    violations,
+    feedback: `Veto (duplicate_leg): ${desc}.`
+  };
+}
+

@@ -22,6 +22,7 @@ import {
   type ToolCallStatus,
   type ToolCallTraceEntry
 } from '../tools/pullBeforePass.ts';
+import { isIndoorLeagueGame } from '../tools/dueloddsRpcTools.ts';
 
 export const PROVIDER_CALL_DEADLINES: Record<string, number> = {
   groq: 20000,
@@ -145,8 +146,19 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
     options
   } = params;
 
+  const gameIds: string[] = (params.gameIds && params.gameIds.length > 0)
+    ? params.gameIds
+    : (gameId && gameId !== 'unknown-game' ? [gameId] : []);
+
   const baseBudget = params.budget || seatBudget(agent.provider);
-  const baseTools = getRoleToolNames(seat);
+  const rawBaseTools = getRoleToolNames(seat);
+  const allCriticGamesIndoor =
+    isCriticSeatName(seat) &&
+    gameIds.length > 0 &&
+    gameIds.every(gId => isIndoorLeagueGame(gId));
+  const baseTools = allCriticGamesIndoor
+    ? rawBaseTools.filter(t => t !== 'get_environment_and_weather')
+    : rawBaseTools;
   const hasBaseTools = baseTools.some(t => registry.has(t));
   const candidateNames = hasBaseTools ? [...baseTools] : registry.list().map(t => t.name);
 
@@ -156,10 +168,6 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
 
   const isCriticSeat = (s: string) => isCriticSeatName(s);
   const isBettingRoleSeat = (s: string) => isQuantSeatName(s) || isMarketSeatName(s);
-
-  const gameIds: string[] = (params.gameIds && params.gameIds.length > 0)
-    ? params.gameIds
-    : (gameId && gameId !== 'unknown-game' ? [gameId] : []);
 
   const isFrontrunnerSeat = (isQuantSeatName(seat) || isMarketSeatName(seat)) &&
     String(agent.provider || '').toLowerCase().trim() !== 'groq';
@@ -327,6 +335,10 @@ export async function runSeatWithTools(params: RunSeatWithToolsParams): Promise<
       for (const t of orderedCriticTools) {
         for (const gId of targetGames) {
           if (calls.length >= maxCalls) break;
+          // P1-2: Never call get_environment_and_weather for indoor leagues (NBA, NHL, NCAAB, WNBA).
+          if (t === 'get_environment_and_weather' && isIndoorLeagueGame(gId)) {
+            continue;
+          }
           if (t === 'get_market_movement') {
             const mType = resolvePrefetchMarketType(params.marketTypesByGame?.[gId] ?? params.marketType);
             calls.push({ tool: t, parameters: { game_id: gId, market_type: mType } });
