@@ -28,7 +28,8 @@ import {
     RED_TEAM_ANALYST_ROLE,
     RED_TEAM_ANALYST_SYSTEM_INSTRUCTION,
     CRITIC_VERDICT_SYSTEM_INSTRUCTION,
-    COMPACT_CRITIC_VERDICT_SYSTEM_INSTRUCTION
+    COMPACT_CRITIC_VERDICT_SYSTEM_INSTRUCTION,
+    UNCERTAIN_QUESTIONABLE_RULE
 } from './constants.ts';
 import { recordDegraded } from './partialResult.ts';
 import { AnalystScorecardSchema } from '../types.ts';
@@ -538,10 +539,13 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
         const customSeatPrompt = !isCritic
             ? (settings?.systemPrompts?.[(analyst as any).id || analyst.role] || settings?.systemPrompts?.[analyst.role])
             : undefined;
-        const baseInstruction = activeVariant?.systemPrompts?.[(analyst as any).id || analyst.role]
+        let baseInstruction = activeVariant?.systemPrompts?.[(analyst as any).id || analyst.role]
             || activeVariant?.systemPrompts?.[analyst.role]
             || customSeatPrompt
             || defaultInstruction;
+        if (!isCritic && !/uncertain_questionable/i.test(baseInstruction)) {
+            baseInstruction = `${baseInstruction}\n\n${UNCERTAIN_QUESTIONABLE_RULE}`;
+        }
         analyst.setSystemInstruction(baseInstruction);
 
         const seat = (analyst as any).id || analyst.role;

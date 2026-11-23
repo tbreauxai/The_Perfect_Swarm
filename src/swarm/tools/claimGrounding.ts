@@ -8,6 +8,7 @@ import {
   type EspnTeamEntry
 } from './injuryAttribution.ts';
 import { checkPickRowSideBinding, extractRowOptions, type RowOptionEntry } from './marketRowBinding.ts';
+import { splitSentencesSafe } from '../parser/responseGuards.ts';
 
 export const GROUNDING_RULE = `GROUNDING:
 - Do not cite a score, goals-allowed, or health claim unless it is in a successful tool result.
@@ -1254,7 +1255,7 @@ export function stripVetoedLegsFromParlayText(text: string, vetoedTargets: Vetoe
       const looksLikeParlay = parts.some(isParlayLegString);
       if (!looksLikeParlay) return fullMatch;
       const kept = parts.filter(part => !vetoedTargets.some(t => targetMatchesTextSpan(part, t)));
-      if (kept.length === parts.length) return fullMatch;
+      if (kept.length === parts.length || kept.length === 0) return fullMatch;
       return kept.join(' + ');
     }
   );
@@ -2506,9 +2507,21 @@ export function sanitizeUngroundedClaims<T extends Record<string, any>>(
     return { hasViolation, endsWithVetoedSubject: singleRes.endsWithVetoedSubject };
   };
 
+  const capitalizeAndPunctuate = (raw: string): string => {
+    let out = raw.trim();
+    if (!out) return '';
+    if (/^[a-z]/.test(out)) {
+      out = out[0].toUpperCase() + out.slice(1);
+    }
+    if (!/[.!?]$/.test(out)) {
+      out = `${out}.`;
+    }
+    return out;
+  };
+
   const cleanTextField = (text: string, sideHint?: string, checkLegRec: boolean = true): string => {
     const preStripped = vetoedTargets.length > 0 ? stripVetoedLegsFromParlayText(text, vetoedTargets) : text;
-    const sentences = preStripped.split(/(?<=[.!?])\s+|\n+/);
+    const sentences = splitSentencesSafe(preStripped);
     const kept: string[] = [];
     let priorSubWasVetoed = false;
     for (const s of sentences) {
@@ -2516,29 +2529,24 @@ export function sanitizeUngroundedClaims<T extends Record<string, any>>(
       const prevVetoFlag = priorSubWasVetoed;
       priorSubWasVetoed = checkRes.endsWithVetoedSubject;
       if (!checkRes.hasViolation) {
-        kept.push(s);
+        kept.push(s.trim());
         continue;
       }
-      // Try removing an offending parenthetical or contrast sub-clause first
+      // S1: Whole-sentence removal only for vetoed-leg violations — never slice mid-sentence at a comma or clause.
+      const isVetoedLegSentence =
+        Boolean(findSingleBetRewriteViolationInClause(s, vetoedTargets, prevVetoFlag).violation) ||
+        Boolean(checkLegRec && findVetoedLegRecommendationInClause(s, vetoedTargets));
+      if (isVetoedLegSentence) {
+        continue;
+      }
+      // For non-veto parenthetical metric claims (e.g. "(L5: 4-1)"), stripping only a complete parenthetical preserves a full sentence.
       const withoutParen = s.replace(/\s*\([^)]*\)/g, '').replace(/\s{2,}/g, ' ').trim();
-      if (withoutParen && withoutParen !== s.trim() && !sentenceHasViolation(withoutParen, sideHint, prevVetoFlag, checkLegRec).hasViolation) {
-        kept.push(withoutParen);
-        continue;
-      }
-      // Try dropping only offending comma/semicolon sub-clauses
-      const subParts = s.split(/;\s+|,\s*(?=(?:while|whereas|but|although|though|so|yet)\b)/i);
-      if (subParts.length > 1) {
-        let subPrior = prevVetoFlag;
-        const cleanSubs: string[] = [];
-        for (const part of subParts) {
-          const partRes = sentenceHasViolation(part, sideHint, subPrior, checkLegRec);
-          subPrior = partRes.endsWithVetoedSubject;
-          if (!partRes.hasViolation) cleanSubs.push(part);
-        }
-        const rejoined = cleanSubs.join(', ').trim();
-        if (rejoined && !sentenceHasViolation(rejoined, sideHint, prevVetoFlag, checkLegRec).hasViolation) {
-          kept.push(rejoined);
-        }
+      if (
+        withoutParen &&
+        withoutParen !== s.trim() &&
+        !sentenceHasViolation(withoutParen, sideHint, prevVetoFlag, checkLegRec).hasViolation
+      ) {
+        kept.push(capitalizeAndPunctuate(withoutParen));
       }
     }
     return kept.join(' ').trim();
@@ -2639,11 +2647,24 @@ export function sanitizeUngroundedClaims<T extends Record<string, any>>(
   }
 
   if (Array.isArray(rep.scorecards)) {
+    const isSeatScorecard = (sc: any): boolean =>
+      Boolean(
+        sc &&
+        typeof sc === 'object' &&
+        (typeof sc.seat === 'string' ||
+          typeof sc.role === 'string' ||
+          typeof sc.verdict === 'string' ||
+          typeof sc.criticApproved === 'boolean' ||
+          typeof sc.wageringPass === 'boolean')
+      );
     if (vetoedTargets.length > 0) {
-      rep.scorecards = rep.scorecards.filter((sc: any) => !vetoedTargets.some(t => pickMatchesVetoedTarget(sc, t)));
+      // S1: Never wipe seat scorecards (including Risk Critic veto scorecards) when pruning vetoed pick legs.
+      rep.scorecards = rep.scorecards.filter((sc: any) =>
+        isSeatScorecard(sc) || !vetoedTargets.some(t => pickMatchesVetoedTarget(sc, t))
+      );
     }
     for (const sc of rep.scorecards) {
-      if (!sc || typeof sc !== 'object') continue;
+      if (!sc || typeof sc !== 'object' || isSeatScorecard(sc)) continue;
       const sideHint = String(sc.pick || sc.side || '');
       for (const field of ['note', 'reason', 'summary'] as const) {
         if (typeof sc[field] === 'string' && sc[field].trim()) {
@@ -3020,28 +3041,216 @@ export function sanitizeContradictedStreakClaims<T extends Record<string, any>>(
   return { report, corrected, details };
 }
 
+function normalizeGrammaticalSentence(raw: string): string {
+  let out = String(raw || '').replace(/\s+/g, ' ').trim();
+  if (!out) return '';
+  if (/^[a-z]/.test(out)) {
+    out = out[0].toUpperCase() + out.slice(1);
+  }
+  if (!/[.!?]$/.test(out)) {
+    out = `${out}.`;
+  }
+  return out;
+}
+
+function cleanVetoReasonText(raw: string): string {
+  return String(raw || '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[-•*\s]+/, '')
+    .replace(/[.!?]+$/, '')
+    .trim();
+}
+
+export function ensureRiskCriticVetoScorecard<T extends Record<string, any>>(
+  report: T,
+  options?: {
+    vetoReason?: string;
+    seatScorecards?: any[];
+  }
+): T {
+  if (!report || typeof report !== 'object') return report;
+  const rep = report as Record<string, any>;
+  const existing = Array.isArray(rep.scorecards) ? [...rep.scorecards] : [];
+  const incoming = Array.isArray(options?.seatScorecards) ? options!.seatScorecards : [];
+
+  const merged: any[] = [...existing];
+  for (const sc of incoming) {
+    if (!sc || typeof sc !== 'object') continue;
+    const seatName = String(sc.seat || sc.role || '').trim().toLowerCase();
+    const alreadyPresent = seatName
+      ? merged.some((m) => m && typeof m === 'object' && String(m.seat || m.role || '').trim().toLowerCase() === seatName)
+      : false;
+    if (!alreadyPresent) {
+      merged.push({ ...sc });
+    }
+  }
+
+  const criticIdx = merged.findIndex(
+    (sc) =>
+      sc &&
+      typeof sc === 'object' &&
+      (/risk\s*critic|^critic$/i.test(String(sc.seat || sc.role || '').trim()) ||
+        (String(sc.verdict || '').toLowerCase() === 'veto' && !sc.seat && !sc.role))
+  );
+
+  const vetoNotes = cleanVetoReasonText(options?.vetoReason || '');
+  if (criticIdx >= 0) {
+    const prev = merged[criticIdx];
+    merged[criticIdx] = {
+      ...prev,
+      seat: prev.seat || 'Risk Critic',
+      verdict: 'veto',
+      criticApproved: false,
+      wageringPass: true,
+      ...(vetoNotes && !prev.notes ? { notes: normalizeGrammaticalSentence(vetoNotes) } : {})
+    };
+  } else {
+    merged.push({
+      seat: 'Risk Critic',
+      verdict: 'veto',
+      criticApproved: false,
+      wageringPass: true,
+      ...(vetoNotes ? { notes: normalizeGrammaticalSentence(vetoNotes) } : {})
+    });
+  }
+
+  rep.scorecards = merged;
+  return report;
+}
+
 /**
- * Normalizes a report into a clean pass if all proposed picks were removed by Critic vetoes.
+ * Normalizes a report into a clean, grammatical deterministic pass if all proposed picks
+ * were removed by Critic vetoes, preserving seat scorecards and Risk Critic veto metadata.
  */
 export function normalizePassIfAllLegsVetoed<T extends Record<string, any>>(
   report: T,
   initialPickCount: number,
-  hadVetoes: boolean
+  hadVetoes: boolean,
+  options?: {
+    vetoTexts?: string[];
+    vetoedLegs?: VetoedLegTarget[];
+    seatScorecards?: any[];
+    criticApproved?: boolean;
+  }
 ): T {
   if (!report || typeof report !== 'object') return report;
   const rep = report as Record<string, any>;
-  if (initialPickCount > 0 && hadVetoes && Array.isArray(rep.picks) && rep.picks.length === 0) {
+  const isZeroPicks = Array.isArray(rep.picks) && rep.picks.length === 0;
+  const criticRejected = options?.criticApproved === false || rep.criticApproved === false;
+  const hadVetoedLegs =
+    hadVetoes ||
+    criticRejected ||
+    (Array.isArray(options?.vetoedLegs) && options!.vetoedLegs.length > 0) ||
+    (Array.isArray(options?.vetoTexts) && options!.vetoTexts.length > 0);
+  const hadCandidateActivity =
+    initialPickCount > 0 ||
+    criticRejected ||
+    (Array.isArray(options?.vetoedLegs) && options!.vetoedLegs.length > 0);
+
+  if (isZeroPicks && hadVetoedLegs && hadCandidateActivity) {
     rep.pass = true;
     rep.status = 'no_play';
+    rep.criticApproved = false;
+    rep.wageringPass = true;
     if (!rep.ui_title || !/insufficient|pass|no play/i.test(String(rep.ui_title))) {
       rep.ui_title = 'Pass';
     }
-    if (typeof rep.summary !== 'string' || !rep.summary.trim()) {
-      rep.summary = 'Pass: every proposed leg was vetoed during verification.';
+
+    const vetoReasons: string[] = [];
+    const seenReasons = new Set<string>();
+    const addReason = (raw?: string) => {
+      const cleaned = cleanVetoReasonText(raw || '');
+      if (!cleaned || cleaned.length < 4) return;
+      const key = cleaned.toLowerCase();
+      if (seenReasons.has(key)) return;
+      seenReasons.add(key);
+      vetoReasons.push(cleaned);
+    };
+
+    for (const vt of options?.vetoTexts || []) addReason(vt);
+    for (const vl of options?.vetoedLegs || []) {
+      if (vl?.reason && !/^pruned from final picks/i.test(vl.reason.trim())) {
+        addReason(vl.reason);
+      }
     }
-    if (typeof rep.analysis === 'string' && !rep.analysis.trim()) {
-      rep.analysis = rep.summary;
+    if (Array.isArray(rep.scorecards)) {
+      for (const sc of rep.scorecards) {
+        if (sc && typeof sc === 'object' && /risk\s*critic|critic/i.test(String(sc.seat || sc.role || ''))) {
+          addReason(sc.notes || sc.reason || sc.summary);
+        }
+      }
     }
+
+    const vetoedLegLabels = Array.from(
+      new Set(
+        (options?.vetoedLegs || [])
+          .map((vl) => [vl?.teamLabel, vl?.rowId ? `(${vl.rowId})` : ''].filter(Boolean).join(' ').trim())
+          .filter(Boolean)
+      )
+    );
+
+    const primaryReason = vetoReasons[0] || '';
+    const legsPhrase =
+      vetoedLegLabels.length > 0
+        ? ` (${vetoedLegLabels.join(', ')})`
+        : '';
+
+    const summaryText = primaryReason
+      ? `Bottom-line call: pass. The Risk Critic vetoed all proposed selections${legsPhrase} because ${primaryReason[0].toLowerCase() + primaryReason.slice(1)}.`
+      : `Bottom-line call: pass. The Risk Critic vetoed all proposed selections${legsPhrase}, leaving no qualified plays on this slate.`;
+
+    const analysisParts = [
+      `Bottom-line call: pass.`,
+      primaryReason
+        ? `The Risk Critic vetoed all proposed selections${legsPhrase}: ${primaryReason}.`
+        : `The Risk Critic vetoed all proposed selections${legsPhrase} after reviewing the available evidence.`,
+      `No wagers meet verification standards on this slate, so all capital is preserved.`
+    ];
+    const analysisText = analysisParts.map(normalizeGrammaticalSentence).join(' ');
+
+    const insightStrings: string[] = [
+      normalizeGrammaticalSentence(
+        `The Risk Critic vetoed all proposed selections${legsPhrase}, resulting in a pass.`
+      )
+    ];
+    if (vetoReasons.length > 0) {
+      for (const r of vetoReasons.slice(0, 3)) {
+        insightStrings.push(normalizeGrammaticalSentence(`Risk Critic veto rationale: ${r}`));
+      }
+    } else if (vetoedLegLabels.length > 0) {
+      insightStrings.push(
+        normalizeGrammaticalSentence(`Excluded selections: ${vetoedLegLabels.join(', ')}.`)
+      );
+    }
+
+    rep.summary = normalizeGrammaticalSentence(summaryText);
+    rep.analysis = analysisText;
+    rep.reason = primaryReason
+      ? normalizeGrammaticalSentence(primaryReason)
+      : 'All proposed selections were vetoed by the Risk Critic.';
+    rep.insights = insightStrings;
+
+    if (Array.isArray(rep.components)) {
+      for (const comp of rep.components) {
+        if (!comp || typeof comp !== 'object' || !comp.props) continue;
+        if (comp.type === 'InsightList' && Array.isArray(comp.props.insights)) {
+          const hasObjects = comp.props.insights.some((i: any) => i && typeof i === 'object');
+          comp.props.insights = hasObjects
+            ? insightStrings.map((msg) => ({ type: 'warning', message: msg }))
+            : [...insightStrings];
+        } else if (comp.type === 'DataTable' && Array.isArray(comp.props.rows)) {
+          const title = String(comp.props.title || '');
+          if (/\b(?:selected|recommended)\s+(?:wagers?|bets?|picks?|plays?)|parlay\s+legs?\b/i.test(title)) {
+            comp.props.rows = [];
+          }
+        }
+      }
+    }
+
+    ensureRiskCriticVetoScorecard(rep, {
+      vetoReason: primaryReason || 'All proposed selections were vetoed.',
+      seatScorecards: options?.seatScorecards
+    });
   }
   return report;
 }

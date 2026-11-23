@@ -691,6 +691,7 @@ export interface PlayerGameLogRow {
   targets?: number | string | null;
   receptions?: number | string | null;
   games_started?: number | string | null;
+  goalie_starts?: number | string | null;
   starts?: number | string | null;
   started?: boolean | number | null;
   snap_pct?: number | string | null;
@@ -700,7 +701,7 @@ export interface PlayerGameLogRow {
   depth_chart_order?: number | string | null;
   impact_tier?: number | null;
   impact_weight?: number | null;
-  stats?: Record<string, any> | null;
+  stats?: Record<string, any> | string | null;
 }
 
 type NormalizedInjurySport = 'nba' | 'nhl' | 'nfl' | 'ncaaf' | 'other';
@@ -842,11 +843,38 @@ async function fetchBatchedPlayerGameLogs(
   return loader;
 }
 
+function extractPlayerIdKeys(raw: unknown): string[] {
+  if (raw === undefined || raw === null) return [];
+  const s = String(raw).trim().toLowerCase();
+  if (!s) return [];
+  const keys = new Set<string>([s]);
+  // Normalize raw ESPN numeric player_id (e.g. "espn-4065648" -> "4065648")
+  const numMatch = s.match(/(?:^|[^0-9])(\d{4,12})$/);
+  if (numMatch?.[1]) keys.add(numMatch[1]);
+  return Array.from(keys);
+}
+
+function parseStatsObject(raw: unknown): Record<string, any> {
+  if (!raw) return {};
+  if (typeof raw === 'object') return raw as Record<string, any>;
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') return parsed as Record<string, any>;
+    } catch {
+      // ignore malformed JSON
+    }
+  }
+  return {};
+}
+
 function buildTeamLogIndex(
   logs: PlayerGameLogRow[],
   targetTeamLabels: string[],
-  sportHint: string
+  sportHint: string,
+  targetPlayerIds?: string[]
 ): TeamLogIndex {
+  const targetSport = normalizeInjurySport(sportHint);
   const targetTokens = new Set<string>();
   for (const lbl of targetTeamLabels) {
     const clean = String(lbl || '').trim().toLowerCase();
@@ -857,6 +885,11 @@ function buildTeamLogIndex(
       targetTokens.add(matched.abbr.toLowerCase());
       targetTokens.add(matched.name.toLowerCase());
     }
+  }
+
+  const targetPidSet = new Set<string>();
+  for (const pid of targetPlayerIds || []) {
+    for (const k of extractPlayerIdKeys(pid)) targetPidSet.add(k);
   }
 
   const acc = new Map<
@@ -886,10 +919,20 @@ function buildTeamLogIndex(
   let matchedAnyRow = false;
   for (const row of logs) {
     if (!row || typeof row !== 'object') continue;
+    const rowSportRaw = row.sport || row.league;
+    if (rowSportRaw && targetSport !== 'other') {
+      const rowSport = normalizeInjurySport(String(rowSportRaw));
+      if (rowSport !== 'other' && rowSport !== targetSport) continue;
+    }
+
+    const pidRaw = row.player_id !== undefined && row.player_id !== null ? String(row.player_id).trim() : '';
+    const pidKeys = extractPlayerIdKeys(pidRaw);
+    const pidMatchesTarget = targetPidSet.size > 0 && pidKeys.some((k) => targetPidSet.has(k));
+
     const rawTeamVals = [row.team_abbr, row.team, row.team_name, row.team_id !== undefined && row.team_id !== null ? String(row.team_id) : '']
       .map((v) => String(v || '').trim())
       .filter(Boolean);
-    if (targetTokens.size > 0 && rawTeamVals.length > 0) {
+    if (!pidMatchesTarget && targetTokens.size > 0 && rawTeamVals.length > 0) {
       const teamMatches = rawTeamVals.some((tv) => {
         const lower = tv.toLowerCase();
         if (targetTokens.has(lower)) return true;
@@ -899,19 +942,20 @@ function buildTeamLogIndex(
       if (!teamMatches) continue;
     }
 
-    const nameRaw = String(row.player_name || row.name || '').trim();
-    const pidRaw = row.player_id !== undefined && row.player_id !== null ? String(row.player_id).trim() : '';
+    const stObj = parseStatsObject(row.stats);
+    const nameRaw = String(row.player_name || row.name || stObj.player_name || '').trim();
     const key = normalizePlayerNameKey(nameRaw) || pidRaw.toLowerCase();
     if (!key) continue;
 
     matchedAnyRow = true;
+    const rowPos = String(row.position || row.pos || stObj.position || stObj.pos || '').trim().toUpperCase();
     let entry = acc.get(key);
     if (!entry) {
       entry = {
         ...(pidRaw ? { playerId: pidRaw } : {}),
         playerName: nameRaw || pidRaw,
         teamKeys: new Set<string>(),
-        position: String(row.position || row.pos || '').trim().toUpperCase(),
+        position: rowPos,
         games: 0,
         minSum: 0,
         minCnt: 0,
@@ -930,12 +974,11 @@ function buildTeamLogIndex(
       acc.set(key, entry);
     }
     for (const tv of rawTeamVals) entry.teamKeys.add(tv.toLowerCase());
-    if (!entry.position && (row.position || row.pos)) {
-      entry.position = String(row.position || row.pos).trim().toUpperCase();
+    if (!entry.position && rowPos) {
+      entry.position = rowPos;
     }
     entry.games += 1;
 
-    const stObj = (row.stats && typeof row.stats === 'object') ? row.stats : {};
     const minVal = parseNumericStat(row.mpg ?? row.avg_minutes ?? row.minutes ?? row.min ?? stObj.mpg ?? stObj.minutes ?? stObj.min);
     if (minVal !== null) {
       entry.minSum += minVal;
@@ -969,7 +1012,14 @@ function buildTeamLogIndex(
     const rec = parseNumericStat(row.receptions ?? stObj.receptions ?? stObj.rec) ?? 0;
     entry.totalTouches += rushAtt + Math.max(targets, rec);
 
-    const startsNum = parseNumericStat(row.games_started ?? row.starts ?? stObj.games_started ?? stObj.starts);
+    const startsNum = parseNumericStat(
+      row.goalie_starts ??
+      row.games_started ??
+      row.starts ??
+      stObj.goalie_starts ??
+      stObj.games_started ??
+      stObj.starts
+    );
     if (startsNum !== null) entry.starts += startsNum;
     else if (row.started === true || row.started === 1 || stObj.started === true || stObj.started === 1) entry.starts += 1;
 
@@ -1008,7 +1058,11 @@ function buildTeamLogIndex(
       depthChartOrder: e.depthChartOrder
     };
     playersByName.set(key, agg);
-    if (agg.playerId) playersById.set(agg.playerId.toLowerCase(), agg);
+    if (agg.playerId) {
+      for (const idKey of extractPlayerIdKeys(agg.playerId)) {
+        playersById.set(idKey, agg);
+      }
+    }
     allStats.push(agg);
   }
 
@@ -1064,7 +1118,7 @@ function classifyPlayerInjuryImpact(
   player: any,
   sport: NormalizedInjurySport,
   teamIndex: TeamLogIndex
-): { tier: 1 | 2 | 3; weight: number; usedWeightedScoring: boolean } {
+): { tier: 1 | 2 | 3 | null; weight: number; usedWeightedScoring: boolean } {
   const pos = String(player?.position || player?.pos || '').trim().toUpperCase();
   const isQb = /^QB$/i.test(pos);
   const isGoalie = /^(?:G|GK|GOALIE|GOALTENDER)$/i.test(pos);
@@ -1087,17 +1141,26 @@ function classifyPlayerInjuryImpact(
   }
 
   const nameKey = normalizePlayerNameKey(player?.player_name || player?.name);
-  const pidKey = player?.player_id !== undefined && player?.player_id !== null ? String(player.player_id).trim().toLowerCase() : '';
-  const logStats =
-    (pidKey ? teamIndex.playersById.get(pidKey) : undefined) ||
-    (nameKey ? teamIndex.playersByName.get(nameKey) : undefined);
+  const pidKeys = [
+    ...extractPlayerIdKeys(player?.player_id),
+    ...extractPlayerIdKeys(player?.espn_id),
+    ...extractPlayerIdKeys(player?.athlete_id)
+  ];
+  let logStats: AggregatedPlayerLogStats | undefined;
+  for (const pk of pidKeys) {
+    logStats = teamIndex.playersById.get(pk);
+    if (logStats) break;
+  }
+  if (!logStats && nameKey) {
+    logStats = teamIndex.playersByName.get(nameKey);
+  }
 
   // Merge inline stats on the injury item itself if present
   const inlineMpg = parseNumericStat(player?.mpg ?? player?.avg_minutes ?? player?.minutes);
   const inlinePpg = parseNumericStat(player?.ppg ?? player?.avg_points ?? player?.points);
   const inlineToi = parseNumericStat(player?.avg_toi ?? player?.toi_minutes ?? player?.toi ?? player?.time_on_ice);
   const inlinePassAtt = parseNumericStat(player?.pass_attempts ?? player?.passing_attempts ?? player?.pass_att);
-  const inlineStarts = parseNumericStat(player?.games_started ?? player?.starts);
+  const inlineStarts = parseNumericStat(player?.goalie_starts ?? player?.games_started ?? player?.starts);
   const inlineSnapPct = parseNumericStat(player?.snap_pct);
   const inlineDepth = parseNumericStat(player?.depth_chart_order);
   const inlineStarter = player?.is_starter === true || player?.starter === true || inlineDepth === 1;
@@ -1127,9 +1190,10 @@ function classifyPlayerInjuryImpact(
     return { tier: 3, weight: 0.5, usedWeightedScoring: true };
   }
 
-  // Flat 1.0 fallback ONLY when the entire team has zero player_game_logs rows AND no inline stats/starter/tier metadata
+  // S3: Honest unweighted fallback when player_game_logs has 0 rows AND no inline stats/starter/tier metadata.
+  // Emit impact_tier: null rather than pretending every player is verified impact_tier: 2.
   if (!teamIndex.hasLogs && !hasInlineStat) {
-    return { tier: 2, weight: 1.0, usedWeightedScoring: false };
+    return { tier: null, weight: 1.0, usedWeightedScoring: false };
   }
 
   const effPos = pos || logStats?.position || '';
@@ -1239,6 +1303,7 @@ export function classifyInjuryHealthBalance(params: {
   homeTier1Q?: string[];
   awayTier1Q?: string[];
   weightedMode?: boolean;
+  unweightedFallback?: boolean;
 }): InjuryHealthSummaryResult {
   const { homeTeam, awayTeam, homeOut, homeQ, awayOut, awayQ, sport, gameId } = params;
   const sportScope = `${sport || ''} ${gameId || ''}`;
@@ -1389,16 +1454,18 @@ export function classifyInjuryHealthBalance(params: {
     label = 'symmetric';
   }
 
+  const finalLabel = params.unweightedFallback ? `${label} [unweighted_fallback]` : label;
+
   return {
     balance,
-    label,
+    label: finalLabel,
     homeTeam,
     awayTeam,
     homeOut,
     homeQ,
     awayOut,
     awayQ,
-    line: `Summary: ${homeTeam} (${homeOut} OUT, ${homeQ} Q) vs ${awayTeam} (${awayOut} OUT, ${awayQ} Q) | Health Balance: ${label}`
+    line: `Summary: ${homeTeam} (${homeOut} OUT, ${homeQ} Q) vs ${awayTeam} (${awayOut} OUT, ${awayQ} Q) | Health Balance: ${finalLabel}`
   };
 }
 
@@ -1617,10 +1684,15 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
       const matchedEntry = matchTeamByLabel(firstName, sportHint) || matchTeamByLabel(groupKey, sportHint);
       const teamNameResolved = matchedEntry?.name || firstName;
       const teamAbbrResolved = matchedEntry?.abbr || items[0]?.team_abbr || groupKey;
+      const teamPlayerIds = items
+        .map((it: any) => it?.player_id ?? it?.espn_id ?? it?.athlete_id)
+        .filter((v: any) => v !== undefined && v !== null && String(v).trim() !== '')
+        .map((v: any) => String(v).trim());
       const teamLogIndex = buildTeamLogIndex(
         suppliedPlayerLogs,
         [teamNameResolved, teamAbbrResolved, groupKey, label],
-        sportHint
+        sportHint,
+        teamPlayerIds
       );
 
       let outCount = 0;
@@ -1773,7 +1845,7 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
               awayTier1Q,
               weightedMode: true
             }
-          : {})
+          : { unweightedFallback: true })
       });
       summaryHeaderLine = healthSummaryObj.line;
     } else if (groupStats.length === 1) {
@@ -1785,7 +1857,8 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
         only.depthOut,
         only.usedWeightedScoring
       );
-      summaryHeaderLine = `Summary: ${only.name} (${seg}, ${only.qCount} Q) | Health Balance: single_team_only`;
+      const fallbackSuffix = only.usedWeightedScoring ? '' : ' [unweighted_fallback]';
+      summaryHeaderLine = `Summary: ${only.name} (${seg}, ${only.qCount} Q) | Health Balance: single_team_only${fallbackSuffix}`;
     }
 
     const stripSourceRef = (val: any): any => {

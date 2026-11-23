@@ -328,7 +328,8 @@ export class AnalysisLifecycle {
                     initialPicks: initialPicksSnapshot,
                     headers: allParsedHeaders,
                     slateText: rawSlateForSync,
-                    ...(alreadyDroppedVetoedLegs.length > 0 ? { vetoedLegs: alreadyDroppedVetoedLegs } : {})
+                    ...(alreadyDroppedVetoedLegs.length > 0 ? { vetoedLegs: alreadyDroppedVetoedLegs } : {}),
+                    ...(accumulatedVetoTexts.length > 0 ? { vetoTexts: accumulatedVetoTexts } : {})
                 });
                 sanitizeCompilerProposalOddsAndSummary(currentProposal);
             }

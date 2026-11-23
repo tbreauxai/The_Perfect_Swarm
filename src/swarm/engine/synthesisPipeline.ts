@@ -555,6 +555,7 @@ export async function executeManagerSynthesis(
         auditNote?: string;
         agreementLevel?: 'strong' | 'moderate' | 'divergent';
         activeEventIds?: string[];
+        seatScorecards?: any[];
     }
 ): Promise<any> {
     const managerInstruction = (settings as any)?.managerInstruction
@@ -670,7 +671,12 @@ export async function executeManagerSynthesis(
             });
         }
         const hadVetoes = criticVetoes.length > 0 || vetoedLegs.length > 0 || vetoedClaims.length > 0;
-        normalizePassIfAllLegsVetoed(finalResult, initialPickCount, hadVetoes);
+        normalizePassIfAllLegsVetoed(finalResult, initialPickCount, hadVetoes, {
+            vetoTexts: criticVetoes,
+            vetoedLegs,
+            seatScorecards: groundingContext?.seatScorecards,
+            ...(hadVetoes && Array.isArray(finalResult.picks) && finalResult.picks.length === 0 ? { criticApproved: false } : {})
+        });
         enforceCriticAuditOnFinalAnalysis(finalResult, {
             criticAuditFailed: groundingContext?.criticAuditFailed === true,
             unauditedLegs: groundingContext?.unauditedLegs,
@@ -707,10 +713,15 @@ export async function executeManagerSynthesis(
 
     if (finalResult && typeof finalResult === 'object' && Array.isArray(finalResult.picks)) {
         const syncBoardSource = groundingContext?.rawBoard || safeDynamicPrompt;
+        const syncVetoedLegs = mergeVetoedLegTargets(groundingContext?.vetoedLegs);
         syncCompilerProseWithFinalPicks(finalResult, {
             initialPicks: initialPicksSnapshot,
             headers: parseGameHeaders(syncBoardSource),
-            slateText: syncBoardSource
+            slateText: syncBoardSource,
+            ...(syncVetoedLegs.length > 0 ? { vetoedLegs: syncVetoedLegs } : {}),
+            ...(groundingContext?.criticVetoes && groundingContext.criticVetoes.length > 0 ? { vetoTexts: groundingContext.criticVetoes } : {}),
+            ...(groundingContext?.seatScorecards && groundingContext.seatScorecards.length > 0 ? { seatScorecards: groundingContext.seatScorecards } : {}),
+            ...(finalResult.criticApproved === false ? { criticApproved: false } : {})
         });
     }
 

@@ -8,6 +8,8 @@ import { CRITIC_EVIDENCE_RULE } from "../tools/criticEvidence.ts";
 import { CRITIC_AUDIT_RULE } from "../tools/criticAudit.ts";
 export { INJURY_ATTRIBUTION_RULE, MARKET_AND_ROW_RULES, SPREAD_SIDE_RULE, GROUNDING_RULE, FORM_GROUNDING_BULLETS, FORM_GROUNDING_RULE, VETO_STICKS_RULE, PULL_BEFORE_PASS_RULE, CRITIC_EVIDENCE_RULE, CRITIC_AUDIT_RULE };
 export const RED_TEAM_ANALYST_ROLE = 'RedTeamAnalyst';
+export const UNCERTAIN_QUESTIONABLE_RULE =
+  'Never claim an injury or health advantage when Health Balance is uncertain_questionable. Treat uncertain_questionable as disqualifying for Pillar 3 (roster health edge).';
 
 export const CRITIC_VERDICT_SYSTEM_INSTRUCTION = `You are the Swarm Risk Critic. Audit other seats' proposed picks for risk and rule compliance.
 VETO POLICY: Only veto ("criticApproved":false,"pass":false) when a proposed leg has a fatal scratch, missing coverage, or rule violation—never for unpicked games. Confirmed OUT tags are priced in (asymmetric opponent OUTs support the healthier side); reserve vetoes for late QUESTIONABLE star uncertainty. Veto ("contra_steam_misread") if claiming favorable steam toward a Steam: AGAINST side; veto ("symmetric_injury_misread") if claiming an injury edge when Health Balance is symmetric or opponent-favored. Never invent cutoffs ("zero injuries","spread under 3.5"); reserve wageringPass:true for unplayable slates.
@@ -64,6 +66,8 @@ ${PULL_BEFORE_PASS_RULE}
 
 ${CRITIC_AUDIT_RULE}
 
+${UNCERTAIN_QUESTIONABLE_RULE}
+
 When analyzing data:
 1. SKEPTICAL SCRUTINY: Actively hunt for unstated assumptions, sampling bias, cherry-picked metrics, survivorship bias, and contradictory evidence.
 2. FALSIFICATION: Formulate explicit counter-hypotheses that challenge the consensus or obvious interpretation.
@@ -101,7 +105,7 @@ ${PULL_BEFORE_PASS_RULE}
 
 ${CRITIC_AUDIT_RULE}
 
-PARLAY & INJURY CALIBRATION: Confirmed OUT tags are priced in (asymmetric opponent OUTs support the healthier side); reserve skepticism for late QUESTIONABLE star uncertainty. Read "Steam: TOWARD <side> | AGAINST <side>" and injury "Summary: ... | Health Balance:" headers literally—never invert steam direction or claim an injury edge when Health Balance is symmetric. Never invent cutoffs ("zero injuries", "spread under 3.5"). For optimal parlays, build a 2-3 leg parlay (or 1-2 singles) when legs satisfy >=2 of 3 pillars: form/diff edge, steam or model_signal lean, clean/asymmetric health.
+PARLAY & INJURY CALIBRATION: Confirmed OUT tags are priced in (asymmetric opponent OUTs support the healthier side); reserve skepticism for late QUESTIONABLE star uncertainty. Read "Steam: TOWARD <side> | AGAINST <side>" and injury "Summary: ... | Health Balance:" headers literally—never invert steam direction or claim an injury edge when Health Balance is symmetric. ${UNCERTAIN_QUESTIONABLE_RULE} Never invent cutoffs ("zero injuries", "spread under 3.5"). For optimal parlays, build a 2-3 leg parlay (or 1-2 singles) when legs satisfy >=2 of 3 pillars: form/diff edge, steam or model_signal lean, clean/asymmetric health.
 
 Output strictly valid JSON matching this schema (no filler):
 ${JSON.stringify(zodToJsonSchema(AnalystResponseSchema as any))}`;
@@ -124,6 +128,8 @@ ${VETO_STICKS_RULE}
 ${PULL_BEFORE_PASS_RULE}
 
 ${CRITIC_AUDIT_RULE}
+
+${UNCERTAIN_QUESTIONABLE_RULE}
 
 Instead of outputting raw text, you MUST output a Generative UI payload.
 Output strict JSON matching this JSON Schema:

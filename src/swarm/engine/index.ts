@@ -780,6 +780,29 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                         }
                     }
                 }
+                const stageSeatScorecards: any[] = [];
+                for (const r of flatReports as any[]) {
+                    if (!r || typeof r !== 'object') continue;
+                    const seatLabel = String(r.role || r.seat || '').trim() || (isCriticSeat(r) ? 'Risk Critic' : 'Analyst');
+                    if (isCriticSeat(r)) {
+                        const isVeto = r.pass === false || r.criticApproved === false || String(r.verdict || '').toLowerCase() === 'veto';
+                        stageSeatScorecards.push({
+                            seat: /critic/i.test(seatLabel) ? seatLabel : 'Risk Critic',
+                            verdict: isVeto ? 'veto' : 'approve',
+                            criticApproved: !isVeto,
+                            wageringPass: Boolean(r.wageringPass ?? isVeto),
+                            ...(typeof r.verdict === 'string' && r.verdict.trim() ? { notes: r.verdict.trim() } : (typeof r.summary === 'string' && r.summary.trim() ? { notes: r.summary.trim() } : {}))
+                        });
+                    } else {
+                        const picksCount = Array.isArray(r.picks) ? r.picks.length : 0;
+                        stageSeatScorecards.push({
+                            seat: seatLabel,
+                            verdict: picksCount > 0 ? 'propose' : 'pass',
+                            picksCount,
+                            ...(typeof r.summary === 'string' && r.summary.trim() ? { notes: r.summary.trim() } : {})
+                        });
+                    }
+                }
                 const paramCriticRes = (params as any)?.criticResult || (params as any)?.criticFeedback || (settings as any)?.criticResult;
                 if (paramCriticRes) {
                     if (typeof paramCriticRes === 'string' && paramCriticRes.trim()) {
@@ -902,6 +925,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                 ...(stage2CriticVetoes.length > 0 ? { criticVetoes: stage2CriticVetoes } : {}),
                                 ...(stage2VetoedLegs.length > 0 ? { vetoedLegs: stage2VetoedLegs } : {}),
                                 ...(stage2VetoedClaims.length > 0 ? { vetoedClaims: stage2VetoedClaims } : {}),
+                                ...(stageSeatScorecards.length > 0 ? { seatScorecards: stageSeatScorecards } : {}),
                                 ...(stage1HadProposedPicks ? { hadProposedPicks: true } : {}),
                                 ...(verifierToolResults ? { toolResults: verifierToolResults } : {}),
                                 ...(allToolEvidenceItems.length > 0 ? { toolEvidenceItems: allToolEvidenceItems } : {}),
@@ -934,6 +958,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                     criticVetoes: stage2CriticVetoes,
                                     ...(stage2VetoedLegs.length > 0 ? { vetoedLegs: stage2VetoedLegs } : {}),
                                     ...(stage2VetoedClaims.length > 0 ? { vetoedClaims: stage2VetoedClaims } : {}),
+                                    ...(stageSeatScorecards.length > 0 ? { seatScorecards: stageSeatScorecards } : {}),
                                     ...(stage2CriticAuditFailed ? { criticAuditFailed: true } : {}),
                                     ...(stage2UnauditedLegs.length > 0 ? { unauditedLegs: stage2UnauditedLegs } : {}),
                                     ...(stage1HadProposedPicks ? { hadProposedPicks: true } : {}),

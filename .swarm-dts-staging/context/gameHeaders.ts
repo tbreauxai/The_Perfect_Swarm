@@ -15,7 +15,23 @@ export interface GameHeader {
   away: string;
   home: string;
   commence?: string;
+  modelSignal?: string;
   options: GameHeaderOption[];
+}
+
+const EVENT_PREFIX_SPORT_MAP: Record<string, string> = {
+  'college-football': 'ncaaf',
+  'college-basketball': 'ncaab'
+};
+
+function inferSportFromEventId(eventId: string): string {
+  const clean = eventId.trim().toLowerCase();
+  const prefixMatch =
+    clean.match(/^([a-z][a-z0-9_-]*?)-\d+$/) ??
+    clean.match(/^(college-football|college-basketball|[a-z][a-z0-9_]*)-/);
+  const prefix = prefixMatch?.[1];
+  if (!prefix) return 'unknown';
+  return EVENT_PREFIX_SPORT_MAP[prefix] ?? prefix;
 }
 
 /**
@@ -39,6 +55,21 @@ export function parseGameHeaders(data: unknown, fallbackEventIds?: string[]): Ga
     ].join('\n');
   }
 
+  const parseOptionsSegment = (segment: string, options: GameHeaderOption[]) => {
+    const rawOpts = segment.replace(/^(?:options:|rows=)\s*/i, '').trim();
+    // Options format: "R1 KC -3.5 (-110), R2 BUF +3.5 (-110)" or "R1:ML KC(-110),R2:SPR BUF +3.5(-110)"
+    const optItems = rawOpts.split(/[,;]\s*(?=R\d+)/);
+    for (const item of optItems) {
+      const match = item.trim().match(/^(R\d+)[:\s]*(.*)$/);
+      if (match) {
+        options.push({
+          id: match[1],
+          text: match[2]?.trim() || match[1]
+        });
+      }
+    }
+  };
+
   if (text) {
     const lines = text.split('\n');
     for (const rawLine of lines) {
@@ -55,7 +86,11 @@ export function parseGameHeaders(data: unknown, fallbackEventIds?: string[]): Ga
         let away = 'Away';
         let home = 'Home';
         let commence: string | undefined = undefined;
+        let modelSignal: string | undefined = undefined;
         const options: GameHeaderOption[] = [];
+        let spRaw: string | undefined;
+        let mlRaw: string | undefined;
+        let totRaw: string | undefined;
 
         for (const p of parts) {
           if (p.startsWith('event_id=')) {
@@ -64,30 +99,109 @@ export function parseGameHeaders(data: unknown, fallbackEventIds?: string[]): Ga
             sport = p.replace('sport=', '').trim();
           } else if (p.startsWith('commence=')) {
             commence = p.replace('commence=', '').trim();
+          } else if (p.startsWith('model_signal=')) {
+            modelSignal = p.replace('model_signal=', '').trim();
           } else if (p.includes('@')) {
             const teams = p.split('@').map(t => t.trim());
             if (teams.length === 2 && teams[0] && teams[1]) {
               away = teams[0];
               home = teams[1];
             }
-          } else if (p.toLowerCase().startsWith('options:')) {
-            const rawOpts = p.replace(/^options:\s*/i, '').trim();
-            // Options format: "R1 KC -3.5 (-110), R2 BUF +3.5 (-110)" or semicolon delimited
-            const optItems = rawOpts.split(/[,;]\s*(?=R\d+)/);
-            for (const item of optItems) {
-              const match = item.trim().match(/^(R\d+)\s*(.*)$/);
-              if (match) {
-                options.push({
-                  id: match[1],
-                  text: match[2]?.trim() || match[1]
-                });
-              }
-            }
+          } else if (p.toLowerCase().startsWith('options:') || p.toLowerCase().startsWith('rows=')) {
+            parseOptionsSegment(p, options);
+          } else if (/^sp\s+/i.test(p)) {
+            spRaw = p.replace(/^sp\s+/i, '').trim();
+          } else if (/^ml\s+/i.test(p)) {
+            mlRaw = p.replace(/^ml\s+/i, '').trim();
+          } else if (/^tot\s+/i.test(p)) {
+            totRaw = p.replace(/^tot\s+/i, '').trim();
           }
         }
 
         if (eventId) {
-          headers.push({ eventId, sport, away, home, commence, options });
+          if (sport === 'unknown') {
+            sport = inferSportFromEventId(eventId);
+          }
+          const hasExplicitRidOptions = options.some(o => Boolean(o.id));
+          if (!hasExplicitRidOptions) {
+            if (mlRaw && !/^n\/a$/i.test(mlRaw)) {
+              const mlParts = mlRaw.split('/').map(s => s.trim());
+              if (mlParts.length === 2 && mlParts[0] && mlParts[1] && !/^n\/a$/i.test(mlParts[0]) && !/^n\/a$/i.test(mlParts[1])) {
+                options.push({
+                  id: '',
+                  text: `${away} ML ${mlParts[1]} / ${home} ML ${mlParts[0]}`
+                });
+              } else if (mlParts.length === 2 && mlParts[0] && !/^n\/a$/i.test(mlParts[0])) {
+                options.push({
+                  id: '',
+                  text: `${home} ML ${mlParts[0]}`
+                });
+              } else if (mlParts.length === 2 && mlParts[1] && !/^n\/a$/i.test(mlParts[1])) {
+                options.push({
+                  id: '',
+                  text: `${away} ML ${mlParts[1]}`
+                });
+              }
+            }
+            if (spRaw && !/^n\/a$/i.test(spRaw)) {
+              const spNum = Number(spRaw);
+              if (Number.isFinite(spNum)) {
+                const homeSp = spNum > 0 ? `+${spNum}` : `${spNum}`;
+                const awayNum = -spNum;
+                const awaySp = awayNum > 0 ? `+${awayNum}` : `${awayNum}`;
+                options.push({
+                  id: '',
+                  text: `${home} ${homeSp} / ${away} ${awaySp}`
+                });
+              }
+            }
+            if (totRaw && !/^n\/a$/i.test(totRaw)) {
+              options.push({
+                id: '',
+                text: `O/U ${totRaw}`
+              });
+            }
+          }
+          headers.push({ eventId, sport, away, home, commence, ...(modelSignal ? { modelSignal } : {}), options });
+        }
+      } else if (line.includes('|') && line.includes('@')) {
+        const parts = line.split('|').map(p => p.trim());
+        if (parts.length >= 2 && /^[a-z][a-z0-9_-]*-\d+$/i.test(parts[0])) {
+          const eventId = parts[0];
+          let sport = inferSportFromEventId(eventId);
+          let away = 'Away';
+          let home = 'Home';
+          let commence: string | undefined = undefined;
+          const options: GameHeaderOption[] = [];
+          let foundMatchup = false;
+
+          for (const p of parts.slice(1)) {
+            if (p.startsWith('sport=')) {
+              const explicitSport = p.replace('sport=', '').trim();
+              if (explicitSport && !/^unknown$/i.test(explicitSport)) {
+                sport = explicitSport;
+              }
+            } else if (/^[a-z][a-z0-9_]+$/i.test(p) && !/^unknown$/i.test(p) && !p.includes('@') && !/^options:/i.test(p)) {
+              sport = p.toLowerCase();
+            } else if (p.startsWith('commence=')) {
+              commence = p.replace('commence=', '').trim();
+            } else if (/^\d{4}-\d{2}-\d{2}T\S+$/.test(p)) {
+              commence = p;
+            } else if (p.includes('@')) {
+              const teams = p.split('@').map(t => t.trim());
+              if (teams.length === 2 && teams[0] && teams[1]) {
+                away = teams[0];
+                home = teams[1];
+                foundMatchup = true;
+              }
+            } else if (p.toLowerCase().startsWith('options:') || p.toLowerCase().startsWith('rows=')) {
+              parseOptionsSegment(p, options);
+            }
+          }
+
+          if (foundMatchup) {
+            headers.push({ eventId, sport, away, home, commence, options });
+          }
         }
       }
     }
@@ -122,9 +236,12 @@ export function renderHeaders(headers: GameHeader[], maxChars: number = 1600): s
 
   const formatLine = (h: GameHeader, maxOpts: number): string => {
     const opts = (h.options || []).slice(0, maxOpts);
-    const optsStr = opts.length > 0 ? ` | options: ${opts.map(o => `${o.id} ${o.text}`).join(', ')}` : '';
+    const optsStr = opts.length > 0 ? ` | options: ${opts.map(o => `${o.id ? o.id + ' ' : ''}${o.text}`).join(', ')}` : '';
     const commenceStr = h.commence ? ` | ${h.commence}` : '';
-    return `event_id=${h.eventId} | ${h.sport} | ${h.away} @ ${h.home}${commenceStr}${optsStr}`;
+    const signalStr = h.modelSignal && (h.modelSignal === 'lean_home' || h.modelSignal === 'lean_away')
+      ? ` | model_signal=${h.modelSignal}`
+      : '';
+    return `event_id=${h.eventId} | ${h.sport} | ${h.away} @ ${h.home}${commenceStr}${signalStr}${optsStr}`;
   };
 
   for (let maxOpts = 6; maxOpts >= 1; maxOpts--) {
@@ -136,11 +253,41 @@ export function renderHeaders(headers: GameHeader[], maxChars: number = 1600): s
   }
 
   const baseLines = headers.map(h => formatLine(h, 0));
-  if (baseLines.join('\n').length <= maxChars) {
-    return baseLines.join('\n');
+  let totalLen = baseLines.reduce((sum, l) => sum + l.length, 0) + Math.max(0, baseLines.length - 1);
+  if (totalLen <= maxChars) {
+    const upgraded = [...baseLines];
+    for (let i = 0; i < headers.length; i++) {
+      const candidate = formatLine(headers[i], 1);
+      const delta = candidate.length - upgraded[i].length;
+      if (delta > 0 && totalLen + delta <= maxChars) {
+        upgraded[i] = candidate;
+        totalLen += delta;
+      }
+    }
+    return upgraded.join('\n');
   }
 
-  return baseLines.join('\n').slice(0, maxChars);
+  // Whole-line packing fallback: never slice a game header mid-line/mid-word
+  const lines: string[] = [];
+  let packedLen = 0;
+  for (const h of headers) {
+    const withOneOpt = (h.options && h.options.length > 0) ? formatLine(h, 1) : formatLine(h, 0);
+    const zeroOpt = formatLine(h, 0);
+    const minimal = `event_id=${h.eventId} | ${h.away} @ ${h.home}`;
+    const sep = lines.length > 0 ? 1 : 0;
+    let chosen: string | null = null;
+    if (packedLen + sep + withOneOpt.length <= maxChars) {
+      chosen = withOneOpt;
+    } else if (packedLen + sep + zeroOpt.length <= maxChars) {
+      chosen = zeroOpt;
+    } else if (lines.length === 0 && minimal.length <= maxChars) {
+      chosen = minimal;
+    }
+    if (!chosen) break;
+    packedLen += sep + chosen.length;
+    lines.push(chosen);
+  }
+  return lines.join('\n');
 }
 
 /**
@@ -163,8 +310,8 @@ export function getEventIdForPick(pick: any, headers: GameHeader[]): string | un
   if (pick.eventId) return String(pick.eventId);
 
   const rowId = pick.row || pick.id;
-  if (typeof rowId === 'string') {
-    const matchingHeader = headers.find(h => (h.options || []).some(o => o.id === rowId));
+  if (typeof rowId === 'string' && rowId.trim()) {
+    const matchingHeader = headers.find(h => (h.options || []).some(o => Boolean(o.id) && o.id === rowId));
     if (matchingHeader) return matchingHeader.eventId;
   }
 

@@ -58,6 +58,7 @@ export interface VerificationPipelineParams {
     queryCache?: GameQueryCache;
     toolOptions?: { env?: Record<string, string | undefined>; fetchFn?: typeof fetch; qdrantClient?: any };
     activeEventIds?: string[];
+    seatScorecards?: any[];
 }
 
 export interface VerificationPipelineResult {
@@ -252,7 +253,12 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
             } else if (initialPickCount > 0 && hadVetoedLegs && survivingPickCount === 0) {
                 finalAnalysis.picks = [];
                 finalAnalysis.components = [];
-                normalizePassIfAllLegsVetoed(finalAnalysis, initialPickCount, true);
+                normalizePassIfAllLegsVetoed(finalAnalysis, initialPickCount, true, {
+                    vetoTexts: combinedVetoTexts,
+                    vetoedLegs: combinedVetoedLegs,
+                    seatScorecards: p.seatScorecards,
+                    criticApproved: false
+                });
             } else {
                 finalAnalysis.picks = [];
                 finalAnalysis.components = [];
@@ -276,7 +282,13 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
             normalizePassIfAllLegsVetoed(
                 finalAnalysis,
                 initialPickCount,
-                hadVetoedLegs || combinedVetoTexts.length > 0
+                hadVetoedLegs || combinedVetoTexts.length > 0,
+                {
+                    vetoTexts: combinedVetoTexts,
+                    vetoedLegs: combinedVetoedLegs,
+                    seatScorecards: p.seatScorecards,
+                    ...(hadVetoedLegs && survivingPickCount === 0 ? { criticApproved: false } : {})
+                }
             );
             enforceCriticAuditOnFinalAnalysis(finalAnalysis, {
                 criticAuditFailed: false,
@@ -296,10 +308,21 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
     }
 
     if (finalAnalysis && typeof finalAnalysis === 'object' && Array.isArray(finalAnalysis.picks)) {
+        const vetoTextsForSync = [
+            ...(Array.isArray(p.criticVetoes) ? p.criticVetoes : []),
+            ...(typeof lifecycleResult?.criticFeedback === 'string' && lifecycleResult.criticFeedback.trim()
+                ? [lifecycleResult.criticFeedback.trim()]
+                : [])
+        ];
+        const vetoLegsForSync = mergeVetoedLegTargets(p.vetoedLegs, lifecycleResult?.vetoedLegs);
         syncCompilerProseWithFinalPicks(finalAnalysis, {
             initialPicks: initialPicksSnapshot,
             headers: parsedHeaders,
-            slateText: rawInput || task || headersText
+            slateText: rawInput || task || headersText,
+            ...(vetoLegsForSync.length > 0 ? { vetoedLegs: vetoLegsForSync } : {}),
+            ...(vetoTextsForSync.length > 0 ? { vetoTexts: vetoTextsForSync } : {}),
+            ...(p.seatScorecards && p.seatScorecards.length > 0 ? { seatScorecards: p.seatScorecards } : {}),
+            ...(finalAnalysis.criticApproved === false ? { criticApproved: false } : {})
         });
     }
 

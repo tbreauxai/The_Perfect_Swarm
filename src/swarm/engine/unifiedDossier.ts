@@ -268,13 +268,16 @@ export function evaluateQualitativePillars(entry: UnifiedGameDossierEntry): Qual
     }
   }
 
+  const isUncertainQuestionable = /Health\s*Balance:\s*uncertain_questionable\b/i.test(inj);
   let healthSide: 'home' | 'away' | null = null;
   let healthLabel = '';
-  const healthMatch = inj.match(/Health\s*Balance:\s*(home_advantage|away_advantage)(?:\s*\(([^)]+)\))?/i);
-  if (healthMatch) {
-    const cls = healthMatch[1].toLowerCase();
-    healthSide = cls === 'home_advantage' ? 'home' : 'away';
-    healthLabel = cls;
+  if (!isUncertainQuestionable) {
+    const healthMatch = inj.match(/Health\s*Balance:\s*(home_advantage|away_advantage)(?:\s*\(([^)]+)\))?/i);
+    if (healthMatch) {
+      const cls = healthMatch[1].toLowerCase();
+      healthSide = cls === 'home_advantage' ? 'home' : 'away';
+      healthLabel = cls;
+    }
   }
 
   const tags: string[] = [];
@@ -297,7 +300,7 @@ export function evaluateQualitativePillars(entry: UnifiedGameDossierEntry): Qual
       : bestDirectionalAligned;
 
   const hasDirectionalSteam = entry.hasDirectionalSteam || steamSide !== null;
-  const outCountDiff = Math.max(entry.outCountDiff || 0, computeOutCountDiff(inj));
+  const outCountDiff = isUncertainQuestionable ? 0 : Math.max(entry.outCountDiff || 0, computeOutCountDiff(inj));
   const weightedMarginRank = isLowScoringSport ? netMarginGap * 4 : netMarginGap;
 
   return {
@@ -588,7 +591,9 @@ export async function fetchTwoHopSlateDossier(
         }
       } else if (call.tool === 'get_injury_and_roster_delta') {
         entry.injuries = compact || 'None';
-        entry.outCountDiff = computeOutCountDiff(entry.injuries);
+        entry.outCountDiff = /Health\s*Balance:\s*uncertain_questionable\b/i.test(entry.injuries)
+          ? 0
+          : computeOutCountDiff(entry.injuries);
       } else if (call.tool === 'get_market_movement') {
         entry.market = compact || 'Unavailable';
         entry.hasDirectionalSteam = /\bSteam:\s*(?!neutral\b|N\/A\b)/i.test(entry.market);

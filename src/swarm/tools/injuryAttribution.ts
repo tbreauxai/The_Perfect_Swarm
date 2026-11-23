@@ -980,6 +980,15 @@ export function sanitizeMisattributedPicksAndText<T extends Record<string, any>>
   if (Array.isArray(rep.scorecards)) {
     rep.scorecards = rep.scorecards.filter((sc: any) => {
       if (!sc || typeof sc !== 'object') return true;
+      if (
+        typeof sc.seat === 'string' ||
+        typeof sc.role === 'string' ||
+        typeof sc.verdict === 'string' ||
+        typeof sc.criticApproved === 'boolean' ||
+        typeof sc.wageringPass === 'boolean'
+      ) {
+        return true;
+      }
       const sideHint = String(sc.pick || sc.side || '');
       const texts = [sc.note, sc.reason, sc.summary, ...(Array.isArray(sc.reasons) ? sc.reasons : [])]
         .filter((x): x is string => typeof x === 'string' && x.trim().length > 0);
