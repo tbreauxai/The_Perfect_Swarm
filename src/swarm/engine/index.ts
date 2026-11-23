@@ -711,30 +711,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     return `${baseVerifierEvidence}\n\n${calibrationBlock.slice(0, sliceLen).trimEnd()}${label}`;
                 })();
 
-                const synthesisResult = blackboard ? emptySynthesisResult() : compileSynthesisPrompt({
-                    task,
-                    rawInput: profilingResult.rawInput,
-                    analysts,
-                    managerAgent,
-                    allAnalystReports: clusterResult.allAnalystReports,
-                    clusterDigests: clusterResult.clusterDigests,
-                    historicalContext,
-                    workflowConsensus,
-                    settings,
-                    activeVariant,
-                    context,
-                    params,
-                    bypassCache,
-                    verifierEvidence,
-                    ...(allToolCallTrace.length > 0 ? { toolCallTrace: allToolCallTrace } : {})
-                });
-
-                workflowOriginalPromptTokens += synthesisResult.workflowOriginalPromptTokens;
-                workflowCompressedPromptTokens += synthesisResult.workflowCompressedPromptTokens;
-                workflowPromptTokensSaved += synthesisResult.workflowPromptTokensSaved;
-                workflowDeduplicatedCount += synthesisResult.workflowDeduplicatedCount;
-
-                // Step 5 & 6: Verification vs Standard Synthesis Execution
+                // Step 5 & 6: Extract Critic verdict/vetoes/scorecards before synthesis compilation
                 const isCriticSeat = (r: any): boolean => {
                     const label = String(r?.seat || r?.role || '').toLowerCase();
                     return label === 'critic' || label === 'risk' || label === 'risk_critic' || label.includes('critic') || label.includes('risk');
@@ -819,6 +796,31 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                         }
                     }
                 }
+
+                const synthesisResult = blackboard ? emptySynthesisResult() : compileSynthesisPrompt({
+                    task,
+                    rawInput: profilingResult.rawInput,
+                    analysts,
+                    managerAgent,
+                    allAnalystReports: clusterResult.allAnalystReports,
+                    clusterDigests: clusterResult.clusterDigests,
+                    historicalContext,
+                    workflowConsensus,
+                    settings,
+                    activeVariant,
+                    context,
+                    params,
+                    bypassCache,
+                    verifierEvidence,
+                    ...(allToolCallTrace.length > 0 ? { toolCallTrace: allToolCallTrace } : {}),
+                    ...(stage2VetoedLegs.length > 0 ? { vetoedLegs: stage2VetoedLegs } : {})
+                });
+
+                workflowOriginalPromptTokens += synthesisResult.workflowOriginalPromptTokens;
+                workflowCompressedPromptTokens += synthesisResult.workflowCompressedPromptTokens;
+                workflowPromptTokensSaved += synthesisResult.workflowPromptTokensSaved;
+                workflowDeduplicatedCount += synthesisResult.workflowDeduplicatedCount;
+
                 const allPlaceholderOrDataRequest = flatReports.length > 0 && nonCriticReports.every(r =>
                     ((r as any)._placeholder === true && !(Array.isArray((r as any).picks) && (r as any).picks.length > 0))
                     || isDataRequest(r)
@@ -991,7 +993,39 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                         }
                         managerFailed = true;
                         recordDegraded(context, managerAgent.id || 'manager');
-                        finalAnalysis = buildPartialFinalAnalysis(best, getDegraded(context));
+                        const isBettingPartial =
+                            (settings as any)?.responseSchema === 'morning_judge' ||
+                            (params as any)?.originApp === 'duelodds' ||
+                            (params as any)?.callerAppId === 'duelodds' ||
+                            (params as any)?.appId === 'duelodds' ||
+                            (params as any)?.isBettingRun === true ||
+                            stage1HadProposedPicks ||
+                            criticReports.length > 0;
+                        const criticRan = criticReports.length > 0 || Boolean(paramCriticRes);
+                        const criticExplicitlyPassed =
+                            criticReports.some((cr: any) => cr && (cr.pass === true || cr.criticApproved === true)) ||
+                            (paramCriticRes && typeof paramCriticRes === 'object' && (paramCriticRes.pass === true || paramCriticRes.criticApproved === true));
+                        const criticExplicitlyFailed =
+                            stage2CriticAuditFailed ||
+                            criticReports.some((cr: any) => cr && (cr.pass === false || cr.criticApproved === false)) ||
+                            (paramCriticRes && typeof paramCriticRes === 'object' && paramCriticRes.pass === false);
+                        const criticPassed = criticRan && criticExplicitlyPassed && !criticExplicitlyFailed;
+                        finalAnalysis = buildPartialFinalAnalysis(
+                            best,
+                            getDegraded(context),
+                            isBettingPartial
+                                ? {
+                                    isBettingRun: true,
+                                    criticRan,
+                                    criticPassed,
+                                    criticApproved: criticPassed,
+                                    vetoedLegs: stage2VetoedLegs,
+                                    vetoTexts: stage2CriticVetoes,
+                                    seatScorecards: stageSeatScorecards,
+                                    allAnalystReports: clusterResult.allAnalystReports
+                                }
+                                : undefined
+                        );
                         context.addEvent({
                             agentRole: 'Partial Result Fallback',
                             action: 'Manager Chain Exhausted',

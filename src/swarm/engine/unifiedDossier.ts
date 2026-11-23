@@ -126,6 +126,11 @@ export function compressDossierPillarSummary(tool: string, summary: string): str
 export interface QualitativePillarEvaluation {
   pillarCount: number;
   alignedPillarCount: number;
+  winningSide?: 'home' | 'away' | null;
+  winningTeam?: string;
+  homePillarCount?: number;
+  awayPillarCount?: number;
+  totalSteamTag?: string;
   tags: string[];
   hasDirectionalSteam: boolean;
   outCountDiff: number;
@@ -239,34 +244,78 @@ export function evaluateQualitativePillars(entry: UnifiedGameDossierEntry): Qual
       }
       formTeam = formSide === 'home' ? homeSide.abbr : awaySide.abbr;
     }
-  } else if (rawMargins.length >= 2) {
-    netMarginGap = Math.abs(rawMargins[0] - rawMargins[1]);
-    const clearMargin = isLowScoringSport ? netMarginGap >= 0.7 : netMarginGap >= 2.5;
-    if (clearMargin) {
-      formSide = rawMargins[0] >= rawMargins[1] ? 'home' : 'away';
-      formTeam =
-        formSide === 'home'
-          ? (homeMatchupName.split(/\s+/).pop() || 'Home')
-          : (awayMatchupName.split(/\s+/).pop() || 'Away');
+  } else {
+    const homeMarginMatch = fund.match(/Home\s*(?:\(([^)]+)\))?\s*:[^|\n]*?(?:Net\s*Margin|Net|Diff)\s*:?\s*([+-]?\d+(?:\.\d+)?)/i);
+    const awayMarginMatch = fund.match(/Away\s*(?:\(([^)]+)\))?\s*:[^|\n]*?(?:Net\s*Margin|Net|Diff)\s*:?\s*([+-]?\d+(?:\.\d+)?)/i);
+    if (homeMarginMatch && awayMarginMatch) {
+      const hVal = Number(homeMarginMatch[2]);
+      const aVal = Number(awayMarginMatch[2]);
+      netMarginGap = Math.abs(hVal - aVal);
+      const clearMargin = isLowScoringSport ? netMarginGap >= 0.7 : netMarginGap >= 2.5;
+      if (clearMargin) {
+        formSide = hVal >= aVal ? 'home' : 'away';
+        formTeam =
+          formSide === 'home'
+            ? (homeMarginMatch[1]?.trim() || homeMatchupName.split(/\s+/).pop() || 'Home')
+            : (awayMarginMatch[1]?.trim() || awayMatchupName.split(/\s+/).pop() || 'Away');
+      }
+    } else if (rawMargins.length >= 2) {
+      netMarginGap = Math.abs(rawMargins[0] - rawMargins[1]);
+      const clearMargin = isLowScoringSport ? netMarginGap >= 0.7 : netMarginGap >= 2.5;
+      if (clearMargin) {
+        const awayIdx = fund.search(/\bAway\b/i);
+        const homeIdx = fund.search(/\bHome\b/i);
+        const awayFirst = awayIdx !== -1 && (homeIdx === -1 || awayIdx < homeIdx);
+        const hVal = awayFirst ? rawMargins[1] : rawMargins[0];
+        const aVal = awayFirst ? rawMargins[0] : rawMargins[1];
+        formSide = hVal >= aVal ? 'home' : 'away';
+        formTeam =
+          formSide === 'home'
+            ? (homeMatchupName.split(/\s+/).pop() || 'Home')
+            : (awayMatchupName.split(/\s+/).pop() || 'Away');
+      }
     }
   }
 
-  let steamSide: 'home' | 'away' | 'total' | null = null;
+  let steamSide: 'home' | 'away' | null = null;
   let steamTarget = '';
-  const steamMatch = mkt.match(/Steam:\s*TOWARD\s+([^|\n;]+)/i);
-  if (steamMatch) {
-    const rawTarget = steamMatch[1]
-      .replace(/\s*\([^)]*\)\s*$/g, '')
-      .trim();
-    if (rawTarget && !/^(?:NEUTRAL|NONE|MIXED|N\/A)$/i.test(rawTarget)) {
-      steamTarget = rawTarget;
-      const matchesHome = teamNameMatchesLabel(rawTarget, homeSide?.abbr || '', homeMatchupName);
-      const matchesAway = teamNameMatchesLabel(rawTarget, awaySide?.abbr || '', awayMatchupName);
-      if (matchesHome && !matchesAway) steamSide = 'home';
-      else if (matchesAway && !matchesHome) steamSide = 'away';
-      else steamSide = 'total';
+  let totalSteamTag = '';
+
+  const sideSteamExplicit = mkt.match(/Side\s+Steam:\s*TOWARD\s+([^|\n;]+)/i);
+  const totalSteamExplicit = mkt.match(/Total\s+Steam:\s*TOWARD\s+([^|\n;]+)/i);
+  const genericSteamMatch = !sideSteamExplicit ? mkt.match(/(?:^|[|\n;]\s*)Steam:\s*TOWARD\s+([^|\n;]+)/i) : null;
+
+  const parseSteamCandidate = (raw: string): void => {
+    const cleaned = raw.replace(/\s*\([^)]*\)\s*$/g, '').trim();
+    if (!cleaned || /^(?:NEUTRAL|NONE|MIXED|N\/A)$/i.test(cleaned)) return;
+    if (/^(?:total\s+)?(?:over|under)\b/i.test(cleaned)) {
+      if (!totalSteamTag) totalSteamTag = `TOWARD ${cleaned}`;
+      return;
+    }
+    const strippedDir = cleaned.replace(/^(?:home|away)\s+/i, '').trim();
+    const explicitHome = /^home\b/i.test(cleaned);
+    const explicitAway = /^away\b/i.test(cleaned);
+    const matchesHome = explicitHome || teamNameMatchesLabel(strippedDir, homeSide?.abbr || '', homeMatchupName);
+    const matchesAway = explicitAway || teamNameMatchesLabel(strippedDir, awaySide?.abbr || '', awayMatchupName);
+    if (matchesHome && !matchesAway) {
+      steamSide = 'home';
+      steamTarget = cleaned;
+    } else if (matchesAway && !matchesHome) {
+      steamSide = 'away';
+      steamTarget = cleaned;
+    } else if (/over|under|total/i.test(cleaned)) {
+      if (!totalSteamTag) totalSteamTag = `TOWARD ${cleaned}`;
+    }
+  };
+
+  if (sideSteamExplicit) parseSteamCandidate(sideSteamExplicit[1]);
+  if (totalSteamExplicit) {
+    const cleanedTotal = totalSteamExplicit[1].replace(/\s*\([^)]*\)\s*$/g, '').trim();
+    if (cleanedTotal && !/^(?:NEUTRAL|NONE|MIXED|N\/A)$/i.test(cleanedTotal)) {
+      totalSteamTag = `TOWARD ${cleanedTotal}`;
     }
   }
+  if (genericSteamMatch) parseSteamCandidate(genericSteamMatch[1]);
 
   const isUncertainQuestionable = /Health\s*Balance:\s*uncertain_questionable\b/i.test(inj);
   let healthSide: 'home' | 'away' | null = null;
@@ -280,33 +329,61 @@ export function evaluateQualitativePillars(entry: UnifiedGameDossierEntry): Qual
     }
   }
 
-  const tags: string[] = [];
-  if (formSide && formTeam) tags.push(`form=${formTeam}`);
-  if (steamSide && steamTarget) tags.push(`steam=TOWARD ${steamTarget}`);
-  if (healthSide && healthLabel) tags.push(`health=${healthLabel}`);
+  // S5: Score pillars independently per side (home vs away). Never sum opposing sides or count Total steam as a side pillar.
+  const homeTags: string[] = [];
+  const awayTags: string[] = [];
 
-  const homeAligned =
-    (formSide === 'home' ? 1 : 0) +
-    (steamSide === 'home' ? 1 : 0) +
-    (healthSide === 'home' ? 1 : 0);
-  const awayAligned =
-    (formSide === 'away' ? 1 : 0) +
-    (steamSide === 'away' ? 1 : 0) +
-    (healthSide === 'away' ? 1 : 0);
-  const bestDirectionalAligned = Math.max(homeAligned, awayAligned);
-  const alignedPillarCount =
-    steamSide === 'total' && bestDirectionalAligned > 0
-      ? bestDirectionalAligned + 1
-      : bestDirectionalAligned;
+  if (formSide === 'home' && formTeam) homeTags.push(`form=${formTeam}`);
+  else if (formSide === 'away' && formTeam) awayTags.push(`form=${formTeam}`);
+
+  if (steamSide === 'home' && steamTarget) homeTags.push(`steam=TOWARD ${steamTarget}`);
+  else if (steamSide === 'away' && steamTarget) awayTags.push(`steam=TOWARD ${steamTarget}`);
+
+  if (healthSide === 'home' && healthLabel) homeTags.push(`health=${healthLabel}`);
+  else if (healthSide === 'away' && healthLabel) awayTags.push(`health=${healthLabel}`);
+
+  const homeCount = homeTags.length;
+  const awayCount = awayTags.length;
+
+  let winningSide: 'home' | 'away' | null = null;
+  if (homeCount > awayCount) {
+    winningSide = 'home';
+  } else if (awayCount > homeCount) {
+    winningSide = 'away';
+  } else if (homeCount > 0) {
+    // Tie-break: prefer side with directional side steam, then health, then home
+    if (steamSide === 'away') winningSide = 'away';
+    else if (steamSide === 'home') winningSide = 'home';
+    else if (healthSide === 'away') winningSide = 'away';
+    else winningSide = 'home';
+  }
+
+  const winningTags = winningSide === 'home' ? homeTags : winningSide === 'away' ? awayTags : [];
+  const alignedPillarCount = winningTags.length;
+  const resolveTeamLabel = (side: 'home' | 'away' | null): string => {
+    if (side === 'home') {
+      return homeSide?.abbr || homeMatchupName.split(/\s+/).pop() || 'HOME';
+    }
+    if (side === 'away') {
+      return awaySide?.abbr || awayMatchupName.split(/\s+/).pop() || 'AWAY';
+    }
+    return '';
+  };
+  const winningTeam = resolveTeamLabel(winningSide);
 
   const hasDirectionalSteam = entry.hasDirectionalSteam || steamSide !== null;
   const outCountDiff = isUncertainQuestionable ? 0 : Math.max(entry.outCountDiff || 0, computeOutCountDiff(inj));
   const weightedMarginRank = isLowScoringSport ? netMarginGap * 4 : netMarginGap;
 
   return {
-    pillarCount: tags.length,
+    pillarCount: alignedPillarCount,
     alignedPillarCount,
-    tags,
+    winningSide,
+    winningTeam,
+    homePillarCount: homeCount,
+    awayPillarCount: awayCount,
+    ...(totalSteamTag ? { totalSteamTag } : {}),
+    tags: winningTags,
     hasDirectionalSteam,
     outCountDiff,
     netMarginGap,
@@ -732,10 +809,14 @@ export function formatUnifiedPerGameDossier(
     if (headerPool.length > 0 && (typeof maxChars !== 'number' || maxChars >= 600)) {
       const headerLines = [
         '=== TOP PILLAR CANDIDATES (QUALITATIVE) ===',
-        ...headerPool.map(
-          (item) =>
-            `- ${item.entry.eventId} [${item.eval.pillarCount} pillar${item.eval.pillarCount === 1 ? '' : 's'}: ${item.eval.tags.join(', ')}]`,
-        ),
+        ...headerPool.map((item) => {
+          const count = item.eval.pillarCount;
+          const sideLabel = item.eval.winningSide
+            ? ` (${item.eval.winningSide}${item.eval.winningTeam ? ` ${item.eval.winningTeam}` : ''})`
+            : '';
+          const totalNote = item.eval.totalSteamTag ? ` | total_steam=${item.eval.totalSteamTag}` : '';
+          return `- ${item.entry.eventId} [${count} pillar${count === 1 ? '' : 's'}${sideLabel}: ${item.eval.tags.join(', ')}]${totalNote}`;
+        }),
       ];
       const candidateHeader = headerLines.join('\n');
       if (typeof maxChars !== 'number' || candidateHeader.length + 220 <= maxChars) {

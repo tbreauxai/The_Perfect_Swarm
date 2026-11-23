@@ -8,7 +8,16 @@ import { seatBudget } from './context/promptBudget.js';
 import { SwarmTracer } from './profiler.js';
 import { globalLoadBalancer, type AdaptiveLoadBalancer } from './loadBalancer.js';
 import { globalTokenBudgetManager } from './loadBalancer/tokenBudgetManager.js';
-import { globalProviderLimiter, estimateTokens, PROVIDER_CALL_TIMEOUT_MS, MAX_BUDGET_WAIT_MS, DEFAULT_STRICT_BUDGET_WAIT_MS, INTERACTIVE_MAX_BUDGET_WAIT_MS } from './providers/limiter.js';
+import {
+    globalProviderLimiter,
+    estimateTokens,
+    PROVIDER_CALL_TIMEOUT_MS,
+    MAX_BUDGET_WAIT_MS,
+    DEFAULT_STRICT_BUDGET_WAIT_MS,
+    INTERACTIVE_MAX_BUDGET_WAIT_MS,
+    PROMPT_EXCEEDS_LIMIT_REASON,
+    UNSATISFIABLE_BUDGET_WAIT_MS
+} from './providers/limiter.js';
 import { parseRetryAfterMs } from './utils/httpTimeouts.js';
 import { isModelDead, DEFAULT_PROVIDER_MODELS } from './server/modelsProvider.js';
 import { groqPromptCharCap } from './providers/groq.js';
@@ -44,12 +53,24 @@ function checkTargetLimits(
         ? `${systemInstruction}\n${effectivePrompt}`
         : effectivePrompt;
     const estimatedTokens = estimateTokens(payloadToEstimate);
-    const budgetWait = globalProviderLimiter.budgetWaitMs(String(target.provider), estimatedTokens);
-    if (knownSkip || budgetWait > maxBudgetWait) {
+    if (globalProviderLimiter.exceedsTokenBudgetCapacity(String(target.provider), estimatedTokens)) {
         return {
             ok: false,
             targetModel,
-            reason: knownSkip || `token budget needs ${Math.ceil(budgetWait)}ms`,
+            reason: knownSkip || PROMPT_EXCEEDS_LIMIT_REASON,
+            needsBudgetWait: false,
+            estimatedTokens
+        };
+    }
+    const budgetWait = globalProviderLimiter.budgetWaitMs(String(target.provider), estimatedTokens);
+    if (knownSkip || !Number.isFinite(budgetWait) || budgetWait >= UNSATISFIABLE_BUDGET_WAIT_MS || budgetWait > maxBudgetWait) {
+        const waitReason = !Number.isFinite(budgetWait) || budgetWait >= UNSATISFIABLE_BUDGET_WAIT_MS
+            ? PROMPT_EXCEEDS_LIMIT_REASON
+            : `token budget needs ${Math.ceil(budgetWait)}ms`;
+        return {
+            ok: false,
+            targetModel,
+            reason: knownSkip || waitReason,
             needsBudgetWait: false,
             estimatedTokens
         };
@@ -512,6 +533,7 @@ export class Agent {
                             }
                         }
                         if (realFallback) {
+                            const fallbackModel = realFallback.modelName || DEFAULT_PROVIDER_MODELS[realFallback.provider] || this.modelName;
                             recordRunDebugFailover(
                                 (context as any)?.id,
                                 this.role,
@@ -521,11 +543,13 @@ export class Agent {
                             context.addEvent({
                                 agentRole: this.role,
                                 action: 'Provider Failover Triggered',
-                                modelName: `${currentTarget.provider} -> ${realFallback.provider}`,
+                                modelName: `${currentTarget.provider}/${targetModel} -> ${realFallback.provider}/${fallbackModel}`,
                                 prompt: `Cascading to backup provider due to error: ${errMsg}`,
                                 output: {
                                     failedProvider: currentTarget.provider,
+                                    failedModel: targetModel,
                                     fallbackProvider: realFallback.provider,
+                                    fallbackModel,
                                     reason: errMsg
                                 },
                                 failover: {

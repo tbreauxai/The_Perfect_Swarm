@@ -10,17 +10,20 @@ import { globalProviderLimiter } from "../providers/limiter.ts";
 import { DEFAULT_PROVIDER_MODELS } from "../agent.ts";
 
 /**
- * Ordered server-side manager fallback chain (PS3).
- * Free tiers only (Tyler, 2026-10-16). github is not here: GitHub Models was retired on 2026-07-30.
- * PROVISIONAL models: to be finalized by PS4 (Code Auditor provider probe). Do not change them in this branch.
+ * Ordered server-side manager fallback chain (S2 consolidated order).
+ * Free tiers only: Gemini primary -> Gemini siblings -> Groq -> Mistral -> Cloudflare -> NVIDIA (last resort).
  */
 export const MANAGER_CHAIN: ReadonlyArray<{
   provider: Provider;
   model: string;
 }> = [
+  { provider: "gemini" as Provider, model: "gemini-3.5-flash-lite" },
   { provider: "gemini" as Provider, model: "gemini-3.1-flash-lite" },
-  { provider: "mistral" as Provider, model: "mistral-small-latest" },
+  { provider: "gemini" as Provider, model: "gemini-3.8-flash" },
   { provider: "groq" as Provider, model: "openai/gpt-oss-120b" },
+  { provider: "mistral" as Provider, model: "mistral-small-latest" },
+  { provider: "cloudflare" as Provider, model: "@cf/meta/llama-3.1-8b-instruct" },
+  { provider: "nvidia" as Provider, model: "nvidia/nemotron-3.5-lightning-30b-a3b" },
 ];
 
 /**

@@ -40,12 +40,16 @@ describe('runNov20j repros (wf-1795237523010)', () => {
     expect(rec?.seats.manager?.postFailoverProvider).toBe('groq');
   });
 
-  it('U: MANAGER_CHAIN uses gemini-3.1-flash-lite and drops retired gemini-2.5 models', () => {
+  it('U: MANAGER_CHAIN uses Nov 2026 Gemini free-tier siblings and drops retired gemini-2.5 models', () => {
     const models = MANAGER_CHAIN.map(e => `${e.provider}:${e.model}`);
     expect(models).toEqual([
+      'gemini:gemini-3.5-flash-lite',
       'gemini:gemini-3.1-flash-lite',
+      'gemini:gemini-3.8-flash',
+      'groq:openai/gpt-oss-120b',
       'mistral:mistral-small-latest',
-      'groq:openai/gpt-oss-120b'
+      'cloudflare:@cf/meta/llama-3.1-8b-instruct',
+      'nvidia:nvidia/nemotron-3.5-lightning-30b-a3b'
     ]);
     expect(models.some(m => m.includes('gemini-2.5'))).toBe(false);
   });
