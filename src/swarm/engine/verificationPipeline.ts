@@ -1,17 +1,20 @@
 import type { Agent } from '../agent.ts';
 import type { SwarmContext } from '../context.ts';
 import { AnalysisLifecycle } from '../lifecycle.ts';
-import { guardManagerResponse } from '../parser.ts';
+import { guardManagerResponse, sanitizeCompilerProposalOddsAndSummary, splitSentencesSafe } from '../parser.ts';
 import { globalSpecialistProfiler } from '../loadBalancer.ts';
 import { getManagerContextTokenCeiling } from './synthesisPipeline.ts';
 import { formatRunDebugOutputDigest, recordRunDebugSeat } from './runDebugRecord.ts';
-import { parseGameHeaders, renderHeaders, filterPicksByCoverage } from '../context/gameHeaders.ts';
-import { INJURY_ATTRIBUTION_RULE, sanitizeMisattributedPicksAndText } from '../tools/injuryAttribution.ts';
-import { MARKET_AND_ROW_RULES, SPREAD_SIDE_RULE, sanitizeRowMismatchedPicks, type MarketToolRecord } from '../tools/marketRowBinding.ts';
+import { parseGameHeaders, renderHeaders, filterPicksByCoverage, type GameHeader } from '../context/gameHeaders.ts';
+import { INJURY_ATTRIBUTION_RULE, auditInjuryAttribution, matchTeamByLabel, sanitizeMisattributedPicksAndText } from '../tools/injuryAttribution.ts';
+import { MARKET_AND_ROW_RULES, SPREAD_SIDE_RULE, auditMarketCoverageAndRowBinding, extractRowOptions, sanitizeRowMismatchedPicks, type MarketToolRecord } from '../tools/marketRowBinding.ts';
 import {
     GROUNDING_RULE,
     FORM_GROUNDING_BULLETS,
     VETO_STICKS_RULE,
+    auditClaimGrounding,
+    auditCriticPremiseContradictions,
+    ensureRiskCriticVetoScorecard,
     mergeVetoedClaims,
     mergeVetoedLegTargets,
     normalizePassIfAllLegsVetoed,
@@ -64,6 +67,256 @@ export interface VerificationPipelineParams {
 export interface VerificationPipelineResult {
     finalAnalysis: any;
     lifecycleResult: any;
+}
+
+const CONTRADICTORY_RECOMMENDATION_PROSE_REGEX =
+    /\b(?:proceed\s+with\s+(?:a\s+)?(?:\d+|two|three|four|five)\s*-?\s*leg|recommend(?:ed|ing|s)?\s+(?:a\s+)?(?:\d+|two|three|four|five)\s*-?\s*leg|risk\s+critic\s+approved\s+(?:all|every|both|the))\b/i;
+
+const FEEDBACK_REJECTION_CUE_REGEX =
+    /\b(?:reject(?:ed|s|ing)?|veto(?:ed|s|ing)?|fail(?:ed|s|ing)?|invalid|disqualif(?:y|ied|ies)|contradict(?:s|ed|ing)?|ungrounded|misread|disadvantaged|away_advantage|home_advantage|symmetric|uncertain_questionable|remove|drop|strip|exclude|cannot\s+recommend|do\s+not\s+recommend|out\b)\b/i;
+
+const FEEDBACK_APPROVAL_ONLY_CUE_REGEX =
+    /\b(?:approved?|valid|clean|pass(?:ed|es)?|keep|sound|grounded|fine|solid|good)\b/i;
+
+function escapeRx(s: string): string {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function buildPickIdentifierInfo(
+    pk: any,
+    rowMap: Map<string, { rowId: string; eventId?: string; text: string }>
+): { rowId?: string; label: string; aliases: string[]; eventId?: string } {
+    const rawSide = typeof pk === 'string'
+        ? pk.trim()
+        : String(pk?.side || pk?.pick || pk?.selection || pk?.team || '').trim();
+    const rowField = typeof pk === 'object' && pk
+        ? String(pk.row || pk.id || '').trim()
+        : '';
+    const rowMatch = rowField.match(/\b(R\d+)\b/i) || rawSide.match(/\b(R\d+)\b/i);
+    const rowId = rowMatch ? rowMatch[1].toUpperCase() : undefined;
+    const rowEntry = rowId ? rowMap.get(rowId) : undefined;
+    const label = rawSide || rowEntry?.text || rowId || '';
+    const aliases = new Set<string>();
+    for (const src of [rawSide, rowEntry?.text].filter((x): x is string => Boolean(x))) {
+        const entry = matchTeamByLabel(src);
+        if (entry) {
+            aliases.add(entry.name.toLowerCase());
+            if (entry.abbr && entry.abbr.length >= 2) aliases.add(entry.abbr.toLowerCase());
+            if (entry.city && entry.city.length >= 3) aliases.add(entry.city.toLowerCase());
+            const words = entry.name.toLowerCase().split(/\s+/).filter(w => w.length >= 4);
+            if (words.length > 0) aliases.add(words[words.length - 1]);
+        }
+        const stripped = src
+            .replace(/\b(?:R\d+|SPR|ML|TOT|moneyline|spread|over|under|home|away)\b/gi, ' ')
+            .replace(/[+-]\d+(?:\.\d+)?/g, ' ')
+            .replace(/[()[\]:|]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+        if (stripped.length >= 4) {
+            aliases.add(stripped.toLowerCase());
+        }
+    }
+    return {
+        ...(rowId ? { rowId } : {}),
+        label,
+        aliases: Array.from(aliases),
+        ...(typeof pk === 'object' && pk?.event_id ? { eventId: String(pk.event_id) } : (rowEntry?.eventId ? { eventId: rowEntry.eventId } : {}))
+    };
+}
+
+function spanMatchesPickInfo(
+    span: string,
+    info: { rowId?: string; aliases: string[] }
+): boolean {
+    if (!span || !span.trim()) return false;
+    if (info.rowId && new RegExp(`\\b${escapeRx(info.rowId)}\\b`, 'i').test(span)) {
+        return true;
+    }
+    const lower = span.toLowerCase();
+    for (const alias of info.aliases) {
+        if (!alias || alias.length < 2) continue;
+        if (alias.length <= 4) {
+            if (new RegExp(`\\b${escapeRx(alias.toUpperCase())}\\b`).test(span)) return true;
+        } else if (new RegExp(`\\b${escapeRx(alias)}\\b`, 'i').test(lower)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function pickMatchesVetoedTarget(
+    pk: any,
+    target: VetoedLegTarget,
+    rowMap: Map<string, { rowId: string; eventId?: string; text: string }>
+): boolean {
+    const info = buildPickIdentifierInfo(pk, rowMap);
+    if (target.rowId && info.rowId && target.rowId.toUpperCase() === info.rowId.toUpperCase()) {
+        return true;
+    }
+    if (target.eventId && info.eventId && target.eventId === info.eventId) {
+        return true;
+    }
+    const pickText = [info.rowId, info.label].filter(Boolean).join(' ');
+    if (target.rowId && new RegExp(`\\b${escapeRx(target.rowId)}\\b`, 'i').test(pickText)) {
+        return true;
+    }
+    const lowerPick = pickText.toLowerCase();
+    for (const alias of target.teamAliases || []) {
+        const cleanAlias = String(alias || '').trim().toLowerCase();
+        if (!cleanAlias || cleanAlias.length < 2) continue;
+        if (info.aliases.includes(cleanAlias)) return true;
+        if (cleanAlias.length <= 4) {
+            if (new RegExp(`\\b${escapeRx(cleanAlias.toUpperCase())}\\b`).test(pickText)) return true;
+        } else if (new RegExp(`\\b${escapeRx(cleanAlias)}\\b`, 'i').test(lowerPick)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Extracts specific leg(s) named in rejection clauses of Verifier feedback when other
+ * proposed legs are NOT rejected in that feedback.
+ */
+export function extractRejectedLegTargetsFromFeedback(
+    feedbackText: string,
+    picks: any[],
+    headers: GameHeader[],
+    slateText: string
+): VetoedLegTarget[] {
+    if (!feedbackText || !feedbackText.trim() || !Array.isArray(picks) || picks.length === 0) {
+        return [];
+    }
+    const rowMap = extractRowOptions([slateText], headers);
+    const pickInfos = picks.map(pk => ({ pk, info: buildPickIdentifierInfo(pk, rowMap) }));
+
+    // Split feedback into clauses (sentence boundaries, semicolons, and contrasting conjunctions)
+    const rawClauses = splitSentencesSafe(feedbackText).flatMap(s =>
+        s.split(/;\s+|,\s+(?:but|however|while|whereas|except)\s+|\s+\b(?:but|however)\b\s+/i)
+    );
+
+    const rejected: VetoedLegTarget[] = [];
+    for (const rawClause of rawClauses) {
+        const clause = rawClause.trim();
+        if (!clause) continue;
+        if (!FEEDBACK_REJECTION_CUE_REGEX.test(clause)) continue;
+        // Skip pure approval clauses that mention no rejection cue
+        const matched = pickInfos.filter(({ info }) => spanMatchesPickInfo(clause, info));
+        if (matched.length === 0) continue;
+        // If clause approves one leg and rejects another without punctuation split, skip ambiguous all-leg approval clauses
+        if (matched.length === pickInfos.length && FEEDBACK_APPROVAL_ONLY_CUE_REGEX.test(clause)) {
+            continue;
+        }
+        for (const { info } of matched) {
+            rejected.push({
+                ...(info.rowId ? { rowId: info.rowId } : {}),
+                ...(info.eventId ? { eventId: info.eventId } : {}),
+                ...(info.label ? { teamLabel: info.label } : {}),
+                teamAliases: info.aliases,
+                reason: clause.slice(0, 180)
+            });
+        }
+    }
+    return mergeVetoedLegTargets(rejected);
+}
+
+/**
+ * Normalizes a zero-pick `_repaired: true` or exhausted-retry verification fallback into
+ * an internally consistent pass payload with explicit `criticApproved: false`, `wageringPass: true`,
+ * preserved Risk Critic veto scorecards, `verification.reasons`, and clean pass prose.
+ */
+export function normalizeRepairedFallbackOutput<T extends Record<string, any>>(
+    report: T,
+    options?: {
+        reasons?: string[];
+        vetoedLegs?: VetoedLegTarget[];
+        seatScorecards?: any[];
+        initialPicks?: any[];
+        headers?: GameHeader[];
+        slateText?: string;
+        markUnverified?: boolean;
+    }
+): T {
+    if (!report || typeof report !== 'object') return report;
+    const rep = report as Record<string, any>;
+    const rowMap = extractRowOptions(
+        options?.slateText ? [options.slateText] : [],
+        options?.headers || []
+    );
+
+    const reasons = Array.from(
+        new Set(
+            [
+                ...(Array.isArray(options?.reasons) ? options!.reasons : []),
+                ...(Array.isArray(rep.verification?.reasons) ? rep.verification.reasons : [])
+            ]
+                .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+                .map(x => x.trim())
+        )
+    );
+
+    let vetoTargets = mergeVetoedLegTargets(options?.vetoedLegs);
+    if (vetoTargets.length === 0 && Array.isArray(options?.initialPicks) && options!.initialPicks.length > 0) {
+        vetoTargets = mergeVetoedLegTargets(
+            options!.initialPicks.map(pk => {
+                const info = buildPickIdentifierInfo(pk, rowMap);
+                return {
+                    ...(info.rowId ? { rowId: info.rowId } : {}),
+                    ...(info.eventId ? { eventId: info.eventId } : {}),
+                    ...(info.label ? { teamLabel: info.label } : {}),
+                    teamAliases: info.aliases,
+                    reason: reasons[0] || 'Failed verification'
+                };
+            })
+        );
+    }
+
+    rep.picks = [];
+    rep.components = [];
+    rep.pass = true;
+    rep.status = 'no_play';
+    rep.criticApproved = false;
+    rep.wageringPass = true;
+
+    if (rep.verification && typeof rep.verification === 'object') {
+        if (reasons.length > 0) {
+            rep.verification = {
+                ...rep.verification,
+                reasons
+            };
+        }
+    } else if (reasons.length > 0) {
+        rep.verification = {
+            success: false,
+            reasons
+        };
+    }
+
+    normalizePassIfAllLegsVetoed(
+        rep,
+        Math.max(options?.initialPicks?.length ?? 0, vetoTargets.length, 1),
+        true,
+        {
+            vetoTexts: reasons.length > 0 ? reasons : ['Verification failed after exhausting retries'],
+            vetoedLegs: vetoTargets,
+            seatScorecards: options?.seatScorecards,
+            criticApproved: false
+        }
+    );
+
+    ensureRiskCriticVetoScorecard(rep, {
+        vetoReason: reasons[0] || 'Verification failed after exhausting retries.',
+        seatScorecards: options?.seatScorecards
+    });
+
+    if (options?.markUnverified && typeof rep.summary === 'string' && rep.summary.trim().length > 0) {
+        if (!/^\[unverified\]/i.test(rep.summary.trim())) {
+            rep.summary = `[UNVERIFIED] ${rep.summary.trim()}`;
+        }
+    }
+
+    sanitizeCompilerProposalOddsAndSummary(rep);
+    return report;
 }
 
 export async function runDeepAnalysisVerification(
@@ -233,7 +486,8 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
             finalAnalysis.verification = {
                 success: false,
                 attempts: lifecycleResult.attempts,
-                rating: lifecycleResult.computedRating
+                rating: lifecycleResult.computedRating,
+                ...(combinedVetoTexts.length > 0 ? { reasons: combinedVetoTexts } : {})
             };
             enforceCriticAuditOnFinalAnalysis(finalAnalysis, {
                 criticAuditFailed: true,
@@ -241,31 +495,110 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
                 hadProposedPicks,
                 auditNote: lifecycleResult?.criticFeedback
             });
+            ensureRiskCriticVetoScorecard(finalAnalysis, {
+                vetoReason: lifecycleResult?.criticFeedback || combinedVetoTexts[0] || 'Risk Critic audit failed.',
+                seatScorecards: p.seatScorecards
+            });
         } else if (lifecycleResult.success === false) {
+            const verificationReasons = Array.from(
+                new Set(
+                    [
+                        ...combinedVetoTexts,
+                        ...(typeof lifecycleResult?.criticFeedback === 'string' && lifecycleResult.criticFeedback.trim()
+                            ? [lifecycleResult.criticFeedback.trim()]
+                            : [])
+                    ].filter(Boolean)
+                )
+            );
             finalAnalysis.verified = false;
             finalAnalysis.verification = {
                 success: false,
                 attempts: lifecycleResult.attempts,
-                rating: lifecycleResult.computedRating
+                rating: lifecycleResult.computedRating,
+                ...(verificationReasons.length > 0 ? { reasons: verificationReasons } : {})
             };
-            if (hadVetoedLegs && survivingPickCount > 0) {
-                // Keep remaining grounded picks and cleaned components after stripping vetoed legs and claims.
-            } else if (initialPickCount > 0 && hadVetoedLegs && survivingPickCount === 0) {
-                finalAnalysis.picks = [];
-                finalAnalysis.components = [];
-                normalizePassIfAllLegsVetoed(finalAnalysis, initialPickCount, true, {
-                    vetoTexts: combinedVetoTexts,
-                    vetoedLegs: combinedVetoedLegs,
+
+            // S2 (1): Surgical Leg-Prune Rescue before giving up when only specific leg(s) failed verification
+            // and >= 1 clean leg survives all deterministic checks.
+            const rowMapForRescue = extractRowOptions([boardSourceForSanitize], parsedHeaders);
+            const feedbackRejectedLegs = extractRejectedLegTargetsFromFeedback(
+                verificationReasons.join(' '),
+                initialPicksSnapshot,
+                parsedHeaders,
+                boardSourceForSanitize
+            );
+            const rescueRejectedTargets = mergeVetoedLegTargets(combinedVetoedLegs, feedbackRejectedLegs);
+
+            let rescued = false;
+            if (
+                initialPickCount > 0 &&
+                Array.isArray(finalAnalysis.picks) &&
+                finalAnalysis.picks.length > 0 &&
+                (rescueRejectedTargets.length > 0 || initialPickCount > finalAnalysis.picks.length)
+            ) {
+                const prunedPicks = rescueRejectedTargets.length > 0
+                    ? finalAnalysis.picks.filter(
+                        (pk: any) => !rescueRejectedTargets.some(target => pickMatchesVetoedTarget(pk, target, rowMapForRescue))
+                    )
+                    : [...finalAnalysis.picks];
+
+                if (prunedPicks.length >= 1 && prunedPicks.length < initialPickCount) {
+                    const candidate = JSON.parse(JSON.stringify(finalAnalysis));
+                    candidate.picks = prunedPicks;
+                    syncCompilerProseWithFinalPicks(candidate, {
+                        initialPicks: initialPicksSnapshot,
+                        headers: parsedHeaders,
+                        slateText: boardSourceForSanitize,
+                        ...(rescueRejectedTargets.length > 0 ? { vetoedLegs: rescueRejectedTargets } : {}),
+                        ...(verificationReasons.length > 0 ? { vetoTexts: verificationReasons } : {}),
+                        ...(p.seatScorecards && p.seatScorecards.length > 0 ? { seatScorecards: p.seatScorecards } : {})
+                    });
+                    sanitizeCompilerProposalOddsAndSummary(candidate);
+
+                    const injuryOk = combinedVerifiedToolResults
+                        ? auditInjuryAttribution(candidate, combinedVerifiedToolResults, headersText || rawInput || task).pass
+                        : true;
+                    const marketOk = (combinedVerifiedToolResults || combinedMarketToolRecords.length > 0)
+                        ? auditMarketCoverageAndRowBinding(
+                            candidate,
+                            combinedVerifiedToolResults,
+                            boardSourceForSanitize,
+                            parsedHeaders,
+                            combinedMarketToolRecords
+                        ).pass
+                        : true;
+                    const groundingOk = auditClaimGrounding(
+                        candidate,
+                        combinedVerifiedToolResults,
+                        boardSourceForSanitize,
+                        { headers: parsedHeaders }
+                    ).pass;
+                    const premiseOk = auditCriticPremiseContradictions(
+                        candidate,
+                        combinedVerifiedToolResults,
+                        boardSourceForSanitize,
+                        { headers: parsedHeaders }
+                    ).pass;
+
+                    if (injuryOk && marketOk && groundingOk && premiseOk && Array.isArray(candidate.picks) && candidate.picks.length >= 1) {
+                        Object.assign(finalAnalysis, candidate);
+                        rescued = true;
+                    }
+                }
+            }
+
+            if (!rescued) {
+                // S2 (2): Consistent pass fallback — zero contradictory recommendations, explicit
+                // criticApproved: false, wageringPass: true, preserved scorecards with Risk Critic veto.
+                normalizeRepairedFallbackOutput(finalAnalysis, {
+                    reasons: verificationReasons,
+                    vetoedLegs: rescueRejectedTargets,
                     seatScorecards: p.seatScorecards,
-                    criticApproved: false
+                    initialPicks: initialPicksSnapshot,
+                    headers: parsedHeaders,
+                    slateText: boardSourceForSanitize,
+                    markUnverified: true
                 });
-            } else {
-                finalAnalysis.picks = [];
-                finalAnalysis.components = [];
-                const rawSummary = typeof finalAnalysis.summary === 'string' && finalAnalysis.summary.trim()
-                    ? finalAnalysis.summary.trim()
-                    : (typeof finalAnalysis.reason === 'string' && finalAnalysis.reason.trim() ? finalAnalysis.reason.trim() : 'Verification failed.');
-                finalAnalysis.summary = /^\[unverified\]/i.test(rawSummary) ? rawSummary : `[UNVERIFIED] ${rawSummary}`;
             }
             enforceCriticAuditOnFinalAnalysis(finalAnalysis, {
                 criticAuditFailed: false,
@@ -315,6 +648,7 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
                 : [])
         ];
         const vetoLegsForSync = mergeVetoedLegTargets(p.vetoedLegs, lifecycleResult?.vetoedLegs);
+        const wasUnverifiedPass = finalAnalysis.verified === false && finalAnalysis.picks.length === 0;
         syncCompilerProseWithFinalPicks(finalAnalysis, {
             initialPicks: initialPicksSnapshot,
             headers: parsedHeaders,
@@ -324,6 +658,33 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
             ...(p.seatScorecards && p.seatScorecards.length > 0 ? { seatScorecards: p.seatScorecards } : {}),
             ...(finalAnalysis.criticApproved === false ? { criticApproved: false } : {})
         });
+        if (wasUnverifiedPass) {
+            finalAnalysis.components = [];
+            if (typeof finalAnalysis.summary === 'string' && finalAnalysis.summary.trim() && !/^\[unverified\]/i.test(finalAnalysis.summary.trim())) {
+                finalAnalysis.summary = `[UNVERIFIED] ${finalAnalysis.summary.trim()}`;
+            }
+        }
+        if (
+            finalAnalysis._repaired === true &&
+            finalAnalysis.picks.length === 0 &&
+            (finalAnalysis.criticApproved === undefined ||
+                finalAnalysis.wageringPass === undefined ||
+                !Array.isArray(finalAnalysis.scorecards) ||
+                finalAnalysis.scorecards.length === 0 ||
+                CONTRADICTORY_RECOMMENDATION_PROSE_REGEX.test(String(finalAnalysis.summary || '')) ||
+                CONTRADICTORY_RECOMMENDATION_PROSE_REGEX.test(String(finalAnalysis.analysis || '')))
+        ) {
+            normalizeRepairedFallbackOutput(finalAnalysis, {
+                reasons: vetoTextsForSync,
+                vetoedLegs: vetoLegsForSync,
+                seatScorecards: p.seatScorecards,
+                initialPicks: initialPicksSnapshot,
+                headers: parsedHeaders,
+                slateText: rawInput || task || headersText,
+                markUnverified: finalAnalysis.verified === false
+            });
+        }
+        sanitizeCompilerProposalOddsAndSummary(finalAnalysis);
     }
 
     recordRunDebugSeat((context as any)?.id, 'manager', {

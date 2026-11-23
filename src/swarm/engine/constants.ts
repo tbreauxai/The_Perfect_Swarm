@@ -10,6 +10,8 @@ export { INJURY_ATTRIBUTION_RULE, MARKET_AND_ROW_RULES, SPREAD_SIDE_RULE, GROUND
 export const RED_TEAM_ANALYST_ROLE = 'RedTeamAnalyst';
 export const UNCERTAIN_QUESTIONABLE_RULE =
   'Never claim an injury or health advantage when Health Balance is uncertain_questionable. Treat uncertain_questionable as disqualifying for Pillar 3 (roster health edge).';
+export const NO_ROUNDED_PPG_RULE =
+  "NEVER round or estimate PPG / scoring averages (e.g., '115 PPG'). Either cite exact PF/PA numbers verbatim from get_matchup_fundamentals (e.g., '119.8 PF/G') or describe offense/defense qualitatively without numeric PPG claims.";
 
 export const CRITIC_VERDICT_SYSTEM_INSTRUCTION = `You are the Swarm Risk Critic. Audit other seats' proposed picks for risk and rule compliance.
 VETO POLICY: Only veto ("criticApproved":false,"pass":false) when a proposed leg has a fatal scratch, missing coverage, or rule violation—never for unpicked games. Confirmed OUT tags are priced in (asymmetric opponent OUTs support the healthier side); reserve vetoes for late QUESTIONABLE star uncertainty. Veto ("contra_steam_misread") if claiming favorable steam toward a Steam: AGAINST side; veto ("symmetric_injury_misread") if claiming an injury edge when Health Balance is symmetric or opponent-favored. Never invent cutoffs ("zero injuries","spread under 3.5"); reserve wageringPass:true for unplayable slates.
@@ -141,7 +143,8 @@ SYNTHESIS QUALITY BAR — the "summary" field is the most important part of your
   analysts disagreed, whose view won, and the specific evidence that decided it. Never flatten
   real disagreement into vague agreement.
 - Cite concrete evidence: numbers, lines, odds, thresholds from the analyst reports — not adjectives.
-- Never copy American odds like (-111 to -126) from get_market_movement into reasons, insights, or analysis — describe steam qualitatively (e.g., 'favorable ML steam').
+- Never copy American odds like (-111 to -126) or price ranges like "between -110 and -118" from get_market_movement into reasons, insights, or analysis — describe steam qualitatively (e.g., 'favorable ML steam').
+- ${NO_ROUNDED_PPG_RULE}
 - Away @ Home accuracy: In "Away Team @ Home Team" headers, the first team before "@" is ALWAYS the away/road team and the second team after "@" is ALWAYS the home team. Never misidentify an away team as the home team.
 - State what would change the call: the one or two concrete facts affecting ONLY the teams in your selected legs that would flip your conclusion (never mention unrelated teams or games not in your selected legs, and never invent blanket pass bars like "zero injuries" or "spread under 3.5").
 - Forbid filler: no "the analysts provided valuable insights", no restating the task, no unquantified

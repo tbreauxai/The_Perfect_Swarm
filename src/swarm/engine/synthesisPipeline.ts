@@ -5,9 +5,9 @@ import type { SwarmEngineSettings } from '../types.ts';
 import type { AgentVariantConfig } from '../experiment.ts';
 import type { ClusterDigest } from '../communication.ts';
 import { globalPromptCompressor } from '../compression.ts';
-import { guardManagerResponse } from '../parser.ts';
+import { guardManagerResponse, sanitizeCompilerProposalOddsAndSummary } from '../parser.ts';
 import { ManagerResponseSchema } from '../schemas.ts';
-import { MANAGER_SYSTEM_INSTRUCTION } from './constants.ts';
+import { MANAGER_SYSTEM_INSTRUCTION, NO_ROUNDED_PPG_RULE } from './constants.ts';
 import { renderPromptConsensusBlock, type AnalystConsensusDigest } from './consensusPipeline.ts';
 import { compileDebateDigest } from './coordinationPipeline.ts';
 import { TokenEstimator } from '../compression/tokenEstimator.ts';
@@ -194,7 +194,7 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
         digests: clusterDigests
     });
 
-    const managerInstruction = (settings as any)?.managerInstruction
+    const baseManagerInstruction = (settings as any)?.managerInstruction
         || (settings as any)?.systemPrompts?.[managerAgent.id || managerAgent.role]
         || (settings as any)?.systemPrompts?.[managerAgent.role]
         || (settings as any)?.systemPrompts?.['manager']
@@ -202,6 +202,10 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
         || activeVariant?.systemPrompts?.[managerAgent.role]
         || activeVariant?.systemPrompts?.['manager']
         || MANAGER_SYSTEM_INSTRUCTION;
+    const isMorningJudgePrep = (settings as any)?.responseSchema === 'morning_judge';
+    const managerInstruction = !isMorningJudgePrep && typeof baseManagerInstruction === 'string' && !baseManagerInstruction.includes('NEVER round or estimate PPG')
+        ? `${baseManagerInstruction}\n\n${NO_ROUNDED_PPG_RULE}`
+        : baseManagerInstruction;
     managerAgent.setSystemInstruction(managerInstruction);
 
     const targetCeiling = getManagerContextTokenCeiling(managerAgent.provider);
@@ -558,7 +562,7 @@ export async function executeManagerSynthesis(
         seatScorecards?: any[];
     }
 ): Promise<any> {
-    const managerInstruction = (settings as any)?.managerInstruction
+    const baseManagerInstruction = (settings as any)?.managerInstruction
         || (settings as any)?.systemPrompts?.[managerAgent.id || managerAgent.role]
         || (settings as any)?.systemPrompts?.[managerAgent.role]
         || (settings as any)?.systemPrompts?.['manager']
@@ -566,9 +570,11 @@ export async function executeManagerSynthesis(
         || activeVariant?.systemPrompts?.[managerAgent.role]
         || activeVariant?.systemPrompts?.['manager']
         || MANAGER_SYSTEM_INSTRUCTION;
-    managerAgent.setSystemInstruction(managerInstruction);
-
     const isMorningJudge = (settings as any)?.responseSchema === 'morning_judge';
+    const managerInstruction = !isMorningJudge && typeof baseManagerInstruction === 'string' && !baseManagerInstruction.includes('NEVER round or estimate PPG')
+        ? `${baseManagerInstruction}\n\n${NO_ROUNDED_PPG_RULE}`
+        : baseManagerInstruction;
+    managerAgent.setSystemInstruction(managerInstruction);
     const zodSchema = isMorningJudge
         ? undefined
         : ((settings as any)?.zodSchema || (settings as any)?.responseSchema || ManagerResponseSchema);
@@ -723,6 +729,7 @@ export async function executeManagerSynthesis(
             ...(groundingContext?.seatScorecards && groundingContext.seatScorecards.length > 0 ? { seatScorecards: groundingContext.seatScorecards } : {}),
             ...(finalResult.criticApproved === false ? { criticApproved: false } : {})
         });
+        sanitizeCompilerProposalOddsAndSummary(finalResult);
     }
 
     if (groundingContext?.agreementLevel) {

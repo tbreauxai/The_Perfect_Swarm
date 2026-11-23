@@ -10,9 +10,9 @@ import type { VerificationResult } from '../types.ts';
 import { parseJsonSafe, parseJsonSafeWithStatus } from './parseJsonSafe.ts';
 
 const POLICY_PRICE_BAND_REGEXES: RegExp[] = [
-    /\bbetween\s+[+-]\d{3,4}(?!\.\d)\s+and\s+[+-]\d{3,4}(?!\.\d)\b/gi,
-    /\b(?:within|inside|in)\s+(?:the\s+|a\s+)?(?:policy\s+|price\s+|odds\s+)?[+-]\d{3,4}(?!\.\d)\s*(?:to|–|—|-)\s*[+-]\d{3,4}(?!\.\d)(?:\s+(?:window|band|range|corridor|zone|limit|cap|pricing|odds|policy))?\b/gi,
-    /(?<![(\dA-Za-z.-])[+-]\d{3,4}(?!\.\d)\s+to\s+[+-]\d{3,4}(?!\.\d)\s+(?:window|band|range|corridor|zone|limit|cap|pricing|odds|policy)\b/gi,
+    /\bbetween\s+-\d{3,4}(?!\.\d)\s+and\s+\+\d{3,4}(?!\.\d)\b/gi,
+    /\b(?:within|inside|in)\s+(?:the\s+|a\s+)?(?:policy\s+|price\s+|odds\s+)?-\d{3,4}(?!\.\d)\s*(?:to|–|—|-)\s*\+\d{3,4}(?!\.\d)(?:\s+(?:window|band|range|corridor|zone|limit|cap|pricing|odds|policy))?\b/gi,
+    /(?<![(\dA-Za-z.-])-\d{3,4}(?!\.\d)\s+to\s+\+\d{3,4}(?!\.\d)\s+(?:window|band|range|corridor|zone|limit|cap|pricing|odds|policy)\b/gi,
     /\b(?:steeper|heavier|juicier|worse|shorter|longer|capped|floor|ceiling|max(?:imum)?|min(?:imum)?)\s+(?:than|at|of)\s+[+-]\d{3,4}(?!\.\d)\b/gi
 ];
 
@@ -108,11 +108,37 @@ export function sanitizeMoneylinePriceMoves(text: string): string {
         }
     );
 
-    // 2. Non-parenthetical inline ML move ranges: "from -111 to -126" or "-111 -> -126"
+    // 2. Non-parenthetical spread/vig/price range phrases (Rule 4):
+    // e.g. "all spreads between -110 and -118", "between -110 and -118", "priced at -114"
+    out = out
+        .replace(
+            /(?:,\s*|\s*;\s*|\s+with\s+)?\b(?:(?:all|every|the|selected|recommended)\s+)?(?:spreads?|totals?|lines?|legs?|prices?|odds)\s+(?:are\s+)?(?:priced\s+|juiced\s+|listed\s+|available\s+)?between\s+[+-]\d{3,4}(?!\.\d)\s+and\s+[+-]\d{3,4}(?!\.\d)\b/gi,
+            ''
+        )
+        .replace(
+            /(?:,\s*|\s+with\s+)?\b(?:priced|juiced|listed|available|offered|set|quoted|trading|sitting)\s+(?:at|@|near|around|between)\s+[+-]\d{3,4}(?!\.\d)(?:\s*(?:and|to|–|—|-)\s*[+-]\d{3,4}(?!\.\d))?\b/gi,
+            ''
+        )
+        .replace(
+            /(?:,\s*|\s+with\s+)?\bbetween\s+[+-]\d{3,4}(?!\.\d)\s+and\s+[+-]\d{3,4}(?!\.\d)\b/gi,
+            ''
+        );
+
+    // 3. Non-parenthetical inline American odds ranges:
+    // "from -111 to -126" / "-111 -> -126" -> qualitative steam wording;
+    // bare price range "-110 to -118" -> stripped cleanly without touching spreads (-12.5) or scores (121-107).
     out = out.replace(
-        /(?:\bfrom\s+)?(?<![\dA-Za-z.-])[+-]\d{3,4}(?!\.\d)\s*(?:->|→|to)\s*[+-]\d{3,4}(?!\.\d)\b/gi,
-        (_full, offset: number, fullStr: string) => {
+        /(?:\bfrom\s+)?(?<![\dA-Za-z.-])[+-]\d{3,4}(?!\.\d)\s*(->|→|to)\s*[+-]\d{3,4}(?!\.\d)\b/gi,
+        (full, sep: string, offset: number, fullStr: string) => {
             const prefix = fullStr.slice(0, offset);
+            const isExplicitMove =
+                sep === '->' ||
+                sep === '→' ||
+                /^from\s+/i.test(full) ||
+                /\b(?:mov(?:e|ed|ing)|steam(?:ed|ing)?|shift(?:ed|ing)?|open(?:ed|ing)?|drif(?:t|ted|ting))\s*$/i.test(prefix.slice(-32));
+            if (!isExplicitMove) {
+                return '';
+            }
             return alreadyMentionsSteam(prefix) ? '' : 'favorable ML steam';
         }
     );
@@ -120,6 +146,8 @@ export function sanitizeMoneylinePriceMoves(text: string): string {
     out = restorePolicyPriceBands(out, tokens);
     return out
         .replace(/\(\s*\)/g, '')
+        .replace(/,\s*([.;:!?])/g, '$1')
+        .replace(/;\s*([.;:!?])/g, '$1')
         .replace(/\s+([,.;:!?])/g, '$1')
         .replace(/[ \t]{2,}/g, ' ')
         .trim();

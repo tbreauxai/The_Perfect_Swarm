@@ -940,7 +940,12 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                         scorecards: proposedAuditContext.proposerReports.flatMap((r: any) =>
                             Array.isArray(r?.scorecards) ? r.scorecards : (r?.scorecard ? [r.scorecard] : [])
                         ),
-                        summary: proposedAuditContext.summaryText || ''
+                        analysis: proposedAuditContext.proposerReports
+                            .map((r: any) => (typeof r?.analysis === 'string' ? r.analysis : ''))
+                            .filter(Boolean)
+                            .join(' '),
+                        summary: proposedAuditContext.summaryText || '',
+                        seatReports: proposedAuditContext.proposerReports
                     }
                     : {
                         ...(Array.isArray(proposedAuditContext.proposedPicks) ? { picks: proposedAuditContext.proposedPicks } : {}),
@@ -1324,7 +1329,8 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                             .map((r: any) => (typeof r?.analysis === 'string' ? r.analysis : ''))
                             .filter(Boolean)
                             .join(' '),
-                        insights: proposedAuditContext.proposerReports.flatMap((r: any) => Array.isArray(r?.insights) ? r.insights : [])
+                        insights: proposedAuditContext.proposerReports.flatMap((r: any) => Array.isArray(r?.insights) ? r.insights : []),
+                        seatReports: proposedAuditContext.proposerReports
                     }
                     : auditTargetProposal;
 

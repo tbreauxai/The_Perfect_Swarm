@@ -1,94 +1,91 @@
-# Engineering Fix Spec — `The_Perfect_Swarm` (`wf-1795394398351`)
+# Engineering Fix Spec — `The_Perfect_Swarm` (`wf-1795446433463`)
 
 **Repo Scope:** `C:\Dev\Workspaces\The_Perfect_Swarm` ONLY. Zero cross-repo edits and zero SQL migrations.
-**Baseline:** All prior Part 7/8 fixes (sentence splitter, Critic scoping, split Side/Total steam, Hop-1 `4000ms` timeout & concurrency cap, verifier corpus & veto-leakage overrides, indoor weather skip) are already merged and verified live. Do NOT re-audit them.
-**Scope of This Spec:** Fixes the 3 net-new issues observed in `wf-1795394398351`:
-1. Post-prune veto prose cleaner chopped sentences mid-clause (`"Bottom-line call: pass. which invalidated..."`, lowercase `"the Risk Critic..."`) and cleared `scorecards` to `[]`.
-2. `Quant Proposer` (`a1`) still claimed an asymmetric health edge on `uncertain_questionable` games (`BOS 3 Q`, `NYK 3 Q`), triggering a full Critic veto and a 108.3s 2-attempt retry loop.
-3. `get_injury_and_roster_delta` silently stamped flat `impact_tier: 2, impact_weight: 1` when `public.player_game_logs` returned `0` rows, and omitted `[impact X.X]` / fallback status from the `Summary:` line.
+**Baseline:** Hop-1 `4000ms` timeout/concurrency, Groq Critic scoping, split Side/Total steam, indoor weather skip, and `[unweighted_fallback]` tags are all verified live. Do NOT re-audit them.
+**Triggering Incident (`wf-1795446433463`):** On a 17-game slate, `Quant Proposer` (`a1`) proposed `LAL -13.5 (R36)`, `HOU -12.5 (R32)`, and `MIN -12.5 (R13)`, claiming `"Each leg satisfies form/diff edge + asymmetric health (2 pillars)"` even though Minnesota's dossier showed `Health Balance: away_advantage (Brooklyn Nets)` with Anthony Edwards `OUT`. Because the initial Risk Critic pre-check missed `MIN -12.5`, the Manager wasted 2 full verification retries (`196.6s`) — failing Attempt 1 on a rounded `"115 PPG"` claim and Attempt 2 on `MIN -12.5` — before the `_repaired: true` fallback cleared `picks: []` while leaving `"Proceed with a 3-leg spread parlay..."` and `"between -110 and -118"` in `summary`/`analysis`.
 
 ---
 
 ## Execution Rules & Token-Saving Guardrails
 1. **HARD CONSTRAINT (Local-Only):** Local edits, `npx tsc --noEmit`, and targeted `npx vitest run` ONLY. Do **NOT** run `git push`, merge to `main`, deploy scripts, or mutate live Render/Supabase/Qdrant services.
-2. **Branch Check First:** Confirm you are on a feature branch (e.g., `fix/swarm-wf-1795394398351`), NOT `main`.
+2. **Branch Check First:** Confirm you are on a feature branch (e.g., `fix/swarm-wf-1795446433463`), NOT `main`.
 3. **Minimal File Reads:** Grep using the exact **Search Anchors** below and read ONLY matched files/functions.
 
 ---
 
-## S1: Whole-Sentence Veto Pruning & Preserve `scorecards[]` on Full-Veto Passes
+## S1: Catch `symmetric_injury_misread` Across Proposer `analysis` & Blanket Pillar Claims (Before Manager Attempt 1)
 
-### Observed Failure (`wf-1795394398351`)
-- After stripping vetoed `Boston Celtics` and `New York Knicks` legs from the Manager output, `rawFinalAnalysisPayload` emitted broken prose fragments and dropped all seat scorecards:
-  - `summary`: `"Bottom-line call: pass. which invalidated the proposed asymmetric injury edge."`
-  - `analysis`: `"...evaluating four games for potential parlay inclusion. the Risk Critic has vetoed both selections..."`
-  - `insights[0]`: `"the Risk Critic has vetoed both selections..."` (lowercase start)
-  - `scorecards`: `[]`
+### Observed Failure (`wf-1795446433463`)
+- `a1` proposed `R13` (`Minnesota Timberwolves -12.5`) where `get_injury_and_roster_delta` returned `Health Balance: away_advantage (Brooklyn Nets)` (`MIN 3 OUT` incl. Anthony Edwards vs `BKN 1 OUT, 1 Q`).
+- In `a1`'s `analysis`, it wrote `"Each leg satisfies form/diff edge + asymmetric health (2 pillars)"`, yet the initial Risk Critic pre-check only inspected per-pick `reason`/`reasons` (or missed blanket multi-leg claims) and returned `"All proposed legs meet criteria; no fatal injuries or rule violations"` (`anomalies: []`).
+- Catching `R13` at the initial Critic gate lets the Manager immediately build a clean 2-leg parlay (`R36` + `R32`) on Attempt 1 instead of burning ~100s on failed verification retries.
 
 ### Search Anchors
-- `"Bottom-line call: pass."`, `"default-insight-list"`, `"Synthesis Findings"`, `"scorecards"`, `"criticApproved"`, `"wageringPass"`
+- `"symmetric_injury_misread"`, `"Veto (GROUNDING):"`, `"Veto (PREMISE):"`, `"Health Balance:"`, `"All proposed legs meet criteria"`
 
 ### Required Changes
-1. **Whole-Sentence Removal Only:** When stripping a vetoed team or row recommendation from `summary`, `analysis`, or `insights`, remove the **entire sentence** (using the existing abbreviation-safe sentence boundary splitter) — never slice mid-sentence at a comma or clause.
-2. **Clean Deterministic Pass Fallback When `picks.length === 0`:**
-   - If post-prune cleanup removes all proposed legs (`picks.length === 0` and `criticApproved === false`), generate a clean, grammatical `summary`, `analysis`, and `insights` explaining the pass and the Critic's veto reason(s) instead of regex-patching fragments out of the rejected draft.
-   - Ensure every surviving sentence and insight begins with a capitalized letter and ends with clean punctuation.
-3. **Preserve `scorecards[]` on Full-Veto Passes:**
-   - Never overwrite `scorecards` to `[]` when a full Critic veto occurs. Preserve the seat scorecards, ensuring `{ seat: "Risk Critic", verdict: "veto", criticApproved: false, wageringPass: true }` is explicitly present.
+1. **Scan Both Per-Pick Rationales AND Seat-Level `analysis` in Deterministic Pre-Check:**
+   - For every proposed pick `{ row, side }`, resolve whether the picked side is on the **disadvantaged** side of `Health Balance` (e.g., picking `home` when `Health Balance` is `away_advantage`, or picking `away` when `Health Balance` is `home_advantage`) or is `symmetric` / `uncertain_questionable`.
+   - Trigger a **per-leg** `symmetric_injury_misread` veto on that specific leg if EITHER:
+     - That pick's `reason` or `reasons[]` claims an injury/health edge, OR
+     - The seat's `analysis` makes a blanket claim covering all legs (e.g., `"each leg satisfies ... health"`, `"all three ... asymmetric health"`, `"2 pillars"` when spread steam is `neutral` so health is implicitly counted as Pillar 2).
+2. **Keep the Veto Scoped to the Offending Leg (`R13`):**
+   - Flag ONLY `R13` (`Minnesota Timberwolves -12.5`) as vetoed so the surviving clean legs (`R36` Lakers `-13.5`, `R32` Rockets `-12.5`) pass straight through to the Manager without nuking the entire slate.
 
 ### Acceptance Criteria
-- Unit test: Full-veto pass on `wf-1795394398351` fixture produces grammatical `summary`, `analysis`, and `insights` with zero lowercase sentence starts, zero dangling fragments like `"Bottom-line call: pass. which..."`, and a non-empty `scorecards[]` containing the Risk Critic `"veto"` entry.
-- Unit test: Partial-veto cleanup (1 of 3 legs vetoed) deletes only complete sentences referencing the vetoed leg as a recommendation while keeping surviving legs intact.
+- Unit test on `wf-1795446433463` fixture (`a1` proposes `[R36, R32, R13]` with `analysis` stating `"Each leg satisfies form/diff edge + asymmetric health (2 pillars)"`, where `MIN` has `Health Balance: away_advantage (Brooklyn Nets)`):
+  - Deterministic pre-check flags `symmetric_injury_misread` specifically on `R13`.
+  - `R36` and `R32` remain unvetoed and approved.
 
 ---
 
-## S2: Explicit `uncertain_questionable` Prohibition for Proposers
+## S2: Repair `_repaired: true` Fallback Hygiene & Scrub Non-Parenthetical Odds Ranges
 
-### Observed Failure (`wf-1795394398351`)
-- `Quant Proposer` (`a1`) forced `BOS -8.5 (R14)` and `NYK -7.5 (R11)` claiming *"a clear asymmetric health edge"* even though the dossier explicitly said `Health Balance: uncertain_questionable (Boston Celtics: 3 Q)` and `uncertain_questionable (New York Knicks: 3 Q)` — walking straight into a full Critic veto and burning 108.3s across 2 attempts.
+### Observed Failure (`wf-1795446433463`)
+- When Attempt 2 exhausted retries (`RLAIF 35%`), the `_repaired: true` fallback emitted an internally contradictory payload:
+  - `picks: []`, `components: []`, and omitted `criticApproved`, `wageringPass`, and `scorecards` completely (`undefined` -> Section 1 logged `criticApproved: null`, `wageringPass: false`).
+  - Meanwhile `summary` and `analysis` still said: `"[UNVERIFIED] Proceed with a 3-leg spread parlay: LAL -13.5 (R36), HOU -12.5 (R32), MIN -12.5 (R13)... Risk Critic approved all three... all spreads between -110 and -118."`
+- Also leaked non-parenthetical American odds (`"between -110 and -118"`) into final prose (violating Rule 4).
 
 ### Search Anchors
-- `"uncertain_questionable"`, `"Health Balance:"`, `"symmetric_injury_misread"`, `"TOP PILLAR CANDIDATES"`
+- `"_repaired"`, `"[UNVERIFIED]"`, `"Exhausted 2 retries"`, `"criticApproved"`, `"wageringPass"`, `"between -110"`
 
 ### Required Changes
-1. **Proposer Prompt Calibration:** Add an explicit rule to the Swarm proposer instructions:
-   - *"Never claim an injury or health advantage when `Health Balance` is `uncertain_questionable`. Treat `uncertain_questionable` as disqualifying for Pillar 3 (roster health edge)."*
-2. **Deterministic Pillar Scorer Alignment:** Verify `=== TOP PILLAR CANDIDATES ===` (and any local candidate pre-ranker) strictly excludes `uncertain_questionable` games from receiving Pillar 3 credit so Proposers aren't nudged toward them on thin late slates.
+1. **Surgical Leg-Prune Rescue Before Giving Up (When Only Specific Leg(s) Failed Verification):**
+   - If the Verifier rejects specific named leg(s) (e.g., `MIN -12.5` / `R13`) on the final retry while `>= 1` other leg in `picks[]` had zero Critic or Verifier violations (`R36`, `R32`), deterministically prune only the rejected leg(s), re-sync `summary`/`analysis`/`components` to the surviving leg(s), and emit `picks: [survivingLegs]` only if deterministic checks pass; otherwise fall through cleanly to the pass fallback below.
+2. **Consistent `_repaired: true` Pass Fallback (Zero Contradictory Recommendations):**
+   - Whenever `_repaired: true` outputs `picks: []`, NEVER leave `"Proceed with a N-leg parlay..."` or `"Risk Critic approved all three..."` in `summary` or `analysis`.
+   - Always emit explicit top-level booleans and scorecards:
+     - `criticApproved: false`
+     - `wageringPass: true`
+     - `picks: []`
+     - `scorecards`: preserve seat scorecards with `{ seat: "Risk Critic", verdict: "veto", criticApproved: false, wageringPass: true }`
+     - `summary` & `analysis`: clean deterministic pass message summarizing the verification failure reason(s) (`verification.reasons`).
+3. **Scrub Non-Parenthetical American Odds Ranges in Final Compiler Output:**
+   - Extend the Compiler Rule-4 odds sanitizer (on `summary`, `analysis`, `picks[].reasons`, `insights`) to also strip non-parenthetical American price ranges like `"between -110 and -118"`, `"-110 to -118"`, or `"priced at -114"` (while continuing to preserve policy phrases in specialist digests like `"-220 to +150"` only inside prompts, and never touching spreads like `-12.5` or H2H scores like `121-107`).
 
 ### Acceptance Criteria
-- Unit test: Proposer prompt contains the explicit `uncertain_questionable` prohibition, and candidate pillar scoring awards `0` health-pillar credit to `uncertain_questionable` matchups (`BOS @ GSW`, `IND @ NYK`, `MIN @ SF`).
+- Unit test (`_repaired: true` with `picks: []`): Output has `criticApproved === false`, `wageringPass === true`, non-empty `scorecards` with Risk Critic `"veto"`, and `summary`/`analysis` stating a pass (zero `"Proceed with a 3-leg"` text).
+- Unit test (Rule-4 sanitizer): Removes `"all spreads between -110 and -118"` while keeping `"-13.5"`, `"-12.5"`, and `"121-107"` intact.
 
 ---
 
-## S3: Starter-Weighted Injury Impact Summary + Honest `[unweighted_fallback]` Tag
+## S3: Stop Manager From Inventing Rounded PPG Averages (`"115 PPG"`)
 
-### Observed Gap (`wf-1795394398351` + DB Audit)
-- Because `public.player_game_logs` currently has `0` rows (fixed separately in `DuelOdds`), `get_injury_and_roster_delta` stamped every player (`Kyler Murray`, `Mike Evans`, `Elias Pettersson`, `Thatcher Demko`, `Bo Richter`) as `impact_tier: 2, impact_weight: 1` and printed raw counts only in `Summary:` without `[impact X.X]` or any fallback indicator.
+### Observed Failure (`wf-1795446433463`)
+- Attempt 1 failed verification (`Verification FAILED on attempt 1`) solely because the Manager rounded/invented `"115 PPG"` in prose instead of citing exact `PF/PA` values from `get_matchup_fundamentals` (burning an entire extra Manager + Verifier cycle).
 
 ### Search Anchors
-- `"impact_tier"`, `"impact_weight"`, `"player_game_logs"`, `"Health Balance:"`, `"get_injury_and_roster_delta"`
+- `"Ungrounded form/score claim"`, `"PF/PA"`, `"GodView Compiler"`, `"Manager Node"`
 
 ### Required Changes
-1. **Align `player_game_logs` Query & Real Tier Weights:**
-   - Verify the batched `public.player_game_logs` lookup matches raw ESPN numeric `player_id` (and `sport`) and reads normalized `stats` JSONB fields (`minutes` / `toi`, `points`, `pass_attempts`, `goalie_starts`, `position`).
-   - When `player_game_logs` rows exist for the game/team, apply real tier weights:
-     - NFL starting QB (`QB1` / top passer by `pass_attempts`): `5.0`
-     - NHL starting goaltender (`G` with highest recent starts/`toi`): `4.0`
-     - Tier 1 core (NBA `>= 28` MPG or `>= 15` PPG; NHL `>= 18` TOI or top-4 points; NFL primary skill starter): `3.0`
-     - Tier 2 rotation (NBA `15–27` MPG; NHL `12–17` TOI; NFL regular contributor): `1.5`
-     - Tier 3 depth / unlogged on a team that DOES have game-log coverage: `0.5`
-     - Weight `QUESTIONABLE` players at `0.5x` their tier weight.
-2. **Surface `[impact X.X]` in `Summary:` & Enforce Tier-1 `Q` Guard:**
-   - When weighted logs are available, print weighted `OUT` impact directly in the `Summary:` line, e.g.:
-     `Summary: Utah Jazz (3 OUT [impact 9.0], 0 Q) vs Dallas Mavericks (5 OUT [impact 4.5], 0 Q) | Health Balance: away_advantage (Dallas Mavericks, +4.5 impact edge)`
-   - Classify `home_advantage` / `away_advantage` on weighted `OUT` impact gap `>= 2.5` (subject to existing sport `Q` caps), and force `uncertain_questionable (<Team>: Tier-1 Q <PlayerName>)` whenever any Tier-1 star (`QB1`, starting goalie, `28+` MPG NBA star) is `QUESTIONABLE`.
-3. **Honest Fallback Tag When `player_game_logs` Is Empty:**
-   - When `player_game_logs` returns `0` rows for a game, append `[unweighted_fallback]` to `Health Balance` (and set `impact_tier: null` or `"unweighted"` rather than pretending every player is verified `impact_tier: 2`).
+1. **Tighten Manager / Compiler Prompt Instruction:**
+   - Add one explicit line to the Manager synthesis prompt: *"NEVER round or estimate PPG / scoring averages (e.g., '115 PPG'). Either cite exact `PF/PA` numbers verbatim from `get_matchup_fundamentals` (e.g., '119.8 PF/G') or describe offense/defense qualitatively without numeric PPG claims."*
+2. **Deterministic Verifier Alignment:**
+   - Confirm the deterministic grounding check accepts exact `PF` / `PA` decimals from `get_matchup_fundamentals` (including `119.8`, `113.0` / `113`) so verbatim tool citations never false-fail.
 
 ### Acceptance Criteria
-- Unit test (populated logs): Utah missing 3 Tier-1 players (`9.0`) vs Dallas missing 2 Tier-2 + 3 Tier-3 (`4.5`) prints `[impact 9.0]` / `[impact 4.5]` and classifies `away_advantage (Dallas Mavericks, +4.5 impact edge)`.
-- Unit test (Tier-1 `Q`): Single `QUESTIONABLE` NFL `QB1` or NHL starting goalie forces `uncertain_questionable`.
-- Unit test (empty logs): `0` rows from `player_game_logs` falls back cleanly and appends `[unweighted_fallback]` to `Health Balance`.
+- Unit test: Manager prompt includes the no-rounded-PPG rule; verbatim `PF/PA` values (`119.8`, `113`) from `get_matchup_fundamentals` pass deterministic grounding cleanly.
 
 ---
 

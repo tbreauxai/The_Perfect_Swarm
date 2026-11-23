@@ -103,32 +103,53 @@ function buildCleanEvidenceForNumericCheck(successfulEvidence: string): string {
 }
 
 const STAT_CONTEXT_KEYWORD_REGEX =
-  /(?:^|[^a-zA-Z0-9])(?:goals?|points?|pts|runs?|allowed|against|conceded|surrendered|scored|scoring|pf\/pa|pf|pa|ga|gf|ra|rf|gaa|ga\/g|ppg|oppg|opp_pts|last_game|score|team_score|opponent_score|home_score|away_score|h2h|boxscore|recent_scores)(?:$|[^a-zA-Z0-9])/i;
+  /(?:^|[^a-zA-Z0-9])(?:goals?|points?|pts|runs?|allowed|against|conceded|surrendered|scored|scoring|pf\/pa|pf\/g|pa\/g|gf\/g|rf\/g|ra\/g|pf|pa|ga|gf|ra|rf|gaa|ga\/g|ppg|oppg|opp_pts|last_game|score|team_score|opponent_score|home_score|away_score|h2h|boxscore|recent_scores)(?:$|[^a-zA-Z0-9])/i;
+
+function numericExactVariants(valueStr: string): string[] {
+  const trimmed = valueStr.trim();
+  const variants = new Set<string>([trimmed]);
+  if (/^\d+$/.test(trimmed)) {
+    variants.add(`${trimmed}.0`);
+  } else {
+    const trailingZero = trimmed.match(/^(\d+)\.0+$/);
+    if (trailingZero) {
+      variants.add(trailingZero[1]);
+      variants.add(`${trailingZero[1]}.0`);
+    }
+  }
+  return Array.from(variants);
+}
 
 function isNumericStatGrounded(valueStr: string, cleanEvidence: string): boolean {
   if (!cleanEvidence) return false;
-  const escapedVal = escapeRegex(valueStr);
-  const tokenRegex = new RegExp(`(?<![\\d.])${escapedVal}(?![\\d.])`, 'g');
-  let m: RegExpExecArray | null;
-  while ((m = tokenRegex.exec(cleanEvidence)) !== null) {
-    const start = Math.max(0, m.index - 45);
-    const end = Math.min(cleanEvidence.length, m.index + valueStr.length + 45);
-    const window = cleanEvidence.slice(start, end);
-    if (STAT_CONTEXT_KEYWORD_REGEX.test(window)) {
-      return true;
+  const variants = numericExactVariants(valueStr);
+
+  for (const variant of variants) {
+    const escapedVal = escapeRegex(variant);
+    const tokenRegex = new RegExp(`(?<![\\d.])${escapedVal}(?![\\d.])`, 'g');
+    let m: RegExpExecArray | null;
+    while ((m = tokenRegex.exec(cleanEvidence)) !== null) {
+      const start = Math.max(0, m.index - 45);
+      const end = Math.min(cleanEvidence.length, m.index + variant.length + 45);
+      const window = cleanEvidence.slice(start, end);
+      if (STAT_CONTEXT_KEYWORD_REGEX.test(window)) {
+        return true;
+      }
     }
   }
 
   // Remaining score pairs (e.g. H2H: ANA vs COL 2-8 (L) — W-L records were stripped)
+  const variantSet = new Set(variants);
   const scorePairRegex = /\b(\d{1,3})\s*-\s*(\d{1,3})\b/g;
+  let m: RegExpExecArray | null;
   while ((m = scorePairRegex.exec(cleanEvidence)) !== null) {
-    if (m[1] === valueStr || m[2] === valueStr) return true;
+    if (variantSet.has(m[1]) || variantSet.has(m[2])) return true;
   }
 
-  // Slash average pairs (e.g. PF/PA 2.2 / 3.9)
+  // Slash average pairs (e.g. PF/PA 119.8 / 113.0 or 2.2 / 3.9)
   const slashPairRegex = /\b(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)\b/g;
   while ((m = slashPairRegex.exec(cleanEvidence)) !== null) {
-    if (m[1] === valueStr || m[2] === valueStr) return true;
+    if (variantSet.has(m[1]) || variantSet.has(m[2])) return true;
   }
 
   return false;
@@ -474,7 +495,7 @@ function findUngroundedFormClaimDetailInClause(
     /\b(?:allowed|allowing|allows|gave\s+up|giving\s+up|gives\s+up|surrendered|surrendering|surrenders|conceded|conceding|concedes|yielded|yielding|yields)\s+(?:over\s+|nearly\s+|about\s+|around\s+|~)?(\d+(?:\.\d+)?)\+?\s+(?:goals?|points?|pts|runs?)\b/gi,
     /\b(?:scored|scoring|scores|netted|tallied|put\s+up|putting\s+up|posted|posting|held\s+to)\s+(?:over\s+|nearly\s+|about\s+|around\s+|~)?(\d+(?:\.\d+)?)\+?\s+(?:goals?|points?|pts|runs?|ppg|gpg|rpg)\b/gi,
     /\b(?:averaging|averages?|avg\.?)\s+(?:over\s+|nearly\s+|about\s+|around\s+|~)?(\d+(?:\.\d+)?)\+?\s*(?:ppg|gpg|rpg|pts\/g(?:m)?|points?\s+per\s+game|goals?\s+per\s+game|runs?\s+per\s+game|points?|pts|goals?|runs?)\b/gi,
-    /\b(\d+(?:\.\d+)?)\+?\s*(?:ppg|gpg|rpg|pts\/g(?:m)?|GAA|GA\/G|goals\s+against\s+avg)\b/gi,
+    /\b(\d+(?:\.\d+)?)\+?\s*(?:ppg|gpg|rpg|pf\/g|pa\/g|gf\/g|rf\/g|ra\/g|pts\/g(?:m)?|GAA|GA\/G|goals\s+against\s+avg)\b/gi,
     /\b(\d+(?:\.\d+)?)\+?\s+(?:goals?|points?|pts|runs?)\s+(?:per\s+game|last\s+game|last\s+night|last\s+outing)\b/gi
   ];
 
@@ -1773,7 +1794,13 @@ const FAVORABLE_STEAM_CLAIM_REGEX =
   /\b(?:favorable\s+(?:market\s+)?steam|(?:market\s+|sharp\s+)?steam\s+(?:is\s+|has\s+been\s+)?(?:moves?|moving|moved|backs?|backing|supports?|supporting|favors?|favoring|on|for|behind|toward|towards)\b|(?:sharp|market)\s+(?:money|action|movement|line\s+move(?:ment)?)\s+(?:is\s+)?(?:moves?|moving|moved|backs?|backing|supports?|supporting|favors?|favoring|toward|towards|on)\b|backing\s+(?:heavy\s+)?(?:market\s+)?steam|following\s+(?:the\s+)?steam|aligned\s+with\s+(?:the\s+)?(?:market\s+)?steam|steam\s+(?:confirmation|support|play)|line\s+move(?:ment)?\s+(?:favors?|supports?|backs?|moves?\s+toward))\b/i;
 
 const HEALTH_ADVANTAGE_CLAIM_REGEX =
-  /\b(?:health\s+(?:advantage|edge)|injury\s+(?:advantage|edge)|healthier\s+(?:side|team|roster|squad)|cleaner\s+injury\s+report|relatively\s+healthy|availability\s+(?:advantage|edge)|roster\s+(?:health\s+)?(?:advantage|edge)|fewer\s+injuries)\b/i;
+  /\b(?:health\s+(?:advantage|edge)|injury\s+(?:advantage|edge)|asymmetric\s+(?:roster\s+)?(?:health|injur(?:y|ies))|clean(?:\s*\/\s*asymmetric)?\s+(?:roster\s+)?health|opponent\s+injury\s+(?:edge|advantage|asymmetry)|pillar\s*3(?:\s*\([^)]*health[^)]*\))?|healthier\s+(?:side|team|roster|squad)|cleaner\s+injury\s+report|relatively\s+healthy|availability\s+(?:advantage|edge)|roster\s+(?:health\s+)?(?:advantage|edge)|fewer\s+injuries)\b/i;
+
+const BLANKET_MULTI_LEG_SUBJECT_REGEX =
+  /\b(?:each\s+(?:leg|pick|play|selection|game|side)|all\s+(?:(?:two|three|four|five|\d+)\s+)?(?:legs?|picks?|plays?|selections?|sides?)|every\s+(?:leg|pick|play|selection|side)|both\s+(?:legs?|picks?|plays?|selections?|sides?)|(?:the\s+)?(?:2|3|4)-leg\s+parlay|parlay\s+legs?)\b/i;
+
+const BLANKET_TWO_PILLAR_CLAIM_REGEX =
+  /\b(?:(?:>=?|at\s+least\s+)?(?:2|two)\s*(?:-|\s+)?pillars?|(?:all\s+)?(?:3|three)\s*(?:-|\s+)?pillars?|satisf(?:y|ies|ying)\s+[^.;\n]{0,50}\bpillars?)\b/i;
 
 const HEALTH_BALANCED_ACK_REGEX =
   /\b(?:no\s+(?:health|injury)\s+(?:advantage|edge)|without\s+(?:a|an)\s+(?:health|injury)\s+(?:advantage|edge)|not\s+(?:a|an)\s+(?:health|injury)\s+(?:advantage|edge)|neither\s+team\s+(?:is\s+healthier|has\s+an?\s+(?:injury|health)\s+(?:advantage|edge))|symmetric|evenly\s+(?:matched|depleted)|equally\s+(?:depleted|banged\s+up|short-?handed)|offsetting\s+injuries|both\s+(?:teams|[A-Za-z .'-]{2,35}\s+and\s+[A-Za-z .'-]{2,35})\s+(?:have|are\s+(?:missing|dealing\s+with|down|without)|miss(?:ing)?))\b/i;
@@ -2038,6 +2065,24 @@ function parseInjuryBalanceFromEvidence(
           awayQ: Number(sm[6]),
           healthBalance: sm[7].toLowerCase() as ParsedInjuryBalanceEntry['healthBalance']
         });
+      } else if ((lineEv || currentEventId) && !byEvent.has(lineEv || currentEventId!)) {
+        const hbOnly = line.match(
+          /\bHealth\s+Balance:\s*(symmetric|home_advantage|away_advantage|conditional_home_advantage|conditional_away_advantage|uncertain_questionable|single_team_only)\b/i
+        );
+        if (hbOnly) {
+          const eventId = lineEv || currentEventId!;
+          const hdr = headers.find(h => h.eventId === eventId);
+          byEvent.set(eventId, {
+            eventId,
+            homeTeam: hdr?.home,
+            homeOut: 0,
+            homeQ: 0,
+            awayTeam: hdr?.away,
+            awayOut: 0,
+            awayQ: 0,
+            healthBalance: hbOnly[1].toLowerCase() as ParsedInjuryBalanceEntry['healthBalance']
+          });
+        }
       }
     }
   }
@@ -2168,7 +2213,8 @@ export function auditCriticPremiseContradictions(
   const evaluateLeg = (
     pk: any,
     sideText: string,
-    reasonTexts: string[]
+    reasonTexts: string[],
+    seatContextTexts: string[] = []
   ) => {
     // 0. Deterministic row_side_mismatch pre-check BEFORE resolving rowEntry.eventId,
     // contra_steam_misread, symmetric_injury_misread, or duplicate_leg checks.
@@ -2191,7 +2237,8 @@ export function auditCriticPremiseContradictions(
     }
 
     const combinedReasons = normalizeText(reasonTexts.filter(Boolean).join('. ')).trim();
-    if (!combinedReasons || (steamEntries.length === 0 && injuryBalances.size === 0)) return;
+    const combinedSeatContext = normalizeText(seatContextTexts.filter(Boolean).join('. ')).trim();
+    if ((!combinedReasons && !combinedSeatContext) || (steamEntries.length === 0 && injuryBalances.size === 0)) return;
 
     const rowMatch = sideText.match(/\b(R\d+)\b/i) || (typeof pk?.row === 'string' ? pk.row.match(/\b(R\d+)\b/i) : null);
     const rowId = rowMatch ? rowMatch[1].toUpperCase() : undefined;
@@ -2219,7 +2266,7 @@ export function auditCriticPremiseContradictions(
       candidates
     );
 
-    const clauses = combinedReasons.split(/(?<=[.!?])\s+|\n+|;\s+/).map(c => c.trim()).filter(Boolean);
+    const clauses = combinedReasons ? combinedReasons.split(/(?<=[.!?])\s+|\n+|;\s+/).map(c => c.trim()).filter(Boolean) : [];
     const pickDisplay = pickedTeamLabel || rowId || sideText || 'pick';
 
     // 1. Check contra-steam misread
@@ -2235,6 +2282,15 @@ export function auditCriticPremiseContradictions(
       }
       return true;
     });
+
+    const hasFavorableDirectionalSteam = relevantSteam.some(se =>
+      isTotal
+        ? (pickedRole === 'over' || pickedRole === 'under') && pickedRole === se.towardRole
+        : Boolean(
+            (pickedRole && se.towardRole && pickedRole === se.towardRole) ||
+            (pickedDesc && se.towardDesc && pickedDesc.key === se.towardDesc.key)
+          )
+    );
 
     for (const se of relevantSteam) {
       const isPickingAgainst = isTotal
@@ -2287,7 +2343,7 @@ export function auditCriticPremiseContradictions(
       }
     }
 
-    // 2. Check symmetric / disadvantaged injury misread
+    // 2. Check symmetric / disadvantaged injury misread (per-pick rationale AND seat-level blanket/targeted analysis)
     const injBal = eventId ? injuryBalances.get(eventId) : undefined;
     if (injBal && (pickedRole === 'home' || pickedRole === 'away')) {
       const isSymmetric = injBal.healthBalance === 'symmetric';
@@ -2305,9 +2361,11 @@ export function auditCriticPremiseContradictions(
           : undefined;
 
         const injurySubClauses = combinedReasons
-          .split(/(?<=[.!?])\s+|\n+|;\s+|,\s+(?:and|but|while|whereas|with)\s+|\s+\b(?:but|while|whereas)\b\s+|\s+\band\b\s+(?=[A-Z][^.!?\n;]*\b(?:missing|out|injured|depleted|decimated|shorthanded|short-?handed|without|scratches)\b)/i)
-          .map(c => c.trim())
-          .filter(Boolean);
+          ? combinedReasons
+              .split(/(?<=[.!?])\s+|\n+|;\s+|,\s+(?:and|but|while|whereas|with)\s+|\s+\b(?:but|while|whereas)\b\s+|\s+\band\b\s+(?=[A-Z][^.!?\n;]*\b(?:missing|out|injured|depleted|decimated|shorthanded|short-?handed|without|scratches)\b)/i)
+              .map(c => c.trim())
+              .filter(Boolean)
+          : [];
 
         const wholeTextHasBalancedAck =
           HEALTH_BALANCED_ACK_REGEX.test(combinedReasons) ||
@@ -2318,15 +2376,32 @@ export function auditCriticPremiseContradictions(
                 findTeamMentionsInText(c, pool).some(m => m.team.key === pickedDesc!.key)
             ));
 
+        let flaggedInjuryMisreadForLeg = false;
+        const flagInjuryMisread = (msg: string, offendingClause: string) => {
+          flaggedInjuryMisreadForLeg = true;
+          addFinding(
+            'symmetric_injury_misread',
+            msg,
+            buildVetoTargetFromPick(pk, headers, rowMap, candidates, msg),
+            offendingClause
+          );
+        };
+
         for (const subClause of injurySubClauses) {
           if (HEALTH_ADVANTAGE_CLAIM_REGEX.test(subClause) && !HEALTH_BALANCED_ACK_REGEX.test(subClause)) {
             const msg = `symmetric_injury_misread: Pick "${pickDisplay}" claims an injury/health advantage when Health Balance is ${injBal.healthBalance} (${injBal.homeTeam || 'Home'} ${injBal.homeOut} OUT/${injBal.homeQ} Q vs ${injBal.awayTeam || 'Away'} ${injBal.awayOut} OUT/${injBal.awayQ} Q).`;
-            addFinding(
-              'symmetric_injury_misread',
-              msg,
-              buildVetoTargetFromPick(pk, headers, rowMap, candidates, msg),
-              subClause
-            );
+            flagInjuryMisread(msg, subClause);
+            continue;
+          }
+
+          if (
+            !hasFavorableDirectionalSteam &&
+            BLANKET_TWO_PILLAR_CLAIM_REGEX.test(subClause) &&
+            !/\bmodel[_\s-]?signal\b/i.test(subClause) &&
+            !HEALTH_BALANCED_ACK_REGEX.test(subClause)
+          ) {
+            const msg = `symmetric_injury_misread: Pick "${pickDisplay}" claims 2-pillar support without favorable directional steam when Health Balance is ${injBal.healthBalance} (${injBal.homeTeam || 'Home'} ${injBal.homeOut} OUT/${injBal.homeQ} Q vs ${injBal.awayTeam || 'Away'} ${injBal.awayOut} OUT/${injBal.awayQ} Q).`;
+            flagInjuryMisread(msg, subClause);
             continue;
           }
 
@@ -2337,13 +2412,48 @@ export function auditCriticPremiseContradictions(
               const mentionsPicked = pickedDesc ? clauseMentions.some(t => t.key === pickedDesc.key) : false;
               if (mentionsOpp && !mentionsPicked) {
                 const msg = `symmetric_injury_misread: Pick "${pickDisplay}" cites opponent injury depletion without acknowledging symmetric/greater injuries (${pickedOut} OUT vs opp ${oppOut} OUT, Health Balance: ${injBal.healthBalance}).`;
-                addFinding(
-                  'symmetric_injury_misread',
-                  msg,
-                  buildVetoTargetFromPick(pk, headers, rowMap, candidates, msg),
-                  subClause
-                );
+                flagInjuryMisread(msg, subClause);
               }
+            }
+          }
+        }
+
+        // S1: Also inspect seat-level analysis/summary for blanket multi-leg health/pillar claims
+        // or targeted health claims mentioning this pick, even when pk.reason is non-empty.
+        if (!flaggedInjuryMisreadForLeg && combinedSeatContext) {
+          const seatClauses = combinedSeatContext
+            .split(/(?<=[.!?])\s+|\n+|;\s+/)
+            .map(c => c.trim())
+            .filter(Boolean);
+
+          const clauseTargetsThisLeg = (clause: string): boolean => {
+            if (rowId && new RegExp(`\\b${escapeRegex(rowId)}\\b`, 'i').test(clause)) return true;
+            if (pickedDesc && findTeamMentionsInText(clause, pool).some(m => m.team.key === pickedDesc.key)) {
+              return true;
+            }
+            return false;
+          };
+
+          for (const sc of seatClauses) {
+            if (HEALTH_BALANCED_ACK_REGEX.test(sc)) continue;
+            const isBlanket = BLANKET_MULTI_LEG_SUBJECT_REGEX.test(sc);
+            const targetsLeg = clauseTargetsThisLeg(sc);
+            if (!isBlanket && !targetsLeg) continue;
+
+            if (HEALTH_ADVANTAGE_CLAIM_REGEX.test(sc)) {
+              const msg = `symmetric_injury_misread: Pick "${pickDisplay}" is covered by seat analysis health-advantage claim ("${sc.slice(0, 120)}") when Health Balance is ${injBal.healthBalance} (${injBal.homeTeam || 'Home'} ${injBal.homeOut} OUT/${injBal.homeQ} Q vs ${injBal.awayTeam || 'Away'} ${injBal.awayOut} OUT/${injBal.awayQ} Q).`;
+              flagInjuryMisread(msg, sc);
+              break;
+            }
+
+            if (
+              !hasFavorableDirectionalSteam &&
+              BLANKET_TWO_PILLAR_CLAIM_REGEX.test(sc) &&
+              !/\bmodel[_\s-]?signal\b/i.test(sc)
+            ) {
+              const msg = `symmetric_injury_misread: Pick "${pickDisplay}" is covered by seat analysis 2-pillar claim ("${sc.slice(0, 120)}") with neutral/non-favorable steam when Health Balance is ${injBal.healthBalance} (${injBal.homeTeam || 'Home'} ${injBal.homeOut} OUT/${injBal.homeQ} Q vs ${injBal.awayTeam || 'Away'} ${injBal.awayOut} OUT/${injBal.awayQ} Q).`;
+              flagInjuryMisread(msg, sc);
+              break;
             }
           }
         }
@@ -2352,11 +2462,19 @@ export function auditCriticPremiseContradictions(
   };
 
   if (typeof proposal === 'object') {
-    if (Array.isArray(proposal.picks)) {
-      for (const pk of proposal.picks) {
+    const topSeatContext = [
+      typeof proposal.analysis === 'string' ? proposal.analysis : '',
+      typeof proposal.summary === 'string' ? proposal.summary : ''
+    ].filter(Boolean);
+
+    const evaluatedPickRefs = new Set<any>();
+
+    const evalPickList = (picksArr: any[], seatContext: string[]) => {
+      for (const pk of picksArr) {
         if (!pk) continue;
+        if (typeof pk === 'object') evaluatedPickRefs.add(pk);
         if (typeof pk === 'string') {
-          evaluateLeg(pk, pk, [pk]);
+          evaluateLeg(pk, pk, [pk], seatContext);
           continue;
         }
         if (typeof pk !== 'object') continue;
@@ -2373,10 +2491,25 @@ export function auditCriticPremiseContradictions(
           pk.summary,
           ...(Array.isArray(pk.reasons) ? pk.reasons : [])
         ].filter((x): x is string => typeof x === 'string' && x.trim().length > 0);
-        if (rTexts.length === 0 && typeof proposal.analysis === 'string') {
-          rTexts.push(proposal.analysis);
-        }
-        evaluateLeg(pk, sideText, rTexts);
+        evaluateLeg(pk, sideText, rTexts, seatContext);
+      }
+    };
+
+    if (Array.isArray(proposal.seatReports) && proposal.seatReports.length > 0) {
+      for (const sr of proposal.seatReports) {
+        if (!sr || typeof sr !== 'object' || !Array.isArray(sr.picks)) continue;
+        const seatCtx = [
+          typeof sr.analysis === 'string' ? sr.analysis : '',
+          typeof sr.summary === 'string' ? sr.summary : ''
+        ].filter(Boolean);
+        evalPickList(sr.picks, seatCtx);
+      }
+    }
+
+    if (Array.isArray(proposal.picks)) {
+      const remainingPicks = proposal.picks.filter((pk: any) => !(pk && typeof pk === 'object' && evaluatedPickRefs.has(pk)));
+      if (remainingPicks.length > 0) {
+        evalPickList(remainingPicks, topSeatContext);
       }
     }
     if (Array.isArray(proposal.scorecards)) {
@@ -2389,14 +2522,14 @@ export function auditCriticPremiseContradictions(
           sc.summary,
           ...(Array.isArray(sc.reasons) ? sc.reasons : [])
         ].filter((x): x is string => typeof x === 'string' && x.trim().length > 0);
-        evaluateLeg(sc, sideText, rTexts);
+        evaluateLeg(sc, sideText, rTexts, topSeatContext);
       }
     }
     if (proposal.scorecard && typeof proposal.scorecard === 'object') {
       const sc = proposal.scorecard;
       const sideText = [sc.row, sc.pick, sc.side, sc.team].filter((x): x is string => typeof x === 'string' && x.trim().length > 0).join(' ');
       const rTexts = [sc.note, sc.reason, sc.summary].filter((x): x is string => typeof x === 'string' && x.trim().length > 0);
-      evaluateLeg(sc, sideText, rTexts);
+      evaluateLeg(sc, sideText, rTexts, topSeatContext);
     }
   }
 
