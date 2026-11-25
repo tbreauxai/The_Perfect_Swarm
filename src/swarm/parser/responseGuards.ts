@@ -15,19 +15,38 @@ import { parseJsonSafe, parseJsonSafeWithStatus } from './parseJsonSafe.ts';
  */
 export function stripApproximateOdds(text: string, options?: { allowExactOdds?: boolean }): string {
     if (!text || typeof text !== 'string') return text;
+    const protectedPriceBands: string[] = [];
+    const protectPriceBand = (match: string): string => {
+        const idx = protectedPriceBands.length;
+        protectedPriceBands.push(match);
+        return `\uE010${idx}\uE011`;
+    };
+
     let out = text
         .replace(/(?:~=|~|≈)\s*[+-]?\d+(?:\.\d+)?%?/g, '')
         .replace(/~=/g, '')
         .replace(/\b(?:about|approx\.?|approximately|around|roughly)\s*(?:[+-]\d{3,4}|\d+(?:\.\d+)?%|\$\d+(?:\.\d+)?)/gi, '');
     if (!options?.allowExactOdds) {
         out = out
+            .replace(
+                /(?:\b(?:in\s+the|within(?:\s+the)?|inside(?:\s+the)?|between|optimal|target|policy|price[\s-]*band(?:\s+of)?)\s+)[+-]\d{3,4}\s*(?:to|and|\/|–|—|-)\s*[+-]\d{3,4}(?:\s*(?:range|window|band|price\s*band|optimal|zone|limit|cap|threshold))?\b/gi,
+                protectPriceBand
+            )
+            .replace(
+                /[+-]\d{3,4}\s*(?:to|\/|–|—)\s*[+-]\d{3,4}\s+(?:range|window|band|price\s*band|optimal(?:\s+(?:band|range|window))?|zone|threshold|limit)\b/gi,
+                protectPriceBand
+            )
+            .replace(/-220\s*(?:to|\/|–|—|-)\s*\+150\b/gi, protectPriceBand)
             .replace(/(?:\b(?:at|@)\s*)?[+-]\d{3,4}\b/gi, '')
             .replace(/\b(?:stake|risk|wager)\s*(?:of\s*)?(?:\d+(?:\.\d+)?\s*u(?:nits?)?|\$\d+(?:\.\d+)?)\b/gi, '')
             .replace(/\b\d+(?:\.\d+)?\s*u(?:nits?)?\b/gi, '')
             .replace(/\bstake\b/gi, '')
             .replace(/\bpayout(?:\s*(?:of|:|=)?\s*\$?\d+(?:\.\d+)?)?\b/gi, '');
     }
+    out = out.replace(/\uE010(\d+)\uE011/g, (_, idxStr) => protectedPriceBands[Number(idxStr)] ?? '');
     return out
+        .replace(/,?\s*\b(?:well\s+)?(?:in|within|inside)\s+the\s+(?:to|\/|–|—|-)\s+(?:range|window|band)\b/gi, '')
+        .replace(/,?\s*\bbetween\s+and\b/gi, '')
         .replace(/\(\s*(?:(?:->|→|–|—|-|to|,|\/|;|:)\s*)+\)/gi, '')
         .replace(/\(\s*(?:->|→|to|,|\/|;)\s+/gi, '(')
         .replace(/\s*(?:->|→|to|,|\/|;)\s*\)/gi, ')')
@@ -474,6 +493,24 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
         }
     }
 
+    const resolvedCriticApproved = typeof raw?.criticApproved === 'boolean'
+        ? raw.criticApproved
+        : (Array.isArray(raw?.scorecards)
+            ? (() => {
+                const criticCards = raw.scorecards.filter(
+                    (sc: any) => sc && typeof sc === 'object' && /critic|\brisk\b/i.test(String(sc.seat || sc.role || ''))
+                );
+                if (criticCards.length === 0) return undefined;
+                if (criticCards.some((sc: any) => /^(?:veto|vetoed|reject|rejected|fail|failed)$/i.test(String(sc.verdict || '').trim()))) {
+                    return false;
+                }
+                if (criticCards.some((sc: any) => /^(?:approve|approved|pass|passed|accept)$/i.test(String(sc.verdict || '').trim()))) {
+                    return true;
+                }
+                return undefined;
+            })()
+            : undefined);
+
     const parsed = ManagerResponseSchema.safeParse(raw);
     if (parsed.success) {
         const rawAnalysisVal = typeof raw?.analysis === 'string' && raw.analysis.trim().length > 0
@@ -486,7 +523,7 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
             ...(Array.isArray(raw?.picks) ? { picks: raw.picks } : {}),
             ...(Array.isArray(raw?.scorecards) ? { scorecards: raw.scorecards } : {}),
             ...(typeof raw?.pass === 'boolean' ? { pass: raw.pass } : {}),
-            ...(typeof raw?.criticApproved === 'boolean' ? { criticApproved: raw.criticApproved } : {}),
+            ...(typeof resolvedCriticApproved === 'boolean' ? { criticApproved: resolvedCriticApproved } : {}),
             ...(typeof raw?.wageringPass === 'boolean' ? { wageringPass: raw.wageringPass } : {}),
             components: parsed.data.components.map((comp) => {
                 if (comp.type === 'InsightList') {
@@ -652,7 +689,7 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
         ...(raw && Array.isArray(raw.picks) ? { picks: raw.picks } : {}),
         ...(raw && Array.isArray(raw.scorecards) ? { scorecards: raw.scorecards } : {}),
         ...(raw && typeof raw.pass === 'boolean' ? { pass: raw.pass } : {}),
-        ...(raw && typeof raw.criticApproved === 'boolean' ? { criticApproved: raw.criticApproved } : {}),
+        ...(typeof resolvedCriticApproved === 'boolean' ? { criticApproved: resolvedCriticApproved } : {}),
         ...(raw && typeof raw.wageringPass === 'boolean' ? { wageringPass: raw.wageringPass } : {}),
         ...(raw && raw.status ? { status: raw.status } : {}),
         ...(raw && raw.reason ? { reason: raw.reason } : {}),

@@ -29,7 +29,7 @@ import {
     sanitizePullBeforePassClaims,
     type ToolCallTraceEntry
 } from '../tools/pullBeforePass.ts';
-import { enforceCriticAuditOnFinalAnalysis } from '../tools/criticAudit.ts';
+import { enforceCriticAuditOnFinalAnalysis, resolveFinalCriticApproved } from '../tools/criticAudit.ts';
 import { syncCompilerProseWithFinalPicks } from '../tools/compilerProseSync.ts';
 
 export interface SynthesisPipelineParams {
@@ -552,6 +552,7 @@ export async function executeManagerSynthesis(
         criticAuditFailed?: boolean;
         unauditedLegs?: VetoedLegTarget[];
         hadProposedPicks?: boolean;
+        criticVerdictApproved?: boolean;
         auditNote?: string;
         agreementLevel?: 'strong' | 'moderate' | 'divergent';
         activeEventIds?: string[];
@@ -677,6 +678,12 @@ export async function executeManagerSynthesis(
             hadProposedPicks: Boolean(groundingContext?.hadProposedPicks || initialPickCount > 0),
             auditNote: groundingContext?.auditNote
         });
+        const hadFullVeto = initialPickCount > 0 && hadVetoes && Array.isArray(finalResult.picks) && finalResult.picks.length === 0;
+        finalResult.criticApproved = resolveFinalCriticApproved(finalResult, {
+            criticAuditFailed: groundingContext?.criticAuditFailed === true,
+            criticVerdictApproved: groundingContext?.criticVerdictApproved,
+            hadFullVeto
+        });
         const isDivergentRun = groundingContext?.agreementLevel === 'divergent'
             || /\bagreement=divergent\b/i.test(safeDynamicPrompt)
             || /\bLevel:\s*divergent\b/i.test(safeDynamicPrompt);
@@ -702,6 +709,7 @@ export async function executeManagerSynthesis(
         if (finalResult.picks.length === 0 && originalCount > 0) {
             finalResult.ui_title = 'Insufficient data';
             finalResult.reason = 'no picks with specialist coverage';
+            finalResult.criticApproved = false;
         }
     }
 

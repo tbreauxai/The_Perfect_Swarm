@@ -537,6 +537,7 @@ export function enforceCriticAuditOnFinalAnalysis<T extends Record<string, any>>
     rep.picks = [];
     rep.components = [];
     rep.pass = true;
+    rep.criticApproved = false;
     rep.status = 'no_play';
     rep.verified = false;
     rep.ui_title = 'Pass — Unaudited Proposal';
@@ -556,6 +557,7 @@ export function enforceCriticAuditOnFinalAnalysis<T extends Record<string, any>>
     rep.picks = rep.picks.filter((pk: any) => !unaudited.some(u => pickMatchesTarget(pk, u)));
     if (rep.picks.length === 0 && before > 0) {
       rep.components = [];
+      rep.criticApproved = false;
       normalizePassIfAllLegsVetoed(rep, before, true);
       if (!rep.reason || /vetoed/i.test(rep.reason)) {
         const msg = 'Pass: Proposed picks were not audited by the Critic and were removed.';
@@ -567,4 +569,81 @@ export function enforceCriticAuditOnFinalAnalysis<T extends Record<string, any>>
   }
 
   return finalAnalysis;
+}
+
+/**
+ * Resolves the authoritative top-level boolean `criticApproved` flag for a final
+ * compiled analysis payload, synchronized with Risk Critic's verdict and verification state.
+ */
+export function resolveFinalCriticApproved(
+  finalAnalysis: Record<string, any>,
+  options?: {
+    criticAuditFailed?: boolean;
+    criticVerdictApproved?: boolean;
+    verificationSuccess?: boolean;
+    hadFullVeto?: boolean;
+  }
+): boolean {
+  if (
+    options?.criticAuditFailed === true ||
+    finalAnalysis?.verified === false ||
+    finalAnalysis?.verification?.success === false ||
+    options?.verificationSuccess === false
+  ) {
+    return false;
+  }
+  if (options?.hadFullVeto === true) {
+    return false;
+  }
+
+  if (Array.isArray(finalAnalysis?.scorecards) && finalAnalysis.scorecards.length > 0) {
+    const criticCards = finalAnalysis.scorecards.filter(
+      (sc: any) => sc && typeof sc === 'object' && /critic|\brisk\b/i.test(String(sc.seat || sc.role || ''))
+    );
+    const cardsToCheck = criticCards.length > 0
+      ? criticCards
+      : finalAnalysis.scorecards.filter((sc: any) => sc && typeof sc === 'object' && typeof sc.verdict === 'string');
+
+    if (cardsToCheck.length > 0) {
+      const hasVeto = cardsToCheck.some((sc: any) =>
+        /^(?:veto|vetoed|reject|rejected|fail|failed)$/i.test(String(sc.verdict || '').trim())
+      );
+      if (hasVeto) return false;
+
+      const hasApprove = cardsToCheck.some((sc: any) =>
+        /^(?:approve|approved|pass|passed|accept)$/i.test(String(sc.verdict || '').trim())
+      );
+      if (hasApprove) {
+        const survivingPicks = Array.isArray(finalAnalysis.picks) ? finalAnalysis.picks.length : 0;
+        if (options?.criticVerdictApproved === false && survivingPicks === 0) {
+          return false;
+        }
+        return true;
+      }
+    }
+  }
+
+  if (typeof options?.criticVerdictApproved === 'boolean') {
+    return options.criticVerdictApproved;
+  }
+  if (
+    finalAnalysis?.verified === true ||
+    finalAnalysis?.verification?.success === true ||
+    options?.verificationSuccess === true
+  ) {
+    return true;
+  }
+  if (typeof finalAnalysis?.criticApproved === 'boolean') {
+    return finalAnalysis.criticApproved;
+  }
+  if (
+    finalAnalysis?.ui_title === 'Insufficient data' ||
+    finalAnalysis?.ui_title === 'Pass — Unaudited Proposal'
+  ) {
+    return false;
+  }
+  if (finalAnalysis?.wageringPass === true) {
+    return true;
+  }
+  return true;
 }

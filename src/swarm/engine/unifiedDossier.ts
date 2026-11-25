@@ -84,6 +84,8 @@ export interface UnifiedSlateDossier {
 export interface FormattedUnifiedDossier {
   text: string;
   sectionsIncluded: number;
+  fullSectionsIncluded?: number;
+  compactSectionsIncluded?: number;
   truncated: boolean;
 }
 
@@ -128,6 +130,7 @@ export interface QualitativePillarEvaluation {
   alignedPillarCount: number;
   tags: string[];
   hasDirectionalSteam: boolean;
+  isUncertainQuestionable: boolean;
   outCountDiff: number;
   netMarginGap: number;
   weightedMarginRank: number;
@@ -297,6 +300,7 @@ export function evaluateQualitativePillars(entry: UnifiedGameDossierEntry): Qual
       : bestDirectionalAligned;
 
   const hasDirectionalSteam = entry.hasDirectionalSteam || steamSide !== null;
+  const isUncertainQuestionable = /Health\s*Balance:\s*uncertain_questionable/i.test(inj);
   const outCountDiff = Math.max(entry.outCountDiff || 0, computeOutCountDiff(inj));
   const weightedMarginRank = isLowScoringSport ? netMarginGap * 4 : netMarginGap;
 
@@ -305,6 +309,7 @@ export function evaluateQualitativePillars(entry: UnifiedGameDossierEntry): Qual
     alignedPillarCount,
     tags,
     hasDirectionalSteam,
+    isUncertainQuestionable,
     outCountDiff,
     netMarginGap,
     weightedMarginRank,
@@ -628,6 +633,22 @@ export interface FormatUnifiedDossierOptions {
   preserveOrder?: boolean;
   omitIndexHeader?: boolean;
   compactInjuriesOnTightBudget?: boolean;
+  maxFullSections?: number;
+}
+
+function formatCompactOneLineEntry(
+  entry: UnifiedGameDossierEntry,
+  evalInfo: QualitativePillarEvaluation,
+  maxLineChars: number = 125,
+): string {
+  const healthMatch = String(entry.injuries || '').match(/Health\s*Balance:\s*([^|\n]+)/i);
+  const healthPart = healthMatch ? `Health: ${healthMatch[1].trim()}` : 'Health: None';
+  const steamMatch = String(entry.market || '').match(/Steam:\s*([^|\n]+)/i);
+  const steamPart = steamMatch ? `Steam: ${steamMatch[1].trim()}` : 'Steam: NEUTRAL';
+  const tagsPart = evalInfo.tags.length > 0 ? evalInfo.tags.join(', ') : `MarginGap ${evalInfo.netMarginGap.toFixed(1)}`;
+  const raw = `- ${entry.eventId} (${entry.matchup}): ${tagsPart} | ${healthPart} | ${steamPart}`;
+  if (raw.length <= maxLineChars) return raw;
+  return `${raw.slice(0, Math.max(24, maxLineChars - 1)).trimEnd()}…`;
 }
 
 /**
@@ -641,7 +662,7 @@ export function formatUnifiedPerGameDossier(
   options?: FormatUnifiedDossierOptions,
 ): FormattedUnifiedDossier {
   if (!Array.isArray(entries) || entries.length === 0) {
-    return { text: '', sectionsIncluded: 0, truncated: false };
+    return { text: '', sectionsIncluded: 0, fullSectionsIncluded: 0, compactSectionsIncluded: 0, truncated: false };
   }
 
   const evaluated = entries.map((entry, idx) => ({
@@ -650,12 +671,24 @@ export function formatUnifiedPerGameDossier(
     eval: evaluateQualitativePillars(entry),
   }));
 
+  const priorityTier = (ev: QualitativePillarEvaluation): number => {
+    if (ev.alignedPillarCount >= 2 && !ev.isUncertainQuestionable) return 3;
+    if (ev.alignedPillarCount >= 2 && ev.isUncertainQuestionable) return 2;
+    if (ev.alignedPillarCount === 1 && !ev.isUncertainQuestionable) return 1;
+    return 0;
+  };
+
   const sorted = options?.preserveOrder
     ? evaluated
     : [...evaluated].sort((a, b) => {
+        const tierDiff = priorityTier(b.eval) - priorityTier(a.eval);
+        if (tierDiff !== 0) return tierDiff;
         if (b.eval.alignedPillarCount !== a.eval.alignedPillarCount) {
           return b.eval.alignedPillarCount - a.eval.alignedPillarCount;
         }
+        const qA = a.eval.isUncertainQuestionable ? 1 : 0;
+        const qB = b.eval.isUncertainQuestionable ? 1 : 0;
+        if (qA !== qB) return qA - qB;
         if (b.eval.pillarCount !== a.eval.pillarCount) {
           return b.eval.pillarCount - a.eval.pillarCount;
         }
@@ -693,6 +726,128 @@ export function formatUnifiedPerGameDossier(
     }
   }
 
+  const isHeavySlate = sorted.length >= 12 && !options?.preserveOrder;
+  if (isHeavySlate) {
+    const requestedFullLimit = Math.min(options?.maxFullSections ?? 10, 10, sorted.length);
+
+    const assembleHeavySlate = (
+      fullLimit: number,
+      caps?: { fund: number; inj: number; mkt: number },
+      entryOpts?: { compactInjuries?: boolean; omitRows?: boolean },
+      compactLineCap: number = 125,
+    ): FormattedUnifiedDossier => {
+      const fullItems = sorted.slice(0, fullLimit);
+      const compactItems = sorted.slice(fullLimit);
+      const parts: string[] = indexHeader ? [indexHeader] : [];
+      let used = indexHeader ? indexHeader.length : 0;
+      let fullIncluded = 0;
+      let compactIncluded = 0;
+      let truncated = false;
+
+      for (const item of fullItems) {
+        const block = formatSingleGameEntry(item.entry, caps, entryOpts);
+        const sep = parts.length > 0 ? 2 : 0;
+        if (typeof maxChars === 'number' && maxChars > 0 && used + sep + block.length > maxChars) {
+          truncated = true;
+          break;
+        }
+        used += sep + block.length;
+        parts.push(block);
+        fullIncluded++;
+      }
+
+      if (compactItems.length > 0) {
+        const compactHeader = '=== REMAINING SLATE (COMPACT SUMMARIES) ===';
+        const compactLines: string[] = [];
+        for (const item of compactItems) {
+          const line = formatCompactOneLineEntry(item.entry, item.eval, compactLineCap);
+          const candidateBody = [compactHeader, ...compactLines, line].join('\n');
+          const sep = parts.length > 0 ? 2 : 0;
+          if (typeof maxChars === 'number' && maxChars > 0 && used + sep + candidateBody.length > maxChars) {
+            truncated = true;
+            break;
+          }
+          compactLines.push(line);
+          compactIncluded++;
+        }
+        if (compactLines.length > 0) {
+          const compactSection = [compactHeader, ...compactLines].join('\n');
+          parts.push(compactSection);
+        } else if (typeof maxChars === 'number' && maxChars > 0) {
+          truncated = true;
+        }
+      }
+
+      return {
+        text: parts.join('\n\n'),
+        sectionsIncluded: fullIncluded + compactIncluded,
+        fullSectionsIncluded: fullIncluded,
+        compactSectionsIncluded: compactIncluded,
+        truncated,
+      };
+    };
+
+    const pass1 = assembleHeavySlate(
+      requestedFullLimit,
+      { fund: 220, inj: 155, mkt: 160 },
+      undefined,
+      125,
+    );
+    if (!pass1.truncated || typeof maxChars !== 'number') {
+      return pass1;
+    }
+
+    const tighterFull = Math.min(requestedFullLimit, 8);
+    const pass2 = assembleHeavySlate(
+      tighterFull,
+      { fund: 185, inj: 130, mkt: 145 },
+      { compactInjuries: true },
+      105,
+    );
+    if (!pass2.truncated) {
+      return pass2;
+    }
+
+    const compactHeaderLen = '=== REMAINING SLATE (COMPACT SUMMARIES) ==='.length + 2;
+    const estCompactCost = compactHeaderLen + Math.max(0, sorted.length - tighterFull) * 96;
+    const headerCost = indexHeader ? indexHeader.length + 2 : 0;
+    const bodyBudget = maxChars - headerCost - estCompactCost - tighterFull * 95;
+    const perGameBody = Math.max(60, Math.floor(bodyBudget / Math.max(1, tighterFull)));
+    const fundCap = Math.max(30, Math.floor(perGameBody * 0.42));
+    const injCap = Math.max(25, Math.floor(perGameBody * 0.28));
+    const mktCap = Math.max(25, perGameBody - fundCap - injCap);
+    const pass3 = assembleHeavySlate(
+      tighterFull,
+      { fund: fundCap, inj: injCap, mkt: mktCap },
+      { compactInjuries: true, omitRows: true },
+      95,
+    );
+    if (!pass3.truncated) {
+      return pass3;
+    }
+
+    for (const fallbackFull of [6, 4, 2]) {
+      if (fallbackFull >= tighterFull) continue;
+      const fbCompactCost = compactHeaderLen + Math.max(0, sorted.length - fallbackFull) * 90;
+      const fbPerGame = Math.max(50, Math.floor((maxChars - headerCost - fbCompactCost - fallbackFull * 95) / fallbackFull));
+      const fbPass = assembleHeavySlate(
+        fallbackFull,
+        {
+          fund: Math.max(25, Math.floor(fbPerGame * 0.42)),
+          inj: Math.max(20, Math.floor(fbPerGame * 0.28)),
+          mkt: Math.max(20, fbPerGame - Math.floor(fbPerGame * 0.70)),
+        },
+        { compactInjuries: true, omitRows: true },
+        88,
+      );
+      if (!fbPass.truncated || fbPass.sectionsIncluded > pass3.sectionsIncluded) {
+        return fbPass;
+      }
+    }
+
+    return pass3.sectionsIncluded >= pass1.sectionsIncluded ? pass3 : pass1;
+  }
+
   const assemble = (
     caps?: { fund: number; inj: number; mkt: number },
     entryOpts?: { compactInjuries?: boolean; omitRows?: boolean },
@@ -717,6 +872,8 @@ export function formatUnifiedPerGameDossier(
     return {
       text: parts.join('\n\n'),
       sectionsIncluded: gameBlocksIncluded,
+      fullSectionsIncluded: gameBlocksIncluded,
+      compactSectionsIncluded: 0,
       truncated,
     };
   };
