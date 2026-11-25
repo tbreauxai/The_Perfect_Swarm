@@ -498,10 +498,12 @@ describe('wf-1795631514400: S1 model_signal guard + scorecards, S2 injury parity
         ).rejects.toThrow(/timed out/i);
 
         // Single attempt (retryOnTimeout: false) — no second 30s stall!
+        // S2 (wf-1795635950672): Nemotron reasoning models disable thinking and keep max_tokens >= 4096 so JSON never truncates.
         expect(nvidiaFetchCount).toBe(1);
         expect(capturedBodies).toHaveLength(1);
-        expect(capturedBodies[0].max_tokens).toBeLessThanOrEqual(1800);
+        expect(capturedBodies[0].max_tokens).toBeGreaterThanOrEqual(4096);
         expect(capturedBodies[0].reasoning_effort).toBe('none');
+        expect(capturedBodies[0].chat_template_kwargs).toEqual({ enable_thinking: false });
       } finally {
         globalThis.fetch = origFetch;
       }
@@ -551,7 +553,7 @@ describe('wf-1795631514400: S1 model_signal guard + scorecards, S2 injury parity
       expect(nvidiaAgentCalls).toBe(1);
       expect(groqCalls).toBe(1);
       expect(capturedTimeoutMs).toBeLessThanOrEqual(30000);
-      expect(capturedMaxTokens).toBeLessThanOrEqual(1800);
+      expect(capturedMaxTokens).toBeGreaterThanOrEqual(4096);
     });
   });
 

@@ -18,6 +18,7 @@ import {
     VETO_STICKS_RULE,
     auditClaimGrounding,
     auditCriticPremiseContradictions,
+    dedupeVetoMessages,
     ensureRiskCriticVetoScorecard,
     mergeVetoedClaims,
     mergeVetoedLegTargets,
@@ -128,20 +129,11 @@ export function selectDecoupledVerifierAgent(params: {
         return baseCriticAgent;
     }
 
-    const managerIs35Lite =
-        String(managerAgent.provider).toLowerCase() === 'gemini' &&
-        String(managerAgent.modelName || '').toLowerCase() === 'gemini-3.5-flash-lite';
-
+    // S3.3: Always prefer gemini-3.5-flash-lite ahead of gemini-3.1-flash-lite
+    // to avoid gemini-3.1-flash-lite's frequent 503 spikes during verification.
     const orderedCandidates: Array<{ provider: Provider; model: string }> = [
-        ...(managerIs35Lite
-            ? [
-                { provider: 'gemini' as Provider, model: 'gemini-3.1-flash-lite' },
-                { provider: 'gemini' as Provider, model: 'gemini-3.5-flash-lite' }
-            ]
-            : [
-                { provider: 'gemini' as Provider, model: 'gemini-3.5-flash-lite' },
-                { provider: 'gemini' as Provider, model: 'gemini-3.1-flash-lite' }
-            ]),
+        { provider: 'gemini' as Provider, model: 'gemini-3.5-flash-lite' },
+        { provider: 'gemini' as Provider, model: 'gemini-3.1-flash-lite' },
         { provider: 'cloudflare' as Provider, model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast' },
         { provider: 'groq' as Provider, model: 'openai/gpt-oss-20b' },
         { provider: 'groq' as Provider, model: 'llama-3.3-70b-versatile' }
@@ -432,16 +424,10 @@ export function normalizeRepairedFallbackOutput<T extends Record<string, any>>(
         options?.headers || []
     );
 
-    const reasons = Array.from(
-        new Set(
-            [
-                ...(Array.isArray(options?.reasons) ? options!.reasons : []),
-                ...(Array.isArray(rep.verification?.reasons) ? rep.verification.reasons : [])
-            ]
-                .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
-                .map(x => x.trim())
-        )
-    );
+    const reasons = dedupeVetoMessages([
+        ...(Array.isArray(options?.reasons) ? options!.reasons : []),
+        ...(Array.isArray(rep.verification?.reasons) ? rep.verification.reasons : [])
+    ]);
 
     let vetoTargets = mergeVetoedLegTargets(options?.vetoedLegs);
     if (vetoTargets.length === 0 && Array.isArray(options?.initialPicks) && options!.initialPicks.length > 0) {
@@ -604,15 +590,11 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
             ...(Array.isArray(p.toolCallTrace) ? p.toolCallTrace : []),
             ...(Array.isArray(lifecycleResult?.verifiedToolTrace) ? lifecycleResult.verifiedToolTrace : [])
         ]);
-        const combinedVetoTexts = Array.from(
-            new Set(
-                [
-                    ...(Array.isArray(p.criticVetoes) ? p.criticVetoes : []),
-                    ...(Array.isArray(lifecycleResult?.accumulatedVetoes) ? lifecycleResult.accumulatedVetoes : []),
-                    ...(lifecycleResult?.criticFeedback && !lifecycleResult.success ? [lifecycleResult.criticFeedback] : [])
-                ].filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
-            )
-        );
+        const combinedVetoTexts = dedupeVetoMessages([
+            ...(Array.isArray(p.criticVetoes) ? p.criticVetoes : []),
+            ...(Array.isArray(lifecycleResult?.accumulatedVetoes) ? lifecycleResult.accumulatedVetoes : []),
+            ...(lifecycleResult?.criticFeedback && !lifecycleResult.success ? [lifecycleResult.criticFeedback] : [])
+        ]);
         const combinedVetoedLegs = mergeVetoedLegTargets(p.vetoedLegs, lifecycleResult?.vetoedLegs);
         const combinedVetoedClaims = mergeVetoedClaims(p.vetoedClaims, lifecycleResult?.vetoedClaims);
 
@@ -697,16 +679,12 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
             });
             finalAnalysis.criticApproved = false;
         } else if (lifecycleResult.success === false) {
-            const verificationReasons = Array.from(
-                new Set(
-                    [
-                        ...combinedVetoTexts,
-                        ...(typeof lifecycleResult?.criticFeedback === 'string' && lifecycleResult.criticFeedback.trim()
-                            ? [lifecycleResult.criticFeedback.trim()]
-                            : [])
-                    ].filter(Boolean)
-                )
-            );
+            const verificationReasons = dedupeVetoMessages([
+                ...combinedVetoTexts,
+                ...(typeof lifecycleResult?.criticFeedback === 'string' && lifecycleResult.criticFeedback.trim()
+                    ? [lifecycleResult.criticFeedback.trim()]
+                    : [])
+            ]);
             finalAnalysis.verified = false;
             finalAnalysis.verification = {
                 success: false,
@@ -847,12 +825,12 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
     }
 
     if (finalAnalysis && typeof finalAnalysis === 'object' && Array.isArray(finalAnalysis.picks)) {
-        const vetoTextsForSync = [
+        const vetoTextsForSync = dedupeVetoMessages([
             ...(Array.isArray(p.criticVetoes) ? p.criticVetoes : []),
             ...(typeof lifecycleResult?.criticFeedback === 'string' && lifecycleResult.criticFeedback.trim()
                 ? [lifecycleResult.criticFeedback.trim()]
                 : [])
-        ];
+        ]);
         const vetoLegsForSync = mergeVetoedLegTargets(p.vetoedLegs, lifecycleResult?.vetoedLegs);
         const wasUnverifiedPass = finalAnalysis.verified === false && finalAnalysis.picks.length === 0;
         syncCompilerProseWithFinalPicks(finalAnalysis, {

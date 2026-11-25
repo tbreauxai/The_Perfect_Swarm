@@ -231,6 +231,7 @@ interface ProviderState {
   active: number;
   waiters: Array<() => void>;
   lastStartAt: number;
+  activeExpectedFreeAt: number;
   consecutiveFailures: number;
   openUntil: number;
   openReason: string;
@@ -278,6 +279,7 @@ export class ProviderLimiter {
         active: 0,
         waiters: [],
         lastStartAt: 0,
+        activeExpectedFreeAt: 0,
         consecutiveFailures: 0,
         openUntil: 0,
         openReason: "",
@@ -496,10 +498,30 @@ export class ProviderLimiter {
     return TOKEN_WINDOW_MS;
   }
 
-  private async acquireSlot(provider: string, model: string = "default", maxWaitMs: number = 60_000): Promise<void> {
+  private async acquireSlot(
+    provider: string,
+    model: string = "default",
+    maxWaitMs: number = 60_000,
+    estTokens: number = 0,
+  ): Promise<void> {
     const s = this.state(provider);
     const cfg = this.limits[provider];
     while (s.active >= cfg.concurrency) {
+      // S3.2: Check estimated wait UPFRONT before sleeping for maxWaitMs (avoid 5s slot_wait_timeout stall)
+      const now = this.now();
+      const slotEstWaitMs = s.activeExpectedFreeAt > now ? s.activeExpectedFreeAt - now : 0;
+      const tpmEstWaitMs = estTokens > 0 ? this.budgetWaitMs(provider, estTokens, model) : 0;
+      const estimatedWaitMs = Math.max(slotEstWaitMs, tpmEstWaitMs);
+      if (maxWaitMs <= 0 || estimatedWaitMs > maxWaitMs) {
+        throw new LimiterSkipError(
+          provider,
+          model,
+          tpmEstWaitMs > maxWaitMs
+            ? `skipped_tpm_wait: ${Math.ceil(tpmEstWaitMs)}ms (max ${maxWaitMs}ms); skipping to next fallback`
+            : `slot_wait_timeout (est ${Math.ceil(estimatedWaitMs)}ms > max ${maxWaitMs}ms)`,
+        );
+      }
+
       let timer: any;
       let waiterResolve: (() => void) | null = null;
       try {
@@ -529,6 +551,9 @@ export class ProviderLimiter {
   private releaseSlot(provider: string): void {
     const s = this.state(provider);
     s.active = Math.max(0, s.active - 1);
+    if (s.active === 0) {
+      s.activeExpectedFreeAt = 0;
+    }
     const next = s.waiters.shift();
     if (next) next();
   }
@@ -544,9 +569,23 @@ export class ProviderLimiter {
       throw new LimiterSkipError(provider, model, PROMPT_EXCEEDS_LIMIT_REASON);
     }
 
-    await this.acquireSlot(provider, model, req.maxBudgetWaitMs ?? 60_000);
+    // S3.2: Compute estimatedWaitMs BEFORE sleeping or waiting for a concurrency slot.
+    // If estimatedWaitMs > maxBudgetWait, skip immediately in 0ms instead of stalling 5,000ms.
+    const maxBudgetWait = this.getMaxBudgetWaitMs(provider, req.maxBudgetWaitMs);
+    const preWait = this.budgetWaitMs(provider, estTokens, model);
+    if (!Number.isFinite(preWait) || preWait >= UNSATISFIABLE_BUDGET_WAIT_MS) {
+      throw new LimiterSkipError(provider, model, PROMPT_EXCEEDS_LIMIT_REASON);
+    }
+    if (preWait > maxBudgetWait) {
+      throw new LimiterSkipError(
+        provider,
+        model,
+        `skipped_tpm_wait: ${Math.ceil(preWait)}ms (max ${maxBudgetWait}ms); skipping to next fallback`,
+      );
+    }
+
+    await this.acquireSlot(provider, model, maxBudgetWait, estTokens);
     try {
-      const maxBudgetWait = this.getMaxBudgetWaitMs(provider, req.maxBudgetWaitMs);
       const wait = this.budgetWaitMs(provider, estTokens, model);
       if (!Number.isFinite(wait) || wait >= UNSATISFIABLE_BUDGET_WAIT_MS) {
         throw new LimiterSkipError(provider, model, PROMPT_EXCEEDS_LIMIT_REASON);
@@ -558,7 +597,12 @@ export class ProviderLimiter {
           `skipped_tpm_wait: ${Math.ceil(wait)}ms (max ${maxBudgetWait}ms); skipping to next fallback`,
         );
       }
-      if (wait > 0) await this.sleep(wait);
+      if (wait > 0) {
+        const s = this.state(provider);
+        s.activeExpectedFreeAt = this.now() + wait;
+        await this.sleep(wait);
+        s.activeExpectedFreeAt = 0;
+      }
       if (this.getTokenLimit(provider, model) !== undefined) {
         this.getTokenLog(provider, model).push({
           at: this.now(),

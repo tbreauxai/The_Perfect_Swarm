@@ -259,6 +259,42 @@ export function resolveTeamFromText(
       aliasMatches.sort((a, b) => a.idx - b.idx || b.len - a.len);
       return { canonical: aliasMatches[0].canonical, name: aliasMatches[0].name };
     }
+    // Before falling back to bare city name on contextTeams, check if `cleaned` explicitly names
+    // a DIFFERENT team across all ESPN sports (e.g. "Minnesota Timberwolves" on an NHL Minnesota Wild row,
+    // "Chicago Bulls" on a Blackhawks row, "New York Knicks" on an Islanders/Rangers row).
+    const ctxCanonicals = new Set(
+      matchedEntries
+        .filter((m): m is { raw: string; entry: EspnTeamEntry } => Boolean(m.entry))
+        .map(m => `${m.entry.sport}:${m.entry.abbr}`)
+    );
+    const otherFullMatches = ESPN_TEAMS.filter(
+      t =>
+        !ctxCanonicals.has(`${t.sport}:${t.abbr}`) &&
+        new RegExp(`\\b${escapeRegex(t.name.toLowerCase())}\\b`, 'i').test(cleaned)
+    );
+    if (otherFullMatches.length === 1) {
+      return { canonical: `${otherFullMatches[0].sport}:${otherFullMatches[0].abbr}`, name: otherFullMatches[0].name };
+    }
+    const otherNickMatches = ESPN_TEAMS.filter(
+      t =>
+        !ctxCanonicals.has(`${t.sport}:${t.abbr}`) &&
+        t.nickname.length >= 4 &&
+        new RegExp(`\\b${escapeRegex(t.nickname.toLowerCase())}\\b`, 'i').test(cleaned)
+    );
+    if (otherNickMatches.length === 1) {
+      return { canonical: `${otherNickMatches[0].sport}:${otherNickMatches[0].abbr}`, name: otherNickMatches[0].name };
+    }
+    if (otherNickMatches.length > 1) {
+      // Disambiguate shared mascot across sports using city if present (e.g. "New York Giants" vs "San Francisco Giants", "Sacramento Kings" vs "LA Kings")
+      const withCity = otherNickMatches.filter(t => new RegExp(`\\b${escapeRegex(t.city.toLowerCase())}\\b`, 'i').test(cleaned));
+      if (withCity.length === 1) {
+        return { canonical: `${withCity[0].sport}:${withCity[0].abbr}`, name: withCity[0].name };
+      }
+      // Even if ambiguous across sports, if NONE of the matched mascots belong to contextTeams, do NOT fall back to bare city!
+      const nonCtxFirst = otherNickMatches[0];
+      return { canonical: `${nonCtxFirst.sport}:${nonCtxFirst.abbr}`, name: nonCtxFirst.name };
+    }
+
     // Check city only if the other team does not share that city
     for (const { entry } of matchedEntries) {
       if (!entry) continue;
@@ -300,7 +336,7 @@ export function resolveTeamFromText(
     }
   }
 
-  // Global ESPN lookup: full name > nickname > abbr/extra aliases > unique city
+  // Global ESPN lookup: full name > unique nickname > cross-sport full/nickname > abbr/extra aliases > unique city
   const matchesByFullName = pool.filter(t => new RegExp(`\\b${escapeRegex(t.name.toLowerCase())}\\b`, 'i').test(cleaned));
   if (matchesByFullName.length === 1) {
     return { canonical: `${matchesByFullName[0].sport}:${matchesByFullName[0].abbr}`, name: matchesByFullName[0].name };
@@ -308,6 +344,16 @@ export function resolveTeamFromText(
   const matchesByNickname = pool.filter(t => new RegExp(`\\b${escapeRegex(t.nickname.toLowerCase())}\\b`, 'i').test(cleaned));
   if (matchesByNickname.length === 1) {
     return { canonical: `${matchesByNickname[0].sport}:${matchesByNickname[0].abbr}`, name: matchesByNickname[0].name };
+  }
+  if (sport) {
+    const crossSportFull = ESPN_TEAMS.filter(t => new RegExp(`\\b${escapeRegex(t.name.toLowerCase())}\\b`, 'i').test(cleaned));
+    if (crossSportFull.length === 1) {
+      return { canonical: `${crossSportFull[0].sport}:${crossSportFull[0].abbr}`, name: crossSportFull[0].name };
+    }
+    const crossSportNick = ESPN_TEAMS.filter(t => t.nickname.length >= 4 && new RegExp(`\\b${escapeRegex(t.nickname.toLowerCase())}\\b`, 'i').test(cleaned));
+    if (crossSportNick.length === 1) {
+      return { canonical: `${crossSportNick[0].sport}:${crossSportNick[0].abbr}`, name: crossSportNick[0].name };
+    }
   }
   const matchesByAbbr = pool.filter(t => new RegExp(`\\b${escapeRegex(t.abbr.toLowerCase())}\\b`, 'i').test(cleaned));
   if (matchesByAbbr.length === 1) {
@@ -769,10 +815,14 @@ function extractProposalPicks(proposal: any, headers: GameHeader[], rowMap: Map<
       structuredRowIds.add(rowId);
     }
 
-    let eventId = getEventIdForPick(pk, headers);
-    if (!eventId && rowId && rowMap.get(rowId)?.eventId) {
-      eventId = rowMap.get(rowId)!.eventId;
-    }
+    // S1: Validate against the cited row's own event FIRST before cross-game lookup.
+    const rowEntry = rowId ? rowMap.get(rowId) : undefined;
+    const rowSideValid = rowId && rowEntry
+      ? checkRowSideBinding(rowId, sideText, rowEntry, typeof pk.market === 'string' ? pk.market : undefined).valid
+      : false;
+    let eventId = (rowEntry?.eventId && rowSideValid)
+      ? rowEntry.eventId
+      : (getEventIdForPick(pk, headers) || rowEntry?.eventId);
 
     results.push({
       pick: pk,
@@ -1540,6 +1590,7 @@ export function checkPickRowSideBinding(
   let sideText = '';
   let marketField: string | undefined;
   let explicitEventId: string | undefined;
+  let reasonSourceEventId: string | undefined;
 
   if (typeof pk === 'string') {
     const m = pk.match(/\b(R\d+)\b/i);
@@ -1557,11 +1608,14 @@ export function checkPickRowSideBinding(
       if (m) rowId = m[1].toUpperCase();
     }
     marketField = typeof pk.market === 'string' ? pk.market : undefined;
-    for (const evCand of [pk.event_id, pk.eventId, pk.reasonSource]) {
+    for (const evCand of [pk.event_id, pk.eventId]) {
       if (typeof evCand === 'string' && /^[a-z][a-z0-9_-]*-\d+$/i.test(evCand.trim())) {
         explicitEventId = evCand.trim();
         break;
       }
+    }
+    if (typeof pk.reasonSource === 'string' && /^[a-z][a-z0-9_-]*-\d+$/i.test(pk.reasonSource.trim())) {
+      reasonSourceEventId = pk.reasonSource.trim();
     }
   }
 
@@ -1569,20 +1623,7 @@ export function checkPickRowSideBinding(
   const rowEntry = rowMap.get(rowId);
   if (!rowEntry) return { valid: true, rowId };
 
-  if (
-    explicitEventId &&
-    rowEntry.eventId &&
-    explicitEventId.toLowerCase() !== rowEntry.eventId.toLowerCase()
-  ) {
-    return {
-      valid: false,
-      rowId,
-      rowEntry,
-      isCrossGameMismatch: true,
-      reason: `Row ${rowId} belongs to ${rowEntry.eventId} ("${rowEntry.text}"), not ${explicitEventId}${sideText ? ` ("${sideText}")` : ''}.`,
-    };
-  }
-
+  // S1: Validate pick.side against the cited row's own event FIRST before running cross-game event checks.
   const check = checkRowSideBinding(rowId, sideText, rowEntry, marketField);
   if (!check.valid) {
     return {
@@ -1594,6 +1635,80 @@ export function checkPickRowSideBinding(
       isValueMismatch: check.isValueMismatch,
     };
   }
+
+  // Check whether pick.side explicitly matches rowEntry's own team
+  const contextTeams = [rowEntry.away, rowEntry.home].filter((t): t is string => Boolean(t));
+  const rowTeam = resolveTeamFromText(rowEntry.text, rowEntry.sport, contextTeams);
+  const pickTeam = sideText ? resolveTeamFromText(sideText, rowEntry.sport, contextTeams) : undefined;
+  const sideExplicitlyMatchesRow = Boolean(
+    rowTeam &&
+    pickTeam &&
+    (rowTeam.canonical === pickTeam.canonical ||
+      (rowTeam.canonical.startsWith('city:') && pickTeam.name.toLowerCase().includes(rowTeam.name.toLowerCase())) ||
+      (pickTeam.canonical.startsWith('city:') && rowTeam.name.toLowerCase().includes(pickTeam.name.toLowerCase())))
+  );
+
+  const sportPrefix = (evId?: string): string => {
+    const m = String(evId || '').trim().toLowerCase().match(/^([a-z]+)-/);
+    return m ? m[1] : '';
+  };
+
+  // S1: If pick.reasonSource is a wrong cross-sport event_id while pick.row and pick.side BOTH agree on
+  // rowEntry.eventId, normalize reasonSource to rowId instead of falsely vetoing a valid pick.
+  if (
+    reasonSourceEventId &&
+    rowEntry.eventId &&
+    reasonSourceEventId.toLowerCase() !== rowEntry.eventId.toLowerCase()
+  ) {
+    const isCrossSport = Boolean(
+      sportPrefix(reasonSourceEventId) &&
+      sportPrefix(rowEntry.eventId) &&
+      sportPrefix(reasonSourceEventId) !== sportPrefix(rowEntry.eventId)
+    );
+    if (sideExplicitlyMatchesRow || (isCrossSport && sideText.trim().length > 0)) {
+      if (typeof pk === 'object' && pk) {
+        pk.reasonSource = rowId;
+      }
+      reasonSourceEventId = undefined;
+    } else {
+      return {
+        valid: false,
+        rowId,
+        rowEntry,
+        isCrossGameMismatch: true,
+        reason: `Row ${rowId} belongs to ${rowEntry.eventId} ("${rowEntry.text}"), not ${reasonSourceEventId}${sideText ? ` ("${sideText}")` : ''}.`,
+      };
+    }
+  }
+
+  if (
+    explicitEventId &&
+    rowEntry.eventId &&
+    explicitEventId.toLowerCase() !== rowEntry.eventId.toLowerCase()
+  ) {
+    const isCrossSport = Boolean(
+      sportPrefix(explicitEventId) &&
+      sportPrefix(rowEntry.eventId) &&
+      sportPrefix(explicitEventId) !== sportPrefix(rowEntry.eventId)
+    );
+    // S1: Never falsely reject a valid pick whose row + side both match rowEntry.eventId because
+    // a multi-sport city collision attached another sport's event_id (e.g. nba-401909320 on nhl-401892791).
+    if (sideExplicitlyMatchesRow && isCrossSport) {
+      if (typeof pk === 'object' && pk) {
+        if ('event_id' in pk) pk.event_id = rowEntry.eventId;
+        if ('eventId' in pk) pk.eventId = rowEntry.eventId;
+      }
+      return { valid: true, rowId, rowEntry };
+    }
+    return {
+      valid: false,
+      rowId,
+      rowEntry,
+      isCrossGameMismatch: true,
+      reason: `Row ${rowId} belongs to ${rowEntry.eventId} ("${rowEntry.text}"), not ${explicitEventId}${sideText ? ` ("${sideText}")` : ''}.`,
+    };
+  }
+
   return { valid: true, rowId, rowEntry };
 }
 

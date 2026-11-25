@@ -9,7 +9,7 @@ export interface SeatTimingDiagnostic {
     model: string;
     durationMs: number;
     inputTokens: number;
-    status: 'ok' | 'failover' | 'error' | 'timeout';
+    status: 'ok' | 'failover' | 'error' | 'timeout' | 'parse_failed';
 }
 
 export interface FailoverDiagnostic {
@@ -17,6 +17,7 @@ export interface FailoverDiagnostic {
     from: string;
     to: string;
     status: number | null;
+    reason?: string;
     error: string;
     durationMs: number;
 }
@@ -76,7 +77,10 @@ function utf8ByteLength(str: string): number {
 function formatEndpoint(provider?: string | null, model?: string | null): string {
     const p = String(provider || '').trim();
     const m = String(model || '').trim();
-    if (p && m) return `${p}/${m}`;
+    if (p && m) {
+        if (m.toLowerCase().startsWith(`${p.toLowerCase()}/`)) return m;
+        return `${p}/${m}`;
+    }
     if (p) return p;
     if (m) return m;
     return 'unknown';
@@ -123,8 +127,10 @@ export function buildCompactRunDiagnostics(params: {
             const inputTokens = typeof ev.prompt === 'string' && ev.prompt.length > 0
                 ? estimateTokens(ev.prompt)
                 : 0;
+            const isParseFailedErr =
+                typeof ev.error === 'string' && /parse_failed|unparsed_json|unparsed output/i.test(ev.error);
             const status: SeatTimingDiagnostic['status'] = action === 'Failed execution'
-                ? 'error'
+                ? (isParseFailedErr ? 'parse_failed' : 'error')
                 : (action.includes('failover') ? 'failover' : 'ok');
 
             seatTimings.push({
@@ -169,8 +175,12 @@ export function buildCompactRunDiagnostics(params: {
             const status = typeof rawStatus === 'number' && Number.isFinite(rawStatus)
                 ? rawStatus
                 : extractHttpStatus(ev.error || fo?.errorSnippet || fo?.reason);
-            const rawErr = fo?.errorSnippet || ev.error || fo?.reason || '';
-            const error = redactErrorSnippet(rawErr, 160);
+            const rawReason = typeof fo?.reason === 'string' ? fo.reason.trim() : '';
+            const isExplicitReasonCode =
+                rawReason === 'unparsed_json' ||
+                /^[a-z0-9_:-]{3,40}$/i.test(rawReason);
+            const rawErr = fo?.errorSnippet || ev.error || rawReason || '';
+            const error = redactErrorSnippet(rawErr, isExplicitReasonCode && rawReason === 'unparsed_json' ? 120 : 160);
             const durationMs = typeof fo?.durationMs === 'number' && Number.isFinite(fo.durationMs)
                 ? Math.max(0, Math.round(fo.durationMs))
                 : (typeof ev.durationMs === 'number' && Number.isFinite(ev.durationMs) ? Math.max(0, Math.round(ev.durationMs)) : 0);
@@ -180,6 +190,7 @@ export function buildCompactRunDiagnostics(params: {
                 from: formatEndpoint(parsedFrom.provider, parsedFrom.model),
                 to: toProvider ? formatEndpoint(toProvider, toModel) : 'none',
                 status,
+                ...(isExplicitReasonCode ? { reason: rawReason } : {}),
                 error,
                 durationMs
             });

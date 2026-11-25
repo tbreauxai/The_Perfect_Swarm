@@ -214,7 +214,7 @@ describe('todo.md Spec (wf-1795624413788 & run_timeout): S1–S3', () => {
       });
       globalTokenBudgetManager.recordUsage('groq', 7500, 'Risk Critic', 'openai/gpt-oss-120b');
 
-      // With Gemini available, routes Verification to 0ms-wait Gemini (different model from Manager)
+      // With Gemini available, routes Verification to 0ms-wait Gemini (gemini-3.5-flash-lite preferred ahead of 3.1-flash-lite)
       const decoupledGemini = selectDecoupledVerifierAgent({
         baseCriticAgent: pass1Critic,
         managerAgent,
@@ -222,7 +222,7 @@ describe('todo.md Spec (wf-1795624413788 & run_timeout): S1–S3', () => {
         context: ctx,
       });
       expect(decoupledGemini.provider).toBe('gemini');
-      expect(decoupledGemini.modelName).toBe('gemini-3.1-flash-lite');
+      expect(decoupledGemini.modelName).toBe('gemini-3.5-flash-lite');
 
       // Without Gemini, routes Verification to Cloudflare @cf/meta/llama-3.3-70b-instruct-fp8-fast
       vi.stubEnv('GEMINI_API_KEY', '');

@@ -43,7 +43,7 @@ import {
 import { parseGameHeaders, filterPicksByCoverage } from "../context/gameHeaders.ts";
 import { buildVerifierEvidence } from "./verifierEvidence.ts";
 import { collectSuccessfulEvidenceItems } from "../tools/criticEvidence.ts";
-import { mergeVetoedClaims, mergeVetoedLegTargets, type VetoedLegTarget } from "../tools/claimGrounding.ts";
+import { dedupeVetoMessages, mergeVetoedClaims, mergeVetoedLegTargets, type VetoedLegTarget } from "../tools/claimGrounding.ts";
 import { mergeToolCallTraceEntries, type ToolCallTraceEntry } from "../tools/pullBeforePass.ts";
 import { isDataRequest } from "../parser/responseGuards.ts";
 import { planTriage, type TriagePlan } from "./triagePlanner.ts";
@@ -751,14 +751,17 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                         stage2CriticApproved = true;
                     }
                     if (cr && cr.pass === false) {
-                        const parts = [
+                        const dedupedParts = dedupeVetoMessages([
                             typeof cr.feedback === 'string' ? cr.feedback : '',
                             typeof cr.verdict === 'string' ? cr.verdict : '',
                             typeof cr.summary === 'string' ? cr.summary : '',
-                            typeof cr.analysis === 'string' ? cr.analysis : '',
-                            Array.isArray(cr.flags) && cr.flags.length > 0 ? cr.flags.join(', ') : ''
-                        ].filter(Boolean);
-                        if (parts.length > 0) stage2CriticVetoes.push(parts.join(' | '));
+                            typeof cr.analysis === 'string' ? cr.analysis : ''
+                        ]);
+                        if (dedupedParts.length > 0) {
+                            stage2CriticVetoes.push(...dedupedParts);
+                        } else if (Array.isArray(cr.flags) && cr.flags.length > 0) {
+                            stage2CriticVetoes.push(cr.flags.join(', '));
+                        }
                         if (Array.isArray((cr as any).vetoedLegs)) {
                             stage2VetoedLegs = mergeVetoedLegTargets(stage2VetoedLegs, (cr as any).vetoedLegs);
                         }
@@ -773,12 +776,18 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     const seatLabel = String(r.role || r.seat || '').trim() || (isCriticSeat(r) ? 'Risk Critic' : 'Analyst');
                     if (isCriticSeat(r)) {
                         const isVeto = r.pass === false || r.criticApproved === false || String(r.verdict || '').toLowerCase() === 'veto';
+                        const rawCriticNote = typeof r.verdict === 'string' && r.verdict.trim()
+                            ? r.verdict.trim()
+                            : (typeof r.summary === 'string' && r.summary.trim() ? r.summary.trim() : '');
+                        const cleanCriticNote = rawCriticNote
+                            ? (dedupeVetoMessages([rawCriticNote]).join('; ') || rawCriticNote)
+                            : '';
                         stageSeatScorecards.push({
                             seat: /critic/i.test(seatLabel) ? seatLabel : 'Risk Critic',
                             verdict: isVeto ? 'veto' : 'approve',
                             criticApproved: !isVeto,
                             wageringPass: Boolean(r.wageringPass ?? isVeto),
-                            ...(typeof r.verdict === 'string' && r.verdict.trim() ? { notes: r.verdict.trim() } : (typeof r.summary === 'string' && r.summary.trim() ? { notes: r.summary.trim() } : {}))
+                            ...(cleanCriticNote ? { notes: cleanCriticNote } : {})
                         });
                     } else {
                         const picksCount = Array.isArray(r.picks) ? r.picks.length : 0;
@@ -793,11 +802,15 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 const paramCriticRes = (params as any)?.criticResult || (params as any)?.criticFeedback || (settings as any)?.criticResult;
                 if (paramCriticRes) {
                     if (typeof paramCriticRes === 'string' && paramCriticRes.trim()) {
-                        stage2CriticVetoes.push(paramCriticRes.trim());
+                        const dedupedParam = dedupeVetoMessages([paramCriticRes.trim()]);
+                        stage2CriticVetoes.push(...(dedupedParam.length > 0 ? dedupedParam : [paramCriticRes.trim()]));
                     } else if (typeof paramCriticRes === 'object' && paramCriticRes.pass === false) {
-                        const parts = [paramCriticRes.feedback, paramCriticRes.verdict, paramCriticRes.summary]
-                            .filter((x): x is string => typeof x === 'string' && Boolean(x.trim()));
-                        if (parts.length > 0) stage2CriticVetoes.push(parts.join(' | '));
+                        const dedupedParts = dedupeVetoMessages([
+                            typeof paramCriticRes.feedback === 'string' ? paramCriticRes.feedback : '',
+                            typeof paramCriticRes.verdict === 'string' ? paramCriticRes.verdict : '',
+                            typeof paramCriticRes.summary === 'string' ? paramCriticRes.summary : ''
+                        ]);
+                        if (dedupedParts.length > 0) stage2CriticVetoes.push(...dedupedParts);
                         if (Array.isArray(paramCriticRes.vetoedLegs)) {
                             stage2VetoedLegs = mergeVetoedLegTargets(stage2VetoedLegs, paramCriticRes.vetoedLegs);
                         }

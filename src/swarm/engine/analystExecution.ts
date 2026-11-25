@@ -1,11 +1,13 @@
 import { processAndRecordToolCalls } from './toolExecutionHelper.ts';
-import type { Agent } from '../agent.ts';
+import { Agent, redactErrorSnippet } from '../agent.ts';
 import type { SwarmContext } from '../context.ts';
-import type { SwarmEngineSettings } from '../types.ts';
+import type { Provider, SwarmEngineSettings } from '../types.ts';
 import type { AgentVariantConfig } from '../experiment.ts';
 import { ToolRegistry } from '../tools/index.ts';
 import { PROVIDER_LIMITS, estimateTokens } from '../providers/limiter.ts';
 import { TokenEstimator } from '../compression/tokenEstimator.ts';
+import { resolveProvider } from './utils.ts';
+import { isModelDead } from '../server/modelsProvider.ts';
 import type { MemoryCortex } from '../memory.ts';
 import type { SwarmStagePayload } from './types.ts';
 import {
@@ -51,6 +53,7 @@ import { auditInjuryAttribution, sanitizeMisattributedPicksAndText } from '../to
 import {
     auditClaimGrounding,
     auditCriticPremiseContradictions,
+    dedupeVetoMessages,
     detectIntraSeatDuplicateLegs,
     mergeVetoedClaims,
     mergeVetoedLegTargets,
@@ -1046,7 +1049,123 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                 throw innerErr;
             }
 
-            const resData = scorecardReport || guardAnalystResponse(rawOutput, analyst.role);
+            let resData = scorecardReport || guardAnalystResponse(rawOutput, analyst.role);
+
+            // S2 (wf-1795635950672): Safety net for proposer seats (a1 / a2 / Quant / Market).
+            // Never accept `unparsed output` as `status: "ok"` — fail over once to a fast
+            // JSON-capable backup (`gemini-3.5-flash-lite` -> `cloudflare` -> `groq`) and record
+            // `reason: "unparsed_json"` with a <= 120-char raw snippet.
+            const isProposerSeat = !isCritic && (
+                seat === 'a1' ||
+                seat === 'a2' ||
+                /quant|market|proposer/i.test(analyst.role || '')
+            );
+            const rawOutputPlaceholder =
+                Boolean((resData as any)?._placeholder) ||
+                /unparsed output/i.test(String((resData as any)?.summary || ''));
+            const proposerPickCount = Array.isArray((resData as any)?.picks) ? (resData as any).picks.length : 0;
+            if (isProposerSeat && !scorecardReport && rawOutputPlaceholder && proposerPickCount === 0) {
+                const rawSnippetSource =
+                    typeof rawOutput === 'string'
+                        ? rawOutput
+                        : (rawOutput && typeof rawOutput === 'object' ? JSON.stringify(rawOutput) : '');
+                const rawSnippet = redactErrorSnippet(rawSnippetSource || '[empty output]', 120);
+                const fastJsonBackups: Array<{ provider: Provider; modelName: string }> = [
+                    { provider: 'gemini', modelName: 'gemini-3.5-flash-lite' },
+                    { provider: 'cloudflare', modelName: '@cf/meta/llama-3.3-70b-instruct-fp8-fast' },
+                    { provider: 'groq', modelName: 'openai/gpt-oss-120b' },
+                    { provider: 'groq', modelName: 'llama-3.3-70b-versatile' }
+                ];
+                let failoverTarget: { provider: Provider; modelName: string; key: string; client?: any } | null = null;
+                for (const cand of fastJsonBackups) {
+                    if (
+                        String(cand.provider).toLowerCase() === String(analyst.provider).toLowerCase() &&
+                        cand.modelName.toLowerCase() === String(analyst.modelName || '').toLowerCase()
+                    ) {
+                        continue;
+                    }
+                    if (isModelDead(cand.provider, cand.modelName)) continue;
+                    const resolved = resolveProvider(cand.provider, settings || {});
+                    if (resolved.key || resolved.client) {
+                        failoverTarget = {
+                            provider: cand.provider,
+                            modelName: cand.modelName,
+                            key: resolved.key,
+                            client: resolved.client
+                        };
+                        break;
+                    }
+                }
+
+                let recovered = false;
+                if (failoverTarget) {
+                    const failoverStart = Date.now();
+                    context.addEvent({
+                        agentRole: analyst.role,
+                        action: 'Provider Failover Triggered',
+                        modelName: `${analyst.provider} / ${analyst.modelName}`,
+                        prompt: seatPrompt,
+                        error: `[PARSE_FAILED:unparsed_json] ${rawSnippet}`,
+                        failover: {
+                            fromProvider: String(analyst.provider),
+                            fromModel: String(analyst.modelName || ''),
+                            toProvider: String(failoverTarget.provider),
+                            toModel: failoverTarget.modelName,
+                            status: null,
+                            reason: 'unparsed_json',
+                            errorSnippet: rawSnippet,
+                            durationMs: 0
+                        }
+                    });
+                    try {
+                        const backupAgent = new Agent(
+                            analyst.role,
+                            failoverTarget.modelName,
+                            failoverTarget.provider,
+                            failoverTarget.key,
+                            failoverTarget.client
+                        );
+                        const backupRaw = await backupAgent.run(
+                            seatLoopRes?.finalPromptSent || seatPrompt,
+                            context,
+                            {
+                                ...analystRunConfig,
+                                systemInstruction: baseInstruction,
+                                responseMimeType: 'application/json',
+                                bypassCache: true
+                            }
+                        );
+                        const backupParsed = guardAnalystResponse(backupRaw, analyst.role);
+                        const backupStillPlaceholder =
+                            Boolean((backupParsed as any)?._placeholder) ||
+                            /unparsed output/i.test(String((backupParsed as any)?.summary || ''));
+                        if (!backupStillPlaceholder) {
+                            resData = backupParsed;
+                            recovered = true;
+                        }
+                    } catch (backupErr: any) {
+                        context.addEvent({
+                            agentRole: analyst.role,
+                            action: 'Failed execution',
+                            modelName: `${failoverTarget.provider} / ${failoverTarget.modelName}`,
+                            prompt: seatPrompt,
+                            error: `[PARSE_FAILED:unparsed_json] ${redactErrorSnippet(backupErr?.message || rawSnippet, 120)}`,
+                            durationMs: Date.now() - failoverStart
+                        });
+                    }
+                }
+
+                if (!recovered) {
+                    (resData as any).parseFailed = true;
+                    context.addEvent({
+                        agentRole: analyst.role,
+                        action: 'Failed execution',
+                        modelName: `${analyst.provider} / ${analyst.modelName}`,
+                        prompt: seatPrompt,
+                        error: `[PARSE_FAILED:unparsed_json] ${rawSnippet}`
+                    });
+                }
+            }
             const finalPromptForTelemetry = seatLoopRes?.finalPromptSent || seatPrompt;
             const rMatches = renderedHeadersText.match(/\bR\d+\b/g);
             const rIdCount = rMatches ? new Set(rMatches).size : 0;
@@ -1339,6 +1458,16 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                     }
                     : auditTargetProposal;
 
+                const deterministicVetoMessages: string[] = [];
+                const applyDeterministicVetoes = () => {
+                    const deduped = dedupeVetoMessages(deterministicVetoMessages);
+                    if (deduped.length === 0) return;
+                    const combined = deduped.join(' | ');
+                    (resData as any).verdict = combined;
+                    (resData as any).summary = combined;
+                    (resData as any).analysis = combined;
+                };
+
                 let injuryAuditPassed = true;
                 if (combinedInjuryEvidence) {
                     const audit = auditInjuryAttribution(groundingTargetProposal, combinedInjuryEvidence, renderedHeadersText);
@@ -1347,11 +1476,12 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                         (resData as any).pass = false;
                         (resData as any).criticApproved = false;
                         const msg = audit.feedback || 'Veto: Proposed pick attributed an injury to the wrong team.';
-                        (resData as any).verdict = msg;
-                        (resData as any).summary = msg;
-                        (resData as any).analysis = msg;
+                        deterministicVetoMessages.push(msg);
+                        applyDeterministicVetoes();
                         if (!Array.isArray((resData as any).flags)) (resData as any).flags = [];
-                        (resData as any).flags.push('injury_misattribution');
+                        if (!(resData as any).flags.includes('injury_misattribution')) {
+                            (resData as any).flags.push('injury_misattribution');
+                        }
                         if (Array.isArray(audit.vetoedLegs) && audit.vetoedLegs.length > 0) {
                             stage2VetoedLegs = mergeVetoedLegTargets(stage2VetoedLegs, audit.vetoedLegs);
                         }
@@ -1369,10 +1499,8 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                     (resData as any).pass = false;
                     (resData as any).criticApproved = false;
                     const msg = marketRowAudit.feedback || 'Veto: Row side mismatch or missing market coverage.';
-                    const nextSummary = injuryAuditPassed ? msg : `${(resData as any).summary} ${msg}`.trim();
-                    (resData as any).verdict = nextSummary;
-                    (resData as any).summary = nextSummary;
-                    (resData as any).analysis = nextSummary;
+                    deterministicVetoMessages.push(msg);
+                    applyDeterministicVetoes();
                     if (!Array.isArray((resData as any).flags)) (resData as any).flags = [];
                     for (const f of marketRowAudit.flags) {
                         if (!(resData as any).flags.includes(f)) (resData as any).flags.push(f);
@@ -1382,11 +1510,12 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                     }
                 }
 
+                const marketHasRowSideVeto = !marketRowAudit.pass && marketRowAudit.flags.includes('row_side_mismatch');
                 const groundingAudit = auditClaimGrounding(
                     groundingTargetProposal,
                     criticGroundingEvidence,
                     fullRawSource || renderedHeadersText,
-                    { headers: mergedHeadersForRowCheck }
+                    { headers: mergedHeadersForRowCheck, skipRowSideCheck: marketHasRowSideVeto }
                 );
                 const premiseEvidence = [
                     criticGroundingEvidence,
@@ -1398,19 +1527,22 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                     groundingTargetProposal,
                     premiseEvidence,
                     fullRawSource || renderedHeadersText,
-                    { headers: mergedHeadersForRowCheck }
+                    { headers: mergedHeadersForRowCheck, skipRowSideCheck: marketHasRowSideVeto }
                 );
                 const groundingAuditPassed = groundingAudit.pass && premiseAudit.pass;
                 if (!groundingAuditPassed) {
                     (resData as any).pass = false;
                     (resData as any).criticApproved = false;
-                    const gMsgs = [groundingAudit.pass ? '' : groundingAudit.feedback, premiseAudit.pass ? '' : premiseAudit.feedback].filter(Boolean);
-                    const gMsg = gMsgs.join(' ').trim() || 'Veto (GROUNDING): Ungrounded form or health claim.';
-                    const hasPriorVeto = !injuryAuditPassed || !marketRowAudit.pass;
-                    const nextSummary = hasPriorVeto ? `${(resData as any).summary} ${gMsg}`.trim() : gMsg;
-                    (resData as any).verdict = nextSummary;
-                    (resData as any).summary = nextSummary;
-                    (resData as any).analysis = nextSummary;
+                    const gMsgs = dedupeVetoMessages([
+                        groundingAudit.pass ? '' : groundingAudit.feedback,
+                        premiseAudit.pass ? '' : premiseAudit.feedback
+                    ]);
+                    if (gMsgs.length > 0) {
+                        deterministicVetoMessages.push(...gMsgs);
+                    } else {
+                        deterministicVetoMessages.push('Veto (GROUNDING): Ungrounded form or health claim.');
+                    }
+                    applyDeterministicVetoes();
                     if (!Array.isArray((resData as any).flags)) (resData as any).flags = [];
                     for (const f of [...groundingAudit.flags, ...premiseAudit.flags]) {
                         if (!(resData as any).flags.includes(f)) (resData as any).flags.push(f);
@@ -1443,11 +1575,8 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                     (resData as any).pass = false;
                     (resData as any).criticApproved = false;
                     const dupMsg = duplicateLegAudit.feedback || 'Veto (duplicate_leg): Single seat proposed multiple legs on the same game.';
-                    const hasPriorVeto = !injuryAuditPassed || !marketRowAudit.pass || !groundingAuditPassed;
-                    const nextSummary = hasPriorVeto ? `${(resData as any).summary} ${dupMsg}`.trim() : dupMsg;
-                    (resData as any).verdict = nextSummary;
-                    (resData as any).summary = nextSummary;
-                    (resData as any).analysis = nextSummary;
+                    deterministicVetoMessages.push(dupMsg);
+                    applyDeterministicVetoes();
                     if (!Array.isArray((resData as any).flags)) (resData as any).flags = [];
                     if (!(resData as any).flags.includes('duplicate_leg')) {
                         (resData as any).flags.push('duplicate_leg');

@@ -15,6 +15,7 @@ import {
 import { auditInjuryAttribution, sanitizeMisattributedPicksAndText } from './tools/injuryAttribution.ts';
 import {
     auditClaimGrounding,
+    dedupeVetoMessages,
     extractQuotedVetoedClaims,
     extractVetoedLegTargets,
     mergeVetoedClaims,
@@ -335,8 +336,11 @@ export class AnalysisLifecycle {
             }
 
             // 2. Critic verifies
-            const CAP = seatBudget(this.critic.provider).maxPromptChars;
-            const PROPOSAL_MAX = Math.min(3000, Math.floor(CAP * 0.35));
+            // S3.3: Strictly scope Verification prompt to <= 3,000 input tokens (~11,600 chars)
+            // instead of dumping full 20-game slates (11,457+ tokens).
+            const VERIFIER_MAX_PROMPT_CHARS = 11_600;
+            const CAP = Math.min(seatBudget(this.critic.provider).maxPromptChars, VERIFIER_MAX_PROMPT_CHARS);
+            const PROPOSAL_MAX = Math.min(2600, Math.floor(CAP * 0.32));
             const REMINDER = 'Do not call any tools or code-execution helpers. Reply only {"pass":boolean,"feedback":string}.';
 
             const toSampleText = (value: unknown): string => {
@@ -520,11 +524,13 @@ export class AnalysisLifecycle {
             const historicalBaselines = typeof rawData === 'object' && rawData && 'historicalBaselines' in rawData
                 ? toSampleText((rawData as any).historicalBaselines)
                 : '';
-            const rawBoard = (selectedGameIds.length > 0 && scopedHeaders.length > 0)
-                ? renderHeaders(scopedHeaders, 1600)
-                : (typeof rawData === 'object' && rawData && 'rawBoard' in rawData
-                    ? toSampleText((rawData as any).rawBoard)
-                    : (typeof rawData === 'string' ? rawData : ''));
+            const rawBoard = hasEmptyPicks
+                ? ''
+                : (selectedGameIds.length > 0 && scopedHeaders.length > 0
+                    ? renderHeaders(scopedHeaders, 1600)
+                    : (typeof rawData === 'object' && rawData && 'rawBoard' in rawData
+                        ? toSampleText((rawData as any).rawBoard).slice(0, 1600)
+                        : (typeof rawData === 'string' ? rawData.slice(0, 1600) : '')));
 
             const appComputedCounts = typeof rawData === 'object' && rawData && 'appComputedCounts' in rawData
                 ? toSampleText((rawData as any).appComputedCounts)
@@ -544,11 +550,43 @@ export class AnalysisLifecycle {
             const trailer = `\n\n${REMINDER}`;
             let maxReportBudget = Math.max(0, CAP - (promptHeader.length + proposalSection.length + trailer.length + 2));
 
+            // S3.3: For a 0-pick pass, scope Verification to compact pass summary ONLY (<= 1,800 chars evidence,
+            // <= 1,200 chars secondary context) so Verification never burns 11k+ tokens on an entire 20-game slate.
+            const scopedToolResults = (() => {
+                if (!toolResults) return '';
+                const groups = toolResults.split(/\n\n+/).filter(Boolean);
+                if (selectedGameIds.length > 0) {
+                    const selSet = new Set(selectedGameIds);
+                    const matched = groups.filter(g => {
+                        const firstLine = g.split(/\r?\n/)[0] || '';
+                        for (const id of selSet) {
+                            if (firstLine.includes(id)) return true;
+                        }
+                        return false;
+                    });
+                    if (matched.length > 0) return matched.join('\n\n');
+                }
+                if (hasEmptyPicks) {
+                    const discussedIds = resolveDiscussedGameIds(currentProposal, allParsedHeaders);
+                    if (discussedIds.length === 0) return '';
+                    const discSet = new Set(discussedIds);
+                    const matched = groups.filter(g => {
+                        const firstLine = g.split(/\r?\n/)[0] || '';
+                        for (const id of discSet) {
+                            if (firstLine.includes(id)) return true;
+                        }
+                        return false;
+                    });
+                    return matched.join('\n\n').slice(0, 1800);
+                }
+                return toolResults;
+            })();
+
             // Keep [Tool Evidence] intact before trimming: give it full priority over secondary text
             // and, if needed under tight provider caps, modestly trim long proposal text before dropping tool evidence.
             const evPrefix = '[Tool Evidence]:\n';
-            if (toolResults && evPrefix.length + toolResults.length > maxReportBudget) {
-                const shortfall = evPrefix.length + toolResults.length - maxReportBudget;
+            if (scopedToolResults && evPrefix.length + scopedToolResults.length > maxReportBudget) {
+                const shortfall = evPrefix.length + scopedToolResults.length - maxReportBudget;
                 const minProposalChars = Math.min(effectiveProposalSample.length, 900);
                 if (effectiveProposalSample.length > minProposalChars) {
                     const nextProposalLen = Math.max(minProposalChars, effectiveProposalSample.length - shortfall);
@@ -558,15 +596,15 @@ export class AnalysisLifecycle {
                     maxReportBudget = Math.max(0, CAP - (promptHeader.length + proposalSection.length + trailer.length + 2));
                 }
             }
-            const evidenceBudget = maxReportBudget;
+            const evidenceBudget = hasEmptyPicks ? Math.min(maxReportBudget, 1800) : maxReportBudget;
 
             let evidenceSection = '';
-            if (toolResults) {
-                const fullEv = `${evPrefix}${toolResults}`;
+            if (scopedToolResults) {
+                const fullEv = `${evPrefix}${scopedToolResults}`;
                 if (fullEv.length <= evidenceBudget) {
                     evidenceSection = fullEv;
                 } else {
-                    const groups = toolResults.split(/\n\n+/).filter(Boolean);
+                    const groups = scopedToolResults.split(/\n\n+/).filter(Boolean);
                     const protectedIds: string[] = selectedGameIds.length > 0
                         ? selectedGameIds
                         : resolveDiscussedGameIds(currentProposal, allParsedHeaders);
@@ -683,13 +721,21 @@ export class AnalysisLifecycle {
                 }
             }
 
-            const secondaryParts = [
-                analystReports ? `[Analyst Reports Sample]:\n${analystReports}` : '',
-                historicalBaselines ? `[Historical Baselines & Past Lessons]:\n${historicalBaselines}` : '',
-                rawBoard ? `[Raw Board Sample]:\n${rawBoard}` : ''
-            ].filter(Boolean);
+            const secondaryParts = hasEmptyPicks
+                ? [analystReports ? `[Analyst Reports Sample]:\n${analystReports.slice(0, 1200)}` : ''].filter(Boolean)
+                : [
+                    analystReports ? `[Analyst Reports Sample]:\n${analystReports}` : '',
+                    historicalBaselines ? `[Historical Baselines & Past Lessons]:\n${historicalBaselines}` : '',
+                    rawBoard ? `[Raw Board Sample]:\n${rawBoard}` : ''
+                ].filter(Boolean);
             const secondaryText = secondaryParts.join('\n\n');
-            const remainingForSecondary = Math.max(0, maxReportBudget - evidenceSection.length - (evidenceSection ? 2 : 0));
+            const remainingForSecondary = Math.max(
+                0,
+                Math.min(
+                    hasEmptyPicks ? 1200 : maxReportBudget,
+                    maxReportBudget - evidenceSection.length - (evidenceSection ? 2 : 0)
+                )
+            );
             const limitedSecondary = secondaryText && remainingForSecondary > 20
                 ? (secondaryText.length > remainingForSecondary
                     ? `${secondaryText.slice(0, Math.max(0, remainingForSecondary - 1)).trimEnd().replace(/\s+\S*$/, '')}…`
@@ -890,7 +936,8 @@ export class AnalysisLifecycle {
                         headers: allParsedHeaders,
                         vetoTexts: accumulatedVetoTexts,
                         vetoedLegs: accumulatedVetoedLegs,
-                        vetoedClaims: accumulatedVetoedClaims
+                        vetoedClaims: accumulatedVetoedClaims,
+                        skipRowSideCheck: marketVetoTriggered
                     }
                 );
                 let groundingVetoTriggered = false;
@@ -908,9 +955,10 @@ export class AnalysisLifecycle {
                         groundingVetoTriggered = true;
                         verification.pass = false;
                         const gMsg = groundingAudit.feedback || 'Veto (GROUNDING): Ungrounded claim or vetoed leg rewrite.';
-                        verification.feedback = (!injuryVetoTriggered && !marketVetoTriggered)
-                            ? gMsg
-                            : [verification.feedback, gMsg].filter(Boolean).join(' ');
+                        const mergedFeedback = dedupeVetoMessages(
+                            (!injuryVetoTriggered && !marketVetoTriggered) ? [gMsg] : [verification.feedback, gMsg]
+                        );
+                        verification.feedback = mergedFeedback.join(' ') || gMsg;
                     }
                 }
 

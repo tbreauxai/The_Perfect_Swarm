@@ -1431,6 +1431,7 @@ export function auditClaimGrounding(
     vetoedLegs?: VetoedLegTarget[];
     vetoedClaims?: string[];
     curatedDossier?: string | { sections?: Array<{ tool?: string; event_id?: string; summary?: string }> };
+    skipRowSideCheck?: boolean;
   }
 ): GroundingAuditResult {
   if (!proposal) return { pass: true, violations: [], flags: [] };
@@ -1720,7 +1721,8 @@ export function auditClaimGrounding(
   }
 
   const premiseAudit = auditCriticPremiseContradictions(proposal, evidenceText, slateText, {
-    headers
+    headers,
+    skipRowSideCheck: options?.skipRowSideCheck
   });
   if (!premiseAudit.pass) {
     for (const f of premiseAudit.flags) {
@@ -2220,6 +2222,7 @@ export function auditCriticPremiseContradictions(
   slateText: string = '',
   options?: {
     headers?: GameHeader[];
+    skipRowSideCheck?: boolean;
   }
 ): GroundingAuditResult {
   if (!proposal) return { pass: true, violations: [], flags: [] };
@@ -2276,6 +2279,10 @@ export function auditCriticPremiseContradictions(
     // contra_steam_misread, symmetric_injury_misread, or duplicate_leg checks.
     const rowCheck = checkPickRowSideBinding(pk, rowMap);
     if (!rowCheck.valid && rowCheck.rowId) {
+      if (options?.skipRowSideCheck) {
+        // Already emitted canonically by auditMarketCoverageAndRowBinding — skip duplicate leg checks & duplicate message.
+        return;
+      }
       const msg = `row_side_mismatch: ${rowCheck.reason}`;
       addFinding(
         'row_side_mismatch',
@@ -3337,7 +3344,78 @@ function normalizeGrammaticalSentence(raw: string): string {
   return out;
 }
 
+const VETO_PREFIX_STRIP_REGEX =
+  /^(?:\[UNVERIFIED\]\s*)?(?:Veto(?:\s*\([^)]*\))?\s*[:\-—–]\s*)*(?:(?:Row\s+side\s+mismatch|row_side_mismatch|contra_steam_misread|symmetric_injury_misread|model_signal_misread|duplicate_leg|injury_misattribution)\s*[:\-—–]\s*)*/i;
+
+const COMPOUND_VETO_SPLIT_REGEX =
+  /\s+\|\s+|\s+(?=Veto(?:\s*\([^)]*\))?\s*[:\-—–])/gi;
+
+/**
+ * Strips repeated deterministic prefixes (`Veto:`, `Veto (GROUNDING):`, `Veto (PREMISE):`,
+ * `Row side mismatch —`, `row_side_mismatch:`) and normalizes whitespace/punctuation for dedupe keying.
+ */
+export function canonicalizeVetoCore(raw: string): string {
+  return String(raw || '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[-•*\s]+/, '')
+    .replace(VETO_PREFIX_STRIP_REGEX, '')
+    .replace(/[.!?]+$/, '')
+    .trim();
+}
+
+/**
+ * S3.1: Splits compound/pipe-joined/multi-prefixed veto strings and deduplicates by normalized core text
+ * so any single deterministic violation (e.g. R4 row_side_mismatch) is emitted exactly once.
+ */
+export function dedupeVetoMessages(messages: Array<string | undefined | null>): string[] {
+  const out: string[] = [];
+  const seenKeys = new Set<string>();
+
+  for (const raw of messages) {
+    if (typeof raw !== 'string' || !raw.trim()) continue;
+    const segments = raw
+      .split(COMPOUND_VETO_SPLIT_REGEX)
+      .map(s => s.trim())
+      .filter(Boolean);
+
+    for (const seg of segments) {
+      // Skip bare flag-list trailers (e.g. "row_side_mismatch" or "row_side_mismatch, contra_steam_misread")
+      if (/^[a-z0-9_]+(?:\s*,\s*[a-z0-9_]+)*$/i.test(seg)) continue;
+      const core = canonicalizeVetoCore(seg);
+      if (!core || core.length < 4) continue;
+      const key = core.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+      if (!key || seenKeys.has(key)) continue;
+      // Also drop near-duplicate truncated copies (prefix of an already-recorded longer reason or vice versa)
+      let subsumed = false;
+      for (const existing of seenKeys) {
+        if (existing.includes(key) || (key.length > 24 && key.includes(existing))) {
+          if (key.length > existing.length) {
+            // Upgrade to the more complete non-truncated message
+            const idx = out.findIndex(m => canonicalizeVetoCore(m).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() === existing);
+            if (idx >= 0) {
+              out[idx] = seg.replace(/\s+/g, ' ').replace(/^[-•*\s]+/, '').replace(/[.!?]+$/, '').trim();
+              seenKeys.delete(existing);
+              seenKeys.add(key);
+            }
+          }
+          subsumed = true;
+          break;
+        }
+      }
+      if (subsumed) continue;
+      seenKeys.add(key);
+      out.push(seg.replace(/\s+/g, ' ').replace(/^[-•*\s]+/, '').replace(/[.!?]+$/, '').trim());
+    }
+  }
+
+  return out;
+}
+
 function cleanVetoReasonText(raw: string): string {
+  const deduped = dedupeVetoMessages([raw]);
+  if (deduped.length > 0) {
+    return deduped.join('; ');
+  }
   return String(raw || '')
     .replace(/\s+/g, ' ')
     .replace(/^[-•*\s]+/, '')
@@ -3380,13 +3458,17 @@ export function ensureRiskCriticVetoScorecard<T extends Record<string, any>>(
   const vetoNotes = cleanVetoReasonText(options?.vetoReason || '');
   if (criticIdx >= 0) {
     const prev = merged[criticIdx];
+    const cleanedPrevNotes = typeof prev.notes === 'string' && prev.notes.trim()
+      ? cleanVetoReasonText(prev.notes)
+      : '';
+    const finalNotes = cleanedPrevNotes || vetoNotes;
     merged[criticIdx] = {
       ...prev,
       seat: prev.seat || 'Risk Critic',
       verdict: 'veto',
       criticApproved: false,
       wageringPass: true,
-      ...(vetoNotes && !prev.notes ? { notes: normalizeGrammaticalSentence(vetoNotes) } : {})
+      ...(finalNotes ? { notes: normalizeGrammaticalSentence(finalNotes) } : {})
     };
   } else {
     merged.push({
@@ -3440,30 +3522,24 @@ export function normalizePassIfAllLegsVetoed<T extends Record<string, any>>(
       rep.ui_title = 'Pass';
     }
 
-    const vetoReasons: string[] = [];
-    const seenReasons = new Set<string>();
-    const addReason = (raw?: string) => {
-      const cleaned = cleanVetoReasonText(raw || '');
-      if (!cleaned || cleaned.length < 4) return;
-      const key = cleaned.toLowerCase();
-      if (seenReasons.has(key)) return;
-      seenReasons.add(key);
-      vetoReasons.push(cleaned);
-    };
-
-    for (const vt of options?.vetoTexts || []) addReason(vt);
+    const rawReasonCandidates: string[] = [];
+    for (const vt of options?.vetoTexts || []) {
+      if (typeof vt === 'string' && vt.trim()) rawReasonCandidates.push(vt);
+    }
     for (const vl of options?.vetoedLegs || []) {
       if (vl?.reason && !/^pruned from final picks/i.test(vl.reason.trim())) {
-        addReason(vl.reason);
+        rawReasonCandidates.push(vl.reason);
       }
     }
     if (Array.isArray(rep.scorecards)) {
       for (const sc of rep.scorecards) {
         if (sc && typeof sc === 'object' && /risk\s*critic|critic/i.test(String(sc.seat || sc.role || ''))) {
-          addReason(sc.notes || sc.reason || sc.summary);
+          const note = sc.notes || sc.reason || sc.summary;
+          if (typeof note === 'string' && note.trim()) rawReasonCandidates.push(note);
         }
       }
     }
+    const vetoReasons = dedupeVetoMessages(rawReasonCandidates);
 
     const vetoedLegLabels = Array.from(
       new Set(

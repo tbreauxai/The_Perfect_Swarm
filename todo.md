@@ -1,118 +1,92 @@
-# Engineering Fix Spec — `The_Perfect_Swarm` (`wf-1795631514400`: `model_signal` Guard, Injury Scale Parity, `a1`/Gemini Latency & Inline Diagnostics)
+# Engineering Fix Spec — `The_Perfect_Swarm` (`wf-1795635950672`: Cross-Sport `row_side_mismatch`, `a1` Unparsed Output, Veto Dedupe & Verifier Scoping)
 
 **Repo Scope:** `C:\Dev\Workspaces\The_Perfect_Swarm` ONLY. Zero cross-repo edits and zero SQL migrations.
-**Baseline:** Groq TPM fixes worked live (`Risk Critic: 1.3s`, `Verifier: 5.0s`), false `row_side_mismatch` is fixed, and `player_game_logs` weighted tiers are active. Do NOT re-audit them.
-**Observed Issues (`wf-1795631514400`):**
-1. `a1` hallucinated `model_signal=lean_home` on `R95` (`nhl-401892792`, which has NO `model_signal` tag) and `CAR @ TBL` (`model_signal=neutral`), and it passed verification at `0.98`.
-2. Weighted injury scoring mixed `0.5/player` (logged team) against `1.0/player` (unlogged team) in the same game (`OKC 7 OUT = 7.0` vs `MIN 3 OUT = 1.5`; `PIT 4 OUT = 4.0` vs `CGY 3 OUT = 1.5`) and labeled unlogged stars (`Curry`, `Edwards`, `Holmgren`, `Barkov`, `Adams`) as `"depth"`.
-3. `Quant Proposer` (`a1`, NVIDIA 550B) took `53.9s` (~45% of total runtime), and `Manager` spent `14s` failing over 3 Gemini models (`3.5-flash-lite -> 3.1-flash-lite -> 3.8-flash`) with the exact HTTP error hidden inside truncated SSE events.
-4. Cloudflare Llama emitted nested `scorecards` (`{ seat, scorecard: { approve, veto } }`) instead of flat `{ seat, verdict, notes }`.
+**Baseline:** `62.3s` total runtime, `gemini-3.5-flash-lite` 3.14s Manager synthesis, `diagnostics` block, and injury coverage parity are verified live. Do NOT re-audit them.
+**Observed Failures (`wf-1795635950672`):**
+1. Deterministic `row_side_mismatch` falsely vetoed `R4` (`ML Minnesota Wild(-150)` on `nhl-401892791`) by cross-matching `"Minnesota Wild"` to `nba-401909320` (`Minnesota Timberwolves`).
+2. `Quant Proposer` (`a1`, `nvidia/nemotron-3-ultra-550b`) completed in `6.68s` with `"[Quant Proposer] unparsed output"` (`picksCount: 0`), marked `status: "ok"` instead of failing over — caused by `max_tokens <= 1800` truncating its reasoning stream before JSON output.
+3. Pass output repeated the same `R4` veto string 9× (`3 prefixes × 3 joins`).
+4. Critic Pass 1 slept `5,005ms` before `[LIMITER_SKIP]`, and Critic Verification received `11,457` input tokens on a 0-pick pass while routing through `gemini-3.1-flash-lite` (`503`) instead of `gemini-3.5-flash-lite`.
 
 ---
 
 ## Execution Rules & Token-Saving Guardrails
 1. **HARD CONSTRAINT (Local-Only):** Local edits, `npx tsc --noEmit`, and targeted `npx vitest run` ONLY. Do **NOT** run `git push`, merge to `main`, deploy scripts, or mutate live Render/Supabase/Qdrant services.
-2. **Branch Check First:** Confirm you are on a feature branch (e.g., `fix/swarm-wf-1795631514400`), NOT `main`.
+2. **Branch Check First:** Confirm you are on a feature branch (e.g., `fix/swarm-wf-1795635950672`), NOT `main`.
 3. **Minimal File Reads:** Grep using the exact **Search Anchors** below and read ONLY matched files/functions.
 
 ---
 
-## S1: Deterministic `model_signal_misread` Guard & Normalize Nested `scorecards[]`
+## S1: Fix Cross-Sport City-Collision Bug in `row_side_mismatch` (`Minnesota Wild` vs `Minnesota Timberwolves`)
 
-### Observed Failures (`wf-1795631514400`)
-- `nhl-401892792` (`Montreal Canadiens @ Colorado Avalanche`) had NO `model_signal` tag on `COMPACT SLATE`, yet `a1` and the Manager published `"R95 satisfies all three pillars (form, model_signal, health)"` with `"model_signal lean_home"` and passed at `rating: 0.98`.
-- `scorecards[]` emitted `{ "seat": "Risk Critic", "scorecard": { "approve": "R2 and R95", "veto": "" } }` instead of `{ "seat": "Risk Critic", "verdict": "approve", "notes": "..." }`.
+### Observed Failure (`wf-1795635950672`)
+- `a2` proposed `R4` (`Minnesota Wild`). The validator emitted:
+  `Veto: Row side mismatch — Row R4 belongs to nhl-401892791 ("ML Minnesota Wild(-150)"), not nba-401909320 ("Minnesota Wild").`
 
 ### Search Anchors
-- `"model_signal"`, `"contra_steam_misread"`, `"symmetric_injury_misread"`, `"scorecards"`, `"verdict"`
+- `"Row side mismatch"`, `"belongs to"`, `"row_side_mismatch"`
 
 ### Required Changes
-1. **Add Deterministic `model_signal_misread` Check (Risk Critic Pre-Check + Verifier):**
-   - Parse each game's actual `model_signal` from `COMPACT SLATE` (`lean_home`, `lean_away`, `neutral`, or `none` when omitted).
-   - If any pick's `reason`, `reasons[]`, or the seat's per-pick `analysis` claims `model_signal` / `lean_home` / `lean_away` support for a game whose slate tag is `none`, `neutral`, or leans the **opposite** direction, flag `"model_signal_misread"` and veto that claim/leg (or strip the false `model_signal` pillar before approval).
-2. **Normalize Nested `scorecards[]` in Compiler Post-Processor:**
-   - If the Manager returns `{ seat, scorecard: { approve, veto } }` (or missing `verdict`), normalize every entry to `{ seat, verdict: "approve" | "veto" | "partial", notes: "..." }` so downstream telemetry and UI always receive a consistent schema.
+1. **Validate Against the Cited Row's Own Event FIRST:**
+   - When a pick cites `row: "R4"` (`nhl-401892791`, `Utah Mammoth @ Minnesota Wild`, `ML Minnesota Wild(-150)`), check whether `pick.side` matches `R4`'s own team (`Minnesota Wild`) BEFORE running cross-game event lookup.
+   - If `pick.side` matches `R4`'s team (`Minnesota Wild`), it is a valid match for `nhl-401892791` — NEVER reject it by mapping `"Minnesota"` to another sport's event (`nba-401909320`, `Minnesota Timberwolves`).
+2. **Require Mascot / Full-Name Disambiguation on Multi-Sport Slates:**
+   - When resolving a team string to a slate event across multiple sports, score **full team name** (`Minnesota Wild`) and **unique mascot** (`Wild` vs `Timberwolves`, `Bulls` vs `Blackhawks`, `Knicks` vs `Islanders`/`Rangers`, `Clippers`/`Lakers` vs `Kings`/`Rams`, `Capitals` vs `Commanders`, `Jazz` vs `Mammoth`) strictly above shared city tokens (`Minnesota`, `Chicago`, `New York`, `Los Angeles`, `Washington`, `Utah`, `Boston`, `Dallas`).
+   - Never match `"Minnesota Wild"` to `"Minnesota Timberwolves"` via shared city prefix `"Minnesota"` or shared abbr `"MIN"`.
+   - If `pick.reasonSource` is a wrong cross-sport `event_id` while `pick.row` and `pick.side` BOTH agree on `nhl-401892791`, normalize `reasonSource` to `row` (`"R4"`) instead of falsely vetoing a valid pick as `row_side_mismatch`.
 
 ### Acceptance Criteria
-- Unit test (`nhl-401892792` with no `model_signal` tag): Proposing `R95` with reason `"model_signal lean_home"` triggers `model_signal_misread`.
-- Unit test (`nhl-401892785` with `model_signal=lean_home`): Proposing `R2` (`New York Islanders ML`) with `"model_signal lean_home"` passes cleanly.
-- Unit test (scorecard normalizer): `{ seat: "Risk Critic", scorecard: { approve: "R2 and R95", veto: "" } }` normalizes to `{ seat: "Risk Critic", verdict: "approve", notes: "R2 and R95" }`.
+- Unit test (`nhl-401892791` `Utah Mammoth @ Minnesota Wild` + `nba-401909320` `Minnesota Timberwolves @ Oklahoma City Thunder` on the same slate):
+  - `row: "R4"`, `side: "Minnesota Wild"` produces **zero** `row_side_mismatch` veto (even if `nba-401909320` appears earlier in the slate map).
+  - `row: "R4"`, `side: "Minnesota Timberwolves"` DOES trigger `row_side_mismatch`.
+  - Same test for `New York Knicks` vs `New York Islanders` / `New York Rangers`, and `Chicago Bulls` vs `Chicago Blackhawks`.
 
 ---
 
-## S2: Fix Mixed `0.5` vs `1.0` Injury Math & Stop Tagging Unlogged Stars as `"depth"`
+## S2: Fix `a1` (`nvidia/nemotron-3-ultra-550b`) `"[Quant Proposer] unparsed output"` & Trigger Failover on Parse Failure
 
-### Observed Failure (`wf-1795631514400`)
-- When one team had `player_game_logs` coverage and the opponent did not, unlogged `OUT` players were scored `0.5` (`depth`) on the logged team vs `1.0` (`unweighted`) on the unlogged team—producing artificial edges (`PIT 4 OUT = 4.0` vs `CGY 3 OUT = 1.5` -> fake `+2.5`; `OKC 7 OUT = 7.0` vs `MIN 3 OUT = 1.5` -> fake `+5.5`) and labeling `Stephen Curry`, `Anthony Edwards`, `Chet Holmgren`, `Aleksander Barkov`, and `Davante Adams` as `"depth"`.
+### Observed Failure (`wf-1795635950672`)
+- `a1` completed in `6.68s`, logged `status: "ok"`, and emitted `"[Quant Proposer] unparsed output"` (`picksCount: 0`) because `max_tokens <= 1800` cut off Nemotron's reasoning output before its JSON block finished.
 
 ### Search Anchors
-- `"get_injury_and_roster_delta"`, `"unweighted_fallback"`, `"impact"`, `"depth"`, `"player_game_logs"`
+- `"unparsed output"`, `"nemotron"`, `"max_tokens"`, `"Quant Proposer"`, `"chat_template_kwargs"`
 
 ### Required Changes
-1. **Require Both-Team Coverage Parity Before Comparing Weighted Totals:**
-   - Never compare weighted `0.5`-floor totals on Team A against unweighted `1.0` defaults on Team B.
-   - Only classify `Health Balance` using weighted `[impact X.X]` edges when **both** teams (or every team with `>= 1` injured player) have `>= 3` distinct `game_date`s (or `espn_depthchart` / `season_stats` rows) in `player_game_logs`. Otherwise stay on consistent `[unweighted_fallback]` (`1.0` per player on both sides) so neither side gets a 2× unit bias.
-2. **Stop Labeling Unlogged Players as `"depth"` Without Proof:**
-   - Only assign `0.5` (`depth`) when a player has actual logged low-usage games (e.g., NBA `< 15` MPG, NHL `< 12` TOI) OR a confirmed `depth_rank >= 3` from depth charts OR their team has `>= 5` distinct logged `game_date`s across the last 14 days proving they are genuinely unused/inactive depth.
-   - If a player has `0` rows on a thinly logged team (`< 5` dates), label them `unlogged` at neutral weight `1.0` (never `"depth"`).
-3. **Recognize `source: "season_stats"` Rows From `player_game_logs`:**
-   - Support season-average rows (`source: "nhl_club_stats" | "espn_season_stats" | "espn_depthchart"`) in `get_injury_and_roster_delta` so multi-week injured stars (`Curry`, `Edwards`, `MacKinnon`, `Barkov`) resolve directly to Tier 1 (`3.0`–`5.0`).
+1. **Fix Reasoning-Model Token Budget on NVIDIA (`nemotron`):**
+   - For NVIDIA reasoning models (`nemotron-*`, `deepseek-r1*`, `qwq*`), either pass `chat_template_kwargs: { enable_thinking: false }` (or low-reasoning budget) when requesting structured JSON, OR set `max_tokens >= 4096` so reasoning tokens cannot truncate the JSON payload while keeping the `30s` single-attempt timeout intact.
+2. **Treat `unparsed output` as Seat Failure -> Immediate Failover (Not `status: "ok"`):**
+   - If a proposer seat (`a1` or `a2`) returns non-JSON / truncated / empty text (`unparsed output`), mark that attempt as `parse_failed` (NOT `status: "ok"` with `verdict: "pass"`) and fail over once to a fast JSON-capable model (`gemini-3.5-flash-lite` -> `cloudflare` -> `groq`), recording the failover in `diagnostics.failovers` with the truncated raw snippet (`<= 120` chars) so parse crashes are always visible and recovered automatically.
 
 ### Acceptance Criteria
-- Unit test (mixed coverage): Team A has 1 logged game (`3 OUT`, all unlogged) and Team B has 0 logged games (`4 OUT`, all unlogged) -> stays `[unweighted_fallback]` (`3 vs 4` = `symmetric`), NEVER `1.5 vs 4.0` (`+2.5` fake edge).
-- Unit test (season-stats star): `Stephen Curry` with `source: "espn_season_stats"` (`minutes: 33.2, points: 26.4`) scores Tier 1 (`3.0`), never `"depth"`.
+- Unit test (NVIDIA request builder): `nvidia/nemotron-3-ultra-550b-a55b` does NOT truncate JSON with `max_tokens: 1800` alongside unconstrained thinking (`max_tokens >= 4096` or `enable_thinking: false`).
+- Unit test (parse failover): When `a1` primary returns truncated `<think>...` with no valid JSON object, the orchestrator records a failover event (`reason: "unparsed_json"`) and recovers cleanly via `gemini-3.5-flash-lite` instead of emitting `"[Quant Proposer] unparsed output"` with `status: "ok"`.
 
 ---
 
-## S3: Cut `a1` (`53.9s`) & Gemini 3-Hop (`14s`) Latency Waste
+## S3: Eliminate 9× Veto Spam, Fix `5s` `slot_wait_timeout` Stall & Scope Verifier (`11,457` Tokens -> `<= 3,000`)
 
-### Observed Timings (`wf-1795631514400`)
-- `Quant Proposer` (`a1`, `nvidia/nemotron-3-ultra-550b`) took `53.9s` (almost 5× slower than `a2`'s `11.8s`).
-- `Manager` spent `14s` trying 3 Gemini models sequentially (`3.5-flash-lite -> 3.1-flash-lite -> 3.8-flash`) before succeeding on Cloudflare.
-
-### Search Anchors
-- `"nemotron"`, `"Quant Proposer"`, `"gemini-3.5-flash-lite"`, `"Failover"`, `"timeout"`
-
-### Required Changes
-1. **Abort Gemini Sibling Loop Immediately on Auth / Invalid-Key / Project-Wide Errors:**
-   - When the primary Gemini model fails with HTTP `400` (bad request/invalid param), `401`/`403` (auth/key/billing), or a project-wide `429` (`limit: 0` / daily quota exhausted), do **NOT** burn 10+ seconds retrying 2 more Gemini siblings—immediately mark Gemini on cooldown and jump straight to the next external provider (`Cloudflare` / `Mistral`).
-   - Only try Gemini siblings (`3.5-flash-lite -> 3.1-flash-lite -> 3.8-flash`) on model-specific `503` / `404` / per-model RPM `429`.
-2. **Bound `a1` (`NVIDIA` 550B) Latency:**
-   - Cap `a1`'s reasoning/completion budget (e.g., `max_tokens <= 1800` and low thinking effort / non-verbose reasoning parameter if supported by the NVIDIA adapter) and set a `30s` single-attempt timeout on `a1` so if NVIDIA stalls past 30s on a heavy slate, it fails over cleanly to fast `Groq` (`1–3s`) or `Mistral` instead of blocking the entire run for 54s+.
-
-### Acceptance Criteria
-- Unit test (Gemini fast-abort): Primary Gemini returning `400` or `403` skips remaining Gemini siblings and jumps straight to Cloudflare in 1 hop.
-- Unit test (Gemini `503`): Primary Gemini returning `503` still tries sibling `gemini-3.1-flash-lite` before leaving Gemini.
-- Unit test (`a1` timeout): `a1` exceeding `30s` aborts and fails over cleanly instead of stalling 54s+.
-
----
-
-## S4 (Debugging Upgrade): Emit Compact `diagnostics` Block Directly on `rawFinalAnalysisPayload`
-
-### Observed Debugging Pain Point
-- Every 20-game Flight Recorder brief truncates `llmAndToolEvents` at `~350–400 KB`, hiding per-seat durations and exact Gemini/provider failover HTTP errors unless we run manual SQL queries.
+### Observed Failures (`wf-1795635950672`)
+1. `summary`, `analysis`, `reason`, `insights[1]`, and `scorecards[0].notes` repeated the exact `R4` veto message 9 times (`Veto:` + `Veto (GROUNDING):` + `Veto (PREMISE):` × 3).
+2. Groq limiter waited `5,005ms` (`slot_wait_timeout`) before `[LIMITER_SKIP]` instead of checking estimated wait upfront and skipping in `0ms`.
+3. Critic Verification (`seatTimings[4]`) sent `11,457` input tokens on a 0-pick pass and tried `gemini-3.1-flash-lite` (`503`) instead of `gemini-3.5-flash-lite`.
 
 ### Search Anchors
-- `"rawFinalAnalysisPayload"`, `"verification"`, `"tools_called"`, `"Failover"`
+- `"Veto (GROUNDING):"`, `"Veto (PREMISE):"`, `"slot_wait_timeout"`, `"LIMITER_SKIP"`, `"gemini-3.1-flash-lite"`, `"Verifier"`
 
 ### Required Changes
-- Attach a compact, bounded (`< 2 KB`) `diagnostics` object to `rawFinalAnalysisPayload` (and to `run_timeout` error payloads):
-  ```json
-  "diagnostics": {
-    "totalMs": 62400,
-    "hop1ToolsMs": 4120,
-    "seatTimings": [
-      { "seat": "a1", "role": "Quant Proposer", "provider": "nvidia", "model": "...", "durationMs": 22100, "inputTokens": 8150, "status": "ok" }
-    ],
-    "failovers": [
-      { "seat": "manager", "from": "gemini/gemini-3.5-flash-lite", "to": "cloudflare/...", "status": 404, "error": "models/gemini-3.5-flash-lite is not found...", "durationMs": 410 }
-    ]
-  }
-  ```
-- Redact any keys/tokens and cap each `error` string to `160` chars so it is always safe and tiny.
+1. **Emit Each Deterministic Veto Once (No Triple Prefixing or `| `-Joining Duplicates):**
+   - For any single deterministic violation on `(rowId, flag)` (e.g., `R4` + `row_side_mismatch`), emit **1** canonical veto line (do NOT duplicate it across `Veto:`, `Veto (GROUNDING):`, and `Veto (PREMISE):`).
+   - In the final pass-summary builder, normalize and deduplicate veto reasons by core text before joining so no sentence ever repeats in `summary`, `analysis`, `reason`, `insights`, or `scorecards[].notes`.
+2. **Instant `0ms` Skip on Saturated Rate-Limiter Bucket:**
+   - In the rate limiter's `acquire(..., maxWaitMs)` path, compute `estimatedWaitMs` BEFORE sleeping. If `estimatedWaitMs > maxWaitMs` (or no slot can open within `maxWaitMs`), reject/skip immediately (`< 50ms`) instead of sleeping for the full `5,000ms` before throwing `slot_wait_timeout`.
+3. **Scope Verifier Input & Prefer `gemini-3.5-flash-lite`:**
+   - Scope Critic Verification's slate/dossier strictly to the games referenced in `compiled.picks` (or compact pass summary ONLY when `compiled.picks.length === 0`) so Verification stays `<= 3,000` input tokens instead of `11,457`.
+   - Route Verifier's Gemini preference to `gemini-3.5-flash-lite` ahead of `gemini-3.1-flash-lite` (avoiding `3.1-flash-lite`'s frequent `503` spikes).
 
 ### Acceptance Criteria
-- Unit test: Final payload includes `diagnostics.seatTimings` and `diagnostics.failovers` with exact HTTP status + error snippet whenever any failover occurs.
+- Unit test (veto dedupe): A single `row_side_mismatch` on `R4` appears **exactly once** in `summary`, `analysis`, `reason`, and `scorecards[0].notes`.
+- Unit test (limiter skip): When `estimatedWaitMs === 18000` and `maxWaitMs === 5000`, limiter skips in `< 50ms` (zero 5-second sleep).
+- Unit test (Verifier scoping): Verifying a 0-pick pass or 2-leg parlay on a 20-game slate sends `<= 3,000` input tokens and selects `gemini-3.5-flash-lite` ahead of `gemini-3.1-flash-lite`.
 
 ---
 

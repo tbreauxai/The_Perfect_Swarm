@@ -397,14 +397,20 @@ export class Agent {
                     const adapter = ProviderRegistry.get(currentTarget.provider);
                     
                     const roleLower = this.role.toLowerCase();
+                    const isNvidiaReasoningTarget =
+                        currentTarget.provider === 'nvidia' &&
+                        /nemotron|deepseek-r1|qwq/i.test(targetModel);
                     const defaultRoleTokens = roleLower.includes('grader') ? 60
                         : roleLower.includes('prompt generator') ? 300
                         : roleLower.includes('manager') ? 2000
+                        : isNvidiaReasoningTarget ? 4096
                         : isQuantRole ? 1800
                         : 1500;
 
                     const requestedTokens = config?.maxTokens ?? this.maxTokens ?? defaultRoleTokens;
-                    const effectiveMaxTokens = isQuantRole ? Math.min(requestedTokens, 1800) : requestedTokens;
+                    const effectiveMaxTokens = isNvidiaReasoningTarget
+                        ? Math.max(requestedTokens, 4096)
+                        : (isQuantRole ? Math.min(requestedTokens, 1800) : requestedTokens);
                     const effectiveConfig: AgentRunConfig = {
                         ...config,
                         maxTokens: effectiveMaxTokens
@@ -528,6 +534,28 @@ export class Agent {
                             const hasParsedKeys = candidate && typeof candidate === 'object' && (
                                 Array.isArray(candidate) ? candidate.length > 0 : Object.keys(candidate).length > 0
                             );
+                            // S2: Treat unparsed/truncated non-JSON output on proposer seats (a1/a2) as parse_failed
+                            // and trigger failover instead of returning status: "ok" with "[Quant Proposer] unparsed output".
+                            const isProposerSeat =
+                                this.id === 'a1' ||
+                                this.id === 'a2' ||
+                                /\b(?:quant|market)\s*proposer\b|\bquant\b|\bmarket\s*analyst\b/i.test(this.role || '');
+                            const hasNativeToolCallInText =
+                                typeof textOutput === 'string' &&
+                                /"tool"\s*:|"tool_calls"\s*:|get_(?:matchup|injury|market|environment|player_prop|historical)/i.test(textOutput);
+                            if (
+                                !hasParsedKeys &&
+                                isProposerSeat &&
+                                !hasNativeToolCallInText &&
+                                targetIdx < targetChain.length - 1
+                            ) {
+                                const rawSnippet = redactErrorSnippet(textOutput || 'empty response', 120);
+                                const parseErr: any = new Error(`[PARSE_FAILED:unparsed_json] ${rawSnippet}`);
+                                parseErr.reason = 'unparsed_json';
+                                parseErr.parseFailed = true;
+                                parseErr.rawSnippet = rawSnippet;
+                                throw parseErr;
+                            }
                             parsedOutput = hasParsedKeys ? candidate : textOutput;
                             
                             if (config?.zodSchema) {
@@ -606,8 +634,14 @@ export class Agent {
                         continue;
                     }
 
-                    const httpStatus = extractHttpStatus(err);
-                    const errorSnippet = redactErrorSnippet(err, 160);
+                    const isParseFailure = Boolean(err?.parseFailed) || errMsg.includes('[PARSE_FAILED:unparsed_json]');
+                    const httpStatus = isParseFailure ? null : extractHttpStatus(err);
+                    const errorSnippet = isParseFailure
+                        ? redactErrorSnippet(err?.rawSnippet || errMsg.replace(/^\[PARSE_FAILED:[^\]]+\]\s*/i, ''), 120)
+                        : redactErrorSnippet(err, 160);
+                    const failoverReason = typeof err?.reason === 'string' && err.reason.trim()
+                        ? err.reason.trim()
+                        : errorSnippet;
                     const attemptDurationMs = Math.max(0, Date.now() - attemptStartTime);
                     const errorEvent = {
                         agentRole: this.role,
@@ -621,6 +655,7 @@ export class Agent {
                             fromModel: targetModel,
                             status: httpStatus,
                             errorSnippet,
+                            reason: failoverReason,
                             durationMs: attemptDurationMs
                         },
                         failover: {
@@ -628,7 +663,7 @@ export class Agent {
                             fromModel: targetModel,
                             status: httpStatus,
                             errorSnippet,
-                            reason: errorSnippet,
+                            reason: failoverReason,
                             durationMs: attemptDurationMs
                         }
                     };
@@ -664,6 +699,7 @@ export class Agent {
 
                     const isFailoverEligible = 
                         isTransientRateLimitOrSkip ||
+                        isParseFailure ||
                         errMsg.includes('EMPTY_COMPLETION') ||
                         errMsg.includes('503') ||
                         errMsg.includes('502') ||
@@ -766,7 +802,7 @@ export class Agent {
                                     fallbackModel,
                                     status: httpStatus,
                                     errorSnippet,
-                                    reason: errorSnippet,
+                                    reason: failoverReason,
                                     durationMs: attemptDurationMs
                                 },
                                 failover: {
@@ -776,7 +812,7 @@ export class Agent {
                                     toModel: fallbackModel,
                                     status: httpStatus,
                                     errorSnippet,
-                                    reason: errorSnippet,
+                                    reason: failoverReason,
                                     durationMs: attemptDurationMs
                                 }
                             });
