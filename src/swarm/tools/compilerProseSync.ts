@@ -518,6 +518,9 @@ export function syncCompilerProseWithFinalPicks<T extends Record<string, any>>(
       ) {
         nextVal = field === 'summary' ? rebuildSummary() : rebuildAnalysis();
       }
+      if (Array.isArray(rep.picks) && /\bpicks\s*=\s*\d+\b/i.test(nextVal)) {
+        nextVal = nextVal.replace(/\bpicks\s*=\s*\d+\b/gi, `picks=${activePicks.length}`);
+      }
       if (nextVal !== orig) {
         rep[field] = nextVal;
         synced = true;

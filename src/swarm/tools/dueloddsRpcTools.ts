@@ -709,6 +709,7 @@ export interface PlayerGameLogRow {
   is_starter?: boolean | null;
   starter?: boolean | null;
   source?: string | null;
+  experience_years?: number | string | null;
   depth_rank?: number | string | null;
   depth_chart_order?: number | string | null;
   impact_tier?: number | null;
@@ -772,7 +773,12 @@ interface AggregatedPlayerLogStats {
   isStarter: boolean;
   depthChartOrder: number | null;
   hasSeasonStats?: boolean;
+  seasonGamesPlayed?: number;
   hasDepthChart?: boolean;
+  hasRosterMeta?: boolean;
+  hasExplicitBoxscore?: boolean;
+  boxscoreGames?: number;
+  experienceYears?: number | null;
   zeroUsageOnly?: boolean;
 }
 
@@ -781,6 +787,7 @@ interface TeamLogIndex {
   distinctGameDates: Set<string>;
   hasDepthChart: boolean;
   hasSeasonStats: boolean;
+  hasRosterMeta: boolean;
   hasDatedLogs: boolean;
   loggedPlayerCount: number;
   hasSufficientCoverage: boolean;
@@ -802,6 +809,13 @@ function isDepthChartSource(sourceRaw: unknown): boolean {
   const src = String(sourceRaw || '').trim().toLowerCase();
   return src === 'espn_depthchart' || src === 'depth_chart' || src === 'depthchart';
 }
+
+function isRosterMetaSource(sourceRaw: unknown): boolean {
+  const src = String(sourceRaw || '').trim().toLowerCase();
+  return src === 'espn_roster_meta' || src === 'nhl_roster_meta';
+}
+
+const NFL_OL_POSITIONS = new Set(['LT', 'RT', 'OT', 'T', 'LG', 'RG', 'G', 'OG', 'C']);
 
 function normalizeLogGameDate(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
@@ -963,7 +977,12 @@ function buildTeamLogIndex(
       isStarter: boolean;
       depthChartOrder: number | null;
       hasSeasonStats: boolean;
+      seasonGamesPlayed: number;
       hasDepthChart: boolean;
+      hasRosterMeta: boolean;
+      hasExplicitBoxscore: boolean;
+      boxscoreGames: number;
+      experienceYears: number | null;
       zeroUsageRows: number;
     }
   >();
@@ -973,6 +992,7 @@ function buildTeamLogIndex(
   const distinctGameDates = new Set<string>();
   let teamHasDepthChart = false;
   let teamHasSeasonStats = false;
+  let teamHasRosterMeta = false;
 
   for (const row of logs) {
     if (!row || typeof row !== 'object') continue;
@@ -1010,12 +1030,15 @@ function buildTeamLogIndex(
     const rowSource = (row as any).source ?? stObj.source;
     const rowIsSeasonStats = isSeasonStatsSource(rowSource);
     const rowIsDepthChart = isDepthChartSource(rowSource);
+    const rowIsRosterMeta = isRosterMetaSource(rowSource);
+    const rowIsBoxscore = !rowIsSeasonStats && !rowIsDepthChart && !rowIsRosterMeta;
     if (rowIsSeasonStats) teamHasSeasonStats = true;
     if (rowIsDepthChart) teamHasDepthChart = true;
+    if (rowIsRosterMeta) teamHasRosterMeta = true;
 
     const rawDate = (row as any).game_date ?? (row as any).date ?? stObj.game_date;
     const normDate = normalizeLogGameDate(rawDate);
-    if (normDate && !rowIsSeasonStats && !rowIsDepthChart) {
+    if (normDate && rowIsBoxscore) {
       distinctGameDates.add(normDate);
     }
 
@@ -1048,19 +1071,35 @@ function buildTeamLogIndex(
         isStarter: false,
         depthChartOrder: null,
         hasSeasonStats: false,
+        seasonGamesPlayed: 0,
         hasDepthChart: false,
+        hasRosterMeta: false,
+        hasExplicitBoxscore: false,
+        boxscoreGames: 0,
+        experienceYears: null,
         zeroUsageRows: 0
       };
       acc.set(key, entry);
     }
     if (rowIsSeasonStats) entry.hasSeasonStats = true;
     if (rowIsDepthChart) entry.hasDepthChart = true;
+    if (rowIsRosterMeta) entry.hasRosterMeta = true;
+    if (rowIsBoxscore && String(rowSource || '').trim().toLowerCase() === 'espn_boxscore') {
+      entry.hasExplicitBoxscore = true;
+    }
+    const expVal = parseNumericStat((row as any).experience_years ?? stObj.experience_years);
+    if (expVal !== null) {
+      entry.experienceYears = entry.experienceYears === null ? expVal : Math.max(entry.experienceYears, expVal);
+    }
     for (const tv of rawTeamVals) entry.teamKeys.add(tv.toLowerCase());
     if (!entry.position && rowPos) {
       entry.position = rowPos;
     }
     const gamesPlayedVal = parseNumericStat((row as any).games_played ?? (row as any).gp ?? stObj.games_played ?? stObj.gp);
-    entry.games += rowIsSeasonStats && gamesPlayedVal !== null && gamesPlayedVal > 1 ? gamesPlayedVal : 1;
+    if (rowIsSeasonStats && gamesPlayedVal !== null) {
+      entry.seasonGamesPlayed = Math.max(entry.seasonGamesPlayed, gamesPlayedVal);
+    }
+    entry.games += rowIsSeasonStats && gamesPlayedVal !== null && gamesPlayedVal > 1 ? gamesPlayedVal : (rowIsRosterMeta ? 0 : 1);
 
     const minVal = parseNumericStat(row.mpg ?? row.avg_minutes ?? row.minutes ?? row.min ?? stObj.mpg ?? stObj.avg_minutes ?? stObj.minutes ?? stObj.min);
     if (minVal !== null && minVal > 0) {
@@ -1167,6 +1206,7 @@ function buildTeamLogIndex(
     const isZeroUsageRow =
       !rowIsDepthChart &&
       !rowIsSeasonStats &&
+      !rowIsRosterMeta &&
       ((minVal === 0 && (toiVal === null || toiVal === 0)) || (toiVal === 0 && (minVal === null || minVal === 0))) &&
       (ptsVal === null || ptsVal === 0) &&
       rushAtt === 0 &&
@@ -1176,6 +1216,8 @@ function buildTeamLogIndex(
       (snapPct === null || snapPct === 0);
     if (isZeroUsageRow) {
       entry.zeroUsageRows += 1;
+    } else if (rowIsBoxscore) {
+      entry.boxscoreGames += 1;
     }
   }
 
@@ -1196,7 +1238,8 @@ function buildTeamLogIndex(
       e.starts === 0 &&
       (e.snapMax === null || e.snapMax === 0) &&
       !e.hasDepthChart &&
-      !e.hasSeasonStats;
+      !e.hasSeasonStats &&
+      !e.hasRosterMeta;
     const agg: AggregatedPlayerLogStats = {
       playerKey: key,
       ...(e.playerId ? { playerId: e.playerId } : {}),
@@ -1217,8 +1260,12 @@ function buildTeamLogIndex(
       snapPct: e.snapMax,
       isStarter: e.isStarter,
       depthChartOrder: e.depthChartOrder,
-      ...(e.hasSeasonStats ? { hasSeasonStats: true } : {}),
+      ...(e.hasSeasonStats ? { hasSeasonStats: true, seasonGamesPlayed: e.seasonGamesPlayed } : {}),
       ...(e.hasDepthChart ? { hasDepthChart: true } : {}),
+      ...(e.hasRosterMeta ? { hasRosterMeta: true } : {}),
+      ...(e.hasExplicitBoxscore ? { hasExplicitBoxscore: true } : {}),
+      boxscoreGames: e.boxscoreGames,
+      ...(e.experienceYears !== null ? { experienceYears: e.experienceYears } : {}),
       ...(zeroUsageOnly ? { zeroUsageOnly: true } : {})
     };
     playersByName.set(key, agg);
@@ -1280,13 +1327,14 @@ function buildTeamLogIndex(
   // (or undated multi-player legacy fixture without source/date metadata).
   const canProveUnloggedDepth =
     distinctGameDates.size >= 5 ||
-    (!hasDatedLogs && !teamHasSeasonStats && !teamHasDepthChart && loggedPlayerCount >= 2);
+    (!hasDatedLogs && !teamHasSeasonStats && !teamHasDepthChart && !teamHasRosterMeta && loggedPlayerCount >= 2);
 
   return {
     hasLogs: matchedAnyRow,
     distinctGameDates,
     hasDepthChart: teamHasDepthChart,
     hasSeasonStats: teamHasSeasonStats,
+    hasRosterMeta: teamHasRosterMeta,
     hasDatedLogs,
     loggedPlayerCount,
     hasSufficientCoverage,
@@ -1444,6 +1492,67 @@ function classifyPlayerInjuryImpact(
   const isStarter = inlineStarter || Boolean(logStats?.isStarter) || depthRank === 1;
   const touchesPerGame = logStats && logStats.games > 0 ? logStats.totalTouches / logStats.games : 0;
 
+  // S1.3: Handle espn_roster_meta / nhl_roster_meta rows (no boxscore or season-stats usage yet)
+  if (
+    logStats?.hasRosterMeta &&
+    (logStats.boxscoreGames ?? 0) === 0 &&
+    !logStats.hasSeasonStats &&
+    !logStats.hasDepthChart &&
+    !hasInlinePositiveStat
+  ) {
+    if (
+      (sport === 'nfl' || sport === 'ncaaf') &&
+      NFL_OL_POSITIONS.has(effPos) &&
+      ((logStats.experienceYears !== null && logStats.experienceYears !== undefined && logStats.experienceYears >= 4) ||
+        depthRank === 1)
+    ) {
+      return { tier: 2, weight: 1.5, usedWeightedScoring: true, roleLabel: 'rotation' };
+    }
+    if (depthRank !== null && depthRank >= 3) {
+      return { tier: 3, weight: 0.5, usedWeightedScoring: true, roleLabel: 'depth' };
+    }
+    if (logStats.experienceYears === 0) {
+      return { tier: 3, weight: 0.5, usedWeightedScoring: true, roleLabel: 'depth' };
+    }
+    return { tier: null, weight: 1.0, usedWeightedScoring: false, roleLabel: 'unlogged' };
+  }
+
+  // S1.2: Never assign 0.5 depth when an injured player has 0 positive boxscore/season rows
+  // and no depth_rank >= 3 on a team with < 5 distinct logged game_dates.
+  if (
+    (!logStats ||
+      logStats.zeroUsageOnly ||
+      ((logStats.boxscoreGames ?? 0) === 0 && !logStats.hasSeasonStats && !logStats.hasDepthChart && !hasInlinePositiveStat)) &&
+    !teamIndex.canProveUnloggedDepth &&
+    (depthRank === null || depthRank < 3)
+  ) {
+    return { tier: null, weight: 1.0, usedWeightedScoring: false, roleLabel: 'unlogged' };
+  }
+
+  // S1.1: Non-QB / non-G players scored purely from a 1-game boxscore cameo cap at Tier-2 (1.5)
+  // and never promote to Tier-1 (3.0+) or trigger Tier-1 Q.
+  const hasSeasonBaseline = Boolean(logStats?.hasSeasonStats && (logStats.seasonGamesPlayed ?? 0) >= 5);
+  const isSingleGameBoxscoreOnly = Boolean(
+    !effIsQb &&
+      !effIsGoalie &&
+      logStats &&
+      !logStats.hasDepthChart &&
+      !hasSeasonBaseline &&
+      ((logStats.hasExplicitBoxscore && (logStats.boxscoreGames ?? logStats.games) < 2) ||
+        (logStats.hasSeasonStats && (logStats.seasonGamesPlayed ?? 0) > 0 && (logStats.seasonGamesPlayed ?? 0) < 5 && (logStats.boxscoreGames ?? 0) < 2))
+  );
+  const capTier1IfSingleGame = (res: {
+    tier: 1 | 2 | 3 | null;
+    weight: number;
+    usedWeightedScoring: boolean;
+    roleLabel: 'star' | 'rotation' | 'depth' | 'unlogged';
+  }) => {
+    if (isSingleGameBoxscoreOnly && res.tier === 1) {
+      return { tier: 2 as const, weight: 1.5, usedWeightedScoring: true, roleLabel: 'rotation' as const };
+    }
+    return res;
+  };
+
   if (sport === 'nfl') {
     if (effIsQb) {
       const isQb1 =
@@ -1456,13 +1565,13 @@ function classifyPlayerInjuryImpact(
       return { tier: 3, weight: 0.5, usedWeightedScoring: true, roleLabel: 'depth' };
     }
     if (/^(?:LT|OT)$/.test(effPos) && isStarter) {
-      return { tier: 1, weight: 4.0, usedWeightedScoring: true, roleLabel: 'star' };
+      return capTier1IfSingleGame({ tier: 1, weight: 4.0, usedWeightedScoring: true, roleLabel: 'star' });
     }
     if (/^(?:EDGE|DE)$/.test(effPos) && isStarter) {
-      return { tier: 1, weight: 3.0, usedWeightedScoring: true, roleLabel: 'star' };
+      return capTier1IfSingleGame({ tier: 1, weight: 3.0, usedWeightedScoring: true, roleLabel: 'star' });
     }
     if (avgTargets >= 7 || avgRushAtt >= 12 || (snapPct !== null && snapPct >= 75 && touchesPerGame >= 10)) {
-      return { tier: 1, weight: 3.0, usedWeightedScoring: true, roleLabel: 'star' };
+      return capTier1IfSingleGame({ tier: 1, weight: 3.0, usedWeightedScoring: true, roleLabel: 'star' });
     }
     if (isStarter || depthRank === 2 || (snapPct !== null && snapPct >= 30) || touchesPerGame >= 2.5 || (logStats && logStats.games >= 2)) {
       return { tier: 2, weight: 1.5, usedWeightedScoring: true, roleLabel: 'rotation' };
@@ -1485,7 +1594,7 @@ function classifyPlayerInjuryImpact(
     const isTopLineSkater = toi !== null && toi >= 19.5 && ppg !== null && ppg >= 0.70;
     const isTopPairDefenseman = isDefenseman && toi !== null && toi >= 21.5;
     if (isTopLineSkater || isTopPairDefenseman) {
-      return { tier: 1, weight: 3.0, usedWeightedScoring: true, roleLabel: 'star' };
+      return capTier1IfSingleGame({ tier: 1, weight: 3.0, usedWeightedScoring: true, roleLabel: 'star' });
     }
     if (isStarter || depthRank === 2 || (toi !== null && toi >= 13) || (ppg !== null && ppg >= 0.35)) {
       return { tier: 2, weight: 1.5, usedWeightedScoring: true, roleLabel: 'rotation' };
@@ -1498,7 +1607,7 @@ function classifyPlayerInjuryImpact(
       (mpg !== null && mpg >= 28 && ((ppg !== null && ppg >= 18) || (pra !== null && pra >= 28))) ||
       (mpg !== null && mpg >= 31);
     if (isHighUsageStar) {
-      return { tier: 1, weight: 3.0, usedWeightedScoring: true, roleLabel: 'star' };
+      return capTier1IfSingleGame({ tier: 1, weight: 3.0, usedWeightedScoring: true, roleLabel: 'star' });
     }
     if (isStarter || depthRank === 2 || (mpg !== null && mpg >= 15) || (ppg !== null && ppg >= 10)) {
       return { tier: 2, weight: 1.5, usedWeightedScoring: true, roleLabel: 'rotation' };
@@ -1507,7 +1616,7 @@ function classifyPlayerInjuryImpact(
   }
 
   // NCAAF / other sports when logs or inline starter tags exist
-  if (isStarter) return { tier: 1, weight: 3.0, usedWeightedScoring: true, roleLabel: 'star' };
+  if (isStarter) return capTier1IfSingleGame({ tier: 1, weight: 3.0, usedWeightedScoring: true, roleLabel: 'star' });
   if (depthRank === 2 || (logStats && logStats.games > 0)) return { tier: 2, weight: 1.5, usedWeightedScoring: true, roleLabel: 'rotation' };
   return { tier: 3, weight: 0.5, usedWeightedScoring: true, roleLabel: 'depth' };
 }
@@ -1756,6 +1865,7 @@ export interface PlayerGameLogStarterRow {
   pos?: string;
   starter?: boolean;
   depth_rank?: number;
+  experience_years?: number | string | null;
   minutes?: number;
   min?: number;
   mpg?: number;
@@ -1780,6 +1890,7 @@ export interface PlayerGameLogStarterRow {
     position?: string;
     pos?: string;
     depth_rank?: number;
+    experience_years?: number | string | null;
     minutes?: number;
     min?: number;
     mpg?: number;
@@ -1808,7 +1919,7 @@ export interface InjuryStarterTierScore {
   starter: boolean;
   position?: string;
   depthRank?: number;
-  source: 'espn_depthchart' | 'season_stats' | 'boxscore';
+  source: 'espn_depthchart' | 'season_stats' | 'boxscore' | 'espn_roster_meta' | 'nhl_roster_meta';
 }
 
 function getTier1StarterWeight(positionRaw?: string, sportHint?: string): number {
@@ -1888,6 +1999,42 @@ export function scorePlayerGameLogStarterRow(
       ...(depthRank !== undefined ? { depthRank } : {}),
       source: 'espn_depthchart'
     };
+  }
+
+  if (isRosterMetaSource(src)) {
+    const normSportMeta = normalizeInjurySport(sportHint);
+    const expYears = parseNumericStat((stats as any).experience_years ?? row.experience_years);
+    const gpMeta = parseNumericStat(stats.games_played ?? stats.gp ?? row.games_played ?? row.gp);
+    const rawRankMeta: unknown = stats.depth_rank ?? row.depth_rank ?? (stats as any).depth_chart_order ?? (row as any).depth_chart_order;
+    const depthRankMeta = parseNumericStat(rawRankMeta);
+    const isFootballMeta = normSportMeta === 'nfl' || normSportMeta === 'ncaaf' || (!sportHint && src === 'espn_roster_meta');
+    if (
+      isFootballMeta &&
+      rawPos &&
+      NFL_OL_POSITIONS.has(rawPos) &&
+      ((expYears !== null && expYears >= 4) || depthRankMeta === 1)
+    ) {
+      return {
+        tier: 2,
+        weight: 1.5,
+        starter: depthRankMeta === 1,
+        ...(position ? { position } : {}),
+        ...(depthRankMeta !== null ? { depthRank: depthRankMeta } : {}),
+        source: src as 'espn_roster_meta' | 'nhl_roster_meta'
+      };
+    }
+    if (gpMeta === 0 || gpMeta === null) {
+      if (expYears === 0) {
+        return {
+          tier: 3,
+          weight: 0.5,
+          starter: false,
+          ...(position ? { position } : {}),
+          source: src as 'espn_roster_meta' | 'nhl_roster_meta'
+        };
+      }
+      return null;
+    }
   }
 
   const starterFlag = stats.starter === true || row.starter === true || Number(stats.games_started ?? row.games_started ?? 0) > 0;
@@ -2120,6 +2267,36 @@ export function scoreInjuryStarterTier(
       (scored.weight === best.weight && scored.source === 'espn_depthchart' && best.source !== 'espn_depthchart')
     ) {
       best = scored;
+    }
+  }
+  if (best && best.tier === 1 && best.source === 'boxscore') {
+    const posCheck = String(best.position || injury.position || injury.pos || '').trim().toUpperCase();
+    const isQbOrGoalie = /^(?:QB|QUARTERBACK|G|GK|GOALIE|GOALTENDER)$/i.test(posCheck);
+    if (!isQbOrGoalie) {
+      const hasDepthOrSeasonBaseline = candidates.some((c) => {
+        const st = c?.stats && typeof c.stats === 'object' ? c.stats : {};
+        const s = String(c?.source ?? st.source ?? '').trim().toLowerCase();
+        if (isDepthChartSource(s)) return true;
+        if (isSeasonStatsSource(s)) {
+          const gp = parseNumericStat(st.games_played ?? st.gp ?? c.games_played ?? c.gp);
+          return gp === null || gp >= 5;
+        }
+        return false;
+      });
+      const explicitBoxRows = candidates.filter((c) => {
+        const st = c?.stats && typeof c.stats === 'object' ? c.stats : {};
+        const s = String(c?.source ?? st.source ?? '').trim().toLowerCase();
+        if (isDepthChartSource(s) || isSeasonStatsSource(s) || isRosterMetaSource(s)) return false;
+        return s === 'espn_boxscore' && scorePlayerGameLogStarterRow(c, sportHint) !== null;
+      });
+      if (!hasDepthOrSeasonBaseline && explicitBoxRows.length > 0 && explicitBoxRows.length < 2) {
+        best = {
+          ...best,
+          tier: 2,
+          weight: 1.5,
+          starter: false
+        };
+      }
     }
   }
   return best;
