@@ -67,6 +67,8 @@ import { globalTieredCache } from '../tieredCache.ts';
 import { globalFeedbackEngine } from '../feedback.ts';
 import { isRunDebugPersistEnabled, persistRunDebugRecord } from './runDebugPersist.ts';
 import { recordRunDebugAgreement } from './runDebugRecord.ts';
+import { buildCompactRunDiagnostics, type CompactRunDiagnostics } from './runDiagnostics.ts';
+export { buildCompactRunDiagnostics, type CompactRunDiagnostics };
 
 export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise<SwarmWorkflowResult> {
     const workflowStartTime = Date.now();
@@ -1128,8 +1130,18 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     ? finalAnalysis.curatedDossier.seat_visibility
                     : []);
 
+            const hop1ToolsMs = typeof curatedDossier?.totalDurationMs === 'number' && Number.isFinite(curatedDossier.totalDurationMs)
+                ? Math.max(0, Math.round(curatedDossier.totalDurationMs))
+                : undefined;
+            const diagnostics = buildCompactRunDiagnostics({
+                events: context.events,
+                totalMs: Math.max(0, Date.now() - workflowStartTime),
+                ...(hop1ToolsMs !== undefined ? { hop1ToolsMs } : {})
+            });
+
             if (finalAnalysis && typeof finalAnalysis === 'object') {
                 finalAnalysis.tools_called = [...toolsCalledList];
+                finalAnalysis.diagnostics = diagnostics;
                 if (hop1Plan && finalAnalysis.hop1Plan === undefined) {
                     finalAnalysis.hop1Plan = hop1Plan;
                 }
@@ -1162,6 +1174,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 partial: managerFailed,
                 degraded,
                 tools_called: toolsCalledList,
+                diagnostics,
                 ...(hop1Plan ? { hop1Plan } : {}),
                 ...(curatedDossier ? { curatedDossier } : {}),
                 ...(resolvedFinalSeatVisibility.length > 0 ? { seat_visibility: resolvedFinalSeatVisibility } : {}),

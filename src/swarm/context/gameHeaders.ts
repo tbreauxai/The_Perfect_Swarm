@@ -172,6 +172,7 @@ export function parseGameHeaders(data: unknown, fallbackEventIds?: string[]): Ga
           let away = 'Away';
           let home = 'Home';
           let commence: string | undefined = undefined;
+          let modelSignal: string | undefined = undefined;
           const options: GameHeaderOption[] = [];
           let foundMatchup = false;
 
@@ -181,6 +182,8 @@ export function parseGameHeaders(data: unknown, fallbackEventIds?: string[]): Ga
               if (explicitSport && !/^unknown$/i.test(explicitSport)) {
                 sport = explicitSport;
               }
+            } else if (p.startsWith('model_signal=')) {
+              modelSignal = p.replace('model_signal=', '').trim();
             } else if (/^[a-z][a-z0-9_]+$/i.test(p) && !/^unknown$/i.test(p) && !p.includes('@') && !/^options:/i.test(p)) {
               sport = p.toLowerCase();
             } else if (p.startsWith('commence=')) {
@@ -200,7 +203,7 @@ export function parseGameHeaders(data: unknown, fallbackEventIds?: string[]): Ga
           }
 
           if (foundMatchup) {
-            headers.push({ eventId, sport, away, home, commence, options });
+            headers.push({ eventId, sport, away, home, commence, ...(modelSignal ? { modelSignal } : {}), options });
           }
         }
       }

@@ -220,6 +220,11 @@ export function sanitizeCompilerProposalOddsAndSummary<T>(proposal: T): T {
         }
     }
 
+    // S1: Normalize any nested or missing-verdict scorecards[] entries to flat { seat, verdict, notes }
+    if (Array.isArray(obj.scorecards)) {
+        obj.scorecards = normalizeScorecardsArray(obj.scorecards);
+    }
+
     // Always guarantee `summary` is populated when `analysis` is present
     const hasSummary = typeof obj.summary === 'string' && obj.summary.trim().length > 0;
     if (!hasSummary && typeof obj.analysis === 'string' && obj.analysis.trim().length > 0) {
@@ -227,6 +232,138 @@ export function sanitizeCompilerProposalOddsAndSummary<T>(proposal: T): T {
     }
 
     return proposal;
+}
+
+function joinScorecardValue(val: unknown): string {
+    if (typeof val === 'string') return val.trim();
+    if (Array.isArray(val)) {
+        return val
+            .map((item) => (typeof item === 'string' ? item.trim() : (item && typeof item === 'object' ? String(item.row || item.side || item.pick || '').trim() : String(item || '').trim())))
+            .filter(Boolean)
+            .join(', ');
+    }
+    return '';
+}
+
+function canonicalizeScorecardVerdict(rawVerdict: unknown): 'approve' | 'veto' | 'partial' | string {
+    const v = String(rawVerdict || '').trim().toLowerCase();
+    if (!v) return '';
+    if (v === 'approve' || v === 'approved' || v === 'accept' || v === 'accepted') return 'approve';
+    if (v === 'veto' || v === 'vetoed' || v === 'reject' || v === 'rejected' || v === 'fail' || v === 'failed') return 'veto';
+    if (v === 'partial' || v === 'mixed' || v === 'conditional') return 'partial';
+    return v;
+}
+
+/**
+ * Normalizes a single scorecard entry (including nested Cloudflare Llama objects like
+ * `{ seat: "Risk Critic", scorecard: { approve: "R2 and R95", veto: "" } }` or missing `verdict`)
+ * to a flat `{ seat, verdict: "approve" | "veto" | "partial", notes: "..." }` schema.
+ */
+export function normalizeScorecardEntry(sc: any): any {
+    if (!sc || typeof sc !== 'object' || Array.isArray(sc)) return sc;
+
+    const nested =
+        (sc.scorecard && typeof sc.scorecard === 'object' && !Array.isArray(sc.scorecard) ? sc.scorecard : null) ||
+        (sc.review && typeof sc.review === 'object' && !Array.isArray(sc.review) ? sc.review : null) ||
+        (sc.audit && typeof sc.audit === 'object' && !Array.isArray(sc.audit) ? sc.audit : null);
+
+    if (nested) {
+        const { scorecard: _sc, review: _rv, audit: _au, ...rest } = sc;
+        const approveStr = joinScorecardValue(nested.approve ?? nested.approved ?? nested.pass);
+        const vetoStr = joinScorecardValue(nested.veto ?? nested.vetoed ?? nested.reject ?? nested.rejected);
+        const explicitNotes = joinScorecardValue(nested.notes ?? nested.note ?? nested.summary ?? nested.reason ?? sc.notes ?? sc.note ?? sc.summary);
+
+        let verdict = canonicalizeScorecardVerdict(nested.verdict ?? sc.verdict);
+        let notes = explicitNotes;
+
+        if (!verdict) {
+            if (approveStr && vetoStr) {
+                verdict = 'partial';
+            } else if (approveStr) {
+                verdict = 'approve';
+            } else if (vetoStr) {
+                verdict = 'veto';
+            } else if (nested.criticApproved === false || nested.pass === false || sc.criticApproved === false || sc.pass === false) {
+                verdict = 'veto';
+            } else if (nested.criticApproved === true || nested.pass === true || sc.criticApproved === true || sc.pass === true) {
+                verdict = 'approve';
+            } else {
+                verdict = 'veto';
+            }
+        }
+
+        if (!notes) {
+            if (approveStr && vetoStr) {
+                notes = `Approve: ${approveStr}; Veto: ${vetoStr}`;
+            } else if (approveStr) {
+                notes = approveStr;
+            } else if (vetoStr) {
+                notes = vetoStr;
+            }
+        }
+
+        return {
+            ...rest,
+            ...(rest.seat || rest.role ? { seat: String(rest.seat || rest.role).trim() } : {}),
+            verdict,
+            notes
+        };
+    }
+
+    const hasFlatApproveVeto = sc.approve !== undefined || sc.veto !== undefined;
+    const rawVerdict = canonicalizeScorecardVerdict(sc.verdict);
+
+    if (!rawVerdict && (hasFlatApproveVeto || typeof sc.criticApproved === 'boolean' || typeof sc.pass === 'boolean' || typeof sc.seat === 'string' || typeof sc.role === 'string')) {
+        const { approve: _a, veto: _v, ...rest } = sc;
+        const approveStr = joinScorecardValue(sc.approve);
+        const vetoStr = joinScorecardValue(sc.veto);
+        const explicitNotes = joinScorecardValue(sc.notes ?? sc.note ?? sc.summary ?? sc.reason);
+
+        let verdict: string;
+        if (approveStr && vetoStr) {
+            verdict = 'partial';
+        } else if (approveStr) {
+            verdict = 'approve';
+        } else if (vetoStr) {
+            verdict = 'veto';
+        } else if (sc.criticApproved === false || sc.pass === false) {
+            verdict = 'veto';
+        } else if (sc.criticApproved === true || sc.pass === true) {
+            verdict = 'approve';
+        } else {
+            verdict = 'approve';
+        }
+
+        const notes = explicitNotes || (approveStr && vetoStr
+            ? `Approve: ${approveStr}; Veto: ${vetoStr}`
+            : (approveStr || vetoStr || ''));
+
+        return {
+            ...rest,
+            ...(rest.seat || rest.role ? { seat: String(rest.seat || rest.role).trim() } : {}),
+            verdict,
+            notes
+        };
+    }
+
+    if (rawVerdict && rawVerdict !== sc.verdict) {
+        const notes = joinScorecardValue(sc.notes ?? sc.note ?? sc.summary ?? sc.reason);
+        return {
+            ...sc,
+            verdict: rawVerdict,
+            ...(notes || sc.notes !== undefined ? { notes: sc.notes !== undefined ? sc.notes : notes } : {})
+        };
+    }
+
+    return sc;
+}
+
+/**
+ * Normalizes every entry in a Manager/Compiler `scorecards[]` array.
+ */
+export function normalizeScorecardsArray(scorecards: any[]): any[] {
+    if (!Array.isArray(scorecards)) return [];
+    return scorecards.map(normalizeScorecardEntry);
 }
 
 const DOT_SENTINEL = '\uE000';
@@ -664,18 +801,25 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
         }
     }
 
+    const normalizedScorecards = Array.isArray(raw?.scorecards)
+        ? normalizeScorecardsArray(raw.scorecards)
+        : undefined;
+    if (normalizedScorecards && raw && typeof raw === 'object') {
+        raw.scorecards = normalizedScorecards;
+    }
+
     const resolvedCriticApproved = typeof raw?.criticApproved === 'boolean'
         ? raw.criticApproved
-        : (Array.isArray(raw?.scorecards)
+        : (Array.isArray(normalizedScorecards)
             ? (() => {
-                const criticCards = raw.scorecards.filter(
+                const criticCards = normalizedScorecards.filter(
                     (sc: any) => sc && typeof sc === 'object' && /critic|\brisk\b/i.test(String(sc.seat || sc.role || ''))
                 );
                 if (criticCards.length === 0) return undefined;
                 if (criticCards.some((sc: any) => /^(?:veto|vetoed|reject|rejected|fail|failed)$/i.test(String(sc.verdict || '').trim()))) {
                     return false;
                 }
-                if (criticCards.some((sc: any) => /^(?:approve|approved|pass|passed|accept)$/i.test(String(sc.verdict || '').trim()))) {
+                if (criticCards.some((sc: any) => /^(?:approve|approved|pass|passed|accept|partial)$/i.test(String(sc.verdict || '').trim()))) {
                     return true;
                 }
                 return undefined;
@@ -696,7 +840,7 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
             ...(resolvedSummaryVal ? { summary: resolvedSummaryVal } : {}),
             ...(rawAnalysisVal ? { analysis: rawAnalysisVal } : {}),
             ...(Array.isArray(raw?.picks) ? { picks: raw.picks } : {}),
-            ...(Array.isArray(raw?.scorecards) ? { scorecards: raw.scorecards } : {}),
+            ...(Array.isArray(normalizedScorecards) ? { scorecards: normalizedScorecards } : {}),
             ...(typeof raw?.pass === 'boolean' ? { pass: raw.pass } : {}),
             ...(typeof resolvedCriticApproved === 'boolean' ? { criticApproved: resolvedCriticApproved } : {}),
             ...(typeof raw?.wageringPass === 'boolean' ? { wageringPass: raw.wageringPass } : {}),
@@ -863,7 +1007,7 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
         components,
         ...(finalMetadata ? { metadata: finalMetadata } : {}),
         ...(raw && Array.isArray(raw.picks) ? { picks: raw.picks } : {}),
-        ...(raw && Array.isArray(raw.scorecards) ? { scorecards: raw.scorecards } : {}),
+        ...(Array.isArray(normalizedScorecards) ? { scorecards: normalizedScorecards } : {}),
         ...(raw && typeof raw.pass === 'boolean' ? { pass: raw.pass } : {}),
         ...(typeof resolvedCriticApproved === 'boolean' ? { criticApproved: resolvedCriticApproved } : {}),
         ...(raw && typeof raw.wageringPass === 'boolean' ? { wageringPass: raw.wageringPass } : {}),

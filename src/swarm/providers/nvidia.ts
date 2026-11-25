@@ -11,7 +11,13 @@ export class NvidiaAdapter implements ProviderAdapter {
         const messages = buildStandardMessages(options);
         const isJson = options.config?.responseMimeType === 'application/json';
         const isReasoning = isKnownReasoningModel(options.modelName) || /nemotron.*ultra/i.test(options.modelName || '');
-        const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 25000;
+        const isQuantOrUltra =
+            /quant|\ba1\b/i.test(String(options.role || '')) ||
+            /nemotron.*ultra|550b/i.test(options.modelName || '');
+        const requestedTimeout = options.timeoutMs || options.config?.timeoutMs || (isQuantOrUltra ? 30000 : 25000);
+        const timeoutMs = isQuantOrUltra ? Math.min(requestedTimeout, 30000) : requestedTimeout;
+        const requestedMaxTokens = options.config?.maxTokens || (isQuantOrUltra ? 1800 : 2048);
+        const maxTokens = isQuantOrUltra ? Math.min(requestedMaxTokens, 1800) : requestedMaxTokens;
 
         return executeOpenAiCompatibleChat(options, {
             providerName: this.providerName,
@@ -20,12 +26,12 @@ export class NvidiaAdapter implements ProviderAdapter {
             apiKey: key,
             modelName: options.modelName,
             messages,
-            maxTokens: options.config?.maxTokens || 2048,
+            maxTokens,
             temperature: 0.2,
             isJson,
             timeoutMs,
-            extraBody: isJson && isReasoning ? { reasoning_effort: 'none' } : undefined,
-            retryOnTimeout: true,
+            extraBody: isReasoning ? { reasoning_effort: isJson ? 'none' : 'low' } : undefined,
+            retryOnTimeout: !isQuantOrUltra,
             format429Error: (_status, errorText) => `[RATE_LIMIT_429] NVIDIA rate limit: ${errorText}`,
             format500Error: (status, errorText) => `[SERVER_ERROR_${status}] NVIDIA: ${errorText}`
         });

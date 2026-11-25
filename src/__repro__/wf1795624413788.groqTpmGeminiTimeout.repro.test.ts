@@ -328,15 +328,15 @@ describe('todo.md Spec (wf-1795624413788 & run_timeout): S1–S3', () => {
         async call(opts: any) {
           if (opts.modelName === 'gemini-3.5-flash-lite') {
             const err: any = new Error(
-              `Gemini API Error (400): INVALID_ARGUMENT bad field key=AIzaSySecretKey1234567890 ${longTail}`,
+              'Gemini API Error (503): Service overloaded with Bearer sk-secret-token-abcdef123456',
             );
-            err.status = 400;
+            err.status = 503;
             throw err;
           }
           const err: any = new Error(
-            'Gemini API Error (503): Service overloaded with Bearer sk-secret-token-abcdef123456',
+            `Gemini API Error (400): INVALID_ARGUMENT bad field key=AIzaSySecretKey1234567890 ${longTail}`,
           );
-          err.status = 503;
+          err.status = 400;
           throw err;
         },
       } as any);
@@ -371,26 +371,26 @@ describe('todo.md Spec (wf-1795624413788 & run_timeout): S1–S3', () => {
         expect(res.summary).toBe('Recovered on Cloudflare');
 
         const failoverEvents = ctx.events.filter((e) => e.action === 'Provider Failover Triggered');
-        const hop400 = failoverEvents.find((e) => e.failover?.fromModel === 'gemini-3.5-flash-lite');
-        const hop503 = failoverEvents.find((e) => e.failover?.fromModel === 'gemini-3.1-flash-lite');
-
-        expect(hop400).toBeDefined();
-        expect(hop400?.failover?.fromProvider).toBe('gemini');
-        expect(hop400?.failover?.fromModel).toBe('gemini-3.5-flash-lite');
-        expect(hop400?.failover?.status).toBe(400);
-        expect(hop400?.failover?.errorSnippet).toBeDefined();
-        expect(hop400!.failover!.errorSnippet!.length).toBeLessThanOrEqual(160);
-        expect(hop400!.failover!.errorSnippet!).not.toContain('AIzaSySecretKey1234567890');
-        expect(hop400!.failover!.errorSnippet!).toContain('[REDACTED]');
+        const hop503 = failoverEvents.find((e) => e.failover?.fromModel === 'gemini-3.5-flash-lite');
+        const hop400 = failoverEvents.find((e) => e.failover?.fromModel === 'gemini-3.1-flash-lite');
 
         expect(hop503).toBeDefined();
         expect(hop503?.failover?.fromProvider).toBe('gemini');
-        expect(hop503?.failover?.fromModel).toBe('gemini-3.1-flash-lite');
+        expect(hop503?.failover?.fromModel).toBe('gemini-3.5-flash-lite');
         expect(hop503?.failover?.status).toBe(503);
         expect(hop503?.failover?.errorSnippet).toBeDefined();
         expect(hop503!.failover!.errorSnippet!.length).toBeLessThanOrEqual(160);
         expect(hop503!.failover!.errorSnippet!).not.toContain('sk-secret-token-abcdef123456');
         expect(hop503!.failover!.errorSnippet!).toContain('[REDACTED]');
+
+        expect(hop400).toBeDefined();
+        expect(hop400?.failover?.fromProvider).toBe('gemini');
+        expect(hop400?.failover?.fromModel).toBe('gemini-3.1-flash-lite');
+        expect(hop400?.failover?.status).toBe(400);
+        expect(hop400?.failover?.errorSnippet).toBeDefined();
+        expect(hop400!.failover!.errorSnippet!.length).toBeLessThanOrEqual(160);
+        expect(hop400!.failover!.errorSnippet!).not.toContain('AIzaSySecretKey1234567890');
+        expect(hop400!.failover!.errorSnippet!).toContain('[REDACTED]');
       } finally {
         (globalProviderLimiter as any).sleep = origSleep;
       }

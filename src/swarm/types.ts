@@ -178,6 +178,7 @@ export interface SwarmEvent {
         status?: number | null;
         errorSnippet?: string;
         reason: string;
+        durationMs?: number;
     };
 }
 

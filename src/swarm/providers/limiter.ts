@@ -108,6 +108,69 @@ export function isExplicitDailyRpdError(message: string): boolean {
   );
 }
 
+/**
+ * S3.1: Returns true when a Gemini error is project-wide / auth / bad-request
+ * (HTTP 400, 401, 403, or project-wide 429 such as `limit: 0` / daily quota exhausted)
+ * so sibling Gemini models should be skipped immediately in 1 hop.
+ * Returns false for model-specific 503 / 500 / 404 / per-model RPM 429.
+ */
+export function isGeminiProjectWideFailure(err: unknown): boolean {
+  if (!err) return false;
+  let status: number | null = null;
+  if (typeof err === "object") {
+    const obj = err as Record<string, any>;
+    const raw = obj.status ?? obj.statusCode ?? obj.code ?? obj.response?.status;
+    if (typeof raw === "number" && raw >= 100 && raw <= 599) status = raw;
+    else if (typeof raw === "string" && /^\d{3}$/.test(raw.trim())) status = Number(raw.trim());
+  }
+  const msg = typeof err === "string" ? err : String((err as any)?.message || err || "");
+  if (status === null) {
+    const tagged = msg.match(/(?:RATE_LIMIT_|SERVER_ERROR_|BAD_REQUEST_|AUTH_ERROR_|HTTP\s+|status[=:\s]+|Error\s*\()([1-5]\d{2})\b/i);
+    if (tagged) status = Number(tagged[1]);
+    else {
+      const generic = msg.match(/\b(400|401|402|403|404|429|500|502|503|504)\b/);
+      if (generic) status = Number(generic[1]);
+    }
+  }
+
+  // Model-specific 404 / 503 / 500 should still try Gemini siblings
+  if (status === 404 || status === 503 || status === 500 || status === 502 || status === 504) {
+    return false;
+  }
+
+  if (status === 400 || status === 401 || status === 403) {
+    return true;
+  }
+
+  if (
+    /INVALID_ARGUMENT|BAD_REQUEST|API_KEY_INVALID|PERMISSION_DENIED|UNAUTHENTICATED|api\s+key\s+not\s+valid|invalid\s+api\s+key|billing\s+(?:not\s+enabled|disabled|required)/i.test(
+      msg,
+    )
+  ) {
+    return true;
+  }
+
+  const is429 =
+    status === 429 ||
+    msg.includes("RATE_LIMIT") ||
+    /resource_exhausted|quota\s+exceeded|rate\s+limit/i.test(msg);
+  if (is429) {
+    if (
+      isExplicitDailyRpdError(msg) ||
+      /\blimit\s*:\s*0\b/i.test(msg) ||
+      /quota_limit_value["']?\s*[:=]\s*["']?0\b/i.test(msg) ||
+      /free_tier_requests.*limit\s*:\s*0/i.test(msg) ||
+      /project.*quota.*exhausted/i.test(msg)
+    ) {
+      return true;
+    }
+    // Per-model RPM 429 -> allow trying Gemini siblings
+    return false;
+  }
+
+  return false;
+}
+
 export function classifyProviderError(
   provider: string,
   message: string,
@@ -265,6 +328,17 @@ export class ProviderLimiter {
     }
   }
 
+  /** Opens a provider-level cooldown immediately (e.g., Gemini 400/401/403/project-wide 429). */
+  openProviderCooldown(provider: string, durationMs: number, reason: string): void {
+    if (!this.isManaged(provider)) return;
+    const s = this.state(provider);
+    const until = this.now() + Math.max(0, durationMs);
+    if (until > s.openUntil) {
+      s.openUntil = until;
+      s.openReason = reason;
+    }
+  }
+
   recordFailure(provider: string, model: string, message: string, isFinalAttempt: boolean = true): void {
     if (!this.isManaged(provider)) return;
     const s = this.state(provider);
@@ -277,6 +351,21 @@ export class ProviderLimiter {
     } else if (kind === "model_dead") {
       if (model)
         this.deadModels.set(`${provider}::${model}`, t + DEAD_MODEL_MS);
+    } else if (provider === "gemini" && isGeminiProjectWideFailure(message)) {
+      // S3.1: Project-wide / auth / 400 / daily-quota Gemini failure opens provider-level cooldown
+      // immediately so remaining Gemini siblings are skipped in 1 hop.
+      const isDailyOrZeroLimit = isExplicitDailyRpdError(message) || /\blimit\s*:\s*0\b/i.test(message);
+      const isAuth = /\b(?:401|403)\b|API_KEY_INVALID|PERMISSION_DENIED|UNAUTHENTICATED/i.test(message);
+      const until = isDailyOrZeroLimit
+        ? nextUtcMidnight(t)
+        : (isAuth ? t + BREAKER_OPEN_MS : t + MODEL_COOLDOWN_MS);
+      if (until > s.openUntil) {
+        s.openUntil = until;
+        s.openReason = isDailyOrZeroLimit
+          ? "gemini project-wide daily/zero quota exhausted"
+          : (isAuth ? "gemini auth/billing failure (401/403)" : "gemini bad request (400) fast-abort");
+      }
+      s.consecutiveFailures = 0;
     } else if (provider === "gemini" && model) {
       // S3: Per-model runtime cooldown on Gemini 503/500/429 without marking unrelated siblings unhealthy.
       if (isExplicitDailyRpdError(message)) {

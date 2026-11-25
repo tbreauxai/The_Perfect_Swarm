@@ -1,6 +1,7 @@
 import type { Context } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { executeSwarmWorkflow, type SwarmWorkflowParams } from '../engine/index.ts';
+import { buildCompactRunDiagnostics } from '../engine/runDiagnostics.ts';
 import { SwarmContext } from '../context.ts';
 import type { SwarmEvent } from '../types.ts';
 
@@ -86,6 +87,8 @@ export async function handleSwarmSse(
 
         let workflowId: string = String((params.context as any)?.id || '');
         let lastStageSeen: string = 'init';
+        let observedHop1ToolsMs: number | undefined;
+        const observedEvents: SwarmEvent[] = [];
         const inFlightSeats = new Map<string, { seat: string; provider: string | null; model: string | null; startedAt: number }>();
         let lastActive: { seat: string | null; provider: string | null; model: string | null } = {
             seat: null,
@@ -95,6 +98,7 @@ export async function handleSwarmSse(
 
         const trackEvent = (event: SwarmEvent) => {
             if (!event || typeof event !== 'object') return;
+            observedEvents.push(event);
             const role = typeof event.agentRole === 'string' && event.agentRole.trim() ? event.agentRole.trim() : null;
             const action = String(event.action || '');
             const parsed = parseEventProviderModel(event.modelName, event.failover);
@@ -161,6 +165,9 @@ export async function handleSwarmSse(
                     } else if (stagePayload && typeof (stagePayload as any).stage === 'string') {
                         lastStageSeen = (stagePayload as any).stage;
                         const sp = stagePayload as Record<string, any>;
+                        if (sp.stage === 'hop1_exec' && typeof sp.durationMs === 'number' && Number.isFinite(sp.durationMs)) {
+                            observedHop1ToolsMs = Math.max(0, Math.round(sp.durationMs));
+                        }
                         if (typeof sp.activeSeat === 'string' || typeof sp.seat === 'string') {
                             const sName = String(sp.activeSeat || sp.seat);
                             lastActive = {
@@ -222,6 +229,16 @@ export async function handleSwarmSse(
                 }
             }
 
+            const sourceEvents = observedEvents.length > 0
+                ? observedEvents
+                : (Array.isArray((params.context as any)?.events) ? (params.context as any).events : []);
+            const diagnostics = buildCompactRunDiagnostics({
+                events: sourceEvents,
+                totalMs: elapsedMs,
+                ...(observedHop1ToolsMs !== undefined ? { hop1ToolsMs: observedHop1ToolsMs } : {}),
+                activeInFlight: Array.from(inFlightSeats.values())
+            });
+
             await sendEvent('swarm_error', {
                 error: errorReason,
                 workflowId,
@@ -230,7 +247,8 @@ export async function handleSwarmSse(
                 activeSeat: stalled.seat,
                 activeProvider: stalled.provider,
                 activeModel: stalled.model,
-                elapsedMs
+                elapsedMs,
+                diagnostics
             });
             isClosed = true;
         } finally {

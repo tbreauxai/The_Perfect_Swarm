@@ -959,7 +959,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                 const preCheckEvidence = [seatDossierText, prefetchedInjurySummary, ...priorSummaryLines, config.curatedDossier || '']
                     .filter(Boolean)
                     .join('\n');
-                if (preCheckEvidence) {
+                if (preCheckEvidence || fullRawSource || renderedHeadersText || mergedHeadersForRowCheck.length > 0) {
                     const preAudit = auditCriticPremiseContradictions(
                         preCheckProposal,
                         preCheckEvidence,

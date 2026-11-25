@@ -15,6 +15,7 @@ import type { Blackboard } from "./blackboard.ts";
 import type { RetrievalContextEnvelope, SnapshotRef, TrustedRetrievalScope } from "./historyScope.ts";
 import type { SeedManifest, SeedManifestPricing, SeedManifestFlags } from "../server/slimPayload.ts";
 import type { GameContextStoreReadResult } from "../morning/gameContext.ts";
+import type { CompactRunDiagnostics } from "./runDiagnostics.ts";
 export type { RetrievalContextEnvelope, SnapshotRef, TrustedRetrievalScope };
 export interface SwarmStagePayload {
     stage: 'routing' | 'cluster_aggregation' | 'partial_prediction' | 'manager_synthesis' | 'critic_verification' | 'completed' | 'scorecard' | 'critic_scorecard' | 'wave_progress' | 'hop1_plan' | 'hop1_exec' | 'curated_dossier' | 'analyst_start';
@@ -158,6 +159,8 @@ export interface SwarmWorkflowResult {
     blackboard?: Blackboard;
     hop1Plan?: any;
     curatedDossier?: any;
+    /** S4: compact (< 2 KB) inline seat timings + failovers diagnostics */
+    diagnostics?: CompactRunDiagnostics;
 }
 
 export interface SwarmFeedbackReport {

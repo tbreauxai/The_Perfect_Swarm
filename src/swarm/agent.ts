@@ -17,7 +17,10 @@ import {
     INTERACTIVE_MAX_BUDGET_WAIT_MS,
     FAILOVER_MAX_TPM_WAIT_MS,
     PROMPT_EXCEEDS_LIMIT_REASON,
-    UNSATISFIABLE_BUDGET_WAIT_MS
+    UNSATISFIABLE_BUDGET_WAIT_MS,
+    MODEL_COOLDOWN_MS,
+    BREAKER_OPEN_MS,
+    isGeminiProjectWideFailure
 } from './providers/limiter.ts';
 import { parseRetryAfterMs } from './utils/httpTimeouts.ts';
 import { isModelDead, DEFAULT_PROVIDER_MODELS } from './server/modelsProvider.ts';
@@ -258,7 +261,9 @@ export class Agent {
         const startTime = Date.now();
         const roleNorm = this.role.toLowerCase();
         const isCriticRole = roleNorm.includes('critic') || roleNorm.includes('risk');
-        const timeoutMs = config?.timeoutMs || (isCriticRole ? 45000 : PROVIDER_CALL_TIMEOUT_MS); // Fresh budget per target in targetChain
+        const isQuantRole = roleNorm.includes('quant') || this.id === 'a1';
+        const rawTimeoutMs = config?.timeoutMs || (isCriticRole ? 45000 : (isQuantRole ? 30000 : PROVIDER_CALL_TIMEOUT_MS));
+        const timeoutMs = isQuantRole ? Math.min(rawTimeoutMs, 30000) : rawTimeoutMs; // Fresh budget per target in targetChain (<=30s on a1/Quant)
 
         const lb = (config?.loadBalancer as AdaptiveLoadBalancer) || this.loadBalancer || globalLoadBalancer;
         const candidateFallbacks = config?.fallbackProviders || this.fallbacks;
@@ -382,10 +387,12 @@ export class Agent {
             // Two attempts max: fail fast on free-tier stalls. Fatal (4xx) errors
             // never recover by retrying; transient (429/5xx/timeout) errors either
             // fail over immediately (when a backup exists) or get one quick retry.
+            // S3.2: a1/Quant on NVIDIA uses a single-attempt 30s timeout so stalls fail over immediately.
             // config.noRetry (startup benchmark): one attempt per target, so a 429 is never retried.
-            const maxRetries = config?.noRetry ? 1 : 2;
+            const maxRetries = (config?.noRetry || (isQuantRole && currentTarget.provider === 'nvidia')) ? 1 : 2;
 
             for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                const attemptStartTime = Date.now();
                 try {
                     const adapter = ProviderRegistry.get(currentTarget.provider);
                     
@@ -393,12 +400,14 @@ export class Agent {
                     const defaultRoleTokens = roleLower.includes('grader') ? 60
                         : roleLower.includes('prompt generator') ? 300
                         : roleLower.includes('manager') ? 2000
-                        : roleLower.includes('quant') ? 4096 // backstop; reasoning capped in nvidia.ts
+                        : isQuantRole ? 1800
                         : 1500;
 
+                    const requestedTokens = config?.maxTokens ?? this.maxTokens ?? defaultRoleTokens;
+                    const effectiveMaxTokens = isQuantRole ? Math.min(requestedTokens, 1800) : requestedTokens;
                     const effectiveConfig: AgentRunConfig = {
                         ...config,
-                        maxTokens: config?.maxTokens ?? this.maxTokens ?? defaultRoleTokens
+                        maxTokens: effectiveMaxTokens
                     };
                     const isStrictJsonRequest =
                         effectiveConfig.responseMimeType === 'application/json' ||
@@ -599,24 +608,28 @@ export class Agent {
 
                     const httpStatus = extractHttpStatus(err);
                     const errorSnippet = redactErrorSnippet(err, 160);
+                    const attemptDurationMs = Math.max(0, Date.now() - attemptStartTime);
                     const errorEvent = {
                         agentRole: this.role,
                         action: `Provider Failover Triggered`,
                         modelName: `${currentTarget.provider} / ${targetModel}`,
                         prompt,
                         error: errorSnippet,
+                        durationMs: attemptDurationMs,
                         output: {
                             fromProvider: String(currentTarget.provider),
                             fromModel: targetModel,
                             status: httpStatus,
-                            errorSnippet
+                            errorSnippet,
+                            durationMs: attemptDurationMs
                         },
                         failover: {
                             fromProvider: String(currentTarget.provider),
                             fromModel: targetModel,
                             status: httpStatus,
                             errorSnippet,
-                            reason: errorSnippet
+                            reason: errorSnippet,
+                            durationMs: attemptDurationMs
                         }
                     };
                     context.addEvent(errorEvent);
@@ -684,6 +697,17 @@ export class Agent {
                         errLower.includes('does not exist') ||
                         errLower.includes('unsupported model');
 
+                    const skipGeminiSiblings =
+                        currentTarget.provider === 'gemini' && isGeminiProjectWideFailure(err);
+                    if (skipGeminiSiblings) {
+                        const cooldownMs = (httpStatus === 401 || httpStatus === 403) ? BREAKER_OPEN_MS : MODEL_COOLDOWN_MS;
+                        globalProviderLimiter.openProviderCooldown(
+                            'gemini',
+                            cooldownMs,
+                            `gemini project-wide error (${httpStatus ?? 'unknown'}): ${errorSnippet}`
+                        );
+                    }
+
                     const hasNextProvider = targetIdx < targetChain.length - 1;
 
                     if ((isFatal || isLimiterSkip) && !hasNextProvider) {
@@ -693,8 +717,10 @@ export class Agent {
                     // If eligible for failover and a backup provider is ready, failover immediately without waiting
                     if ((isFailoverEligible || isFatal || isTransientRateLimitOrSkip) && hasNextProvider) {
                         let realFallback: typeof currentTarget | undefined;
+                        let realFallbackIdx = -1;
                         for (let j = targetIdx + 1; j < targetChain.length; j++) {
                             const cand = targetChain[j];
+                            if (skipGeminiSiblings && cand.provider === 'gemini') continue;
                             const candModel = resolveTargetModelName(cand, String(this.provider), this.modelName);
                             if (isModelDead(String(cand.provider), candModel)) continue;
                             const candHasFastBackup = hasHealthyFastAlternative(
@@ -711,6 +737,7 @@ export class Agent {
                                 : baseMaxBudgetWait;
                             if (checkTargetLimits(cand, this.modelName, prompt, this.systemInstruction, candMaxWait, config?.groqMode, String(this.provider)).ok) {
                                 realFallback = cand;
+                                realFallbackIdx = j;
                                 break;
                             }
                         }
@@ -727,6 +754,7 @@ export class Agent {
                                 action: 'Provider Failover Triggered',
                                 modelName: `${currentTarget.provider} -> ${realFallback.provider}`,
                                 prompt: `Cascading to backup provider due to error: ${errorSnippet}`,
+                                durationMs: attemptDurationMs,
                                 output: {
                                     fromProvider: String(currentTarget.provider),
                                     fromModel: targetModel,
@@ -738,7 +766,8 @@ export class Agent {
                                     fallbackModel,
                                     status: httpStatus,
                                     errorSnippet,
-                                    reason: errorSnippet
+                                    reason: errorSnippet,
+                                    durationMs: attemptDurationMs
                                 },
                                 failover: {
                                     fromProvider: String(currentTarget.provider),
@@ -747,9 +776,21 @@ export class Agent {
                                     toModel: fallbackModel,
                                     status: httpStatus,
                                     errorSnippet,
-                                    reason: errorSnippet
+                                    reason: errorSnippet,
+                                    durationMs: attemptDurationMs
                                 }
                             });
+                            // S3.1: Jump directly to the chosen non-Gemini fallback in 1 hop
+                            if (skipGeminiSiblings && realFallbackIdx > targetIdx + 1) {
+                                targetIdx = realFallbackIdx - 1;
+                            }
+                        } else if (skipGeminiSiblings) {
+                            // No non-Gemini fallback available; skip remaining Gemini siblings so loop exits cleanly
+                            let lastSkippedIdx = targetIdx;
+                            while (lastSkippedIdx + 1 < targetChain.length && targetChain[lastSkippedIdx + 1].provider === 'gemini') {
+                                lastSkippedIdx += 1;
+                            }
+                            targetIdx = lastSkippedIdx;
                         }
                         break; // Exit retry loop to advance to next target in chain
                     }

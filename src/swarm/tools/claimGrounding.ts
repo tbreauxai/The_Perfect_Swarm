@@ -941,7 +941,7 @@ function findHealthViolationInClause(
 }
 
 const LEG_VETO_SIGNAL_REGEX =
-  /\b(?:veto(?:ed|ing)?(?:\s+leg)?|reject(?:ed|ing)?(?:\s+leg)?|remov(?:ed|e)(?:\s+leg)?|drop(?:ped)?(?:\s+leg)?|disqualif(?:ied|y)|exclud(?:ed|e)|do\s+not\s+(?:bet|play|back|pick|recommend)|cannot\s+(?:bet|play|back|pick|recommend)|must\s+be\s+removed|fatal\s+injury|critical\s+roster\s+scratch|injury\s+misattribution|contra_steam_misread|symmetric_injury_misread|contra-?steam|symmetric-?injury|missing_(?:moneyline|spread|total)_coverage|missing\s+(?:moneyline|spread|total)\s+coverage|ungrounded|contradicted)\b/i;
+  /\b(?:veto(?:ed|ing)?(?:\s+leg)?|reject(?:ed|ing)?(?:\s+leg)?|remov(?:ed|e)(?:\s+leg)?|drop(?:ped)?(?:\s+leg)?|disqualif(?:ied|y)|exclud(?:ed|e)|do\s+not\s+(?:bet|play|back|pick|recommend)|cannot\s+(?:bet|play|back|pick|recommend)|must\s+be\s+removed|fatal\s+injury|critical\s+roster\s+scratch|injury\s+misattribution|contra_steam_misread|symmetric_injury_misread|model_signal_misread|contra-?steam|symmetric-?injury|missing_(?:moneyline|spread|total)_coverage|missing\s+(?:moneyline|spread|total)\s+coverage|ungrounded|contradicted)\b/i;
 
 const EXPLICIT_LEG_REF_IN_CLAUSE_REGEX =
   /\b(?:leg|pick|side|parlay|must\s+be\s+removed|vetoed\s+leg|R\d+|ML|moneyline|puckline|over\s+\d|under\s+\d)\b|[+-]\d+(?:\.5|\.0)\b/i;
@@ -2157,9 +2157,62 @@ function parseInjuryBalanceFromEvidence(
   return byEvent;
 }
 
+export type ParsedModelSignal = 'lean_home' | 'lean_away' | 'neutral' | 'none';
+
+function normalizeParsedModelSignal(raw: unknown): ParsedModelSignal {
+  const s = String(raw || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (s === 'lean_home') return 'lean_home';
+  if (s === 'lean_away') return 'lean_away';
+  if (s === 'neutral') return 'neutral';
+  return 'none';
+}
+
 /**
- * Deterministically audits proposed picks and rationales for contra-steam misreads
- * and symmetric/disadvantaged-injury misreads against retrieved market & injury evidence.
+ * Parses each game's actual `model_signal` tag from COMPACT SLATE lines (`lean_home`,
+ * `lean_away`, `neutral`, or `none` when omitted).
+ */
+export function parseCompactSlateModelSignals(
+  slateText: string = '',
+  headers?: GameHeader[]
+): Map<string, ParsedModelSignal> {
+  const byEvent = new Map<string, ParsedModelSignal>();
+  const resolvedHeaders = headers && headers.length > 0 ? headers : parseGameHeaders(slateText);
+
+  for (const h of resolvedHeaders) {
+    if (!h?.eventId) continue;
+    byEvent.set(h.eventId, normalizeParsedModelSignal(h.modelSignal));
+  }
+
+  if (slateText && typeof slateText === 'string') {
+    for (const rawLine of slateText.split('\n')) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      const evMatch =
+        line.match(/\bevent_id=([a-z0-9_-]+)/i) ||
+        line.match(/^([a-z][a-z0-9_-]*-\d+)\s*\|/i);
+      if (!evMatch) continue;
+      const evId = evMatch[1].trim();
+      const sigMatch = line.match(/\bmodel_signal=([a-z_-]+)/i);
+      const parsedSig = sigMatch ? normalizeParsedModelSignal(sigMatch[1]) : 'none';
+      if (!byEvent.has(evId) || (byEvent.get(evId) === 'none' && parsedSig !== 'none')) {
+        byEvent.set(evId, parsedSig);
+      }
+    }
+  }
+
+  return byEvent;
+}
+
+const MODEL_SIGNAL_NEGATED_REGEX =
+  /\b(?:no|without|lacks?|missing|absent|not\s+supported\s+by|against|contrary\s+to|despite|ignoring|no\s+active)\s+(?:a\s+|any\s+|explicit\s+|clear\s+|directional\s+)?(?:model[_\s-]?signal|lean[_\s-]?(?:home|away))\b|\bmodel[_\s-]?signal\s*(?:=|is|:)?\s*(?:none|neutral|n\/a|absent|missing|omitted|untagged)\b|\b(?:neutral|absent|missing|omitted)\s+model[_\s-]?signal\b/i;
+
+const MODEL_SIGNAL_EXPLICIT_DIR_REGEX = /\b(lean[_\s-]?home|lean[_\s-]?away)\b/i;
+
+const MODEL_SIGNAL_SUPPORT_REGEX = /\bmodel[_\s-]?signal\b/i;
+
+/**
+ * Deterministically audits proposed picks and rationales for contra-steam misreads,
+ * symmetric/disadvantaged-injury misreads, and COMPACT SLATE `model_signal` misreads.
  */
 export function auditCriticPremiseContradictions(
   proposal: any,
@@ -2175,8 +2228,11 @@ export function auditCriticPremiseContradictions(
     ? options.headers
     : parseGameHeaders(slateText);
   const rowMap = extractRowOptions([slateText], headers);
+  const modelSignals = parseCompactSlateModelSignals(slateText, headers);
   const successfulEvidence = extractSuccessfulEvidenceText(evidenceText);
-  if (!successfulEvidence && rowMap.size === 0) return { pass: true, violations: [], flags: [] };
+  if (!successfulEvidence && rowMap.size === 0 && headers.length === 0 && modelSignals.size === 0) {
+    return { pass: true, violations: [], flags: [] };
+  }
 
   const rawProposalText = typeof proposal === 'string' ? proposal : JSON.stringify(proposal);
   const hasSportsSignal =
@@ -2192,7 +2248,7 @@ export function auditCriticPremiseContradictions(
   const steamEntries = successfulEvidence ? parseSteamEntriesFromEvidence(successfulEvidence, headers, candidates) : [];
   const injuryBalances = successfulEvidence ? parseInjuryBalanceFromEvidence(successfulEvidence, headers, allInjuries, candidates) : new Map();
 
-  if (rowMap.size === 0 && steamEntries.length === 0 && injuryBalances.size === 0) {
+  if (rowMap.size === 0 && steamEntries.length === 0 && injuryBalances.size === 0 && modelSignals.size === 0) {
     return { pass: true, violations: [], flags: [] };
   }
 
@@ -2238,7 +2294,12 @@ export function auditCriticPremiseContradictions(
 
     const combinedReasons = normalizeText(reasonTexts.filter(Boolean).join('. ')).trim();
     const combinedSeatContext = normalizeText(seatContextTexts.filter(Boolean).join('. ')).trim();
-    if ((!combinedReasons && !combinedSeatContext) || (steamEntries.length === 0 && injuryBalances.size === 0)) return;
+    if (
+      (!combinedReasons && !combinedSeatContext) ||
+      (steamEntries.length === 0 && injuryBalances.size === 0 && modelSignals.size === 0)
+    ) {
+      return;
+    }
 
     const rowMatch = sideText.match(/\b(R\d+)\b/i) || (typeof pk?.row === 'string' ? pk.row.match(/\b(R\d+)\b/i) : null);
     const rowId = rowMatch ? rowMatch[1].toUpperCase() : undefined;
@@ -2455,6 +2516,96 @@ export function auditCriticPremiseContradictions(
               flagInjuryMisread(msg, sc);
               break;
             }
+          }
+        }
+      }
+    }
+
+    // 3. Deterministic model_signal_misread check against COMPACT SLATE tags
+    if (eventId && modelSignals.has(eventId)) {
+      const actualSignal: ParsedModelSignal = modelSignals.get(eventId) || 'none';
+      const checkModelSignalClause = (clause: string, sourceLabel: string): boolean => {
+        if (!clause) return false;
+        if (MODEL_SIGNAL_NEGATED_REGEX.test(clause)) return false;
+
+        const dirMatch = clause.match(MODEL_SIGNAL_EXPLICIT_DIR_REGEX);
+        const mentionsModelSignal = MODEL_SIGNAL_SUPPORT_REGEX.test(clause);
+        if (!dirMatch && !mentionsModelSignal) return false;
+
+        const explicitDir = dirMatch
+          ? (dirMatch[1].toLowerCase().includes('home') ? 'lean_home' : 'lean_away')
+          : null;
+
+        // If the slate has no directional model_signal (none or neutral), any positive claim of
+        // model_signal / lean_home / lean_away support is a misread.
+        if (actualSignal === 'none' || actualSignal === 'neutral') {
+          const msg = `model_signal_misread: Pick "${pickDisplay}" (${eventId}) ${sourceLabel} claims "${explicitDir || 'model_signal'}" support, but COMPACT SLATE has model_signal=${actualSignal}.`;
+          addFinding(
+            'model_signal_misread',
+            msg,
+            buildVetoTargetFromPick(pk, headers, rowMap, candidates, msg),
+            clause
+          );
+          return true;
+        }
+
+        // If the clause explicitly names lean_home / lean_away and it disagrees with the slate tag.
+        if (explicitDir && explicitDir !== actualSignal) {
+          const msg = `model_signal_misread: Pick "${pickDisplay}" (${eventId}) ${sourceLabel} claims "${explicitDir}", but COMPACT SLATE has model_signal=${actualSignal}.`;
+          addFinding(
+            'model_signal_misread',
+            msg,
+            buildVetoTargetFromPick(pk, headers, rowMap, candidates, msg),
+            clause
+          );
+          return true;
+        }
+
+        // If the pick is on the opposite side of the slate's directional model_signal (e.g., picking home on lean_away).
+        const isOppositeSide =
+          (pickedRole === 'home' && actualSignal === 'lean_away') ||
+          (pickedRole === 'away' && actualSignal === 'lean_home');
+        if (isOppositeSide) {
+          const msg = `model_signal_misread: Pick "${pickDisplay}" (${eventId}, ${pickedRole} side) ${sourceLabel} claims model_signal support, but COMPACT SLATE leans opposite (${actualSignal}).`;
+          addFinding(
+            'model_signal_misread',
+            msg,
+            buildVetoTargetFromPick(pk, headers, rowMap, candidates, msg),
+            clause
+          );
+          return true;
+        }
+
+        return false;
+      };
+
+      let flaggedModelSignal = false;
+      for (const clause of clauses) {
+        if (checkModelSignalClause(clause, 'rationale')) {
+          flaggedModelSignal = true;
+          break;
+        }
+      }
+
+      if (!flaggedModelSignal && combinedSeatContext) {
+        const seatClauses = combinedSeatContext
+          .split(/(?<=[.!?])\s+|\n+|;\s+/)
+          .map(c => c.trim())
+          .filter(Boolean);
+        const clauseTargetsLegForSignal = (clause: string): boolean => {
+          if (rowId && new RegExp(`\\b${escapeRegex(rowId)}\\b`, 'i').test(clause)) return true;
+          if (eventId && clause.toLowerCase().includes(eventId.toLowerCase())) return true;
+          if (pickedDesc && findTeamMentionsInText(clause, pool).some(m => m.team.key === pickedDesc.key)) {
+            return true;
+          }
+          return false;
+        };
+        for (const sc of seatClauses) {
+          const isBlanket = BLANKET_MULTI_LEG_SUBJECT_REGEX.test(sc);
+          const targetsLeg = clauseTargetsLegForSignal(sc);
+          if (!isBlanket && !targetsLeg) continue;
+          if (checkModelSignalClause(sc, 'seat analysis')) {
+            break;
           }
         }
       }

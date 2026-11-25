@@ -27,6 +27,7 @@ import { isIndoorLeagueGame } from '../tools/dueloddsRpcTools.ts';
 export const PROVIDER_CALL_DEADLINES: Record<string, number> = {
   groq: 20000,
   gemini: 30000,
+  nvidia: 30000,
   others: 30000
 };
 
