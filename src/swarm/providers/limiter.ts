@@ -27,12 +27,17 @@ export const PROVIDER_LIMITS: Record<string, ProviderLimitConfig> = {
 
 export const BREAKER_FAILURE_THRESHOLD = 3;
 export const BREAKER_OPEN_MS = 5 * 60 * 1000;
+export const MODEL_COOLDOWN_MS = 60_000;
 export const DEAD_MODEL_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_STRICT_BUDGET_WAIT_MS = 65_000;
 export const INTERACTIVE_MAX_BUDGET_WAIT_MS = 10_000;
 export const MAX_BUDGET_WAIT_MS = 10_000;
+export const UNSATISFIABLE_BUDGET_WAIT_MS = DEFAULT_STRICT_BUDGET_WAIT_MS + 1;
+export const PROMPT_EXCEEDS_LIMIT_REASON = "prompt_exceeds_provider_limit";
 export const PROVIDER_CALL_TIMEOUT_MS = 25_000;
 export const RETRY_503_BACKOFF_MS = 1_000;
+export const GEMINI_503_RETRY_MIN_MS = 1_200;
+export const GEMINI_503_RETRY_MAX_MS = 2_000;
 const TOKEN_WINDOW_MS = 60_000;
 
 export class LimiterSkipError extends Error {
@@ -90,6 +95,12 @@ export type ProviderFailureKind =
   | "rate_or_server"
   | "other";
 
+export function isExplicitDailyRpdError(message: string): boolean {
+  return /free-models-per-day|per[\s_-]*day|daily\s+(?:limit|quota|cap)|requests?\s+per\s+day|\brpd\b/i.test(
+    message || "",
+  );
+}
+
 export function classifyProviderError(
   provider: string,
   message: string,
@@ -116,7 +127,9 @@ export function classifyProviderError(
   if (
     msg.includes("SERVER_ERROR") ||
     /\b50[0234]\b/.test(msg) ||
-    /\b500\b/.test(msg)
+    /\b500\b/.test(msg) ||
+    lower.includes("overloaded") ||
+    lower.includes("high demand")
   ) {
     return "server_error";
   }
@@ -124,10 +137,24 @@ export function classifyProviderError(
 }
 
 export function is503(message: string): boolean {
+  const msg = message || "";
+  const lower = msg.toLowerCase();
   return (
-    (message || "").includes("SERVER_ERROR_503") ||
-    /\b503\b/.test(message || "")
+    msg.includes("SERVER_ERROR_503") ||
+    /\b503\b/.test(msg) ||
+    lower.includes("overloaded") ||
+    lower.includes("high demand")
   );
+}
+
+export function isTransientGeminiRetryable(message: string): boolean {
+  const msg = message || "";
+  return is503(msg) || msg.includes("SERVER_ERROR_500") || /\b500\b/.test(msg);
+}
+
+export function computeGemini503JitterMs(rand: () => number = Math.random): number {
+  const span = GEMINI_503_RETRY_MAX_MS - GEMINI_503_RETRY_MIN_MS;
+  return GEMINI_503_RETRY_MIN_MS + Math.floor(Math.max(0, Math.min(1, rand())) * (span + 1));
 }
 
 interface ProviderState {
@@ -150,6 +177,7 @@ export interface LimiterRunRequest {
 export class ProviderLimiter {
   private states = new Map<string, ProviderState>();
   private deadModels = new Map<string, number>();
+  private modelCooldowns = new Map<string, { until: number; reason: string }>();
 
   private readonly limits: Record<string, ProviderLimitConfig>;
   private readonly now: () => number;
@@ -199,9 +227,14 @@ export class ProviderLimiter {
       return `circuit open until ${new Date(s.openUntil).toISOString()} (${s.openReason})`;
     }
     if (model) {
-      const deadUntil = this.deadModels.get(`${provider}::${model}`);
+      const key = `${provider}::${model}`;
+      const deadUntil = this.deadModels.get(key);
       if (deadUntil && deadUntil > t) {
         return `model marked dead until ${new Date(deadUntil).toISOString()} (404 model-not-found)`;
+      }
+      const cooldown = this.modelCooldowns.get(key);
+      if (cooldown && cooldown.until > t) {
+        return `model on cooldown until ${new Date(cooldown.until).toISOString()} (${cooldown.reason})`;
       }
     }
     return null;
@@ -217,9 +250,12 @@ export class ProviderLimiter {
     return this.getSkipReason(provider, model) === null;
   }
 
-  recordSuccess(provider: string): void {
+  recordSuccess(provider: string, model?: string): void {
     if (!this.isManaged(provider)) return;
     this.state(provider).consecutiveFailures = 0;
+    if (model) {
+      this.modelCooldowns.delete(`${provider}::${model}`);
+    }
   }
 
   recordFailure(provider: string, model: string, message: string, isFinalAttempt: boolean = true): void {
@@ -234,6 +270,26 @@ export class ProviderLimiter {
     } else if (kind === "model_dead") {
       if (model)
         this.deadModels.set(`${provider}::${model}`, t + DEAD_MODEL_MS);
+    } else if (provider === "gemini" && model) {
+      // S3: Per-model runtime cooldown on Gemini 503/500/429 without marking unrelated siblings unhealthy.
+      if (isExplicitDailyRpdError(message)) {
+        this.modelCooldowns.set(`${provider}::${model}`, {
+          until: nextUtcMidnight(t),
+          reason: "daily RPD quota exhausted",
+        });
+      } else if (
+        kind === "server_error" ||
+        kind === "rate_or_server" ||
+        (kind === "rate_limit" && isFinalAttempt)
+      ) {
+        this.modelCooldowns.set(`${provider}::${model}`, {
+          until: t + MODEL_COOLDOWN_MS,
+          reason:
+            kind === "rate_limit"
+              ? "429 RPM rate limit"
+              : "503/500 transient overload",
+        });
+      }
     } else if (kind === "server_error" || kind === "rate_or_server") {
       s.consecutiveFailures += 1;
       if (s.consecutiveFailures >= BREAKER_FAILURE_THRESHOLD) {
@@ -265,16 +321,37 @@ export class ProviderLimiter {
     return MAX_BUDGET_WAIT_MS;
   }
 
+  /** True when the request can never fit into the provider's bucket capacity or refill rate <= 0. */
+  exceedsTokenBudgetCapacity(provider: string, estTokens: number): boolean {
+    const cfg = this.limits[provider];
+    if (!cfg || cfg.tokensPerMinute === undefined) return false;
+    const limit = cfg.tokensPerMinute;
+    const tokensPerMs = limit / TOKEN_WINDOW_MS;
+    if (!Number.isFinite(limit) || limit <= 0 || tokensPerMs <= 0) return true;
+    return !Number.isFinite(estTokens) || estTokens > limit;
+  }
+
   private tokensUsed(s: ProviderState, t: number): number {
     s.tokenLog = s.tokenLog.filter((e) => t - e.at < TOKEN_WINDOW_MS);
     return s.tokenLog.reduce((sum, e) => sum + e.tokens, 0);
   }
 
-  /** ms until estTokens fits the per-minute budget (0 = fits now, Infinity = can never fit). */
+  /**
+   * Finite ms until estTokens fits the per-minute budget (0 = fits now).
+   * Never returns Infinity or NaN; returns UNSATISFIABLE_BUDGET_WAIT_MS when
+   * requestedTokens > bucketCapacity or tokensPerMs <= 0.
+   */
   budgetWaitMs(provider: string, estTokens: number): number {
-    const limit = this.limits[provider]?.tokensPerMinute;
-    if (!limit) return 0;
-    if (estTokens > limit) return Infinity;
+    const cfg = this.limits[provider];
+    if (!cfg || cfg.tokensPerMinute === undefined) return 0;
+    const limit = cfg.tokensPerMinute;
+    const tokensPerMs = limit / TOKEN_WINDOW_MS;
+    if (!Number.isFinite(limit) || limit <= 0 || tokensPerMs <= 0) {
+      return UNSATISFIABLE_BUDGET_WAIT_MS;
+    }
+    if (!Number.isFinite(estTokens) || estTokens > limit) {
+      return UNSATISFIABLE_BUDGET_WAIT_MS;
+    }
     const t = this.now();
     const s = this.state(provider);
     const used = this.tokensUsed(s, t);
@@ -285,7 +362,7 @@ export class ProviderLimiter {
       freed += e.tokens;
       if (freed >= mustFree) return Math.max(0, e.at + TOKEN_WINDOW_MS - t);
     }
-    return Infinity;
+    return TOKEN_WINDOW_MS;
   }
 
   private async acquireSlot(provider: string, model: string = "default", maxWaitMs: number = 60_000): Promise<void> {
@@ -332,15 +409,22 @@ export class ProviderLimiter {
     const skip = this.getSkipReason(provider, model);
     if (skip) throw new LimiterSkipError(provider, model, skip);
 
+    if (this.exceedsTokenBudgetCapacity(provider, estTokens)) {
+      throw new LimiterSkipError(provider, model, PROMPT_EXCEEDS_LIMIT_REASON);
+    }
+
     await this.acquireSlot(provider, model, req.maxBudgetWaitMs ?? 60_000);
     try {
       const maxBudgetWait = this.getMaxBudgetWaitMs(provider, req.maxBudgetWaitMs);
       const wait = this.budgetWaitMs(provider, estTokens);
+      if (!Number.isFinite(wait) || wait >= UNSATISFIABLE_BUDGET_WAIT_MS) {
+        throw new LimiterSkipError(provider, model, PROMPT_EXCEEDS_LIMIT_REASON);
+      }
       if (wait > maxBudgetWait) {
         throw new LimiterSkipError(
           provider,
           model,
-          `token budget needs ${Number.isFinite(wait) ? Math.ceil(wait) + "ms" : "more than a full minute"} of waiting (max ${maxBudgetWait}ms); skipping to next fallback`,
+          `token budget needs ${Math.ceil(wait)}ms of waiting (max ${maxBudgetWait}ms); skipping to next fallback`,
         );
       }
       if (wait > 0) await this.sleep(wait);
@@ -355,13 +439,20 @@ export class ProviderLimiter {
       while (true) {
         try {
           const out = await fn();
-          this.recordSuccess(provider);
+          this.recordSuccess(provider, model);
           return out;
         } catch (err: any) {
           const msg = err?.message || String(err);
-          if (!retried503 && is503(msg)) {
-            retried503 = true; // exactly one backoff retry, 503 only
-            await this.sleep(RETRY_503_BACKOFF_MS);
+          const canRetry =
+            !retried503 &&
+            (provider === "gemini" ? isTransientGeminiRetryable(msg) : is503(msg));
+          if (canRetry) {
+            retried503 = true; // exactly one fast retry on transient 503/500/overloaded
+            const backoffMs =
+              provider === "gemini"
+                ? computeGemini503JitterMs()
+                : RETRY_503_BACKOFF_MS;
+            await this.sleep(backoffMs);
             continue;
           }
           this.recordFailure(provider, model, msg);
@@ -380,10 +471,11 @@ export class ProviderLimiter {
     }
   }
 
-  /** Clears all breaker/budget state (tests). */
+  /** Clears all breaker/budget/cooldown state (tests). */
   reset(): void {
     this.states.clear();
     this.deadModels.clear();
+    this.modelCooldowns.clear();
   }
 }
 

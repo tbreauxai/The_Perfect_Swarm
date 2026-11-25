@@ -3,6 +3,7 @@ import { matchTeamByLabel } from './injuryAttribution.ts';
 import { extractRowOptions, type RowOptionEntry } from './marketRowBinding.ts';
 import { splitSentencesSafe } from '../parser/responseGuards.ts';
 import {
+  normalizePassIfAllLegsVetoed,
   stripVetoedLegsFromParlayText,
   type VetoedLegTarget,
 } from './claimGrounding.ts';
@@ -143,15 +144,27 @@ function extractInsightText(ins: any): string {
   return '';
 }
 
+function normalizeCleanSentence(raw: string): string {
+  let out = raw.replace(/\s+/g, ' ').trim();
+  if (!out) return '';
+  if (/^[a-z]/.test(out)) {
+    out = out[0].toUpperCase() + out.slice(1);
+  }
+  if (!/[.!?]$/.test(out)) {
+    out = `${out}.`;
+  }
+  return out;
+}
+
 function stripOrphanReferencesFromProse(
   text: string,
   orphanTargets: VetoedLegTarget[],
-  activeRowIds: Set<string>,
+  _activeRowIds: Set<string>,
   activePickCount: number,
 ): { text: string; changed: boolean } {
   if (!text || !text.trim()) return { text, changed: false };
   let working = text;
-  if (orphanTargets.length > 0) {
+  if (orphanTargets.length > 0 && activePickCount > 0) {
     working = stripVetoedLegsFromParlayText(working, orphanTargets);
   }
   working = reconcileLegCountText(working, activePickCount);
@@ -160,59 +173,19 @@ function stripOrphanReferencesFromProse(
     return { text: working, changed: working !== text };
   }
 
-  const containsActiveRow = (s: string) =>
-    Array.from(activeRowIds).some((rid) => new RegExp(`\\b${escapeRegExp(rid)}\\b`, 'i').test(s));
   const containsOrphan = (s: string) => orphanTargets.some((t) => targetMatchesSpanSafe(s, t));
 
+  // S1: Whole-sentence removal only using the abbreviation-safe splitter — never slice mid-sentence at a comma or clause.
   const sentences = splitSentencesSafe(working);
   const kept: string[] = [];
 
   for (const rawSentence of sentences) {
     const sentence = rawSentence.trim();
     if (!sentence) continue;
-    if (!containsOrphan(sentence)) {
-      kept.push(sentence);
+    if (containsOrphan(sentence)) {
       continue;
     }
-
-    // Sentence mixes active + orphan legs: try sub-clause isolation on semicolons, bullets, or " + " / ", and "
-    const subParts = sentence.split(/;\s+|\s+with\s+(?=R\d+\b)|,\s*(?=(?:and|plus|alongside)\s+)/i);
-    const cleanSubs: string[] = [];
-    for (const part of subParts) {
-      const cleanedPart = part
-        .replace(/\b(?:and|plus|alongside)\s+$/i, '')
-        .trim();
-      if (!cleanedPart) continue;
-      if (!containsOrphan(cleanedPart)) {
-        cleanSubs.push(cleanedPart);
-        continue;
-      }
-      // Also strip comma/parenthetical segments naming only the orphan
-      const commaParts = cleanedPart.split(/,\s+/);
-      if (commaParts.length > 1) {
-        const survivingCommas = commaParts.filter((cp) => !containsOrphan(cp) || containsActiveRow(cp));
-        const rejoined = survivingCommas
-          .filter((cp) => !containsOrphan(cp))
-          .join(', ')
-          .replace(/,\s*(?:and|with)\s*\.?$/i, '.')
-          .trim();
-        if (rejoined && !containsOrphan(rejoined)) {
-          cleanSubs.push(rejoined);
-        }
-      }
-    }
-    if (cleanSubs.length > 0) {
-      let joined = cleanSubs.join('; ').trim();
-      joined = joined
-        .replace(/\s*\+\s*(?=[.,;]|$)/g, '')
-        .replace(/,\s*(?=[.;]|$)/g, '')
-        .replace(/\s+([.,;!?])/g, '$1')
-        .replace(/\(\s*\)/g, '')
-        .trim();
-      if (joined && !containsOrphan(joined)) {
-        kept.push(/[.!?]$/.test(joined) ? joined : `${joined}.`);
-      }
-    }
+    kept.push(normalizeCleanSentence(sentence));
   }
 
   const out = kept
@@ -235,6 +208,10 @@ export function syncCompilerProseWithFinalPicks<T extends Record<string, any>>(
     headers?: GameHeader[];
     rowMap?: Map<string, RowOptionEntry>;
     slateText?: string;
+    vetoedLegs?: VetoedLegTarget[];
+    vetoTexts?: string[];
+    criticApproved?: boolean;
+    seatScorecards?: any[];
   },
 ): {
   report: T;
@@ -272,13 +249,16 @@ export function syncCompilerProseWithFinalPicks<T extends Record<string, any>>(
   }
 
   const orphanTargetsMap = new Map<string, VetoedLegTarget>();
-  const registerOrphan = (rowId?: string, labelHint?: string) => {
+  const registerOrphan = (rowId?: string, labelHint?: string, extraAliases?: string[]) => {
     const normRow = rowId ? rowId.toUpperCase() : undefined;
     if (normRow && activeRowIds.has(normRow)) return;
     const rowText = normRow ? rowMap.get(normRow)?.text : undefined;
     const combinedLabel = [labelHint, rowText].filter(Boolean).join(' ').trim();
-    const rawAliases = buildAliasesForText(combinedLabel);
-    const filteredAliases = rawAliases.filter((a) => !activeAliases.has(a));
+    const rawAliases = [
+      ...buildAliasesForText(combinedLabel),
+      ...(Array.isArray(extraAliases) ? extraAliases.map((a) => a.toLowerCase().trim()).filter(Boolean) : [])
+    ];
+    const filteredAliases = Array.from(new Set(rawAliases.filter((a) => !activeAliases.has(a))));
     const key = normRow || filteredAliases[0] || combinedLabel.toLowerCase();
     if (!key) return;
     const prev = orphanTargetsMap.get(key);
@@ -305,6 +285,18 @@ export function syncCompilerProseWithFinalPicks<T extends Record<string, any>>(
       (!rid && side && activeSidesNorm.has(side.toLowerCase()));
     if (!matchesActive && (rid || side)) {
       registerOrphan(rid, side);
+    }
+  }
+
+  for (const vLeg of options?.vetoedLegs || []) {
+    if (!vLeg) continue;
+    const rid = vLeg.rowId ? vLeg.rowId.toUpperCase() : undefined;
+    const aliases = Array.isArray(vLeg.teamAliases) ? vLeg.teamAliases : [];
+    const matchesActive =
+      (rid && activeRowIds.has(rid)) ||
+      (aliases.length > 0 && aliases.some((a) => activeAliases.has(a.toLowerCase().trim())));
+    if (!matchesActive) {
+      registerOrphan(rid, vLeg.teamLabel, aliases);
     }
   }
 
@@ -386,7 +378,12 @@ export function syncCompilerProseWithFinalPicks<T extends Record<string, any>>(
         synced = true;
         continue;
       }
-      filtered.push(item);
+      const normalizedTxt = normalizeCleanSentence(txt);
+      const normalizedItem = asObjects && typeof item === 'object'
+        ? { ...item, message: normalizedTxt }
+        : normalizedTxt;
+      if (normalizedTxt !== txt) synced = true;
+      filtered.push(normalizedItem);
     }
 
     if (activePicks.length > 0 && (orphanTargets.length > 0 || filtered.length !== arr.length)) {
@@ -486,23 +483,45 @@ export function syncCompilerProseWithFinalPicks<T extends Record<string, any>>(
     );
   };
 
-  for (const field of ['summary', 'analysis'] as const) {
-    if (typeof rep[field] !== 'string' || !rep[field].trim()) continue;
-    const orig = rep[field];
-    const stripped = stripOrphanReferencesFromProse(orig, orphanTargets, activeRowIds, activePicks.length);
-    let nextVal = stripped.text;
-    const stillHasOrphan = orphanTargets.some((t) => targetMatchesSpanSafe(nextVal, t));
-    if (
-      activePicks.length > 0 &&
-      (!nextVal ||
-        stillHasOrphan ||
-        (orphanTargets.length > 0 && activePicks.some((pk: any) => !isPickRepresentedInProse(pk, nextVal))))
-    ) {
-      nextVal = field === 'summary' ? rebuildSummary() : rebuildAnalysis();
-    }
-    if (nextVal !== orig) {
-      rep[field] = nextVal;
-      synced = true;
+  const isFullVetoPass =
+    activePicks.length === 0 &&
+    (options?.criticApproved === false ||
+      rep.criticApproved === false ||
+      (orphanTargets.length > 0 &&
+        ((options?.initialPicks?.length ?? 0) > 0 || (options?.vetoedLegs?.length ?? 0) > 0)));
+
+  if (isFullVetoPass) {
+    normalizePassIfAllLegsVetoed(
+      rep,
+      Math.max(options?.initialPicks?.length ?? 0, orphanTargets.length),
+      true,
+      {
+        vetoTexts: options?.vetoTexts,
+        vetoedLegs: (options?.vetoedLegs && options.vetoedLegs.length > 0) ? options.vetoedLegs : orphanTargets,
+        seatScorecards: options?.seatScorecards,
+        criticApproved: false,
+      },
+    );
+    synced = true;
+  } else {
+    for (const field of ['summary', 'analysis'] as const) {
+      if (typeof rep[field] !== 'string' || !rep[field].trim()) continue;
+      const orig = rep[field];
+      const stripped = stripOrphanReferencesFromProse(orig, orphanTargets, activeRowIds, activePicks.length);
+      let nextVal = stripped.text;
+      const stillHasOrphan = orphanTargets.some((t) => targetMatchesSpanSafe(nextVal, t));
+      if (
+        activePicks.length > 0 &&
+        (!nextVal ||
+          stillHasOrphan ||
+          (orphanTargets.length > 0 && activePicks.some((pk: any) => !isPickRepresentedInProse(pk, nextVal))))
+      ) {
+        nextVal = field === 'summary' ? rebuildSummary() : rebuildAnalysis();
+      }
+      if (nextVal !== orig) {
+        rep[field] = nextVal;
+        synced = true;
+      }
     }
   }
 

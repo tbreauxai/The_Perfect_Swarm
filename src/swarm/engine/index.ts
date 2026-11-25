@@ -370,7 +370,9 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 retrievalContext: params.retrievalContext,
                 snapshotRefs: params.snapshotRefs,
                 retrievalScope: params.retrievalScope,
-                preloadedGameContext: params.preloadedGameContext
+                preloadedGameContext: params.preloadedGameContext,
+                triageMode: params.triageMode || (isTwoHopSlateRun ? 'two-hop' : undefined),
+                curatedDossierActive: Boolean(params.curatedDossier || params.seedManifest || isTwoHopSlateRun)
             });
 
             const mathBlock = profilingResult.mathGroundingReport?.promptBlock;
@@ -710,30 +712,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     return `${baseVerifierEvidence}\n\n${calibrationBlock.slice(0, sliceLen).trimEnd()}${label}`;
                 })();
 
-                const synthesisResult = blackboard ? emptySynthesisResult() : compileSynthesisPrompt({
-                    task,
-                    rawInput: profilingResult.rawInput,
-                    analysts,
-                    managerAgent,
-                    allAnalystReports: clusterResult.allAnalystReports,
-                    clusterDigests: clusterResult.clusterDigests,
-                    historicalContext,
-                    workflowConsensus,
-                    settings,
-                    activeVariant,
-                    context,
-                    params,
-                    bypassCache,
-                    verifierEvidence,
-                    ...(allToolCallTrace.length > 0 ? { toolCallTrace: allToolCallTrace } : {})
-                });
-
-                workflowOriginalPromptTokens += synthesisResult.workflowOriginalPromptTokens;
-                workflowCompressedPromptTokens += synthesisResult.workflowCompressedPromptTokens;
-                workflowPromptTokensSaved += synthesisResult.workflowPromptTokensSaved;
-                workflowDeduplicatedCount += synthesisResult.workflowDeduplicatedCount;
-
-                // Step 5 & 6: Verification vs Standard Synthesis Execution
+                // Step 5 & 6: Extract Critic verdict/vetoes/scorecards before synthesis compilation
                 const isCriticSeat = (r: any): boolean => {
                     const label = String(r?.seat || r?.role || '').toLowerCase();
                     return label === 'critic' || label === 'risk' || label === 'risk_critic' || label.includes('critic') || label.includes('risk');
@@ -786,6 +765,29 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                         }
                     }
                 }
+                const stageSeatScorecards: any[] = [];
+                for (const r of flatReports as any[]) {
+                    if (!r || typeof r !== 'object') continue;
+                    const seatLabel = String(r.role || r.seat || '').trim() || (isCriticSeat(r) ? 'Risk Critic' : 'Analyst');
+                    if (isCriticSeat(r)) {
+                        const isVeto = r.pass === false || r.criticApproved === false || String(r.verdict || '').toLowerCase() === 'veto';
+                        stageSeatScorecards.push({
+                            seat: /critic/i.test(seatLabel) ? seatLabel : 'Risk Critic',
+                            verdict: isVeto ? 'veto' : 'approve',
+                            criticApproved: !isVeto,
+                            wageringPass: Boolean(r.wageringPass ?? isVeto),
+                            ...(typeof r.verdict === 'string' && r.verdict.trim() ? { notes: r.verdict.trim() } : (typeof r.summary === 'string' && r.summary.trim() ? { notes: r.summary.trim() } : {}))
+                        });
+                    } else {
+                        const picksCount = Array.isArray(r.picks) ? r.picks.length : 0;
+                        stageSeatScorecards.push({
+                            seat: seatLabel,
+                            verdict: picksCount > 0 ? 'propose' : 'pass',
+                            picksCount,
+                            ...(typeof r.summary === 'string' && r.summary.trim() ? { notes: r.summary.trim() } : {})
+                        });
+                    }
+                }
                 const paramCriticRes = (params as any)?.criticResult || (params as any)?.criticFeedback || (settings as any)?.criticResult;
                 if (paramCriticRes) {
                     if (typeof paramCriticRes === 'string' && paramCriticRes.trim()) {
@@ -802,6 +804,31 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                         }
                     }
                 }
+
+                const synthesisResult = blackboard ? emptySynthesisResult() : compileSynthesisPrompt({
+                    task,
+                    rawInput: profilingResult.rawInput,
+                    analysts,
+                    managerAgent,
+                    allAnalystReports: clusterResult.allAnalystReports,
+                    clusterDigests: clusterResult.clusterDigests,
+                    historicalContext,
+                    workflowConsensus,
+                    settings,
+                    activeVariant,
+                    context,
+                    params,
+                    bypassCache,
+                    verifierEvidence,
+                    ...(allToolCallTrace.length > 0 ? { toolCallTrace: allToolCallTrace } : {}),
+                    ...(stage2VetoedLegs.length > 0 ? { vetoedLegs: stage2VetoedLegs } : {})
+                });
+
+                workflowOriginalPromptTokens += synthesisResult.workflowOriginalPromptTokens;
+                workflowCompressedPromptTokens += synthesisResult.workflowCompressedPromptTokens;
+                workflowPromptTokensSaved += synthesisResult.workflowPromptTokensSaved;
+                workflowDeduplicatedCount += synthesisResult.workflowDeduplicatedCount;
+
                 const allPlaceholderOrDataRequest = flatReports.length > 0 && nonCriticReports.every(r =>
                     ((r as any)._placeholder === true && !(Array.isArray((r as any).picks) && (r as any).picks.length > 0))
                     || isDataRequest(r)
@@ -823,8 +850,22 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     })
                     .filter(Boolean)
                     .join('\n\n');
-                const baseJoinedEvidence = [joinedToolEvidence, calibrationBlock].filter(Boolean).join('\n\n');
-                const verifierToolResults = verifierEvidence || baseJoinedEvidence;
+                const hop1CuratedDossierEvidence = (
+                    (curatedDossier && Array.isArray((curatedDossier as any).sections) ? (curatedDossier as any).sections : null) ??
+                    (unifiedSlateDossier && Array.isArray(unifiedSlateDossier.sections) ? unifiedSlateDossier.sections : [])
+                )
+                    .map((sec: any) => {
+                        const sum = typeof sec?.summary === 'string' ? sec.summary.trim() : '';
+                        if (!sum) return '';
+                        const evId = typeof sec?.event_id === 'string' ? sec.event_id.trim() : '';
+                        return evId && !sum.includes(evId) ? `EVENT ${evId}\n${sum}` : sum;
+                    })
+                    .filter(Boolean)
+                    .join('\n\n');
+                const baseJoinedEvidence = [hop1CuratedDossierEvidence, joinedToolEvidence, calibrationBlock].filter(Boolean).join('\n\n');
+                const verifierToolResults = [hop1CuratedDossierEvidence, verifierEvidence || baseJoinedEvidence]
+                    .filter((part, idx, arr) => Boolean(part) && (idx === 0 || !arr[0].includes(part)))
+                    .join('\n\n');
 
                 if (allPlaceholderOrDataRequest) {
                     const criticParts: string[] = [];
@@ -897,6 +938,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                 ...(stage2CriticVetoes.length > 0 ? { criticVetoes: stage2CriticVetoes } : {}),
                                 ...(stage2VetoedLegs.length > 0 ? { vetoedLegs: stage2VetoedLegs } : {}),
                                 ...(stage2VetoedClaims.length > 0 ? { vetoedClaims: stage2VetoedClaims } : {}),
+                                ...(stageSeatScorecards.length > 0 ? { seatScorecards: stageSeatScorecards } : {}),
                                 ...(stage1HadProposedPicks ? { hadProposedPicks: true } : {}),
                                 ...(typeof stage2CriticApproved === 'boolean' ? { criticVerdictApproved: stage2CriticApproved } : {}),
                                 ...(verifierToolResults ? { toolResults: verifierToolResults } : {}),
@@ -930,6 +972,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                     criticVetoes: stage2CriticVetoes,
                                     ...(stage2VetoedLegs.length > 0 ? { vetoedLegs: stage2VetoedLegs } : {}),
                                     ...(stage2VetoedClaims.length > 0 ? { vetoedClaims: stage2VetoedClaims } : {}),
+                                    ...(stageSeatScorecards.length > 0 ? { seatScorecards: stageSeatScorecards } : {}),
                                     ...(stage2CriticAuditFailed ? { criticAuditFailed: true } : {}),
                                     ...(stage2UnauditedLegs.length > 0 ? { unauditedLegs: stage2UnauditedLegs } : {}),
                                     ...(stage1HadProposedPicks ? { hadProposedPicks: true } : {}),
@@ -963,7 +1006,39 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                         }
                         managerFailed = true;
                         recordDegraded(context, managerAgent.id || 'manager');
-                        finalAnalysis = buildPartialFinalAnalysis(best, getDegraded(context));
+                        const isBettingPartial =
+                            (settings as any)?.responseSchema === 'morning_judge' ||
+                            (params as any)?.originApp === 'duelodds' ||
+                            (params as any)?.callerAppId === 'duelodds' ||
+                            (params as any)?.appId === 'duelodds' ||
+                            (params as any)?.isBettingRun === true ||
+                            stage1HadProposedPicks ||
+                            criticReports.length > 0;
+                        const criticRan = criticReports.length > 0 || Boolean(paramCriticRes);
+                        const criticExplicitlyPassed =
+                            criticReports.some((cr: any) => cr && (cr.pass === true || cr.criticApproved === true)) ||
+                            (paramCriticRes && typeof paramCriticRes === 'object' && (paramCriticRes.pass === true || paramCriticRes.criticApproved === true));
+                        const criticExplicitlyFailed =
+                            stage2CriticAuditFailed ||
+                            criticReports.some((cr: any) => cr && (cr.pass === false || cr.criticApproved === false)) ||
+                            (paramCriticRes && typeof paramCriticRes === 'object' && paramCriticRes.pass === false);
+                        const criticPassed = criticRan && criticExplicitlyPassed && !criticExplicitlyFailed;
+                        finalAnalysis = buildPartialFinalAnalysis(
+                            best,
+                            getDegraded(context),
+                            isBettingPartial
+                                ? {
+                                    isBettingRun: true,
+                                    criticRan,
+                                    criticPassed,
+                                    criticApproved: criticPassed,
+                                    vetoedLegs: stage2VetoedLegs,
+                                    vetoTexts: stage2CriticVetoes,
+                                    seatScorecards: stageSeatScorecards,
+                                    allAnalystReports: clusterResult.allAnalystReports
+                                }
+                                : undefined
+                        );
                         context.addEvent({
                             agentRole: 'Partial Result Fallback',
                             action: 'Manager Chain Exhausted',

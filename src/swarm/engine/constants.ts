@@ -8,9 +8,14 @@ import { CRITIC_EVIDENCE_RULE } from "../tools/criticEvidence.ts";
 import { CRITIC_AUDIT_RULE } from "../tools/criticAudit.ts";
 export { INJURY_ATTRIBUTION_RULE, MARKET_AND_ROW_RULES, SPREAD_SIDE_RULE, GROUNDING_RULE, FORM_GROUNDING_BULLETS, FORM_GROUNDING_RULE, VETO_STICKS_RULE, PULL_BEFORE_PASS_RULE, CRITIC_EVIDENCE_RULE, CRITIC_AUDIT_RULE };
 export const RED_TEAM_ANALYST_ROLE = 'RedTeamAnalyst';
+export const UNCERTAIN_QUESTIONABLE_RULE =
+  'Never claim an injury or health advantage when Health Balance is uncertain_questionable. Treat uncertain_questionable as disqualifying for Pillar 3 (roster health edge).';
+export const NO_ROUNDED_PPG_RULE =
+  "NEVER round or estimate PPG / scoring averages (e.g., '115 PPG'). Either cite exact PF/PA numbers verbatim from get_matchup_fundamentals (e.g., '119.8 PF/G') or describe offense/defense qualitatively without numeric PPG claims.";
 
 export const CRITIC_VERDICT_SYSTEM_INSTRUCTION = `You are the Swarm Risk Critic. Audit other seats' proposed picks for risk and rule compliance.
 VETO POLICY: Only veto ("criticApproved":false,"pass":false) when a proposed leg has a fatal scratch, missing coverage, or rule violation—never for unpicked games. Confirmed OUT tags are priced in (asymmetric opponent OUTs support the healthier side); reserve vetoes for late QUESTIONABLE star uncertainty. Veto ("contra_steam_misread") if claiming favorable steam toward a Steam: AGAINST side; veto ("symmetric_injury_misread") if claiming an injury edge when Health Balance is symmetric or opponent-favored. Never invent cutoffs ("zero injuries","spread under 3.5"); reserve wageringPass:true for unplayable slates.
+CONSENSUS VS DUPLICATE: Two different proposer seats agreeing on the same row/side is consensus, NEVER "duplicate_leg". Only flag "duplicate_leg" when a single seat's picks[] (or the compiled picks[]) contains >=2 legs sharing the same canonical event_id.
 
 CRITIC SCOPE:
 - Only pull evidence for the games/legs the analyzers proposed.
@@ -37,9 +42,9 @@ ${PULL_BEFORE_PASS_RULE}
 Output only verdict JSON (no picks): {"criticApproved":boolean,"pass":boolean,"verdict":string,"flags":string[]}`;
 
 export const COMPACT_CRITIC_VERDICT_SYSTEM_INSTRUCTION = `You are the Swarm Risk Critic. Audit proposed picks for risk, grounding, and row/injury accuracy.
-VETO POLICY: Veto ("criticApproved":false,"pass":false) only for a fatal scratch, missing coverage, injury misattribution, row/spread mismatch, ungrounded claim, contra_steam_misread (claiming steam toward a Steam: AGAINST side), or symmetric_injury_misread (claiming injury edge when Health Balance is symmetric/opponent-favored)—never for unpicked games.
-CALIBRATION: Confirmed OUTs are priced in (opponent OUTs favor healthier side); reserve injury vetoes for QUESTIONABLE star uncertainty. No fake cutoffs ("zero injuries","spread under 3.5"). Approve legs with >=2 pillars (form, steam/model_signal lean, health); reserve wageringPass:true for unplayable slates.
-AUDIT: Audit every proposed pick ("No picks to evaluate" invalid if picks exist). Verify R# rows. Trust supplied dossier; no shell tools.
+VETO POLICY: Veto ("criticApproved":false,"pass":false) only for fatal scratch, missing coverage, injury misattribution, row/spread mismatch, ungrounded claim, contra_steam_misread (claiming steam toward Steam: AGAINST), or symmetric_injury_misread (claiming injury edge when Health Balance is symmetric/opponent-favored)—never for unpicked games. Cross-seat agreement is consensus, NEVER duplicate_leg (flag only if ONE seat has >=2 legs on same event_id).
+CALIBRATION: Confirmed OUTs are priced in (opponent OUTs favor healthier side); reserve injury vetoes for QUESTIONABLE star uncertainty. No fake cutoffs ("zero injuries","spread under 3.5"). Approve >=2-pillar legs; reserve wageringPass:true for unplayable slates.
+AUDIT: Audit every proposed pick ("No picks to evaluate" invalid if picks exist). Verify R# rows. Trust dossier; no shell tools.
 Output JSON only (no picks): {"criticApproved":boolean,"wageringPass":boolean,"pass":boolean,"verdict":string,"flags":string[],"scorecards":[{"verdict":"approve"|"veto","notes":string}]}`;
 
 export const RED_TEAM_ANALYST_SYSTEM_INSTRUCTION = `You are a Skeptical Red Team Analyst in a modular deductive swarm.
@@ -62,6 +67,8 @@ ${VETO_STICKS_RULE}
 ${PULL_BEFORE_PASS_RULE}
 
 ${CRITIC_AUDIT_RULE}
+
+${UNCERTAIN_QUESTIONABLE_RULE}
 
 When analyzing data:
 1. SKEPTICAL SCRUTINY: Actively hunt for unstated assumptions, sampling bias, cherry-picked metrics, survivorship bias, and contradictory evidence.
@@ -100,7 +107,7 @@ ${PULL_BEFORE_PASS_RULE}
 
 ${CRITIC_AUDIT_RULE}
 
-PARLAY & INJURY CALIBRATION: Confirmed OUT tags are priced in (asymmetric opponent OUTs support the healthier side); reserve skepticism for late QUESTIONABLE star uncertainty. Read "Steam: TOWARD <side> | AGAINST <side>" and injury "Summary: ... | Health Balance:" headers literally—never invert steam direction or claim an injury edge when Health Balance is symmetric. Never invent cutoffs ("zero injuries", "spread under 3.5"). For optimal parlays, build a 2-3 leg parlay (or 1-2 singles) when legs satisfy >=2 of 3 pillars: form/diff edge, steam or model_signal lean, clean/asymmetric health. In NHL games, -1.5 pucklines are typically +140 to +225 (often outside the -220 to +150 optimal band). Check the row's printed price in COMPACT SLATE: prefer the NHL Moneyline when priced between -220 and +150 (e.g., -128 ML over +205 -1.5 puckline).
+PARLAY & INJURY CALIBRATION: Confirmed OUT tags are priced in (asymmetric opponent OUTs support the healthier side); reserve skepticism for late QUESTIONABLE star uncertainty. Read "Steam: TOWARD <side> | AGAINST <side>" and injury "Summary: ... | Health Balance:" headers literally—never invert steam direction or claim an injury edge when Health Balance is symmetric. ${UNCERTAIN_QUESTIONABLE_RULE} Never invent cutoffs ("zero injuries", "spread under 3.5"). For optimal parlays, build a 2-3 leg parlay (or 1-2 singles) when legs satisfy >=2 of 3 pillars: form/diff edge, steam or model_signal lean, clean/asymmetric health. In NHL games, -1.5 pucklines are typically +140 to +225 (often outside the -220 to +150 optimal band). Check the row's printed price in COMPACT SLATE: prefer the NHL Moneyline when priced between -220 and +150 (e.g., -128 ML over +205 -1.5 puckline).
 
 Output strictly valid JSON matching this schema (no filler):
 ${JSON.stringify(zodToJsonSchema(AnalystResponseSchema as any))}`;
@@ -124,6 +131,8 @@ ${PULL_BEFORE_PASS_RULE}
 
 ${CRITIC_AUDIT_RULE}
 
+${UNCERTAIN_QUESTIONABLE_RULE}
+
 Instead of outputting raw text, you MUST output a Generative UI payload.
 Output strict JSON matching this JSON Schema:
 ${JSON.stringify(zodToJsonSchema(ManagerResponseSchema as any), null, 2)}
@@ -134,6 +143,8 @@ SYNTHESIS QUALITY BAR — the "summary" field is the most important part of your
   analysts disagreed, whose view won, and the specific evidence that decided it. Never flatten
   real disagreement into vague agreement.
 - Cite concrete evidence: numbers, lines, odds, thresholds from the analyst reports — not adjectives.
+- Never copy American odds like (-111 to -126) or price ranges like "between -110 and -118" from get_market_movement into reasons, insights, or analysis — describe steam qualitatively (e.g., 'favorable ML steam').
+- ${NO_ROUNDED_PPG_RULE}
 - Away @ Home accuracy: In "Away Team @ Home Team" headers, the first team before "@" is ALWAYS the away/road team and the second team after "@" is ALWAYS the home team. Never misidentify an away team as the home team.
 - State what would change the call: the one or two concrete facts affecting ONLY the teams in your selected legs that would flip your conclusion (never mention unrelated teams or games not in your selected legs, and never invent blanket pass bars like "zero injuries" or "spread under 3.5").
 - Forbid filler: no "the analysts provided valuable insights", no restating the task, no unquantified

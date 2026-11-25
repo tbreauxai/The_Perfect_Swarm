@@ -1,6 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
 import { Agent } from '../agent.ts';
-import { DEFAULT_PROVIDER_MODELS } from '../server/modelsProvider.ts';
+import { DEFAULT_PROVIDER_MODELS, remapDeprecatedGeminiModel } from '../server/modelsProvider.ts';
 import type { ProviderCredential, Provider, AgentConfig } from '../types.ts';
 import type { SwarmEngineSettings } from '../types.ts';
 import type { AgentVariantConfig, AgentExperiment } from '../experiment.ts';
@@ -100,6 +100,11 @@ export function resolveSwarmAgents(
         { seatModelsOnly: isMorningRun }
     );
 
+    const normalizeModelForProvider = (provider: string, rawModel?: string): string => {
+        const chosen = (rawModel || DEFAULT_PROVIDER_MODELS[provider] || '').trim();
+        return provider === 'gemini' ? remapDeprecatedGeminiModel(chosen) : chosen;
+    };
+
     const normalizeFallbackList = (rawFallbacks: any[] | undefined): ProviderCredential[] => {
         if (!Array.isArray(rawFallbacks)) return [];
         const out: ProviderCredential[] = [];
@@ -108,7 +113,7 @@ export function resolveSwarmAgents(
             const prov = fb.provider as Provider;
             const { key, client } = resolveProvider(prov, settings || ({} as SwarmEngineSettings), defaultAi);
             const fbKey = fb.apiKey ? sanitizeApiKey(fb.apiKey) : key;
-            const fbModel = (fb.modelName || fb.model || DEFAULT_PROVIDER_MODELS[prov] || '').trim();
+            const fbModel = normalizeModelForProvider(prov, fb.modelName || fb.model);
             const isFbMock = prov === 'simulated' || prov === 'mock' || String(prov).includes('mock') || String(prov).includes('simulated');
             if (!fbKey && !isFbMock) continue;
             out.push({
@@ -124,13 +129,16 @@ export function resolveSwarmAgents(
     const { key: mKey, client: mClient } = resolveProvider(managerConfig.provider, settings, defaultAi);
     const finalMKey = managerConfig.apiKey ? sanitizeApiKey(managerConfig.apiKey) : mKey;
     validateProviderKey(managerConfig.provider, finalMKey, managerConfig.role || 'Manager Node');
-    const managerModel = managerConfig.model || (managerConfig as any).modelName || DEFAULT_PROVIDER_MODELS[managerConfig.provider] || '';
+    const managerModel = normalizeModelForProvider(
+        managerConfig.provider,
+        managerConfig.model || (managerConfig as any).modelName
+    );
     const explicitManagerFallbacks = normalizeFallbackList((managerConfig as any).fallbackProviders || (managerConfig as any).fallbacks);
     const managerFallbacks = mergeFallbacks(
         explicitManagerFallbacks,
         buildManagerChain(defaultAi, { provider: managerConfig.provider, model: managerModel }),
         availableFallbacks
-    ).filter(f => f.provider !== managerConfig.provider);
+    ).filter(f => !(f.provider === managerConfig.provider && (f.modelName || '') === managerModel));
     const managerAgent = new Agent('Manager Node', managerModel, managerConfig.provider, finalMKey, mClient, managerFallbacks);
     managerAgent.preserveFallbackOrder = true;
     managerAgent.id = managerConfig.id || managerConfig.role || 'manager';
@@ -143,7 +151,7 @@ export function resolveSwarmAgents(
         const finalAKey = ac.apiKey ? sanitizeApiKey(ac.apiKey) : aKey;
         const isMock = ac.provider === 'simulated' || ac.provider === 'mock' || ac.provider === 'custom-mock' || ac.provider.includes('mock') || ac.provider.includes('simulated');
         if (finalAKey || isMock) {
-            const aModel = ac.model || (ac as any).modelName || DEFAULT_PROVIDER_MODELS[ac.provider] || '';
+            const aModel = normalizeModelForProvider(ac.provider, ac.model || (ac as any).modelName);
             const explicitFallbacks = normalizeFallbackList((ac as any).fallbackProviders || (ac as any).fallbacks);
             const aFallbacks = mergeFallbacks(explicitFallbacks, availableFallbacks).filter(f => f.provider !== ac.provider);
             const analyst = new Agent(ac.role || 'Analyst', aModel, ac.provider, finalAKey, aClient, aFallbacks);
@@ -165,7 +173,7 @@ export function resolveSwarmAgents(
         const finalCKey = dedicatedCriticConfig.apiKey ? sanitizeApiKey(dedicatedCriticConfig.apiKey) : cKey;
         const isCriticMock = dedicatedCriticConfig.provider === 'simulated' || dedicatedCriticConfig.provider === 'mock' || dedicatedCriticConfig.provider === 'custom-mock' || dedicatedCriticConfig.provider.includes('mock') || dedicatedCriticConfig.provider.includes('simulated');
         if (finalCKey || isCriticMock) {
-            const cModel = dedicatedCriticConfig.model || (dedicatedCriticConfig as any).modelName || DEFAULT_PROVIDER_MODELS[dedicatedCriticConfig.provider] || '';
+            const cModel = normalizeModelForProvider(dedicatedCriticConfig.provider, dedicatedCriticConfig.model || (dedicatedCriticConfig as any).modelName);
             const explicitCriticFallbacks = normalizeFallbackList((dedicatedCriticConfig as any).fallbackProviders || (dedicatedCriticConfig as any).fallbacks);
             const cFallbacks = mergeFallbacks(explicitCriticFallbacks, availableFallbacks).filter(f => f.provider !== dedicatedCriticConfig.provider);
             dedicatedCriticAgent = new Agent(dedicatedCriticConfig.role || 'Verification Critic', cModel, dedicatedCriticConfig.provider, finalCKey, cClient, cFallbacks);

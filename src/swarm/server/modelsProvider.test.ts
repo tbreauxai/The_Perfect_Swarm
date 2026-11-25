@@ -143,7 +143,7 @@ describe('modelsProvider rankModelsForAccount & probing', () => {
         } as any);
 
         const models = [
-            { id: 'gemini-2.5-flash', name: 'Gemini Flash' }
+            { id: 'gemini-3.5-flash-lite', name: 'Gemini 3.5 Flash-Lite' }
         ];
 
         const result = await rankModelsForAccount('gemini', models, undefined);

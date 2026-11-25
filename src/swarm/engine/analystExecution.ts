@@ -28,7 +28,8 @@ import {
     RED_TEAM_ANALYST_ROLE,
     RED_TEAM_ANALYST_SYSTEM_INSTRUCTION,
     CRITIC_VERDICT_SYSTEM_INSTRUCTION,
-    COMPACT_CRITIC_VERDICT_SYSTEM_INSTRUCTION
+    COMPACT_CRITIC_VERDICT_SYSTEM_INSTRUCTION,
+    UNCERTAIN_QUESTIONABLE_RULE
 } from './constants.ts';
 import { recordDegraded } from './partialResult.ts';
 import { AnalystScorecardSchema } from '../types.ts';
@@ -50,6 +51,7 @@ import { auditInjuryAttribution, sanitizeMisattributedPicksAndText } from '../to
 import {
     auditClaimGrounding,
     auditCriticPremiseContradictions,
+    detectIntraSeatDuplicateLegs,
     mergeVetoedClaims,
     mergeVetoedLegTargets,
     sanitizeUngroundedClaims,
@@ -538,10 +540,13 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
         const customSeatPrompt = !isCritic
             ? (settings?.systemPrompts?.[(analyst as any).id || analyst.role] || settings?.systemPrompts?.[analyst.role])
             : undefined;
-        const baseInstruction = activeVariant?.systemPrompts?.[(analyst as any).id || analyst.role]
+        let baseInstruction = activeVariant?.systemPrompts?.[(analyst as any).id || analyst.role]
             || activeVariant?.systemPrompts?.[analyst.role]
             || customSeatPrompt
             || defaultInstruction;
+        if (!isCritic && !/uncertain_questionable/i.test(baseInstruction)) {
+            baseInstruction = `${baseInstruction}\n\n${UNCERTAIN_QUESTIONABLE_RULE}`;
+        }
         analyst.setSystemInstruction(baseInstruction);
 
         const seat = (analyst as any).id || analyst.role;
@@ -595,7 +600,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
         const passAuditTargetIds = hasAuditContext && auditTargetIds.length === 0
             ? (hasUnifiedDossier
                 ? selectTopPassAuditEventIds(unifiedDossier!.entries, mergedHeadersForRowCheck, 4)
-                : (config.triageMode === 'two-hop' || fullRawSource.includes('rows=R')
+                : (config.triageMode === 'two-hop' || String(fullRawSource || '').includes('rows=R')
                     ? (activeEventIdList.length > 0
                         ? filterHeadersByEventIds(mergedHeadersForRowCheck, activeEventIdList).map(h => h.eventId)
                         : activeScopedHeaders.map(h => h.eventId))
@@ -939,7 +944,12 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                         scorecards: proposedAuditContext.proposerReports.flatMap((r: any) =>
                             Array.isArray(r?.scorecards) ? r.scorecards : (r?.scorecard ? [r.scorecard] : [])
                         ),
-                        summary: proposedAuditContext.summaryText || ''
+                        analysis: proposedAuditContext.proposerReports
+                            .map((r: any) => (typeof r?.analysis === 'string' ? r.analysis : ''))
+                            .filter(Boolean)
+                            .join(' '),
+                        summary: proposedAuditContext.summaryText || '',
+                        seatReports: proposedAuditContext.proposerReports
                     }
                     : {
                         ...(Array.isArray(proposedAuditContext.proposedPicks) ? { picks: proposedAuditContext.proposedPicks } : {}),
@@ -1324,7 +1334,8 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                             .map((r: any) => (typeof r?.analysis === 'string' ? r.analysis : ''))
                             .filter(Boolean)
                             .join(' '),
-                        insights: proposedAuditContext.proposerReports.flatMap((r: any) => Array.isArray(r?.insights) ? r.insights : [])
+                        insights: proposedAuditContext.proposerReports.flatMap((r: any) => Array.isArray(r?.insights) ? r.insights : []),
+                        seatReports: proposedAuditContext.proposerReports
                     }
                     : auditTargetProposal;
 
@@ -1411,6 +1422,68 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                     const combinedVetoedClaims = [...(groundingAudit.vetoedClaims || []), ...(premiseAudit.vetoedClaims || [])];
                     if (combinedVetoedClaims.length > 0) {
                         stage2VetoedClaims = mergeVetoedClaims(stage2VetoedClaims, combinedVetoedClaims);
+                    }
+                }
+
+                // P0-4: Scope duplicate_leg strictly within a single seat's picks[] (or compiled picks[]).
+                // Two different proposer seats agreeing on the same row/side is consensus, NEVER duplicate_leg.
+                const duplicateLegAudit = detectIntraSeatDuplicateLegs(
+                    {
+                        seatReports: Array.isArray(proposedAuditContext.proposerReports) && proposedAuditContext.proposerReports.length > 0
+                            ? proposedAuditContext.proposerReports
+                            : undefined,
+                        picks: (!Array.isArray(proposedAuditContext.proposerReports) || proposedAuditContext.proposerReports.length === 0)
+                            ? auditTargetProposal.picks
+                            : undefined
+                    },
+                    mergedHeadersForRowCheck,
+                    fullRawSource || renderedHeadersText
+                );
+                if (!duplicateLegAudit.pass) {
+                    (resData as any).pass = false;
+                    (resData as any).criticApproved = false;
+                    const dupMsg = duplicateLegAudit.feedback || 'Veto (duplicate_leg): Single seat proposed multiple legs on the same game.';
+                    const hasPriorVeto = !injuryAuditPassed || !marketRowAudit.pass || !groundingAuditPassed;
+                    const nextSummary = hasPriorVeto ? `${(resData as any).summary} ${dupMsg}`.trim() : dupMsg;
+                    (resData as any).verdict = nextSummary;
+                    (resData as any).summary = nextSummary;
+                    (resData as any).analysis = nextSummary;
+                    if (!Array.isArray((resData as any).flags)) (resData as any).flags = [];
+                    if (!(resData as any).flags.includes('duplicate_leg')) {
+                        (resData as any).flags.push('duplicate_leg');
+                    }
+                    if (!Array.isArray((resData as any).anomalies)) (resData as any).anomalies = [];
+                    if (!(resData as any).anomalies.includes('duplicate_leg')) {
+                        (resData as any).anomalies.push('duplicate_leg');
+                    }
+                } else {
+                    const isDupLegLabel = (val: unknown) =>
+                        typeof val === 'string' && /\b(?:duplicate[\s_-]*leg|duplicate\s+(?:ml|moneyline|spread|total|pick|row)\s+leg)\b/i.test(val);
+                    const hadFalseDupFlag =
+                        (Array.isArray((resData as any).flags) && (resData as any).flags.some(isDupLegLabel)) ||
+                        (Array.isArray((resData as any).anomalies) && (resData as any).anomalies.some(isDupLegLabel));
+                    if (Array.isArray((resData as any).flags)) {
+                        (resData as any).flags = (resData as any).flags.filter((f: unknown) => !isDupLegLabel(f));
+                    }
+                    if (Array.isArray((resData as any).anomalies)) {
+                        (resData as any).anomalies = (resData as any).anomalies.filter((a: unknown) => !isDupLegLabel(a));
+                    }
+                    const verdictStr = String((resData as any).verdict || (resData as any).summary || (resData as any).analysis || '');
+                    const remainingFlags = Array.isArray((resData as any).flags) ? (resData as any).flags : [];
+                    if (
+                        (resData as any).pass === false &&
+                        injuryAuditPassed &&
+                        marketRowAudit.pass &&
+                        groundingAuditPassed &&
+                        remainingFlags.length === 0 &&
+                        (hadFalseDupFlag || /\bduplicate\s+(?:ml\s+)?leg\b/i.test(verdictStr))
+                    ) {
+                        const okMsg = 'Verified: cross-seat agreement on the same row is consensus, not duplicate_leg.';
+                        (resData as any).pass = true;
+                        (resData as any).criticApproved = true;
+                        (resData as any).verdict = okMsg;
+                        (resData as any).summary = okMsg;
+                        (resData as any).analysis = okMsg;
                     }
                 }
 

@@ -27,11 +27,15 @@ describe("MANAGER_CHAIN + analyst pool (PS3)", () => {
     globalProviderLimiter.reset();
   });
 
-  it("MANAGER_CHAIN is gemini-3.1-flash-lite, mistral, groq (no github)", () => {
+  it("MANAGER_CHAIN follows Gemini siblings -> groq -> mistral -> cloudflare -> nvidia (no github)", () => {
     expect(MANAGER_CHAIN.map((e) => `${e.provider}:${e.model}`)).toEqual([
+      "gemini:gemini-3.5-flash-lite",
       "gemini:gemini-3.1-flash-lite",
-      "mistral:mistral-small-latest",
+      "gemini:gemini-3.8-flash",
       "groq:openai/gpt-oss-120b",
+      "mistral:mistral-small-latest",
+      "cloudflare:@cf/meta/llama-3.1-8b-instruct",
+      "nvidia:nvidia/nemotron-3.5-lightning-30b-a3b",
     ]);
     expect(MANAGER_CHAIN.some((e) => String(e.provider) === "github")).toBe(
       false,
@@ -40,46 +44,58 @@ describe("MANAGER_CHAIN + analyst pool (PS3)", () => {
 
   it("keeps MANAGER_CHAIN order and only uses entries with a server key", () => {
     expect(ids(buildManagerChain())).toEqual([
+      "gemini:gemini-3.5-flash-lite",
       "gemini:gemini-3.1-flash-lite",
-      "mistral:mistral-small-latest",
+      "gemini:gemini-3.8-flash",
       "groq:openai/gpt-oss-120b",
+      "mistral:mistral-small-latest",
     ]);
     vi.stubEnv("GEMINI_API_KEY", "");
     expect(buildManagerChain().map((c) => c.provider)).toEqual([
-      "mistral",
       "groq",
+      "mistral",
     ]);
   });
 
   it("skips providers whose circuit is open and models marked dead", () => {
     globalProviderLimiter.recordFailure(
       "gemini",
-      "gemini-3.1-flash-lite",
+      "gemini-3.5-flash-lite",
       "Gemini API Error (404): NOT_FOUND model",
     );
     expect(ids(buildManagerChain())).toEqual([
-      "mistral:mistral-small-latest",
+      "gemini:gemini-3.1-flash-lite",
+      "gemini:gemini-3.8-flash",
       "groq:openai/gpt-oss-120b",
+      "mistral:mistral-small-latest",
     ]);
     globalProviderLimiter.recordFailure(
       "mistral",
       "mistral-small-latest",
       "Mistral API Error (404): model not found",
     );
-    expect(buildManagerChain().map((c) => c.provider)).toEqual(["groq"]);
+    expect(ids(buildManagerChain())).toEqual([
+      "gemini:gemini-3.1-flash-lite",
+      "gemini:gemini-3.8-flash",
+      "groq:openai/gpt-oss-120b",
+    ]);
   });
 
-  it("excludes the manager's own provider+model", () => {
+  it("excludes the manager's own provider+model while keeping Gemini siblings", () => {
     const chain = buildManagerChain(undefined, {
       provider: "gemini",
-      model: "gemini-3.1-flash-lite",
+      model: "gemini-3.5-flash-lite",
     });
     expect(ids(chain)).toEqual([
-      "mistral:mistral-small-latest",
+      "gemini:gemini-3.1-flash-lite",
+      "gemini:gemini-3.8-flash",
       "groq:openai/gpt-oss-120b",
+      "mistral:mistral-small-latest",
     ]);
     const noMistral = buildManagerChain(undefined, { provider: "mistral" });
     expect(noMistral.map((c) => c.provider)).toEqual([
+      "gemini",
+      "gemini",
       "gemini",
       "groq",
     ]);

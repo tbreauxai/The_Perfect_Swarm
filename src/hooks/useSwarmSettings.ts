@@ -86,8 +86,11 @@ export function cleanSavedSettings(saved: string | null): { cleanedSettings: Par
         delete cleanAgent.groqApiKey;
         delete cleanAgent.mistralApiKey;
         delete cleanAgent.githubToken;
-        if (cleanAgent.provider === 'gemini' && cleanAgent.model === 'gemini-2.5-flash') {
-          cleanAgent.model = 'gemini-3.5-flash';
+        if (cleanAgent.provider === 'gemini' && typeof cleanAgent.model === 'string') {
+          const m = cleanAgent.model.trim();
+          if (/^gemini-2\.[05](?:[-.]|$)/i.test(m) || /^gemini-3\.5-flash$/i.test(m)) {
+            cleanAgent.model = 'gemini-3.5-flash-lite';
+          }
         }
         return cleanAgent;
       });

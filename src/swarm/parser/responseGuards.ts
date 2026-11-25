@@ -9,53 +9,224 @@ import {
 import type { VerificationResult } from '../types.ts';
 import { parseJsonSafe, parseJsonSafeWithStatus } from './parseJsonSafe.ts';
 
+const POLICY_PRICE_BAND_REGEXES: RegExp[] = [
+    /\bbetween\s+-\d{3,4}(?!\.\d)\s+and\s+\+\d{3,4}(?!\.\d)\b/gi,
+    /\b(?:within|inside|in)\s+(?:the\s+|a\s+)?(?:policy\s+|price\s+|odds\s+)?-\d{3,4}(?!\.\d)\s*(?:to|\/|–|—|-)\s*\+\d{3,4}(?!\.\d)(?:\s+(?:window|band|range|corridor|zone|limit|cap|pricing|odds|policy))?\b/gi,
+    /(?<![(\dA-Za-z.-])-\d{3,4}(?!\.\d)\s+(?:to|\/)\s+\+\d{3,4}(?!\.\d)\s+(?:window|band|range|corridor|zone|limit|cap|pricing|odds|policy)\b/gi,
+    /\b(?:steeper|heavier|juicier|worse|shorter|longer|capped|floor|ceiling|max(?:imum)?|min(?:imum)?)\s+(?:than|at|of)\s+[+-]\d{3,4}(?!\.\d)\b/gi
+];
+
+const RANGE_SUFFIX_PRICE_BAND_REGEXES: RegExp[] = [
+    /\b(?:within|inside|in)\s+(?:the\s+|a\s+)?(?:policy\s+|price\s+|odds\s+|optimal\s+)?[+-]\d{3,4}(?!\.\d)\s*(?:to|\/|–|—|-)\s*[+-]\d{3,4}(?!\.\d)\s+(?:window|band|range|corridor|zone|limit|cap|pricing|odds|policy|optimal(?:\s+(?:band|range|window))?)\b/gi,
+    /(?<![(\dA-Za-z.-])[+-]\d{3,4}(?!\.\d)\s*(?:to|\/|–|—)\s*[+-]\d{3,4}(?!\.\d)\s+(?:window|band|range|corridor|zone|limit|cap|pricing|odds|policy|optimal(?:\s+(?:band|range|window))?)\b/gi
+];
+
+const BARE_POLICY_PRICE_BAND_REGEX =
+    /(?<![(\dA-Za-z.-])-\d{3,4}(?!\.\d)\s*(?:to|\/)\s*\+\d{3,4}(?!\.\d)\b/gi;
+
+function protectPolicyPriceBands(
+    text: string,
+    includeBareOppositeSignBand: boolean,
+    includeRangeSuffixBand: boolean = false
+): { masked: string; tokens: string[] } {
+    const tokens: string[] = [];
+    const patterns = [
+        ...POLICY_PRICE_BAND_REGEXES,
+        ...(includeRangeSuffixBand ? RANGE_SUFFIX_PRICE_BAND_REGEXES : []),
+        ...(includeBareOppositeSignBand ? [BARE_POLICY_PRICE_BAND_REGEX] : [])
+    ];
+    let masked = text;
+    for (const rx of patterns) {
+        masked = masked.replace(rx, (match) => {
+            const idx = tokens.push(match) - 1;
+            return `__POLICY_PRICE_BAND_${idx}__`;
+        });
+    }
+    return { masked, tokens };
+}
+
+function restorePolicyPriceBands(text: string, tokens: string[]): string {
+    if (tokens.length === 0) return text;
+    return text.replace(/__POLICY_PRICE_BAND_(\d+)__/g, (_m, idxStr) => tokens[Number(idxStr)] ?? '');
+}
+
 /**
  * Strips approximate odds, percents, and payouts (e.g. ~65%, ~+650, ~=, "about +650")
  * from model-generated analysis/summary text without replacing them with defaults.
  */
 export function stripApproximateOdds(text: string, options?: { allowExactOdds?: boolean }): string {
     if (!text || typeof text !== 'string') return text;
-    const protectedPriceBands: string[] = [];
-    const protectPriceBand = (match: string): string => {
-        const idx = protectedPriceBands.length;
-        protectedPriceBands.push(match);
-        return `\uE010${idx}\uE011`;
-    };
-
-    let out = text
+    const { masked, tokens } = protectPolicyPriceBands(text, true, true);
+    let out = masked
         .replace(/(?:~=|~|≈)\s*[+-]?\d+(?:\.\d+)?%?/g, '')
         .replace(/~=/g, '')
         .replace(/\b(?:about|approx\.?|approximately|around|roughly)\s*(?:[+-]\d{3,4}|\d+(?:\.\d+)?%|\$\d+(?:\.\d+)?)/gi, '');
     if (!options?.allowExactOdds) {
         out = out
-            .replace(
-                /(?:\b(?:in\s+the|within(?:\s+the)?|inside(?:\s+the)?|between|optimal|target|policy|price[\s-]*band(?:\s+of)?)\s+)[+-]\d{3,4}\s*(?:to|and|\/|–|—|-)\s*[+-]\d{3,4}(?:\s*(?:range|window|band|price\s*band|optimal|zone|limit|cap|threshold))?\b/gi,
-                protectPriceBand
-            )
-            .replace(
-                /[+-]\d{3,4}\s*(?:to|\/|–|—)\s*[+-]\d{3,4}\s+(?:range|window|band|price\s*band|optimal(?:\s+(?:band|range|window))?|zone|threshold|limit)\b/gi,
-                protectPriceBand
-            )
-            .replace(/-220\s*(?:to|\/|–|—|-)\s*\+150\b/gi, protectPriceBand)
-            .replace(/(?:\b(?:at|@)\s*)?[+-]\d{3,4}\b/gi, '')
+            // Never strip hyphenated game scores (e.g. 112-100, 106-104) or decimal spreads (-9.5, -10.5):
+            // require non-digit/non-word/non-decimal immediately before signed 3-4 digit American odds.
+            .replace(/(?:\b(?:at|@)\s+[+-]\d{3,4}(?!\.\d)\b|(?<![\dA-Za-z.-])[+-]\d{3,4}(?!\.\d)\b)/gi, '')
             .replace(/\b(?:stake|risk|wager)\s*(?:of\s*)?(?:\d+(?:\.\d+)?\s*u(?:nits?)?|\$\d+(?:\.\d+)?)\b/gi, '')
             .replace(/\b\d+(?:\.\d+)?\s*u(?:nits?)?\b/gi, '')
             .replace(/\bstake\b/gi, '')
             .replace(/\bpayout(?:\s*(?:of|:|=)?\s*\$?\d+(?:\.\d+)?)?\b/gi, '');
     }
-    out = out.replace(/\uE010(\d+)\uE011/g, (_, idxStr) => protectedPriceBands[Number(idxStr)] ?? '');
+    // Clean only inside matched parentheticals so numbered list items like "1) ... 2) DEN -9.5 (R24)"
+    // are never corrupted and stripped odds never leave "( -> )" or "(, +4.1pp)" artifacts.
+    out = out.replace(/\(([^()]*)\)/g, (_full, inner: string) => {
+        const cleanedInner = inner
+            .replace(/^\s*(?:(?:->|→|–|—|-(?!\d)|\bto\b|,|\/|;|:)\s*)+/gi, '')
+            .replace(/(?:\s*(?:->|→|–|—|(?<!\d)-|\bto\b|,|\/|;|:))+\s*$/gi, '')
+            .replace(/,\s*,+/g, ',')
+            .replace(/\s{2,}/g, ' ')
+            .trim();
+        return cleanedInner ? `(${cleanedInner})` : '';
+    });
+    out = restorePolicyPriceBands(out, tokens);
     return out
         .replace(/,?\s*\b(?:well\s+)?(?:in|within|inside)\s+the\s+(?:to|\/|–|—|-)\s+(?:range|window|band)\b/gi, '')
         .replace(/,?\s*\bbetween\s+and\b/gi, '')
-        .replace(/\(\s*(?:(?:->|→|–|—|-|to|,|\/|;|:)\s*)+\)/gi, '')
-        .replace(/\(\s*(?:->|→|to|,|\/|;)\s+/gi, '(')
-        .replace(/\s*(?:->|→|to|,|\/|;)\s*\)/gi, ')')
-        .replace(/\(\s*\)/g, '')
         .replace(/,\s*,+/g, ',')
         .replace(/\s+([,.;:!?])/g, '$1')
         .replace(/[ \t]{2,}/g, ' ')
         .replace(/^[,;\s]+|[,;\s]+$/g, '')
         .trim();
+}
+
+/**
+ * Strips inline American moneyline move parentheticals/ranges like "(-111 to -126)" or
+ * "(-111 -> -126, +3.6pp implied)" from Compiler picks/insights/analysis, replacing with
+ * qualitative steam wording while leaving spreads (-9.5, -10.5), R# IDs, and scores (112-100) untouched.
+ */
+export function sanitizeMoneylinePriceMoves(text: string): string {
+    if (!text || typeof text !== 'string') return text;
+
+    const { masked, tokens } = protectPolicyPriceBands(text, true);
+    const alreadyMentionsSteam = (prefix: string): boolean => /\bsteam\b/i.test(prefix.slice(-64));
+
+    // 1. Parenthetical American ML move ranges: (-111 to -126), (-111 -> -126, +3.6pp implied), (home -111 -> -126)
+    let out = masked.replace(
+        /\(\s*(?:(?:home|away)\s+)?[+-]\d{3,4}(?!\.\d)\s*(?:->|→|to|–|—)\s*[+-]\d{3,4}(?!\.\d)(?:\s*,\s*([^()]+))?\s*\)/gi,
+        (_full, trailingNote: string | undefined, offset: number, fullStr: string) => {
+            const prefix = fullStr.slice(0, offset);
+            const note = typeof trailingNote === 'string' ? trailingNote.trim() : '';
+            const hasSteam = alreadyMentionsSteam(prefix);
+            if (hasSteam) {
+                return note ? `(${note})` : '';
+            }
+            return note ? `(favorable ML steam, ${note})` : '(favorable ML steam)';
+        }
+    );
+
+    // 2. Non-parenthetical spread/vig/price range phrases (Rule 4):
+    // e.g. "all spreads between -110 and -118", "between -110 and -118", "priced at -114"
+    out = out
+        .replace(
+            /(?:,\s*|\s*;\s*|\s+with\s+)?\b(?:(?:all|every|the|selected|recommended)\s+)?(?:spreads?|totals?|lines?|legs?|prices?|odds)\s+(?:are\s+)?(?:priced\s+|juiced\s+|listed\s+|available\s+)?between\s+[+-]\d{3,4}(?!\.\d)\s+and\s+[+-]\d{3,4}(?!\.\d)\b/gi,
+            ''
+        )
+        .replace(
+            /(?:,\s*|\s+with\s+)?\b(?:priced|juiced|listed|available|offered|set|quoted|trading|sitting)\s+(?:at|@|near|around|between)\s+[+-]\d{3,4}(?!\.\d)(?:\s*(?:and|to|–|—|-)\s*[+-]\d{3,4}(?!\.\d))?\b/gi,
+            ''
+        )
+        .replace(
+            /(?:,\s*|\s+with\s+)?\bbetween\s+[+-]\d{3,4}(?!\.\d)\s+and\s+[+-]\d{3,4}(?!\.\d)\b/gi,
+            ''
+        );
+
+    // 3. Non-parenthetical inline American odds ranges:
+    // "from -111 to -126" / "-111 -> -126" -> qualitative steam wording;
+    // bare price range "-110 to -118" -> stripped cleanly without touching spreads (-12.5) or scores (121-107).
+    out = out.replace(
+        /(?:\bfrom\s+)?(?<![\dA-Za-z.-])[+-]\d{3,4}(?!\.\d)\s*(->|→|to)\s*[+-]\d{3,4}(?!\.\d)\b/gi,
+        (full, sep: string, offset: number, fullStr: string) => {
+            const prefix = fullStr.slice(0, offset);
+            const isExplicitMove =
+                sep === '->' ||
+                sep === '→' ||
+                /^from\s+/i.test(full) ||
+                /\b(?:mov(?:e|ed|ing)|steam(?:ed|ing)?|shift(?:ed|ing)?|open(?:ed|ing)?|drif(?:t|ted|ting))\s*$/i.test(prefix.slice(-32));
+            if (!isExplicitMove) {
+                return '';
+            }
+            return alreadyMentionsSteam(prefix) ? '' : 'favorable ML steam';
+        }
+    );
+
+    out = restorePolicyPriceBands(out, tokens);
+    return out
+        .replace(/\(\s*\)/g, '')
+        .replace(/,\s*([.;:!?])/g, '$1')
+        .replace(/;\s*([.;:!?])/g, '$1')
+        .replace(/\s+([,.;:!?])/g, '$1')
+        .replace(/[ \t]{2,}/g, ' ')
+        .trim();
+}
+
+/**
+ * Normalizes a Compiler proposal object in-place (and returns it):
+ * 1) Strips inline ML price-move parentheticals like (-111 to -126) across picks, insights, analysis, and summary.
+ * 2) Guarantees `summary` is populated from the first abbreviation-safe sentence of `analysis` when omitted.
+ */
+export function sanitizeCompilerProposalOddsAndSummary<T>(proposal: T): T {
+    if (!proposal || typeof proposal !== 'object' || Array.isArray(proposal)) return proposal;
+    const obj = proposal as any;
+
+    if (typeof obj.analysis === 'string' && obj.analysis.trim().length > 0) {
+        obj.analysis = sanitizeMoneylinePriceMoves(obj.analysis);
+    }
+    if (typeof obj.summary === 'string' && obj.summary.trim().length > 0) {
+        obj.summary = sanitizeMoneylinePriceMoves(obj.summary);
+    }
+
+    if (Array.isArray(obj.picks)) {
+        for (const pk of obj.picks) {
+            if (!pk || typeof pk !== 'object') continue;
+            if (typeof pk.reason === 'string' && pk.reason.trim().length > 0) {
+                pk.reason = sanitizeMoneylinePriceMoves(pk.reason);
+            }
+            if (Array.isArray(pk.reasons)) {
+                pk.reasons = pk.reasons
+                    .map((r: any) => (typeof r === 'string' ? sanitizeMoneylinePriceMoves(r) : r))
+                    .filter((r: any) => (typeof r === 'string' ? r.length > 0 : Boolean(r)));
+            }
+            if (typeof pk.note === 'string' && pk.note.trim().length > 0) {
+                pk.note = sanitizeMoneylinePriceMoves(pk.note);
+            }
+        }
+    }
+
+    if (Array.isArray(obj.insights)) {
+        obj.insights = obj.insights.map((ins: any) => {
+            if (typeof ins === 'string') return sanitizeMoneylinePriceMoves(ins);
+            if (ins && typeof ins === 'object' && typeof ins.message === 'string') {
+                return { ...ins, message: sanitizeMoneylinePriceMoves(ins.message) };
+            }
+            return ins;
+        });
+    }
+
+    if (Array.isArray(obj.components)) {
+        for (const comp of obj.components) {
+            if (comp && typeof comp === 'object' && comp.type === 'InsightList' && Array.isArray(comp.props?.insights)) {
+                comp.props.insights = comp.props.insights.map((ins: any) => {
+                    if (typeof ins === 'string') return sanitizeMoneylinePriceMoves(ins);
+                    if (ins && typeof ins === 'object' && typeof ins.message === 'string') {
+                        return { ...ins, message: sanitizeMoneylinePriceMoves(ins.message) };
+                    }
+                    return ins;
+                });
+            }
+        }
+    }
+
+    // Always guarantee `summary` is populated when `analysis` is present
+    const hasSummary = typeof obj.summary === 'string' && obj.summary.trim().length > 0;
+    if (!hasSummary && typeof obj.analysis === 'string' && obj.analysis.trim().length > 0) {
+        obj.summary = extractFirstSentenceSafe(obj.analysis.trim(), 220);
+    }
+
+    return proposal;
 }
 
 const DOT_SENTINEL = '\uE000';
@@ -514,11 +685,15 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
     const parsed = ManagerResponseSchema.safeParse(raw);
     if (parsed.success) {
         const rawAnalysisVal = typeof raw?.analysis === 'string' && raw.analysis.trim().length > 0
-            ? stripApproximateOdds(raw.analysis.trim(), { allowExactOdds: true })
+            ? sanitizeMoneylinePriceMoves(stripApproximateOdds(raw.analysis.trim(), { allowExactOdds: true }))
             : undefined;
+        const explicitSummaryVal = typeof parsed.data.summary === 'string' && parsed.data.summary.trim().length > 0
+            ? sanitizeMoneylinePriceMoves(stripApproximateOdds(parsed.data.summary.trim(), { allowExactOdds: true }))
+            : undefined;
+        const resolvedSummaryVal = explicitSummaryVal || (rawAnalysisVal ? extractFirstSentenceSafe(rawAnalysisVal, 220) : undefined);
         const cleanedData: ManagerResponse = {
             ...parsed.data,
-            ...(parsed.data.summary ? { summary: stripApproximateOdds(parsed.data.summary, { allowExactOdds: true }) } : {}),
+            ...(resolvedSummaryVal ? { summary: resolvedSummaryVal } : {}),
             ...(rawAnalysisVal ? { analysis: rawAnalysisVal } : {}),
             ...(Array.isArray(raw?.picks) ? { picks: raw.picks } : {}),
             ...(Array.isArray(raw?.scorecards) ? { scorecards: raw.scorecards } : {}),
@@ -533,7 +708,7 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
                             ...comp.props,
                             insights: comp.props.insights.map((ins) => ({
                                 ...ins,
-                                message: stripApproximateOdds(ins.message, { allowExactOdds: true })
+                                message: sanitizeMoneylinePriceMoves(stripApproximateOdds(ins.message, { allowExactOdds: true }))
                             }))
                         }
                     };
@@ -541,6 +716,7 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
                 return comp;
             })
         } as ManagerResponse;
+        sanitizeCompilerProposalOddsAndSummary(cleanedData);
         if (!wasRepaired) return cleanedData;
         return {
             ...cleanedData,
@@ -680,7 +856,7 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
         ? raw.metadata
         : undefined;
 
-    return {
+    const result = {
         ui_title: title,
         ...(summary ? { summary } : {}),
         ...(rawAnalysis ? { analysis: rawAnalysis } : (summary ? { analysis: summary } : {})),
@@ -695,6 +871,7 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
         ...(raw && raw.reason ? { reason: raw.reason } : {}),
         ...(wasRepaired ? { _repaired: true } : {})
     } as ManagerResponse;
+    return sanitizeCompilerProposalOddsAndSummary(result);
 }
 
 /**

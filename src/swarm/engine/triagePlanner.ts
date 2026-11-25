@@ -230,7 +230,7 @@ export async function planTriage(
   // 3. Construct Planner Agent
   let agent = options?.agent;
   if (!agent && provider && apiKey) {
-    const model = options?.modelName || (provider === 'gemini' ? 'gemini-2.5-flash-lite' : 'llama-3.3-70b-versatile');
+    const model = options?.modelName || (provider === 'gemini' ? 'gemini-3.5-flash-lite' : 'llama-3.3-70b-versatile');
     agent = new Agent('Triage Planner', model, provider, apiKey);
   }
 

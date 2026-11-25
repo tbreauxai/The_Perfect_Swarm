@@ -5,9 +5,9 @@ import type { SwarmEngineSettings } from '../types.ts';
 import type { AgentVariantConfig } from '../experiment.ts';
 import type { ClusterDigest } from '../communication.ts';
 import { globalPromptCompressor } from '../compression.ts';
-import { guardManagerResponse } from '../parser.ts';
+import { guardManagerResponse, sanitizeCompilerProposalOddsAndSummary } from '../parser.ts';
 import { ManagerResponseSchema } from '../schemas.ts';
-import { MANAGER_SYSTEM_INSTRUCTION } from './constants.ts';
+import { MANAGER_SYSTEM_INSTRUCTION, NO_ROUNDED_PPG_RULE } from './constants.ts';
 import { renderPromptConsensusBlock, type AnalystConsensusDigest } from './consensusPipeline.ts';
 import { compileDebateDigest } from './coordinationPipeline.ts';
 import { TokenEstimator } from '../compression/tokenEstimator.ts';
@@ -32,6 +32,8 @@ import {
 import { enforceCriticAuditOnFinalAnalysis, resolveFinalCriticApproved } from '../tools/criticAudit.ts';
 import { syncCompilerProseWithFinalPicks } from '../tools/compilerProseSync.ts';
 
+export const MANAGER_MAX_PROMPT_CHARS = 9000;
+
 export interface SynthesisPipelineParams {
     task: string;
     rawInput: string;
@@ -48,6 +50,7 @@ export interface SynthesisPipelineParams {
     bypassCache: boolean;
     verifierEvidence?: string;
     toolCallTrace?: ToolCallTraceEntry[];
+    vetoedLegs?: VetoedLegTarget[];
 }
 
 export interface SynthesisPipelineResult {
@@ -194,7 +197,7 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
         digests: clusterDigests
     });
 
-    const managerInstruction = (settings as any)?.managerInstruction
+    const baseManagerInstruction = (settings as any)?.managerInstruction
         || (settings as any)?.systemPrompts?.[managerAgent.id || managerAgent.role]
         || (settings as any)?.systemPrompts?.[managerAgent.role]
         || (settings as any)?.systemPrompts?.['manager']
@@ -202,6 +205,10 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
         || activeVariant?.systemPrompts?.[managerAgent.role]
         || activeVariant?.systemPrompts?.['manager']
         || MANAGER_SYSTEM_INSTRUCTION;
+    const isMorningJudgePrep = (settings as any)?.responseSchema === 'morning_judge';
+    const managerInstruction = !isMorningJudgePrep && typeof baseManagerInstruction === 'string' && !baseManagerInstruction.includes('NEVER round or estimate PPG')
+        ? `${baseManagerInstruction}\n\n${NO_ROUNDED_PPG_RULE}`
+        : baseManagerInstruction;
     managerAgent.setSystemInstruction(managerInstruction);
 
     const targetCeiling = getManagerContextTokenCeiling(managerAgent.provider);
@@ -223,7 +230,119 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
     if (isBettingRun) {
         const rawInput = p.rawInput || (params as any)?.rawInput || '';
         const parsedHeaders = parseGameHeaders(rawInput || task, (params as any)?.eventIds);
-        const renderedHeadersText = renderHeaders(parsedHeaders, 1600);
+
+        // S1: Scope Manager synthesis context to proposed/approved games when >= 1 pick was proposed.
+        const vetoedLegList: VetoedLegTarget[] = [
+            ...(Array.isArray(p.vetoedLegs) ? p.vetoedLegs : []),
+            ...(criticResult && typeof criticResult === 'object' && Array.isArray((criticResult as any).vetoedLegs)
+                ? (criticResult as any).vetoedLegs
+                : [])
+        ];
+        const isCriticReport = (r: any, role?: string): boolean => {
+            const label = String(r?.seat || r?.role || role || '').toLowerCase();
+            return label === 'critic' || label === 'risk' || label === 'risk_critic' || label.includes('critic') || label.includes('risk');
+        };
+        const isVetoedPick = (pick: any): boolean => {
+            if (vetoedLegList.length === 0) return false;
+            const pEv = String(pick?.eventId || pick?.event_id || pick?.gameId || pick?.game_id || '').toLowerCase().trim();
+            const pRow = String(pick?.row || pick?.rowId || pick?.row_id || '').toUpperCase().trim();
+            const pText = (typeof pick === 'string'
+                ? pick
+                : [pick?.row, pick?.team, pick?.pick, pick?.selection, pick?.market, pick?.matchup, pick?.label]
+                    .filter(Boolean)
+                    .join(' ')
+            ).toLowerCase();
+            return vetoedLegList.some((v) => {
+                const vEv = String((v as any)?.eventId || '').toLowerCase().trim();
+                const vRow = String((v as any)?.rowId || (v as any)?.row || '').toUpperCase().trim();
+                const vTeam = String((v as any)?.team || '').toLowerCase().trim();
+                if (vEv && pEv && vEv === pEv) return true;
+                if (vRow && (pRow === vRow || new RegExp(`\\b${vRow}\\b`, 'i').test(pText))) return true;
+                if (vTeam && vTeam.length >= 3 && pText.includes(vTeam)) return true;
+                return false;
+            });
+        };
+
+        const rowToEventId = new Map<string, string>();
+        for (const h of parsedHeaders) {
+            for (const opt of h.options || []) {
+                const id = String(opt?.id || '').toUpperCase().trim();
+                if (id) rowToEventId.set(id, h.eventId);
+            }
+            const rawMatches = String((h as any).raw || '').match(/\bR\d+\b/gi) || [];
+            for (const rm of rawMatches) {
+                const key = rm.toUpperCase();
+                if (!rowToEventId.has(key)) rowToEventId.set(key, h.eventId);
+            }
+        }
+        const matchPickToEventId = (pick: any): string | null => {
+            if (!pick) return null;
+            if (typeof pick === 'object') {
+                const direct = String(pick.eventId || pick.event_id || pick.gameId || pick.game_id || '').trim();
+                if (direct) return direct;
+                const rowRaw = String(pick.row || pick.rowId || pick.row_id || '').toUpperCase().trim();
+                if (rowRaw && rowToEventId.has(rowRaw)) return rowToEventId.get(rowRaw)!;
+            }
+            const text = typeof pick === 'string'
+                ? pick
+                : [pick.row, pick.rowId, pick.team, pick.pick, pick.selection, pick.matchup, pick.label]
+                    .filter(Boolean)
+                    .join(' ');
+            const rowMatch = text.match(/\b(R\d+)\b/i);
+            if (rowMatch) {
+                const mapped = rowToEventId.get(rowMatch[1].toUpperCase());
+                if (mapped) return mapped;
+            }
+            const lower = text.toLowerCase();
+            if (lower) {
+                for (const h of parsedHeaders) {
+                    if (h.eventId && lower.includes(h.eventId.toLowerCase())) return h.eventId;
+                    const teams = Array.isArray((h as any).teams)
+                        ? (h as any).teams
+                        : [h.away, h.home, ...String((h as any).matchup || '').split(/\s*(?:@|vs\.?|v\.?)\s*/i)];
+                    for (const t of teams) {
+                        const tok = String(t || '').trim().toLowerCase();
+                        if (tok.length >= 4 && lower.includes(tok)) return h.eventId;
+                        const lastWord = tok.split(/\s+/).pop() || '';
+                        if (lastWord.length >= 4 && lower.includes(lastWord)) return h.eventId;
+                    }
+                }
+            }
+            return null;
+        };
+
+        const proposedEventIds = new Set<string>();
+        const allProposedPicks: any[] = [];
+        allAnalystReports.forEach((seatReports, idx) => {
+            const role = analysts[idx]?.role;
+            const list = Array.isArray(seatReports) ? seatReports : [];
+            for (const r of list) {
+                if (!r || typeof r !== 'object' || (r as any)._placeholder === true) continue;
+                if (isCriticReport(r, role)) continue;
+                const candidatePicks: any[] = [];
+                if (Array.isArray((r as any).picks)) candidatePicks.push(...(r as any).picks);
+                if ((r as any).scorecard?.pick) candidatePicks.push((r as any).scorecard.pick);
+                if (Array.isArray((r as any).scorecards)) {
+                    for (const sc of (r as any).scorecards) {
+                        if (sc?.pick) candidatePicks.push(sc.pick);
+                        if (Array.isArray(sc?.picks)) candidatePicks.push(...sc.picks);
+                    }
+                }
+                for (const pk of candidatePicks) {
+                    if (isVetoedPick(pk)) continue;
+                    allProposedPicks.push(pk);
+                    const evId = matchPickToEventId(pk);
+                    if (evId) proposedEventIds.add(evId);
+                }
+            }
+        });
+
+        const hasScopedGames = proposedEventIds.size > 0;
+        const scopedHeaders = hasScopedGames
+            ? parsedHeaders.filter(h => proposedEventIds.has(h.eventId))
+            : parsedHeaders;
+        const effectiveHeaders = scopedHeaders.length > 0 ? scopedHeaders : parsedHeaders;
+        const renderedHeadersText = renderHeaders(effectiveHeaders, 1600);
         const headersLength = renderedHeadersText.length;
         const { userTask: cappedTask, contractBlock } = partitionTaskAndContract(
             task,
@@ -260,40 +379,95 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
             : '';
         appComputedCountsLine = `App-computed counts: games=${parsedHeaders.length}, covered=${coveredSet.size}, picks=${picksCount}, seats_parsed=${parsedSeats}/${analysts.length}${agreementPart}`;
         const toolStatusLine = Array.isArray(p.toolCallTrace) && p.toolCallTrace.length > 0
-            ? buildToolCoverageSummaryLine(p.toolCallTrace, parsedHeaders)
+            ? buildToolCoverageSummaryLine(p.toolCallTrace, effectiveHeaders)
             : '';
 
         const pBudget = seatBudget(managerAgent.provider);
+        const promptCap = Math.min(maxChars, pBudget.maxPromptChars, MANAGER_MAX_PROMPT_CHARS);
         const seatCount = Math.max(1, analysts.length);
-        const perReportCap = Math.max(100, Math.floor((pBudget.maxPromptChars - headersLength - contractSection.length - toolStatusLine.length - 800) / seatCount));
+        const perReportCap = Math.max(
+            200,
+            Math.min(
+                1400,
+                Math.floor((promptCap - headersLength - contractSection.length - toolStatusLine.length - 1200) / seatCount)
+            )
+        );
 
-        const cappedCompiledReports = analysts.map((a, i) => {
+        const seenProseFingerprints = new Set<string>();
+        const compactAnalystReport = (r: any): string => {
+            if (typeof r === 'string') {
+                const norm = r.trim();
+                const fp = norm.toLowerCase().replace(/\s+/g, ' ').slice(0, 140);
+                if (fp && seenProseFingerprints.has(fp)) return '';
+                if (fp) seenProseFingerprints.add(fp);
+                return norm;
+            }
+            if (!r || typeof r !== 'object') return JSON.stringify(r);
+            const {
+                toolEvidence: _te,
+                toolEvidenceItems: _tei,
+                toolCallTrace: _tct,
+                marketToolRecords: _mtr,
+                raw: _raw,
+                rawText: _rt,
+                coveredEventIds: rawCoveredIds,
+                ...rest
+            } = r as any;
+            const cleaned: Record<string, any> = { ...rest };
+            if (Array.isArray(rawCoveredIds) && rawCoveredIds.length > 0 && hasScopedGames) {
+                const scopedCovered = rawCoveredIds.filter((id: any) => proposedEventIds.has(String(id)));
+                if (scopedCovered.length > 0) cleaned.coveredEventIds = scopedCovered;
+            } else if (Array.isArray(rawCoveredIds) && rawCoveredIds.length > 0 && !hasScopedGames) {
+                cleaned.coveredEventIds = rawCoveredIds;
+            }
+            const summaryStr = typeof cleaned.summary === 'string' ? cleaned.summary.trim() : '';
+            if (summaryStr) {
+                const sfp = summaryStr.toLowerCase().replace(/\s+/g, ' ').slice(0, 140);
+                if (seenProseFingerprints.has(sfp)) {
+                    cleaned.summary = '[duplicate summary omitted]';
+                } else {
+                    seenProseFingerprints.add(sfp);
+                }
+            }
+            if (Array.isArray(cleaned.insights)) {
+                const dedupedInsights: string[] = [];
+                for (const ins of cleaned.insights) {
+                    const s = String(ins || '').trim();
+                    if (!s) continue;
+                    const ifp = s.toLowerCase().replace(/\s+/g, ' ').slice(0, 120);
+                    if (summaryStr && summaryStr.toLowerCase().includes(s.toLowerCase().slice(0, 80))) continue;
+                    if (seenProseFingerprints.has(ifp)) continue;
+                    seenProseFingerprints.add(ifp);
+                    dedupedInsights.push(s);
+                }
+                if (dedupedInsights.length > 0) cleaned.insights = dedupedInsights.slice(0, 6);
+                else delete cleaned.insights;
+            }
+            return JSON.stringify(cleaned);
+        };
+
+        let cappedCompiledReports = analysts.map((a, i) => {
             const reports = allAnalystReports[i];
             if (!reports || reports.length === 0) return null;
             const combinedStr = reports
                 .map((r) => {
-                    let content: string;
-                    if (typeof r === 'string') {
-                        content = r;
-                    } else if (r && typeof r === 'object') {
-                        const { toolEvidence: _te, toolEvidenceItems: _tei, toolCallTrace: _tct, marketToolRecords: _mtr, ...rest } = r as any;
-                        content = JSON.stringify(rest);
-                    } else {
-                        content = JSON.stringify(r);
-                    }
+                    let content = compactAnalystReport(r);
+                    if (!content) return '';
                     if (content.length > perReportCap) {
-                        content = content.slice(0, perReportCap - 15) + '\n…[truncated]';
+                        content = content.slice(0, Math.max(0, perReportCap - 15)) + '\n…[truncated]';
                     }
                     return content;
                 })
+                .filter(Boolean)
                 .join('\n\n');
+            if (!combinedStr) return null;
             return `[${a.role} Report]:\n${combinedStr}`;
         }).filter(Boolean).join('\n\n');
 
         const unionEvidence = typeof p.verifierEvidence === 'string' && p.verifierEvidence.trim()
             ? p.verifierEvidence.trim()
             : '';
-        const cappedToolEvidence = unionEvidence || analysts.map((a, i) => {
+        const rawToolEvidence = unionEvidence || analysts.map((a, i) => {
             const reports = allAnalystReports[i];
             if (!reports || reports.length === 0) return null;
             const evStr = reports
@@ -301,11 +475,61 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
                 .filter(Boolean)
                 .join('\n');
             if (!evStr) return null;
-            const capped = evStr.length > perReportCap
-                ? evStr.slice(0, perReportCap - 15) + '\n…[truncated]'
-                : evStr;
-            return `[${a.role}]:\n${capped}`;
+            return `[${a.role}]:\n${evStr}`;
         }).filter(Boolean).join('\n\n');
+
+        // Deduplicate evidence blocks and scope strictly to proposedEventIds when picks were proposed.
+        const allKnownEventIds = new Set(parsedHeaders.map(h => h.eventId.toLowerCase()));
+        const scopeAndDedupEvidence = (ev: string): string => {
+            if (!ev.trim()) return '';
+            const rawBlocks = ev
+                .split(/\n\n+|(?==== GAME DOSSIER:)|(?=\nEVENT\s+)/)
+                .map(b => b.trim())
+                .filter(Boolean);
+            const seenBlocks = new Set<string>();
+            const kept: string[] = [];
+            for (const blk of rawBlocks) {
+                // Filter TOP PILLAR CANDIDATES header lines to only proposed games when scoped
+                if (blk.startsWith('=== TOP PILLAR CANDIDATES') && hasScopedGames) {
+                    const lines = blk.split('\n');
+                    const filteredLines = [
+                        lines[0],
+                        ...lines.slice(1).filter((ln) => {
+                            const lowerLn = ln.toLowerCase();
+                            return Array.from(proposedEventIds).some(id => lowerLn.includes(id.toLowerCase()));
+                        })
+                    ];
+                    if (filteredLines.length > 1) {
+                        const joined = filteredLines.join('\n');
+                        const fp = joined.toLowerCase().replace(/\s+/g, ' ');
+                        if (!seenBlocks.has(fp)) {
+                            seenBlocks.add(fp);
+                            kept.push(joined);
+                        }
+                    }
+                    continue;
+                }
+                const fp = blk.toLowerCase().replace(/\s+/g, ' ');
+                if (seenBlocks.has(fp)) continue;
+                if (hasScopedGames) {
+                    const lowerBlk = blk.toLowerCase();
+                    const matchesProposed = Array.from(proposedEventIds).some(id => lowerBlk.includes(id.toLowerCase()));
+                    if (!matchesProposed) {
+                        // Drop any block belonging to another event or non-proposed game
+                        const mentionsOtherKnownEvent = Array.from(allKnownEventIds).some(id => lowerBlk.includes(id));
+                        const looksLikeEventBlock = /(?:=== GAME DOSSIER:|^\s*EVENT\s+|\b(?:nba|nfl|nhl|mlb|ncaab|ncaaf|mls|soccer|mma|ufc)-[a-z0-9_-]+)/i.test(blk);
+                        if (mentionsOtherKnownEvent || looksLikeEventBlock) {
+                            continue;
+                        }
+                    }
+                }
+                seenBlocks.add(fp);
+                kept.push(blk);
+            }
+            return kept.join('\n\n');
+        };
+
+        const cappedToolEvidence = scopeAndDedupEvidence(rawToolEvidence);
 
         let baselinesText = historicalContext ? `Historical Baselines:\n${historicalContext}\n\n` : '';
         let digestsText = clusterDigestText;
@@ -313,10 +537,9 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
         evidenceChars = cappedToolEvidence.length;
 
         const countsBlock = toolStatusLine ? `${appComputedCountsLine}\n${toolStatusLine}` : appComputedCountsLine;
-        const buildBettingPrompt = (bText: string, dText: string, eText: string) =>
-            `${formatUserTaskSection(cappedTask)}${contractSection}\nCite only facts present in Game Slate, Tool evidence, or seat summaries.\n${countsBlock}\n\nGame Slate:\n${renderedHeadersText}\n\n${criticSection}${bText}${consensusSection}${dText}${eText}Analyst Reports:\n${cappedCompiledReports}`;
+        const buildBettingPrompt = (bText: string, dText: string, eText: string, reportsText: string = cappedCompiledReports, cSection: string = contractSection) =>
+            `${formatUserTaskSection(cappedTask)}${cSection}\nCite only facts present in Game Slate, Tool evidence, or seat summaries.\n${countsBlock}\n\nGame Slate:\n${renderedHeadersText}\n\n${criticSection}${bText}${consensusSection}${dText}${eText}Analyst Reports:\n${reportsText}`;
 
-        const promptCap = Math.min(maxChars, pBudget.maxPromptChars);
         let candidate = buildBettingPrompt(baselinesText, digestsText, toolEvidenceSection);
         if (candidate.length > promptCap && digestsText) {
             digestsText = '';
@@ -333,7 +556,7 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
             const restLen = buildBettingPrompt(baselinesText, digestsText, '').length;
             const availableForBody = promptCap - restLen - prefix.length - suffix.length;
             const blocks = cappedToolEvidence
-                .split(/\n\n+|\n(?=EVENT\s+)/)
+                .split(/\n\n+|\n(?=EVENT\s+)|(?==== GAME DOSSIER:)/)
                 .map(b => b.trim())
                 .filter(Boolean);
             const keptBlocks: string[] = [];
@@ -344,6 +567,9 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
                     keptBlocks.push(blk);
                     usedLen += sepLen + blk.length;
                 } else if (keptBlocks.length > 0) {
+                    break;
+                } else if (availableForBody > 120) {
+                    keptBlocks.push(blk.slice(0, Math.max(0, availableForBody - trimMarker.length - 3)) + '...');
                     break;
                 }
             }
@@ -358,6 +584,17 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
                 evidenceDropped = true;
             }
             candidate = buildBettingPrompt(baselinesText, digestsText, toolEvidenceSection);
+        }
+        // Final hard backstop: ensure Manager betting prompt never exceeds promptCap (<= 9,000 chars)
+        if (candidate.length > promptCap) {
+            const overflow = candidate.length - promptCap;
+            if (cappedCompiledReports.length > overflow + 200) {
+                cappedCompiledReports = cappedCompiledReports.slice(0, cappedCompiledReports.length - overflow - 20) + '\n…[reports trimmed]';
+                candidate = buildBettingPrompt(baselinesText, digestsText, toolEvidenceSection, cappedCompiledReports);
+            }
+            if (candidate.length > promptCap) {
+                candidate = candidate.slice(0, Math.max(0, promptCap - 16)) + '\n[prompt capped]';
+            }
         }
         dynamicPrompt = candidate;
     } else {
@@ -556,9 +793,10 @@ export async function executeManagerSynthesis(
         auditNote?: string;
         agreementLevel?: 'strong' | 'moderate' | 'divergent';
         activeEventIds?: string[];
+        seatScorecards?: any[];
     }
 ): Promise<any> {
-    const managerInstruction = (settings as any)?.managerInstruction
+    const baseManagerInstruction = (settings as any)?.managerInstruction
         || (settings as any)?.systemPrompts?.[managerAgent.id || managerAgent.role]
         || (settings as any)?.systemPrompts?.[managerAgent.role]
         || (settings as any)?.systemPrompts?.['manager']
@@ -566,9 +804,11 @@ export async function executeManagerSynthesis(
         || activeVariant?.systemPrompts?.[managerAgent.role]
         || activeVariant?.systemPrompts?.['manager']
         || MANAGER_SYSTEM_INSTRUCTION;
-    managerAgent.setSystemInstruction(managerInstruction);
-
     const isMorningJudge = (settings as any)?.responseSchema === 'morning_judge';
+    const managerInstruction = !isMorningJudge && typeof baseManagerInstruction === 'string' && !baseManagerInstruction.includes('NEVER round or estimate PPG')
+        ? `${baseManagerInstruction}\n\n${NO_ROUNDED_PPG_RULE}`
+        : baseManagerInstruction;
+    managerAgent.setSystemInstruction(managerInstruction);
     const zodSchema = isMorningJudge
         ? undefined
         : ((settings as any)?.zodSchema || (settings as any)?.responseSchema || ManagerResponseSchema);
@@ -671,7 +911,12 @@ export async function executeManagerSynthesis(
             });
         }
         const hadVetoes = criticVetoes.length > 0 || vetoedLegs.length > 0 || vetoedClaims.length > 0;
-        normalizePassIfAllLegsVetoed(finalResult, initialPickCount, hadVetoes);
+        normalizePassIfAllLegsVetoed(finalResult, initialPickCount, hadVetoes, {
+            vetoTexts: criticVetoes,
+            vetoedLegs,
+            seatScorecards: groundingContext?.seatScorecards,
+            ...(hadVetoes && Array.isArray(finalResult.picks) && finalResult.picks.length === 0 ? { criticApproved: false } : {})
+        });
         enforceCriticAuditOnFinalAnalysis(finalResult, {
             criticAuditFailed: groundingContext?.criticAuditFailed === true,
             unauditedLegs: groundingContext?.unauditedLegs,
@@ -715,11 +960,17 @@ export async function executeManagerSynthesis(
 
     if (finalResult && typeof finalResult === 'object' && Array.isArray(finalResult.picks)) {
         const syncBoardSource = groundingContext?.rawBoard || safeDynamicPrompt;
+        const syncVetoedLegs = mergeVetoedLegTargets(groundingContext?.vetoedLegs);
         syncCompilerProseWithFinalPicks(finalResult, {
             initialPicks: initialPicksSnapshot,
             headers: parseGameHeaders(syncBoardSource),
-            slateText: syncBoardSource
+            slateText: syncBoardSource,
+            ...(syncVetoedLegs.length > 0 ? { vetoedLegs: syncVetoedLegs } : {}),
+            ...(groundingContext?.criticVetoes && groundingContext.criticVetoes.length > 0 ? { vetoTexts: groundingContext.criticVetoes } : {}),
+            ...(groundingContext?.seatScorecards && groundingContext.seatScorecards.length > 0 ? { seatScorecards: groundingContext.seatScorecards } : {}),
+            ...(finalResult.criticApproved === false ? { criticApproved: false } : {})
         });
+        sanitizeCompilerProposalOddsAndSummary(finalResult);
     }
 
     if (groundingContext?.agreementLevel) {

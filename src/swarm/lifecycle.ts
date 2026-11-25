@@ -1,7 +1,7 @@
 import { Agent } from './agent.ts';
 import { SwarmContext } from './context.ts';
 import { parseJsonSafe, guardVerificationResult } from './parser.ts';
-import { redactForLog } from './parser/responseGuards.ts';
+import { redactForLog, sanitizeCompilerProposalOddsAndSummary } from './parser/responseGuards.ts';
 import { groqPromptCharCap } from './providers/groq.ts';
 import { seatBudget } from './context/promptBudget.ts';
 import { formatRunDebugOutputDigest, recordRunDebugSeat, recordRunDebugDrop, recordRunDebugEdit } from './engine/runDebugRecord.ts';
@@ -51,6 +51,7 @@ import type { ToolRegistry } from './tools/registry.ts';
 import { GameQueryCache } from './cache/gameQueryCache.ts';
 import { executeToolWithCacheAndTimeout } from './engine/triageExecutor.ts';
 import type { ToolEvidenceItem } from './engine/seatToolLoop.ts';
+import { isIndoorLeagueGame } from './tools/dueloddsRpcTools.ts';
 
 import type { VerificationResult } from './types.ts';
 export type { VerificationResult };
@@ -267,6 +268,9 @@ export class AnalysisLifecycle {
             });
             
             currentProposal = parseJsonSafe(proposalRaw, { rawText: proposalRaw, error: "Failed to parse JSON" });
+            if (currentProposal && typeof currentProposal === 'object') {
+                sanitizeCompilerProposalOddsAndSummary(currentProposal);
+            }
             const initialPicksSnapshot = Array.isArray(currentProposal?.picks)
                 ? [...currentProposal.picks]
                 : [];
@@ -293,11 +297,41 @@ export class AnalysisLifecycle {
                 }
             }
             if (currentProposal && typeof currentProposal === 'object' && Array.isArray(currentProposal.picks)) {
+                // P0-2: Run deterministic post-prune cleanup on InsightList/analysis BEFORE verification
+                // for coverage-pruned legs and for vetoed legs already removed from picks[] and Selected Wagers
+                // (while preserving verification failure if a vetoed leg is still kept in picks[] or Selected Wagers).
+                const selectedWagersRowsText = Array.isArray((currentProposal as any).components)
+                    ? (currentProposal as any).components
+                        .filter((c: any) =>
+                            c &&
+                            c.type === 'DataTable' &&
+                            Array.isArray(c.props?.rows) &&
+                            /\b(?:selected|recommended)\s+(?:wagers?|bets?|picks?|plays?)|parlay\s+legs?\b/i.test(String(c.props?.title || ''))
+                        )
+                        .flatMap((c: any) => c.props.rows)
+                        .map((row: any) => (row && typeof row === 'object' ? Object.values(row).join(' ') : ''))
+                        .join(' ')
+                    : '';
+                const activePicksText = currentProposal.picks
+                    .map((pk: any) => (typeof pk === 'string' ? pk : [pk?.row, pk?.Row, pk?.rowId, pk?.side, pk?.pick, pk?.selection, pk?.team].filter(Boolean).join(' ')))
+                    .join(' ');
+                const activeTicketText = `${activePicksText} ${selectedWagersRowsText}`.toLowerCase();
+                const alreadyDroppedVetoedLegs = accumulatedVetoedLegs.filter((vLeg) => {
+                    if (vLeg.rowId && new RegExp(`\\b${vLeg.rowId}\\b`, 'i').test(activeTicketText)) return false;
+                    if (Array.isArray(vLeg.teamAliases) && vLeg.teamAliases.some((a) => a.length >= 2 && new RegExp(`(?<![a-z0-9])${a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![a-z0-9])`, 'i').test(activeTicketText))) {
+                        return false;
+                    }
+                    return true;
+                });
+
                 syncCompilerProseWithFinalPicks(currentProposal, {
                     initialPicks: initialPicksSnapshot,
                     headers: allParsedHeaders,
-                    slateText: rawSlateForSync
+                    slateText: rawSlateForSync,
+                    ...(alreadyDroppedVetoedLegs.length > 0 ? { vetoedLegs: alreadyDroppedVetoedLegs } : {}),
+                    ...(accumulatedVetoTexts.length > 0 ? { vetoTexts: accumulatedVetoTexts } : {})
                 });
+                sanitizeCompilerProposalOddsAndSummary(currentProposal);
             }
 
             // 2. Critic verifies
@@ -365,7 +399,12 @@ export class AnalysisLifecycle {
                     const headerById = new Map<string, GameHeader>(allParsedHeaders.map(h => [h.eventId, h]));
                     const pullCalls: Array<{ tool: string; gId: string }> = [];
                     for (const gId of selectedGameIds) {
+                        const hdrForWeather = headerById.get(gId);
                         for (const tool of criticTools) {
+                            // P1-2: Never call get_environment_and_weather for indoor leagues (NBA, NHL, NCAAB, WNBA).
+                            if (tool === 'get_environment_and_weather' && isIndoorLeagueGame(gId, hdrForWeather?.sport)) {
+                                continue;
+                            }
                             if (prePassedDataKeys.has(normalizeToolKey(tool, gId))) {
                                 verifiedEventIdsSet.add(gId);
                             } else {
@@ -758,11 +797,21 @@ export class AnalysisLifecycle {
             if (currentProposal) {
                 const slateHeaders = renderHeaders(scopedHeaders);
                 const toolResultsSummary = toolResults;
+                const prePassedItemsText = prePassedToolItems
+                    .filter(item => item && typeof item.summary === 'string' && item.summary.trim().length > 0 && !isEmptyToolSummary(item.summary) && !isFailedToolSummary(item.summary))
+                    .map(item => {
+                        const sum = item.summary.trim();
+                        return item.eventId && !sum.includes(item.eventId)
+                            ? `EVENT ${item.eventId}\n${sum}`
+                            : sum;
+                    })
+                    .join('\n\n');
                 const traceDataText = accumulatedToolTrace
                     .filter(e => e && e.status === 'data' && typeof e.summary === 'string' && e.summary.trim().length > 0)
                     .map(e => e.summary!.trim())
                     .join('\n\n');
                 const combinedToolSummary = [
+                    prePassedItemsText,
                     toolResultsSummary,
                     prePassedToolResults,
                     rawPulledText,

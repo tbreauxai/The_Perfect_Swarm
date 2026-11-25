@@ -2,6 +2,7 @@ import { GoogleGenAI } from '@google/genai';
 import { cleanToken, sanitizeModelOutput, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
 import { globalTelemetryCollector, estimateTokens } from '../telemetry.ts';
 import { parseRetryAfterMs } from '../utils/httpTimeouts.ts';
+import { remapDeprecatedGeminiModel } from '../server/modelsProvider.ts';
 
 export class GeminiAdapter implements ProviderAdapter {
     readonly providerName = 'gemini';
@@ -45,6 +46,7 @@ export class GeminiAdapter implements ProviderAdapter {
         const isJson = reqConfig.responseMimeType === 'application/json';
         const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 30000; // 30s default: fail fast on free-tier stalls instead of hanging for 2 minutes
 
+        const effectiveModelName = remapDeprecatedGeminiModel(options.modelName);
         const executeGeneration = async (cfg: any): Promise<any> => {
             let timeoutId: any;
             const timeoutPromise = new Promise<never>((_, reject) => {
@@ -55,7 +57,7 @@ export class GeminiAdapter implements ProviderAdapter {
             try {
                 return await Promise.race([
                     client.models.generateContent({
-                        model: options.modelName,
+                        model: effectiveModelName,
                         contents: options.prompt,
                         config: cfg
                     }),
@@ -130,7 +132,7 @@ export class GeminiAdapter implements ProviderAdapter {
                 promptTokens: response.usageMetadata.promptTokenCount || 0,
                 completionTokens: response.usageMetadata.candidatesTokenCount || 0,
                 provider: this.providerName,
-                model: options.modelName
+                model: effectiveModelName
             });
         } else {
             const promptTokens = estimateTokens(options.prompt + (options.systemInstruction || ''));
@@ -139,7 +141,7 @@ export class GeminiAdapter implements ProviderAdapter {
                 promptTokens,
                 completionTokens,
                 provider: this.providerName,
-                model: options.modelName
+                model: effectiveModelName
             });
         }
 

@@ -128,6 +128,11 @@ export function compressDossierPillarSummary(tool: string, summary: string): str
 export interface QualitativePillarEvaluation {
   pillarCount: number;
   alignedPillarCount: number;
+  winningSide?: 'home' | 'away' | null;
+  winningTeam?: string;
+  homePillarCount?: number;
+  awayPillarCount?: number;
+  totalSteamTag?: string;
   tags: string[];
   hasDirectionalSteam: boolean;
   isUncertainQuestionable: boolean;
@@ -242,72 +247,146 @@ export function evaluateQualitativePillars(entry: UnifiedGameDossierEntry): Qual
       }
       formTeam = formSide === 'home' ? homeSide.abbr : awaySide.abbr;
     }
-  } else if (rawMargins.length >= 2) {
-    netMarginGap = Math.abs(rawMargins[0] - rawMargins[1]);
-    const clearMargin = isLowScoringSport ? netMarginGap >= 0.7 : netMarginGap >= 2.5;
-    if (clearMargin) {
-      formSide = rawMargins[0] >= rawMargins[1] ? 'home' : 'away';
-      formTeam =
-        formSide === 'home'
-          ? (homeMatchupName.split(/\s+/).pop() || 'Home')
-          : (awayMatchupName.split(/\s+/).pop() || 'Away');
+  } else {
+    const homeMarginMatch = fund.match(/Home\s*(?:\(([^)]+)\))?\s*:[^|\n]*?(?:Net\s*Margin|Net|Diff)\s*:?\s*([+-]?\d+(?:\.\d+)?)/i);
+    const awayMarginMatch = fund.match(/Away\s*(?:\(([^)]+)\))?\s*:[^|\n]*?(?:Net\s*Margin|Net|Diff)\s*:?\s*([+-]?\d+(?:\.\d+)?)/i);
+    if (homeMarginMatch && awayMarginMatch) {
+      const hVal = Number(homeMarginMatch[2]);
+      const aVal = Number(awayMarginMatch[2]);
+      netMarginGap = Math.abs(hVal - aVal);
+      const clearMargin = isLowScoringSport ? netMarginGap >= 0.7 : netMarginGap >= 2.5;
+      if (clearMargin) {
+        formSide = hVal >= aVal ? 'home' : 'away';
+        formTeam =
+          formSide === 'home'
+            ? (homeMarginMatch[1]?.trim() || homeMatchupName.split(/\s+/).pop() || 'Home')
+            : (awayMarginMatch[1]?.trim() || awayMatchupName.split(/\s+/).pop() || 'Away');
+      }
+    } else if (rawMargins.length >= 2) {
+      netMarginGap = Math.abs(rawMargins[0] - rawMargins[1]);
+      const clearMargin = isLowScoringSport ? netMarginGap >= 0.7 : netMarginGap >= 2.5;
+      if (clearMargin) {
+        const awayIdx = fund.search(/\bAway\b/i);
+        const homeIdx = fund.search(/\bHome\b/i);
+        const awayFirst = awayIdx !== -1 && (homeIdx === -1 || awayIdx < homeIdx);
+        const hVal = awayFirst ? rawMargins[1] : rawMargins[0];
+        const aVal = awayFirst ? rawMargins[0] : rawMargins[1];
+        formSide = hVal >= aVal ? 'home' : 'away';
+        formTeam =
+          formSide === 'home'
+            ? (homeMatchupName.split(/\s+/).pop() || 'Home')
+            : (awayMatchupName.split(/\s+/).pop() || 'Away');
+      }
     }
   }
 
-  let steamSide: 'home' | 'away' | 'total' | null = null;
+  let steamSide: 'home' | 'away' | null = null;
   let steamTarget = '';
-  const steamMatch = mkt.match(/Steam:\s*TOWARD\s+([^|\n;]+)/i);
-  if (steamMatch) {
-    const rawTarget = steamMatch[1]
-      .replace(/\s*\([^)]*\)\s*$/g, '')
-      .trim();
-    if (rawTarget && !/^(?:NEUTRAL|NONE|MIXED|N\/A)$/i.test(rawTarget)) {
-      steamTarget = rawTarget;
-      const matchesHome = teamNameMatchesLabel(rawTarget, homeSide?.abbr || '', homeMatchupName);
-      const matchesAway = teamNameMatchesLabel(rawTarget, awaySide?.abbr || '', awayMatchupName);
-      if (matchesHome && !matchesAway) steamSide = 'home';
-      else if (matchesAway && !matchesHome) steamSide = 'away';
-      else steamSide = 'total';
+  let totalSteamTag = '';
+
+  const sideSteamExplicit = mkt.match(/Side\s+Steam:\s*TOWARD\s+([^|\n;]+)/i);
+  const totalSteamExplicit = mkt.match(/Total\s+Steam:\s*TOWARD\s+([^|\n;]+)/i);
+  const genericSteamMatch = !sideSteamExplicit ? mkt.match(/(?:^|[|\n;]\s*)Steam:\s*TOWARD\s+([^|\n;]+)/i) : null;
+
+  const parseSteamCandidate = (raw: string): void => {
+    const cleaned = raw.replace(/\s*\([^)]*\)\s*$/g, '').trim();
+    if (!cleaned || /^(?:NEUTRAL|NONE|MIXED|N\/A)$/i.test(cleaned)) return;
+    if (/^(?:total\s+)?(?:over|under)\b/i.test(cleaned)) {
+      if (!totalSteamTag) totalSteamTag = `TOWARD ${cleaned}`;
+      return;
+    }
+    const strippedDir = cleaned.replace(/^(?:home|away)\s+/i, '').trim();
+    const explicitHome = /^home\b/i.test(cleaned);
+    const explicitAway = /^away\b/i.test(cleaned);
+    const matchesHome = explicitHome || teamNameMatchesLabel(strippedDir, homeSide?.abbr || '', homeMatchupName);
+    const matchesAway = explicitAway || teamNameMatchesLabel(strippedDir, awaySide?.abbr || '', awayMatchupName);
+    if (matchesHome && !matchesAway) {
+      steamSide = 'home';
+      steamTarget = cleaned;
+    } else if (matchesAway && !matchesHome) {
+      steamSide = 'away';
+      steamTarget = cleaned;
+    } else if (/over|under|total/i.test(cleaned)) {
+      if (!totalSteamTag) totalSteamTag = `TOWARD ${cleaned}`;
+    }
+  };
+
+  if (sideSteamExplicit) parseSteamCandidate(sideSteamExplicit[1]);
+  if (totalSteamExplicit) {
+    const cleanedTotal = totalSteamExplicit[1].replace(/\s*\([^)]*\)\s*$/g, '').trim();
+    if (cleanedTotal && !/^(?:NEUTRAL|NONE|MIXED|N\/A)$/i.test(cleanedTotal)) {
+      totalSteamTag = `TOWARD ${cleanedTotal}`;
     }
   }
+  if (genericSteamMatch) parseSteamCandidate(genericSteamMatch[1]);
 
+  const isUncertainQuestionable = /Health\s*Balance:\s*uncertain_questionable\b/i.test(inj);
   let healthSide: 'home' | 'away' | null = null;
   let healthLabel = '';
-  const healthMatch = inj.match(/Health\s*Balance:\s*(home_advantage|away_advantage)(?:\s*\(([^)]+)\))?/i);
-  if (healthMatch) {
-    const cls = healthMatch[1].toLowerCase();
-    healthSide = cls === 'home_advantage' ? 'home' : 'away';
-    healthLabel = cls;
+  if (!isUncertainQuestionable) {
+    const healthMatch = inj.match(/Health\s*Balance:\s*(home_advantage|away_advantage)(?:\s*\(([^)]+)\))?/i);
+    if (healthMatch) {
+      const cls = healthMatch[1].toLowerCase();
+      healthSide = cls === 'home_advantage' ? 'home' : 'away';
+      healthLabel = cls;
+    }
   }
 
-  const tags: string[] = [];
-  if (formSide && formTeam) tags.push(`form=${formTeam}`);
-  if (steamSide && steamTarget) tags.push(`steam=TOWARD ${steamTarget}`);
-  if (healthSide && healthLabel) tags.push(`health=${healthLabel}`);
+  // S5: Score pillars independently per side (home vs away). Never sum opposing sides or count Total steam as a side pillar.
+  const homeTags: string[] = [];
+  const awayTags: string[] = [];
 
-  const homeAligned =
-    (formSide === 'home' ? 1 : 0) +
-    (steamSide === 'home' ? 1 : 0) +
-    (healthSide === 'home' ? 1 : 0);
-  const awayAligned =
-    (formSide === 'away' ? 1 : 0) +
-    (steamSide === 'away' ? 1 : 0) +
-    (healthSide === 'away' ? 1 : 0);
-  const bestDirectionalAligned = Math.max(homeAligned, awayAligned);
-  const alignedPillarCount =
-    steamSide === 'total' && bestDirectionalAligned > 0
-      ? bestDirectionalAligned + 1
-      : bestDirectionalAligned;
+  if (formSide === 'home' && formTeam) homeTags.push(`form=${formTeam}`);
+  else if (formSide === 'away' && formTeam) awayTags.push(`form=${formTeam}`);
+
+  if (steamSide === 'home' && steamTarget) homeTags.push(`steam=TOWARD ${steamTarget}`);
+  else if (steamSide === 'away' && steamTarget) awayTags.push(`steam=TOWARD ${steamTarget}`);
+
+  if (healthSide === 'home' && healthLabel) homeTags.push(`health=${healthLabel}`);
+  else if (healthSide === 'away' && healthLabel) awayTags.push(`health=${healthLabel}`);
+
+  const homeCount = homeTags.length;
+  const awayCount = awayTags.length;
+
+  let winningSide: 'home' | 'away' | null = null;
+  if (homeCount > awayCount) {
+    winningSide = 'home';
+  } else if (awayCount > homeCount) {
+    winningSide = 'away';
+  } else if (homeCount > 0) {
+    // Tie-break: prefer side with directional side steam, then health, then home
+    if (steamSide === 'away') winningSide = 'away';
+    else if (steamSide === 'home') winningSide = 'home';
+    else if (healthSide === 'away') winningSide = 'away';
+    else winningSide = 'home';
+  }
+
+  const winningTags = winningSide === 'home' ? homeTags : winningSide === 'away' ? awayTags : [];
+  const alignedPillarCount = winningTags.length;
+  const resolveTeamLabel = (side: 'home' | 'away' | null): string => {
+    if (side === 'home') {
+      return homeSide?.abbr || homeMatchupName.split(/\s+/).pop() || 'HOME';
+    }
+    if (side === 'away') {
+      return awaySide?.abbr || awayMatchupName.split(/\s+/).pop() || 'AWAY';
+    }
+    return '';
+  };
+  const winningTeam = resolveTeamLabel(winningSide);
 
   const hasDirectionalSteam = entry.hasDirectionalSteam || steamSide !== null;
-  const isUncertainQuestionable = /Health\s*Balance:\s*uncertain_questionable/i.test(inj);
-  const outCountDiff = Math.max(entry.outCountDiff || 0, computeOutCountDiff(inj));
+  const outCountDiff = isUncertainQuestionable ? 0 : Math.max(entry.outCountDiff || 0, computeOutCountDiff(inj));
   const weightedMarginRank = isLowScoringSport ? netMarginGap * 4 : netMarginGap;
 
   return {
-    pillarCount: tags.length,
+    pillarCount: alignedPillarCount,
     alignedPillarCount,
-    tags,
+    winningSide,
+    winningTeam,
+    homePillarCount: homeCount,
+    awayPillarCount: awayCount,
+    ...(totalSteamTag ? { totalSteamTag } : {}),
+    tags: winningTags,
     hasDirectionalSteam,
     isUncertainQuestionable,
     outCountDiff,
@@ -330,10 +409,17 @@ function extractNumericMargins(text?: string): number[] {
 export function computeOutCountDiff(injuriesText?: string): number {
   if (!injuriesText || injuriesText === 'None') return 0;
   const summaryMatch = injuriesText.match(
-    /Summary:\s*[^(]+\((\d+)\s+OUT,\s*\d+\s+Q\)\s+vs\s+[^(]+\((\d+)\s+OUT,\s*\d+\s+Q\)/i
+    /Summary:\s*[^(]+\((\d+)\s+OUT(?:\s*\[impact\s+(\d+(?:\.\d+)?)[^\]]*\]|\s*\[[^\]]*\])?,\s*\d+\s+Q\)\s+vs\s+[^(]+\((\d+)\s+OUT(?:\s*\[impact\s+(\d+(?:\.\d+)?)[^\]]*\]|\s*\[[^\]]*\])?,\s*\d+\s+Q\)/i
   );
   if (summaryMatch) {
-    return Math.abs(Number(summaryMatch[1]) - Number(summaryMatch[2]));
+    const rawDiff = Math.abs(Number(summaryMatch[1]) - Number(summaryMatch[3]));
+    if (summaryMatch[2] !== undefined && summaryMatch[4] !== undefined) {
+      const impactDiff = Math.abs(Number(summaryMatch[2]) - Number(summaryMatch[4]));
+      if (Number.isFinite(impactDiff)) {
+        return Math.max(rawDiff, Math.round(impactDiff * 10) / 10);
+      }
+    }
+    return rawDiff;
   }
   const parts = injuriesText.split('|').map((p) => p.trim()).filter(Boolean);
   if (parts.length >= 2) {
@@ -360,6 +446,14 @@ async function runWithConcurrencyLimit<T, R>(
   return results;
 }
 
+export const HOP1_TOOL_EXECUTION_TIMEOUT_MS = 4000;
+export const HOP1_MAX_CONCURRENCY = 6;
+const HOP1_HARD_MAX_CONCURRENCY = 8;
+
+function isHop1TimeoutError(error?: string): boolean {
+  return /\b(?:timeout|timed\s+out|exceeded\s+\d+ms|AbortError)\b/i.test(String(error || ''));
+}
+
 /**
  * Hop 1 Unified 3-Tool Dossier Fetcher:
  * Concurrently executes get_matchup_fundamentals, get_injury_and_roster_delta,
@@ -370,12 +464,22 @@ export async function fetchTwoHopSlateDossier(
   toolRegistry: ToolRegistry,
   cache: GameQueryCache,
   context?: SwarmContext,
-  options?: { env?: Record<string, string | undefined>; fetchFn?: typeof fetch; qdrantClient?: any; timeoutMs?: number },
+  options?: {
+    env?: Record<string, string | undefined>;
+    fetchFn?: typeof fetch;
+    qdrantClient?: any;
+    timeoutMs?: number;
+    maxConcurrency?: number;
+  },
 ): Promise<UnifiedSlateDossier> {
   const startTime = Date.now();
   const availableTools = TWO_HOP_DOSSIER_TOOLS.filter((t) => toolRegistry.has(t));
   const activeEventIds = activeHeaders.map((h) => h.eventId).filter(Boolean);
-  const timeoutMs = options?.timeoutMs ?? TOOL_EXECUTION_TIMEOUT_MS;
+  const timeoutMs = options?.timeoutMs ?? HOP1_TOOL_EXECUTION_TIMEOUT_MS;
+  const maxConcurrency = Math.max(
+    1,
+    Math.min(options?.maxConcurrency ?? HOP1_MAX_CONCURRENCY, HOP1_HARD_MAX_CONCURRENCY)
+  );
 
   if (activeHeaders.length === 0 || availableTools.length === 0) {
     return {
@@ -424,28 +528,49 @@ export async function fetchTwoHopSlateDossier(
     }
   }
 
-  const executed = await runWithConcurrencyLimit(calls, 6, async (c) => {
-    const res = await executeToolWithCacheAndTimeout(
+  const runPlayerLogsCache = new Map<string, Promise<any[]>>();
+  const executed = await runWithConcurrencyLimit(calls, maxConcurrency, async (c) => {
+    const execOpts = {
+      env: options?.env,
+      fetchFn: options?.fetchFn,
+      qdrantClient: options?.qdrantClient,
+      playerLogsCache: runPlayerLogsCache,
+      game: {
+        event_id: c.header.eventId,
+        sport: c.header.sport,
+        home_team: c.header.home,
+        away_team: c.header.away,
+        home_team_abbr: c.header.home,
+        away_team_abbr: c.header.away,
+        ...(Array.isArray(c.header.options) && c.header.options.length > 0 ? { options: c.header.options } : {}),
+      },
+    };
+
+    let res = await executeToolWithCacheAndTimeout(
       { tool: c.tool, parameters: c.parameters },
       { game_id: c.header.eventId },
       toolRegistry,
       cache,
       timeoutMs,
-      {
-        env: options?.env,
-        fetchFn: options?.fetchFn,
-        qdrantClient: options?.qdrantClient,
-        game: {
-          event_id: c.header.eventId,
-          sport: c.header.sport,
-          home_team: c.header.home,
-          away_team: c.header.away,
-          home_team_abbr: c.header.home,
-          away_team_abbr: c.header.away,
-          ...(Array.isArray(c.header.options) && c.header.options.length > 0 ? { options: c.header.options } : {}),
-        },
-      },
+      execOpts,
     );
+
+    // P0-5: Retry once automatically on timeout before recording status: "error".
+    if (!res.success && isHop1TimeoutError(res.error)) {
+      cache.delete(c.header.eventId, c.tool, c.parameters);
+      const retryRes = await executeToolWithCacheAndTimeout(
+        { tool: c.tool, parameters: c.parameters },
+        { game_id: c.header.eventId },
+        toolRegistry,
+        cache,
+        timeoutMs,
+        execOpts,
+      );
+      res = {
+        ...retryRes,
+        durationMs: (res.durationMs ?? 0) + (retryRes.durationMs ?? 0),
+      };
+    }
 
     if (context?.addEvent) {
       context.addEvent({
@@ -547,7 +672,9 @@ export async function fetchTwoHopSlateDossier(
         }
       } else if (call.tool === 'get_injury_and_roster_delta') {
         entry.injuries = compact || 'None';
-        entry.outCountDiff = computeOutCountDiff(entry.injuries);
+        entry.outCountDiff = /Health\s*Balance:\s*uncertain_questionable\b/i.test(entry.injuries)
+          ? 0
+          : computeOutCountDiff(entry.injuries);
       } else if (call.tool === 'get_market_movement') {
         entry.market = compact || 'Unavailable';
         entry.hasDirectionalSteam = /\bSteam:\s*(?!neutral\b|N\/A\b)/i.test(entry.market);
@@ -714,10 +841,14 @@ export function formatUnifiedPerGameDossier(
     if (headerPool.length > 0 && (typeof maxChars !== 'number' || maxChars >= 600)) {
       const headerLines = [
         '=== TOP PILLAR CANDIDATES (QUALITATIVE) ===',
-        ...headerPool.map(
-          (item) =>
-            `- ${item.entry.eventId} [${item.eval.pillarCount} pillar${item.eval.pillarCount === 1 ? '' : 's'}: ${item.eval.tags.join(', ')}]`,
-        ),
+        ...headerPool.map((item) => {
+          const count = item.eval.pillarCount;
+          const sideLabel = item.eval.winningSide
+            ? ` (${item.eval.winningSide}${item.eval.winningTeam ? ` ${item.eval.winningTeam}` : ''})`
+            : '';
+          const totalNote = item.eval.totalSteamTag ? ` | total_steam=${item.eval.totalSteamTag}` : '';
+          return `- ${item.entry.eventId} [${count} pillar${count === 1 ? '' : 's'}${sideLabel}: ${item.eval.tags.join(', ')}]${totalNote}`;
+        }),
       ];
       const candidateHeader = headerLines.join('\n');
       if (typeof maxChars !== 'number' || candidateHeader.length + 220 <= maxChars) {
@@ -892,19 +1023,27 @@ export function formatUnifiedPerGameDossier(
     }
   }
 
-  const avgRowsOverhead = Math.ceil(
-    sorted.reduce((sum, item) => sum + (item.entry.rows ? item.entry.rows.trim().length + 7 : 0), 0) /
-      Math.max(1, sorted.length),
-  );
-  const overheadPerGame = 105 + avgRowsOverhead;
+  const measureFixedOverhead = (omitRows: boolean): number => {
+    const sepOverhead = Math.max(0, sorted.length - 1) * 2;
+    const perEntries = sorted.reduce((sum, item) => {
+      const hdrLen = `=== GAME DOSSIER: ${item.entry.eventId} (${item.entry.matchup}) ===`.length;
+      const rowsLen = !omitRows && item.entry.rows && item.entry.rows.trim()
+        ? 1 + `Rows: ${item.entry.rows.trim()}`.length
+        : 0;
+      // \nFundamentals: \nInjuries: \nMarket:  => 37 chars
+      return sum + hdrLen + rowsLen + 37;
+    }, 0);
+    return perEntries + sepOverhead;
+  };
+
   const headerCost = indexHeader ? indexHeader.length + 2 : 0;
-  const totalBodyBudget = maxChars - headerCost - sorted.length * overheadPerGame;
+  const totalBodyBudget = maxChars - headerCost - measureFixedOverhead(false);
   const perGameBody = Math.floor(totalBodyBudget / sorted.length);
   const minPerGameBody = options?.compactInjuriesOnTightBudget ? 90 : 160;
   if (perGameBody >= minPerGameBody) {
-    const fundCap = Math.max(options?.compactInjuriesOnTightBudget ? 40 : 70, Math.floor(perGameBody * 0.43));
-    const injCap = Math.max(options?.compactInjuriesOnTightBudget ? 35 : 60, Math.floor(perGameBody * 0.30));
-    const mktCap = Math.max(options?.compactInjuriesOnTightBudget ? 35 : 55, perGameBody - fundCap - injCap);
+    const fundCap = Math.max(options?.compactInjuriesOnTightBudget ? 30 : 70, Math.floor(perGameBody * 0.42));
+    const injCap = Math.max(options?.compactInjuriesOnTightBudget ? 30 : 60, Math.floor(perGameBody * 0.30));
+    const mktCap = Math.max(options?.compactInjuriesOnTightBudget ? 25 : 55, perGameBody - fundCap - injCap);
     const pass2 = assemble(
       { fund: fundCap, inj: injCap, mkt: mktCap },
       options?.compactInjuriesOnTightBudget ? { compactInjuries: true } : undefined,
@@ -918,16 +1057,16 @@ export function formatUnifiedPerGameDossier(
   }
 
   if (options?.compactInjuriesOnTightBudget) {
-    const noRowsBodyBudget = maxChars - headerCost - sorted.length * 95;
-    const noRowsPerGameBody = Math.max(60, Math.floor(noRowsBodyBudget / sorted.length));
-    const fundCap = Math.max(25, Math.floor(noRowsPerGameBody * 0.42));
-    const injCap = Math.max(20, Math.floor(noRowsPerGameBody * 0.28));
-    const mktCap = Math.max(20, noRowsPerGameBody - fundCap - injCap);
+    const noRowsBodyBudget = maxChars - headerCost - measureFixedOverhead(true);
+    const noRowsPerGameBody = Math.max(45, Math.floor(noRowsBodyBudget / sorted.length));
+    const fundCap = Math.max(15, Math.floor(noRowsPerGameBody * 0.40));
+    const injCap = Math.max(15, Math.floor(noRowsPerGameBody * 0.30));
+    const mktCap = Math.max(15, noRowsPerGameBody - fundCap - injCap);
     const pass3 = assemble(
       { fund: fundCap, inj: injCap, mkt: mktCap },
       { compactInjuries: true, omitRows: true },
     );
-    if (pass3.sectionsIncluded >= pass1.sectionsIncluded) {
+    if (!pass3.truncated || pass3.sectionsIncluded >= pass1.sectionsIncluded) {
       return pass3;
     }
   }

@@ -8,6 +8,7 @@ import {
   type EspnTeamEntry
 } from './injuryAttribution.ts';
 import { checkPickRowSideBinding, extractRowOptions, type RowOptionEntry } from './marketRowBinding.ts';
+import { splitSentencesSafe } from '../parser/responseGuards.ts';
 
 export const GROUNDING_RULE = `GROUNDING:
 - Do not cite a score, goals-allowed, or health claim unless it is in a successful tool result.
@@ -102,32 +103,53 @@ function buildCleanEvidenceForNumericCheck(successfulEvidence: string): string {
 }
 
 const STAT_CONTEXT_KEYWORD_REGEX =
-  /(?:^|[^a-zA-Z0-9])(?:goals?|points?|pts|runs?|allowed|against|conceded|surrendered|scored|scoring|pf\/pa|pf|pa|ga|gf|ra|rf|gaa|ga\/g|ppg|oppg|opp_pts|last_game|score|team_score|opponent_score|home_score|away_score|h2h|boxscore|recent_scores)(?:$|[^a-zA-Z0-9])/i;
+  /(?:^|[^a-zA-Z0-9])(?:goals?|points?|pts|runs?|allowed|against|conceded|surrendered|scored|scoring|pf\/pa|pf\/g|pa\/g|gf\/g|rf\/g|ra\/g|pf|pa|ga|gf|ra|rf|gaa|ga\/g|ppg|oppg|opp_pts|last_game|score|team_score|opponent_score|home_score|away_score|h2h|boxscore|recent_scores)(?:$|[^a-zA-Z0-9])/i;
+
+function numericExactVariants(valueStr: string): string[] {
+  const trimmed = valueStr.trim();
+  const variants = new Set<string>([trimmed]);
+  if (/^\d+$/.test(trimmed)) {
+    variants.add(`${trimmed}.0`);
+  } else {
+    const trailingZero = trimmed.match(/^(\d+)\.0+$/);
+    if (trailingZero) {
+      variants.add(trailingZero[1]);
+      variants.add(`${trailingZero[1]}.0`);
+    }
+  }
+  return Array.from(variants);
+}
 
 function isNumericStatGrounded(valueStr: string, cleanEvidence: string): boolean {
   if (!cleanEvidence) return false;
-  const escapedVal = escapeRegex(valueStr);
-  const tokenRegex = new RegExp(`(?<![\\d.])${escapedVal}(?![\\d.])`, 'g');
-  let m: RegExpExecArray | null;
-  while ((m = tokenRegex.exec(cleanEvidence)) !== null) {
-    const start = Math.max(0, m.index - 45);
-    const end = Math.min(cleanEvidence.length, m.index + valueStr.length + 45);
-    const window = cleanEvidence.slice(start, end);
-    if (STAT_CONTEXT_KEYWORD_REGEX.test(window)) {
-      return true;
+  const variants = numericExactVariants(valueStr);
+
+  for (const variant of variants) {
+    const escapedVal = escapeRegex(variant);
+    const tokenRegex = new RegExp(`(?<![\\d.])${escapedVal}(?![\\d.])`, 'g');
+    let m: RegExpExecArray | null;
+    while ((m = tokenRegex.exec(cleanEvidence)) !== null) {
+      const start = Math.max(0, m.index - 45);
+      const end = Math.min(cleanEvidence.length, m.index + variant.length + 45);
+      const window = cleanEvidence.slice(start, end);
+      if (STAT_CONTEXT_KEYWORD_REGEX.test(window)) {
+        return true;
+      }
     }
   }
 
   // Remaining score pairs (e.g. H2H: ANA vs COL 2-8 (L) — W-L records were stripped)
+  const variantSet = new Set(variants);
   const scorePairRegex = /\b(\d{1,3})\s*-\s*(\d{1,3})\b/g;
+  let m: RegExpExecArray | null;
   while ((m = scorePairRegex.exec(cleanEvidence)) !== null) {
-    if (m[1] === valueStr || m[2] === valueStr) return true;
+    if (variantSet.has(m[1]) || variantSet.has(m[2])) return true;
   }
 
-  // Slash average pairs (e.g. PF/PA 2.2 / 3.9)
+  // Slash average pairs (e.g. PF/PA 119.8 / 113.0 or 2.2 / 3.9)
   const slashPairRegex = /\b(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)\b/g;
   while ((m = slashPairRegex.exec(cleanEvidence)) !== null) {
-    if (m[1] === valueStr || m[2] === valueStr) return true;
+    if (variantSet.has(m[1]) || variantSet.has(m[2])) return true;
   }
 
   return false;
@@ -182,14 +204,14 @@ function extractRecordsFromSegment(seg: string): Set<string> {
   const norm = normalizeText(seg);
 
   const prefixRx =
-    /\b(?:W-L|L\d{1,2}|last[\s_]?\d{1,2}|record|ATS|SU|home|away|road|overall|form)\b["']?\s*[:="']?\s*(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?\b/gi;
+    /\b(?:W-L|L\d{1,2}|last[\s_]?\d{1,2}|record|ATS|SU|home|away|road|overall|form|season)\b["']?\s*[:="']?\s*(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?\b/gi;
   let m: RegExpExecArray | null;
   while ((m = prefixRx.exec(norm)) !== null) {
     addGroundedRecordValue(records, m[1], m[2], m[3]);
   }
 
   const suffixRx =
-    /\b(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?\s*(?:L\d{1,2}|W-L|ATS|SU|record|last\s+\d+)\b/gi;
+    /\b(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?\s*(?:L\d{1,2}|W-L|ATS|SU|record|last\s+\d+|home|away|road|overall|season)\b/gi;
   while ((m = suffixRx.exec(norm)) !== null) {
     addGroundedRecordValue(records, m[1], m[2], m[3]);
   }
@@ -272,7 +294,9 @@ function extractGroundedRecords(
   const recordsByTeamKey = new Map<string, Set<string>>();
   const recordsByEventId = new Map<string, Set<string>>();
   const unscopedRecords = new Set<string>();
-  if (!successfulEvidence) return { allRecords, recordsByTeamKey, recordsByEventId, unscopedRecords };
+  if (typeof successfulEvidence !== 'string' || !successfulEvidence) {
+    return { allRecords, recordsByTeamKey, recordsByEventId, unscopedRecords };
+  }
 
   const addToMapSet = (map: Map<string, Set<string>>, key: string, recs: Set<string>) => {
     let set = map.get(key);
@@ -305,6 +329,7 @@ function extractGroundedRecords(
 
     const evLineMatch =
       line.match(/^EVENT\s+([a-z0-9-]+)/i) ||
+      line.match(/^===\s*GAME\s+DOSSIER:\s*([a-z0-9-]+)/i) ||
       line.match(/\[(?:MATCHUP FUNDAMENTALS|MARKET MOVEMENT|INJURY(?:\s*&\s*ROSTER\s*DELTA)?):\s*([a-z0-9-]+)/i) ||
       line.match(/\bevent_id\s*=\s*([a-z0-9-]+)/i);
     if (evLineMatch && evLineMatch[1]) {
@@ -470,7 +495,7 @@ function findUngroundedFormClaimDetailInClause(
     /\b(?:allowed|allowing|allows|gave\s+up|giving\s+up|gives\s+up|surrendered|surrendering|surrenders|conceded|conceding|concedes|yielded|yielding|yields)\s+(?:over\s+|nearly\s+|about\s+|around\s+|~)?(\d+(?:\.\d+)?)\+?\s+(?:goals?|points?|pts|runs?)\b/gi,
     /\b(?:scored|scoring|scores|netted|tallied|put\s+up|putting\s+up|posted|posting|held\s+to)\s+(?:over\s+|nearly\s+|about\s+|around\s+|~)?(\d+(?:\.\d+)?)\+?\s+(?:goals?|points?|pts|runs?|ppg|gpg|rpg)\b/gi,
     /\b(?:averaging|averages?|avg\.?)\s+(?:over\s+|nearly\s+|about\s+|around\s+|~)?(\d+(?:\.\d+)?)\+?\s*(?:ppg|gpg|rpg|pts\/g(?:m)?|points?\s+per\s+game|goals?\s+per\s+game|runs?\s+per\s+game|points?|pts|goals?|runs?)\b/gi,
-    /\b(\d+(?:\.\d+)?)\+?\s*(?:ppg|gpg|rpg|pts\/g(?:m)?|GAA|GA\/G|goals\s+against\s+avg)\b/gi,
+    /\b(\d+(?:\.\d+)?)\+?\s*(?:ppg|gpg|rpg|pf\/g|pa\/g|gf\/g|rf\/g|ra\/g|pts\/g(?:m)?|GAA|GA\/G|goals\s+against\s+avg)\b/gi,
     /\b(\d+(?:\.\d+)?)\+?\s+(?:goals?|points?|pts|runs?)\s+(?:per\s+game|last\s+game|last\s+night|last\s+outing)\b/gi
   ];
 
@@ -529,7 +554,7 @@ function findUngroundedFormClaimDetailInClause(
   }
 
   const recordPatterns: RegExp[] = [
-    /\b(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?\s*(?:(?:in\s+(?:their\s+|the\s+)?|over\s+(?:their\s+|the\s+)?)?(?:last|past)\s+\d{1,2}\b|(?:(?:in|over|across)\s+(?:their\s+|the\s+)?)?L\d{1,2}\b|W-L\b|ATS\b|SU\b|overall\b|record\b|on\s+the\s+(?:season|year|road)\b|at\s+home\b|form\b)/gi,
+    /\b(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?\s*(?:(?:in\s+(?:their\s+|the\s+)?|over\s+(?:their\s+|the\s+)?)?(?:last|past)\s+\d{1,2}\b|(?:(?:in|over|across)\s+(?:their\s+|the\s+)?)?L\d{1,2}\b|W-L\b|ATS\b|SU\b|overall\b|(?:(?:away|home|road|season|overall)\s+)?record\b|on\s+the\s+(?:season|year|road)\b|at\s+home\b|form\b)/gi,
     /\b(?:L\d{1,2}|(?:last|past)\s+\d{1,2}\b|W-L|record(?:\s+of)?|ATS(?:\s+record)?|recent\s+form|form(?:\s+of)?)\s*(?::|=|is|are|was|were|at|of)?\s*(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?\b/gi
   ];
   if (hasSportsSignal) {
@@ -1097,7 +1122,7 @@ export function extractVetoedLegTargets(
 }
 
 const EXPLICIT_VETO_EXPLANATION_REGEX =
-  /\b(?:was\s+vetoed|were\s+vetoed|is\s+vetoed|vetoed\s+(?:from|for|due|and)|rejected|remov(?:ed|ing)|drop(?:ped|ping)|exclud(?:ed|ing)|disqualif(?:ied|y)|off\s+the\s+card|not\s+recommend(?:ed|ing)|do\s+not\s+(?:bet|play|back|pick|recommend)|cannot\s+(?:bet|play|back|pick|recommend)|must\s+be\s+removed|avoid(?:ed|ing)?|skip(?:ped|ping)?|pass(?:ed|ing)?\s+on)\b/i;
+  /\b(?:was\s+vetoed|were\s+vetoed|is\s+vetoed|vetoed|ruled\s+out|rejected|remov(?:ed|ing)|drop(?:ped|ping)|exclud(?:ed|ing)|prun(?:ed|ing)|stripp(?:ed|ing)|omitt(?:ed|ing)|filter(?:ed|ing)\s+out|disqualif(?:ied|y)|off\s+the\s+card|not\s+included|no\s+longer\s+(?:included|recommended|on\s+the\s+card)|not\s+recommend(?:ed|ing)|do\s+not\s+(?:bet|play|back|pick|recommend)|cannot\s+(?:bet|play|back|pick|recommend)|must\s+be\s+removed|avoid(?:ed|ing)?|skip(?:ped|ping)?|pass(?:ed|ing)?\s+on)\b/i;
 
 const LEG_REC_CONTEXT_REGEX =
   /\b(?:parlay|recommend(?:ed|ing|s)?|recommended\s+bets?|play(?:ing)?|back(?:ing)?|take|taking|pick(?:ed|s|ing)?|bet(?:s|ting)?|ticket|card|leg|legs)\b/i;
@@ -1173,6 +1198,7 @@ function findSingleBetRewriteViolationInClause(
     const sub = subClauses[i];
     SINGLE_BET_REC_REGEX.lastIndex = 0;
     if (!SINGLE_BET_REC_REGEX.test(sub) || NEGATED_SINGLE_BET_REGEX.test(sub)) continue;
+    if (EXPLICIT_VETO_EXPLANATION_REGEX.test(sub) && !/\b(?:as\s+a\s+single|recommended\s+single|standalone\s+(?:bet|play|wager)|play\s+(?:it|that\s+leg)\s+as\s+a\s+single)\b/i.test(sub)) continue;
 
     // Look directly in this sub-clause for a vetoed target (taking care if both vetoed & non-vetoed appear, use segment right before single-bet phrase)
     const mSingle = SINGLE_BET_REC_REGEX.exec(sub);
@@ -1250,7 +1276,7 @@ export function stripVetoedLegsFromParlayText(text: string, vetoedTargets: Vetoe
       const looksLikeParlay = parts.some(isParlayLegString);
       if (!looksLikeParlay) return fullMatch;
       const kept = parts.filter(part => !vetoedTargets.some(t => targetMatchesTextSpan(part, t)));
-      if (kept.length === parts.length) return fullMatch;
+      if (kept.length === parts.length || kept.length === 0) return fullMatch;
       return kept.join(' + ');
     }
   );
@@ -1258,12 +1284,15 @@ export function stripVetoedLegsFromParlayText(text: string, vetoedTargets: Vetoe
 
 function findVetoedLegRecommendationInClause(
   clause: string,
-  vetoedTargets: VetoedLegTarget[]
+  vetoedTargets: VetoedLegTarget[],
+  options?: { isInActiveTicketOrInsights?: boolean }
 ): { target: VetoedLegTarget; subClause: string } | null {
   if (!clause || vetoedTargets.length === 0) return null;
   const norm = normalizeText(clause);
   const subClauses = norm
-    .split(/,\s*(?=(?:so|leaving|making|which\s+leaves|instead|after|while|whereas)\b)|;\s+/i)
+    .split(
+      /,\s*(?=(?:so|leaving|making|which\s+leaves|instead|after|while|whereas|because|since|although|though|but|however|following)\b)|;\s+|\s+(?=(?:after|because|since|while|whereas|although|though)\s+[^.;]{0,120}\b(?:vetoed|rejected|dropped|excluded|removed|ruled\s+out|pruned|stripped|omitted)\b)/i
+    )
     .map(s => s.trim())
     .filter(Boolean);
 
@@ -1271,6 +1300,12 @@ function findVetoedLegRecommendationInClause(
     if (EXPLICIT_VETO_EXPLANATION_REGEX.test(sub)) continue;
     const matched = vetoedTargets.find(t => targetMatchesTextSpan(sub, t));
     if (!matched) continue;
+
+    // P0-2: If the vetoed leg is absent from picks[], Selected Wagers, and InsightList,
+    // and the enclosing clause is a rejection/explanation clause, do not treat it as an active recommendation.
+    if (!options?.isInActiveTicketOrInsights && EXPLICIT_VETO_EXPLANATION_REGEX.test(norm)) {
+      continue;
+    }
 
     // Flag if sub-clause either lists it as a "+" parlay leg, includes bet syntax (ML/+1.5/R-id),
     // or explicitly recommends/plays/picks/backs it.
@@ -1395,6 +1430,7 @@ export function auditClaimGrounding(
     vetoTexts?: string[];
     vetoedLegs?: VetoedLegTarget[];
     vetoedClaims?: string[];
+    curatedDossier?: string | { sections?: Array<{ tool?: string; event_id?: string; summary?: string }> };
   }
 ): GroundingAuditResult {
   if (!proposal) return { pass: true, violations: [], flags: [] };
@@ -1404,7 +1440,22 @@ export function auditClaimGrounding(
     : parseGameHeaders(slateText);
   const rowMap = extractRowOptions([slateText], headers);
 
-  const successfulEvidence = extractSuccessfulEvidenceText(evidenceText);
+  let curatedDossierText = '';
+  if (typeof options?.curatedDossier === 'string') {
+    curatedDossierText = options.curatedDossier.trim();
+  } else if (options?.curatedDossier && Array.isArray(options.curatedDossier.sections)) {
+    curatedDossierText = options.curatedDossier.sections
+      .map(s => {
+        const sum = typeof s?.summary === 'string' ? s.summary.trim() : '';
+        if (!sum) return '';
+        return s.event_id && !sum.includes(s.event_id) ? `EVENT ${s.event_id}\n${sum}` : sum;
+      })
+      .filter(Boolean)
+      .join('\n\n');
+  }
+  const combinedEvidenceInput = [curatedDossierText, evidenceText].filter(Boolean).join('\n\n');
+
+  const successfulEvidence = extractSuccessfulEvidenceText(combinedEvidenceInput);
   const cleanEvidence = buildCleanEvidenceForNumericCheck(successfulEvidence);
 
   const rawProposalText = typeof proposal === 'string' ? proposal : JSON.stringify(proposal);
@@ -1417,7 +1468,28 @@ export function auditClaimGrounding(
   const allInjuries = extractAuthoritativeInjuries(successfulEvidence, slateText);
   const outInjuries = allInjuries.filter(inj => /^(?:OUT|IR|INJURED\s+RESERVE|SUSPENDED)$/i.test(inj.status));
   const candidates = buildTeamDescriptors(headers, outInjuries, hasSportsSignal);
+  // P0-1: Build record corpus from authoritative Hop-1 curatedDossier/tool summaries unioned with COMPACT SLATE.
   const groundedRecords = extractGroundedRecords(successfulEvidence, candidates, headers);
+  if (typeof slateText === 'string' && slateText.trim().length > 0) {
+    const slateRecords = extractGroundedRecords(slateText, candidates, headers);
+    for (const r of slateRecords.allRecords) groundedRecords.allRecords.add(r);
+    for (const [k, recs] of slateRecords.recordsByTeamKey.entries()) {
+      let set = groundedRecords.recordsByTeamKey.get(k);
+      if (!set) {
+        set = new Set<string>();
+        groundedRecords.recordsByTeamKey.set(k, set);
+      }
+      for (const r of recs) set.add(r);
+    }
+    for (const [ev, recs] of slateRecords.recordsByEventId.entries()) {
+      let set = groundedRecords.recordsByEventId.get(ev);
+      if (!set) {
+        set = new Set<string>();
+        groundedRecords.recordsByEventId.set(ev, set);
+      }
+      for (const r of recs) set.add(r);
+    }
+  }
   const injuryCoverage = collectSuccessfulInjuryCoverage(successfulEvidence, candidates);
   const vetoedTargets = mergeVetoedLegTargets(
     options?.vetoedLegs,
@@ -1449,15 +1521,38 @@ export function auditClaimGrounding(
     detectedVetoedLegs.push(target);
   };
 
-  if (typeof proposal === 'object' && Array.isArray(proposal.picks) && vetoedTargets.length > 0) {
-    for (const pk of proposal.picks) {
-      const matched = vetoedTargets.find(t => pickMatchesVetoedTarget(pk, t));
-      if (matched) {
-        addViolation(
-          'vetoed_leg_kept',
-          `Vetoed leg (${matched.rowId || matched.teamLabel || 'pick'}) must be removed from picks.`
-        );
-        recordVetoedLeg(matched);
+  let vetoedInActiveTicketOrInsights = false;
+  if (typeof proposal === 'object' && vetoedTargets.length > 0) {
+    if (Array.isArray(proposal.picks)) {
+      for (const pk of proposal.picks) {
+        const matched = vetoedTargets.find(t => pickMatchesVetoedTarget(pk, t));
+        if (matched) {
+          vetoedInActiveTicketOrInsights = true;
+          addViolation(
+            'vetoed_leg_kept',
+            `Vetoed leg (${matched.rowId || matched.teamLabel || 'pick'}) must be removed from picks.`
+          );
+          recordVetoedLeg(matched);
+        }
+      }
+    }
+    if (Array.isArray(proposal.components)) {
+      for (const comp of proposal.components) {
+        if (!comp || typeof comp !== 'object' || !comp.props) continue;
+        if (comp.type === 'DataTable' && isRecommendationTable(comp) && Array.isArray(comp.props.rows)) {
+          for (const row of comp.props.rows) {
+            if (row && typeof row === 'object' && vetoedTargets.some(t => dataTableRowMatchesTarget(row, t))) {
+              vetoedInActiveTicketOrInsights = true;
+            }
+          }
+        } else if (comp.type === 'InsightList' && Array.isArray(comp.props.insights)) {
+          for (const ins of comp.props.insights) {
+            const msg = typeof ins === 'string' ? ins : ins?.message;
+            if (typeof msg === 'string' && !EXPLICIT_VETO_EXPLANATION_REGEX.test(msg) && vetoedTargets.some(t => targetMatchesTextSpan(msg, t))) {
+              vetoedInActiveTicketOrInsights = true;
+            }
+          }
+        }
       }
     }
   }
@@ -1516,7 +1611,9 @@ export function auditClaimGrounding(
       if (singleBetRes.violation) {
         addViolation('vetoed_leg_rewritten', singleBetRes.violation);
       } else if (checkLegRec && vetoedTargets.length > 0) {
-        const legRec = findVetoedLegRecommendationInClause(clause, vetoedTargets);
+        const legRec = findVetoedLegRecommendationInClause(clause, vetoedTargets, {
+          isInActiveTicketOrInsights: vetoedInActiveTicketOrInsights
+        });
         if (legRec) {
           const label = legRec.target.rowId || legRec.target.teamLabel || 'vetoed leg';
           addViolation(
@@ -1697,7 +1794,13 @@ const FAVORABLE_STEAM_CLAIM_REGEX =
   /\b(?:favorable\s+(?:market\s+)?steam|(?:market\s+|sharp\s+)?steam\s+(?:is\s+|has\s+been\s+)?(?:moves?|moving|moved|backs?|backing|supports?|supporting|favors?|favoring|on|for|behind|toward|towards)\b|(?:sharp|market)\s+(?:money|action|movement|line\s+move(?:ment)?)\s+(?:is\s+)?(?:moves?|moving|moved|backs?|backing|supports?|supporting|favors?|favoring|toward|towards|on)\b|backing\s+(?:heavy\s+)?(?:market\s+)?steam|following\s+(?:the\s+)?steam|aligned\s+with\s+(?:the\s+)?(?:market\s+)?steam|steam\s+(?:confirmation|support|play)|line\s+move(?:ment)?\s+(?:favors?|supports?|backs?|moves?\s+toward))\b/i;
 
 const HEALTH_ADVANTAGE_CLAIM_REGEX =
-  /\b(?:health\s+(?:advantage|edge)|injury\s+(?:advantage|edge)|healthier\s+(?:side|team|roster|squad)|cleaner\s+injury\s+report|relatively\s+healthy|availability\s+(?:advantage|edge)|roster\s+(?:health\s+)?(?:advantage|edge)|fewer\s+injuries)\b/i;
+  /\b(?:health\s+(?:advantage|edge)|injury\s+(?:advantage|edge)|asymmetric\s+(?:roster\s+)?(?:health|injur(?:y|ies))|clean(?:\s*\/\s*asymmetric)?\s+(?:roster\s+)?health|opponent\s+injury\s+(?:edge|advantage|asymmetry)|pillar\s*3(?:\s*\([^)]*health[^)]*\))?|healthier\s+(?:side|team|roster|squad)|cleaner\s+injury\s+report|relatively\s+healthy|availability\s+(?:advantage|edge)|roster\s+(?:health\s+)?(?:advantage|edge)|fewer\s+injuries)\b/i;
+
+const BLANKET_MULTI_LEG_SUBJECT_REGEX =
+  /\b(?:each\s+(?:leg|pick|play|selection|game|side)|all\s+(?:(?:two|three|four|five|\d+)\s+)?(?:legs?|picks?|plays?|selections?|sides?)|every\s+(?:leg|pick|play|selection|side)|both\s+(?:legs?|picks?|plays?|selections?|sides?)|(?:the\s+)?(?:2|3|4)-leg\s+parlay|parlay\s+legs?)\b/i;
+
+const BLANKET_TWO_PILLAR_CLAIM_REGEX =
+  /\b(?:(?:>=?|at\s+least\s+)?(?:2|two)\s*(?:-|\s+)?pillars?|(?:all\s+)?(?:3|three)\s*(?:-|\s+)?pillars?|satisf(?:y|ies|ying)\s+[^.;\n]{0,50}\bpillars?)\b/i;
 
 const HEALTH_BALANCED_ACK_REGEX =
   /\b(?:no\s+(?:health|injury)\s+(?:advantage|edge)|without\s+(?:a|an)\s+(?:health|injury)\s+(?:advantage|edge)|not\s+(?:a|an)\s+(?:health|injury)\s+(?:advantage|edge)|neither\s+team\s+(?:is\s+healthier|has\s+an?\s+(?:injury|health)\s+(?:advantage|edge))|symmetric|evenly\s+(?:matched|depleted)|equally\s+(?:depleted|banged\s+up|short-?handed)|offsetting\s+injuries|both\s+(?:teams|[A-Za-z .'-]{2,35}\s+and\s+[A-Za-z .'-]{2,35})\s+(?:have|are\s+(?:missing|dealing\s+with|down|without)|miss(?:ing)?))\b/i;
@@ -1948,7 +2051,7 @@ function parseInjuryBalanceFromEvidence(
       const lineEv = extractLineEventId(line);
       if (lineEv) currentEventId = lineEv;
       const sm = line.match(
-        /Summary:\s*(.+?)\s*\((\d+)\s+OUT,\s*(\d+)\s+Q\)\s+vs\s+(.+?)\s*\((\d+)\s+OUT,\s*(\d+)\s+Q\)\s*\|\s*Health\s+Balance:\s*(symmetric|home_advantage|away_advantage|conditional_home_advantage|conditional_away_advantage|uncertain_questionable|single_team_only)/i
+        /Summary:\s*(.+?)\s*\((\d+)\s+OUT(?:\s*\[[^\]]*\])?,\s*(\d+)\s+Q\)\s+vs\s+(.+?)\s*\((\d+)\s+OUT(?:\s*\[[^\]]*\])?,\s*(\d+)\s+Q\)\s*\|\s*Health\s+Balance:\s*(symmetric|home_advantage|away_advantage|conditional_home_advantage|conditional_away_advantage|uncertain_questionable|single_team_only)/i
       );
       if (sm && (lineEv || currentEventId)) {
         const eventId = lineEv || currentEventId!;
@@ -1962,6 +2065,24 @@ function parseInjuryBalanceFromEvidence(
           awayQ: Number(sm[6]),
           healthBalance: sm[7].toLowerCase() as ParsedInjuryBalanceEntry['healthBalance']
         });
+      } else if ((lineEv || currentEventId) && !byEvent.has(lineEv || currentEventId!)) {
+        const hbOnly = line.match(
+          /\bHealth\s+Balance:\s*(symmetric|home_advantage|away_advantage|conditional_home_advantage|conditional_away_advantage|uncertain_questionable|single_team_only)\b/i
+        );
+        if (hbOnly) {
+          const eventId = lineEv || currentEventId!;
+          const hdr = headers.find(h => h.eventId === eventId);
+          byEvent.set(eventId, {
+            eventId,
+            homeTeam: hdr?.home,
+            homeOut: 0,
+            homeQ: 0,
+            awayTeam: hdr?.away,
+            awayOut: 0,
+            awayQ: 0,
+            healthBalance: hbOnly[1].toLowerCase() as ParsedInjuryBalanceEntry['healthBalance']
+          });
+        }
       }
     }
   }
@@ -2092,7 +2213,8 @@ export function auditCriticPremiseContradictions(
   const evaluateLeg = (
     pk: any,
     sideText: string,
-    reasonTexts: string[]
+    reasonTexts: string[],
+    seatContextTexts: string[] = []
   ) => {
     // 0. Deterministic row_side_mismatch pre-check BEFORE resolving rowEntry.eventId,
     // contra_steam_misread, symmetric_injury_misread, or duplicate_leg checks.
@@ -2115,7 +2237,8 @@ export function auditCriticPremiseContradictions(
     }
 
     const combinedReasons = normalizeText(reasonTexts.filter(Boolean).join('. ')).trim();
-    if (!combinedReasons || (steamEntries.length === 0 && injuryBalances.size === 0)) return;
+    const combinedSeatContext = normalizeText(seatContextTexts.filter(Boolean).join('. ')).trim();
+    if ((!combinedReasons && !combinedSeatContext) || (steamEntries.length === 0 && injuryBalances.size === 0)) return;
 
     const rowMatch = sideText.match(/\b(R\d+)\b/i) || (typeof pk?.row === 'string' ? pk.row.match(/\b(R\d+)\b/i) : null);
     const rowId = rowMatch ? rowMatch[1].toUpperCase() : undefined;
@@ -2143,7 +2266,7 @@ export function auditCriticPremiseContradictions(
       candidates
     );
 
-    const clauses = combinedReasons.split(/(?<=[.!?])\s+|\n+|;\s+/).map(c => c.trim()).filter(Boolean);
+    const clauses = combinedReasons ? combinedReasons.split(/(?<=[.!?])\s+|\n+|;\s+/).map(c => c.trim()).filter(Boolean) : [];
     const pickDisplay = pickedTeamLabel || rowId || sideText || 'pick';
 
     // 1. Check contra-steam misread
@@ -2159,6 +2282,15 @@ export function auditCriticPremiseContradictions(
       }
       return true;
     });
+
+    const hasFavorableDirectionalSteam = relevantSteam.some(se =>
+      isTotal
+        ? (pickedRole === 'over' || pickedRole === 'under') && pickedRole === se.towardRole
+        : Boolean(
+            (pickedRole && se.towardRole && pickedRole === se.towardRole) ||
+            (pickedDesc && se.towardDesc && pickedDesc.key === se.towardDesc.key)
+          )
+    );
 
     for (const se of relevantSteam) {
       const isPickingAgainst = isTotal
@@ -2211,7 +2343,7 @@ export function auditCriticPremiseContradictions(
       }
     }
 
-    // 2. Check symmetric / disadvantaged injury misread
+    // 2. Check symmetric / disadvantaged injury misread (per-pick rationale AND seat-level blanket/targeted analysis)
     const injBal = eventId ? injuryBalances.get(eventId) : undefined;
     if (injBal && (pickedRole === 'home' || pickedRole === 'away')) {
       const isSymmetric = injBal.healthBalance === 'symmetric';
@@ -2229,9 +2361,11 @@ export function auditCriticPremiseContradictions(
           : undefined;
 
         const injurySubClauses = combinedReasons
-          .split(/(?<=[.!?])\s+|\n+|;\s+|,\s+(?:and|but|while|whereas|with)\s+|\s+\b(?:but|while|whereas)\b\s+|\s+\band\b\s+(?=[A-Z][^.!?\n;]*\b(?:missing|out|injured|depleted|decimated|shorthanded|short-?handed|without|scratches)\b)/i)
-          .map(c => c.trim())
-          .filter(Boolean);
+          ? combinedReasons
+              .split(/(?<=[.!?])\s+|\n+|;\s+|,\s+(?:and|but|while|whereas|with)\s+|\s+\b(?:but|while|whereas)\b\s+|\s+\band\b\s+(?=[A-Z][^.!?\n;]*\b(?:missing|out|injured|depleted|decimated|shorthanded|short-?handed|without|scratches)\b)/i)
+              .map(c => c.trim())
+              .filter(Boolean)
+          : [];
 
         const wholeTextHasBalancedAck =
           HEALTH_BALANCED_ACK_REGEX.test(combinedReasons) ||
@@ -2242,32 +2376,84 @@ export function auditCriticPremiseContradictions(
                 findTeamMentionsInText(c, pool).some(m => m.team.key === pickedDesc!.key)
             ));
 
+        let flaggedInjuryMisreadForLeg = false;
+        const flagInjuryMisread = (msg: string, offendingClause: string) => {
+          flaggedInjuryMisreadForLeg = true;
+          addFinding(
+            'symmetric_injury_misread',
+            msg,
+            buildVetoTargetFromPick(pk, headers, rowMap, candidates, msg),
+            offendingClause
+          );
+        };
+
         for (const subClause of injurySubClauses) {
           if (HEALTH_ADVANTAGE_CLAIM_REGEX.test(subClause) && !HEALTH_BALANCED_ACK_REGEX.test(subClause)) {
             const msg = `symmetric_injury_misread: Pick "${pickDisplay}" claims an injury/health advantage when Health Balance is ${injBal.healthBalance} (${injBal.homeTeam || 'Home'} ${injBal.homeOut} OUT/${injBal.homeQ} Q vs ${injBal.awayTeam || 'Away'} ${injBal.awayOut} OUT/${injBal.awayQ} Q).`;
-            addFinding(
-              'symmetric_injury_misread',
-              msg,
-              buildVetoTargetFromPick(pk, headers, rowMap, candidates, msg),
-              subClause
-            );
+            flagInjuryMisread(msg, subClause);
             continue;
           }
 
-          if ((isSymmetric && pickedOut >= 2 && oppOut > 0) || (isDisadvantaged && pickedOut > oppOut)) {
+          if (
+            !hasFavorableDirectionalSteam &&
+            BLANKET_TWO_PILLAR_CLAIM_REGEX.test(subClause) &&
+            !/\bmodel[_\s-]?signal\b/i.test(subClause) &&
+            !HEALTH_BALANCED_ACK_REGEX.test(subClause)
+          ) {
+            const msg = `symmetric_injury_misread: Pick "${pickDisplay}" claims 2-pillar support without favorable directional steam when Health Balance is ${injBal.healthBalance} (${injBal.homeTeam || 'Home'} ${injBal.homeOut} OUT/${injBal.homeQ} Q vs ${injBal.awayTeam || 'Away'} ${injBal.awayOut} OUT/${injBal.awayQ} Q).`;
+            flagInjuryMisread(msg, subClause);
+            continue;
+          }
+
+          if ((isSymmetric && pickedOut >= 2 && oppOut > 0) || isDisadvantaged) {
             if (!wholeTextHasBalancedAck && !HEALTH_BALANCED_ACK_REGEX.test(subClause) && DEPLETION_MENTION_REGEX.test(subClause)) {
               const clauseMentions = findTeamMentionsInText(subClause, pool).map(m => m.team);
               const mentionsOpp = oppDesc ? clauseMentions.some(t => t.key === oppDesc.key) : false;
               const mentionsPicked = pickedDesc ? clauseMentions.some(t => t.key === pickedDesc.key) : false;
               if (mentionsOpp && !mentionsPicked) {
                 const msg = `symmetric_injury_misread: Pick "${pickDisplay}" cites opponent injury depletion without acknowledging symmetric/greater injuries (${pickedOut} OUT vs opp ${oppOut} OUT, Health Balance: ${injBal.healthBalance}).`;
-                addFinding(
-                  'symmetric_injury_misread',
-                  msg,
-                  buildVetoTargetFromPick(pk, headers, rowMap, candidates, msg),
-                  subClause
-                );
+                flagInjuryMisread(msg, subClause);
               }
+            }
+          }
+        }
+
+        // S1: Also inspect seat-level analysis/summary for blanket multi-leg health/pillar claims
+        // or targeted health claims mentioning this pick, even when pk.reason is non-empty.
+        if (!flaggedInjuryMisreadForLeg && combinedSeatContext) {
+          const seatClauses = combinedSeatContext
+            .split(/(?<=[.!?])\s+|\n+|;\s+/)
+            .map(c => c.trim())
+            .filter(Boolean);
+
+          const clauseTargetsThisLeg = (clause: string): boolean => {
+            if (rowId && new RegExp(`\\b${escapeRegex(rowId)}\\b`, 'i').test(clause)) return true;
+            if (pickedDesc && findTeamMentionsInText(clause, pool).some(m => m.team.key === pickedDesc.key)) {
+              return true;
+            }
+            return false;
+          };
+
+          for (const sc of seatClauses) {
+            if (HEALTH_BALANCED_ACK_REGEX.test(sc)) continue;
+            const isBlanket = BLANKET_MULTI_LEG_SUBJECT_REGEX.test(sc);
+            const targetsLeg = clauseTargetsThisLeg(sc);
+            if (!isBlanket && !targetsLeg) continue;
+
+            if (HEALTH_ADVANTAGE_CLAIM_REGEX.test(sc)) {
+              const msg = `symmetric_injury_misread: Pick "${pickDisplay}" is covered by seat analysis health-advantage claim ("${sc.slice(0, 120)}") when Health Balance is ${injBal.healthBalance} (${injBal.homeTeam || 'Home'} ${injBal.homeOut} OUT/${injBal.homeQ} Q vs ${injBal.awayTeam || 'Away'} ${injBal.awayOut} OUT/${injBal.awayQ} Q).`;
+              flagInjuryMisread(msg, sc);
+              break;
+            }
+
+            if (
+              !hasFavorableDirectionalSteam &&
+              BLANKET_TWO_PILLAR_CLAIM_REGEX.test(sc) &&
+              !/\bmodel[_\s-]?signal\b/i.test(sc)
+            ) {
+              const msg = `symmetric_injury_misread: Pick "${pickDisplay}" is covered by seat analysis 2-pillar claim ("${sc.slice(0, 120)}") with neutral/non-favorable steam when Health Balance is ${injBal.healthBalance} (${injBal.homeTeam || 'Home'} ${injBal.homeOut} OUT/${injBal.homeQ} Q vs ${injBal.awayTeam || 'Away'} ${injBal.awayOut} OUT/${injBal.awayQ} Q).`;
+              flagInjuryMisread(msg, sc);
+              break;
             }
           }
         }
@@ -2276,11 +2462,19 @@ export function auditCriticPremiseContradictions(
   };
 
   if (typeof proposal === 'object') {
-    if (Array.isArray(proposal.picks)) {
-      for (const pk of proposal.picks) {
+    const topSeatContext = [
+      typeof proposal.analysis === 'string' ? proposal.analysis : '',
+      typeof proposal.summary === 'string' ? proposal.summary : ''
+    ].filter(Boolean);
+
+    const evaluatedPickRefs = new Set<any>();
+
+    const evalPickList = (picksArr: any[], seatContext: string[]) => {
+      for (const pk of picksArr) {
         if (!pk) continue;
+        if (typeof pk === 'object') evaluatedPickRefs.add(pk);
         if (typeof pk === 'string') {
-          evaluateLeg(pk, pk, [pk]);
+          evaluateLeg(pk, pk, [pk], seatContext);
           continue;
         }
         if (typeof pk !== 'object') continue;
@@ -2297,10 +2491,25 @@ export function auditCriticPremiseContradictions(
           pk.summary,
           ...(Array.isArray(pk.reasons) ? pk.reasons : [])
         ].filter((x): x is string => typeof x === 'string' && x.trim().length > 0);
-        if (rTexts.length === 0 && typeof proposal.analysis === 'string') {
-          rTexts.push(proposal.analysis);
-        }
-        evaluateLeg(pk, sideText, rTexts);
+        evaluateLeg(pk, sideText, rTexts, seatContext);
+      }
+    };
+
+    if (Array.isArray(proposal.seatReports) && proposal.seatReports.length > 0) {
+      for (const sr of proposal.seatReports) {
+        if (!sr || typeof sr !== 'object' || !Array.isArray(sr.picks)) continue;
+        const seatCtx = [
+          typeof sr.analysis === 'string' ? sr.analysis : '',
+          typeof sr.summary === 'string' ? sr.summary : ''
+        ].filter(Boolean);
+        evalPickList(sr.picks, seatCtx);
+      }
+    }
+
+    if (Array.isArray(proposal.picks)) {
+      const remainingPicks = proposal.picks.filter((pk: any) => !(pk && typeof pk === 'object' && evaluatedPickRefs.has(pk)));
+      if (remainingPicks.length > 0) {
+        evalPickList(remainingPicks, topSeatContext);
       }
     }
     if (Array.isArray(proposal.scorecards)) {
@@ -2313,14 +2522,14 @@ export function auditCriticPremiseContradictions(
           sc.summary,
           ...(Array.isArray(sc.reasons) ? sc.reasons : [])
         ].filter((x): x is string => typeof x === 'string' && x.trim().length > 0);
-        evaluateLeg(sc, sideText, rTexts);
+        evaluateLeg(sc, sideText, rTexts, topSeatContext);
       }
     }
     if (proposal.scorecard && typeof proposal.scorecard === 'object') {
       const sc = proposal.scorecard;
       const sideText = [sc.row, sc.pick, sc.side, sc.team].filter((x): x is string => typeof x === 'string' && x.trim().length > 0).join(' ');
       const rTexts = [sc.note, sc.reason, sc.summary].filter((x): x is string => typeof x === 'string' && x.trim().length > 0);
-      evaluateLeg(sc, sideText, rTexts);
+      evaluateLeg(sc, sideText, rTexts, topSeatContext);
     }
   }
 
@@ -2431,9 +2640,21 @@ export function sanitizeUngroundedClaims<T extends Record<string, any>>(
     return { hasViolation, endsWithVetoedSubject: singleRes.endsWithVetoedSubject };
   };
 
+  const capitalizeAndPunctuate = (raw: string): string => {
+    let out = raw.trim();
+    if (!out) return '';
+    if (/^[a-z]/.test(out)) {
+      out = out[0].toUpperCase() + out.slice(1);
+    }
+    if (!/[.!?]$/.test(out)) {
+      out = `${out}.`;
+    }
+    return out;
+  };
+
   const cleanTextField = (text: string, sideHint?: string, checkLegRec: boolean = true): string => {
     const preStripped = vetoedTargets.length > 0 ? stripVetoedLegsFromParlayText(text, vetoedTargets) : text;
-    const sentences = preStripped.split(/(?<=[.!?])\s+|\n+/);
+    const sentences = splitSentencesSafe(preStripped);
     const kept: string[] = [];
     let priorSubWasVetoed = false;
     for (const s of sentences) {
@@ -2441,29 +2662,24 @@ export function sanitizeUngroundedClaims<T extends Record<string, any>>(
       const prevVetoFlag = priorSubWasVetoed;
       priorSubWasVetoed = checkRes.endsWithVetoedSubject;
       if (!checkRes.hasViolation) {
-        kept.push(s);
+        kept.push(s.trim());
         continue;
       }
-      // Try removing an offending parenthetical or contrast sub-clause first
+      // S1: Whole-sentence removal only for vetoed-leg violations — never slice mid-sentence at a comma or clause.
+      const isVetoedLegSentence =
+        Boolean(findSingleBetRewriteViolationInClause(s, vetoedTargets, prevVetoFlag).violation) ||
+        Boolean(checkLegRec && findVetoedLegRecommendationInClause(s, vetoedTargets));
+      if (isVetoedLegSentence) {
+        continue;
+      }
+      // For non-veto parenthetical metric claims (e.g. "(L5: 4-1)"), stripping only a complete parenthetical preserves a full sentence.
       const withoutParen = s.replace(/\s*\([^)]*\)/g, '').replace(/\s{2,}/g, ' ').trim();
-      if (withoutParen && withoutParen !== s.trim() && !sentenceHasViolation(withoutParen, sideHint, prevVetoFlag, checkLegRec).hasViolation) {
-        kept.push(withoutParen);
-        continue;
-      }
-      // Try dropping only offending comma/semicolon sub-clauses
-      const subParts = s.split(/;\s+|,\s*(?=(?:while|whereas|but|although|though|so|yet)\b)/i);
-      if (subParts.length > 1) {
-        let subPrior = prevVetoFlag;
-        const cleanSubs: string[] = [];
-        for (const part of subParts) {
-          const partRes = sentenceHasViolation(part, sideHint, subPrior, checkLegRec);
-          subPrior = partRes.endsWithVetoedSubject;
-          if (!partRes.hasViolation) cleanSubs.push(part);
-        }
-        const rejoined = cleanSubs.join(', ').trim();
-        if (rejoined && !sentenceHasViolation(rejoined, sideHint, prevVetoFlag, checkLegRec).hasViolation) {
-          kept.push(rejoined);
-        }
+      if (
+        withoutParen &&
+        withoutParen !== s.trim() &&
+        !sentenceHasViolation(withoutParen, sideHint, prevVetoFlag, checkLegRec).hasViolation
+      ) {
+        kept.push(capitalizeAndPunctuate(withoutParen));
       }
     }
     return kept.join(' ').trim();
@@ -2564,11 +2780,24 @@ export function sanitizeUngroundedClaims<T extends Record<string, any>>(
   }
 
   if (Array.isArray(rep.scorecards)) {
+    const isSeatScorecard = (sc: any): boolean =>
+      Boolean(
+        sc &&
+        typeof sc === 'object' &&
+        (typeof sc.seat === 'string' ||
+          typeof sc.role === 'string' ||
+          typeof sc.verdict === 'string' ||
+          typeof sc.criticApproved === 'boolean' ||
+          typeof sc.wageringPass === 'boolean')
+      );
     if (vetoedTargets.length > 0) {
-      rep.scorecards = rep.scorecards.filter((sc: any) => !vetoedTargets.some(t => pickMatchesVetoedTarget(sc, t)));
+      // S1: Never wipe seat scorecards (including Risk Critic veto scorecards) when pruning vetoed pick legs.
+      rep.scorecards = rep.scorecards.filter((sc: any) =>
+        isSeatScorecard(sc) || !vetoedTargets.some(t => pickMatchesVetoedTarget(sc, t))
+      );
     }
     for (const sc of rep.scorecards) {
-      if (!sc || typeof sc !== 'object') continue;
+      if (!sc || typeof sc !== 'object' || isSeatScorecard(sc)) continue;
       const sideHint = String(sc.pick || sc.side || '');
       for (const field of ['note', 'reason', 'summary'] as const) {
         if (typeof sc[field] === 'string' && sc[field].trim()) {
@@ -2945,28 +3174,375 @@ export function sanitizeContradictedStreakClaims<T extends Record<string, any>>(
   return { report, corrected, details };
 }
 
+function normalizeGrammaticalSentence(raw: string): string {
+  let out = String(raw || '').replace(/\s+/g, ' ').trim();
+  if (!out) return '';
+  if (/^[a-z]/.test(out)) {
+    out = out[0].toUpperCase() + out.slice(1);
+  }
+  if (!/[.!?]$/.test(out)) {
+    out = `${out}.`;
+  }
+  return out;
+}
+
+function cleanVetoReasonText(raw: string): string {
+  return String(raw || '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[-•*\s]+/, '')
+    .replace(/[.!?]+$/, '')
+    .trim();
+}
+
+export function ensureRiskCriticVetoScorecard<T extends Record<string, any>>(
+  report: T,
+  options?: {
+    vetoReason?: string;
+    seatScorecards?: any[];
+  }
+): T {
+  if (!report || typeof report !== 'object') return report;
+  const rep = report as Record<string, any>;
+  const existing = Array.isArray(rep.scorecards) ? [...rep.scorecards] : [];
+  const incoming = Array.isArray(options?.seatScorecards) ? options!.seatScorecards : [];
+
+  const merged: any[] = [...existing];
+  for (const sc of incoming) {
+    if (!sc || typeof sc !== 'object') continue;
+    const seatName = String(sc.seat || sc.role || '').trim().toLowerCase();
+    const alreadyPresent = seatName
+      ? merged.some((m) => m && typeof m === 'object' && String(m.seat || m.role || '').trim().toLowerCase() === seatName)
+      : false;
+    if (!alreadyPresent) {
+      merged.push({ ...sc });
+    }
+  }
+
+  const criticIdx = merged.findIndex(
+    (sc) =>
+      sc &&
+      typeof sc === 'object' &&
+      (/risk\s*critic|^critic$/i.test(String(sc.seat || sc.role || '').trim()) ||
+        (String(sc.verdict || '').toLowerCase() === 'veto' && !sc.seat && !sc.role))
+  );
+
+  const vetoNotes = cleanVetoReasonText(options?.vetoReason || '');
+  if (criticIdx >= 0) {
+    const prev = merged[criticIdx];
+    merged[criticIdx] = {
+      ...prev,
+      seat: prev.seat || 'Risk Critic',
+      verdict: 'veto',
+      criticApproved: false,
+      wageringPass: true,
+      ...(vetoNotes && !prev.notes ? { notes: normalizeGrammaticalSentence(vetoNotes) } : {})
+    };
+  } else {
+    merged.push({
+      seat: 'Risk Critic',
+      verdict: 'veto',
+      criticApproved: false,
+      wageringPass: true,
+      ...(vetoNotes ? { notes: normalizeGrammaticalSentence(vetoNotes) } : {})
+    });
+  }
+
+  rep.scorecards = merged;
+  return report;
+}
+
 /**
- * Normalizes a report into a clean pass if all proposed picks were removed by Critic vetoes.
+ * Normalizes a report into a clean, grammatical deterministic pass if all proposed picks
+ * were removed by Critic vetoes, preserving seat scorecards and Risk Critic veto metadata.
  */
 export function normalizePassIfAllLegsVetoed<T extends Record<string, any>>(
   report: T,
   initialPickCount: number,
-  hadVetoes: boolean
+  hadVetoes: boolean,
+  options?: {
+    vetoTexts?: string[];
+    vetoedLegs?: VetoedLegTarget[];
+    seatScorecards?: any[];
+    criticApproved?: boolean;
+  }
 ): T {
   if (!report || typeof report !== 'object') return report;
   const rep = report as Record<string, any>;
-  if (initialPickCount > 0 && hadVetoes && Array.isArray(rep.picks) && rep.picks.length === 0) {
+  const isZeroPicks = Array.isArray(rep.picks) && rep.picks.length === 0;
+  const criticRejected = options?.criticApproved === false || rep.criticApproved === false;
+  const hadVetoedLegs =
+    hadVetoes ||
+    criticRejected ||
+    (Array.isArray(options?.vetoedLegs) && options!.vetoedLegs.length > 0) ||
+    (Array.isArray(options?.vetoTexts) && options!.vetoTexts.length > 0);
+  const hadCandidateActivity =
+    initialPickCount > 0 ||
+    criticRejected ||
+    (Array.isArray(options?.vetoedLegs) && options!.vetoedLegs.length > 0);
+
+  if (isZeroPicks && hadVetoedLegs && hadCandidateActivity) {
     rep.pass = true;
     rep.status = 'no_play';
+    rep.criticApproved = false;
+    rep.wageringPass = true;
     if (!rep.ui_title || !/insufficient|pass|no play/i.test(String(rep.ui_title))) {
       rep.ui_title = 'Pass';
     }
-    if (typeof rep.summary !== 'string' || !rep.summary.trim()) {
-      rep.summary = 'Pass: every proposed leg was vetoed during verification.';
+
+    const vetoReasons: string[] = [];
+    const seenReasons = new Set<string>();
+    const addReason = (raw?: string) => {
+      const cleaned = cleanVetoReasonText(raw || '');
+      if (!cleaned || cleaned.length < 4) return;
+      const key = cleaned.toLowerCase();
+      if (seenReasons.has(key)) return;
+      seenReasons.add(key);
+      vetoReasons.push(cleaned);
+    };
+
+    for (const vt of options?.vetoTexts || []) addReason(vt);
+    for (const vl of options?.vetoedLegs || []) {
+      if (vl?.reason && !/^pruned from final picks/i.test(vl.reason.trim())) {
+        addReason(vl.reason);
+      }
     }
-    if (typeof rep.analysis === 'string' && !rep.analysis.trim()) {
-      rep.analysis = rep.summary;
+    if (Array.isArray(rep.scorecards)) {
+      for (const sc of rep.scorecards) {
+        if (sc && typeof sc === 'object' && /risk\s*critic|critic/i.test(String(sc.seat || sc.role || ''))) {
+          addReason(sc.notes || sc.reason || sc.summary);
+        }
+      }
     }
+
+    const vetoedLegLabels = Array.from(
+      new Set(
+        (options?.vetoedLegs || [])
+          .map((vl) => [vl?.teamLabel, vl?.rowId ? `(${vl.rowId})` : ''].filter(Boolean).join(' ').trim())
+          .filter(Boolean)
+      )
+    );
+
+    const primaryReason = vetoReasons[0] || '';
+    const legsPhrase =
+      vetoedLegLabels.length > 0
+        ? ` (${vetoedLegLabels.join(', ')})`
+        : '';
+
+    const summaryText = primaryReason
+      ? `Bottom-line call: pass. The Risk Critic vetoed all proposed selections${legsPhrase} because ${primaryReason[0].toLowerCase() + primaryReason.slice(1)}.`
+      : `Bottom-line call: pass. The Risk Critic vetoed all proposed selections${legsPhrase}, leaving no qualified plays on this slate.`;
+
+    const analysisParts = [
+      `Bottom-line call: pass.`,
+      primaryReason
+        ? `The Risk Critic vetoed all proposed selections${legsPhrase}: ${primaryReason}.`
+        : `The Risk Critic vetoed all proposed selections${legsPhrase} after reviewing the available evidence.`,
+      `No wagers meet verification standards on this slate, so all capital is preserved.`
+    ];
+    const analysisText = analysisParts.map(normalizeGrammaticalSentence).join(' ');
+
+    const insightStrings: string[] = [
+      normalizeGrammaticalSentence(
+        `The Risk Critic vetoed all proposed selections${legsPhrase}, resulting in a pass.`
+      )
+    ];
+    if (vetoReasons.length > 0) {
+      for (const r of vetoReasons.slice(0, 3)) {
+        insightStrings.push(normalizeGrammaticalSentence(`Risk Critic veto rationale: ${r}`));
+      }
+    } else if (vetoedLegLabels.length > 0) {
+      insightStrings.push(
+        normalizeGrammaticalSentence(`Excluded selections: ${vetoedLegLabels.join(', ')}.`)
+      );
+    }
+
+    rep.summary = normalizeGrammaticalSentence(summaryText);
+    rep.analysis = analysisText;
+    rep.reason = primaryReason
+      ? normalizeGrammaticalSentence(primaryReason)
+      : 'All proposed selections were vetoed by the Risk Critic.';
+    rep.insights = insightStrings;
+
+    if (Array.isArray(rep.components)) {
+      for (const comp of rep.components) {
+        if (!comp || typeof comp !== 'object' || !comp.props) continue;
+        if (comp.type === 'InsightList' && Array.isArray(comp.props.insights)) {
+          const hasObjects = comp.props.insights.some((i: any) => i && typeof i === 'object');
+          comp.props.insights = hasObjects
+            ? insightStrings.map((msg) => ({ type: 'warning', message: msg }))
+            : [...insightStrings];
+        } else if (comp.type === 'DataTable' && Array.isArray(comp.props.rows)) {
+          const title = String(comp.props.title || '');
+          if (/\b(?:selected|recommended)\s+(?:wagers?|bets?|picks?|plays?)|parlay\s+legs?\b/i.test(title)) {
+            comp.props.rows = [];
+          }
+        }
+      }
+    }
+
+    ensureRiskCriticVetoScorecard(rep, {
+      vetoReason: primaryReason || 'All proposed selections were vetoed.',
+      seatScorecards: options?.seatScorecards
+    });
   }
   return report;
 }
+
+export interface IntraSeatDuplicateLegViolation {
+  seat: string;
+  eventId: string;
+  rows: string[];
+  sides: string[];
+}
+
+export interface IntraSeatDuplicateLegsResult {
+  pass: boolean;
+  flags: string[];
+  violations: IntraSeatDuplicateLegViolation[];
+  feedback?: string;
+}
+
+/**
+ * P0-4: Scopes `duplicate_leg` strictly within a SINGLE seat's picks[] (or the compiled picks[]).
+ * Two different proposer seats agreeing on the same row/side (e.g. a1: R39, a2: R39) is consensus,
+ * NEVER `duplicate_leg`. Triggers ONLY when a single seat's picks[] (or compiled picks[]) contains
+ * >= 2 legs sharing the same canonical event_id.
+ */
+export function detectIntraSeatDuplicateLegs(
+  input: {
+    seatReports?: Array<{ seat?: string; role?: string; picks?: any[] }>;
+    picks?: any[];
+  },
+  headers: GameHeader[] = [],
+  slateText?: string,
+  rowMapOverride?: Map<string, RowOptionEntry>
+): IntraSeatDuplicateLegsResult {
+  const effectiveHeaders = headers.length > 0 ? headers : parseGameHeaders(slateText);
+  const rowMap = rowMapOverride ?? extractRowOptions(slateText ? [slateText] : [], effectiveHeaders);
+  // Also index compact "EVENT <id>" + "R<n>: <side>" lines if not already in rowMap
+  if (typeof slateText === 'string' && slateText.trim()) {
+    let curEv = '';
+    for (const rawLine of slateText.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      const evM = line.match(/^EVENT\s+([a-z0-9-]+)/i);
+      if (evM?.[1]) {
+        curEv = evM[1].trim();
+        continue;
+      }
+      if (!curEv) continue;
+      const rx = /\b(R\d+)\s*:\s*([^|\n]+)/gi;
+      let rm: RegExpExecArray | null;
+      while ((rm = rx.exec(line)) !== null) {
+        const rid = rm[1].toUpperCase();
+        const existing = rowMap.get(rid);
+        if (!existing || !existing.eventId) {
+          rowMap.set(rid, { rowId: rid, eventId: curEv, text: existing?.text || rm[2].trim() });
+        }
+      }
+    }
+  }
+  const candidates = buildTeamDescriptors(effectiveHeaders, [], effectiveHeaders.length > 0);
+
+  const resolveCanonicalEventIdForPick = (pk: any): { eventId?: string; rowId?: string; side: string } => {
+    if (!pk) return { side: '' };
+    if (typeof pk === 'string') {
+      const rMatch = pk.match(/\b(R\d+)\b/i);
+      const rowId = rMatch ? rMatch[1].toUpperCase() : undefined;
+      const rowEntry = rowId ? rowMap.get(rowId) : undefined;
+      let eventId = rowEntry?.eventId;
+      if (!eventId) {
+        const tm = findTeamMentionsInText(pk, candidates)[0]?.team;
+        if (tm && tm.eventIds.length === 1) eventId = tm.eventIds[0];
+      }
+      return { ...(eventId ? { eventId } : {}), ...(rowId ? { rowId } : {}), side: pk.trim() };
+    }
+    if (typeof pk !== 'object') return { side: '' };
+
+    const rawRow = pk.row ?? pk.Row ?? pk.rowId ?? pk.id ?? pk.ID;
+    const rawSide = [pk.side, pk.pick, pk.selection, pk.team, pk.Side, pk.Pick]
+      .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+      .join(' ')
+      .trim();
+    const rowIdFromField = typeof rawRow === 'string' && /^R\d+$/i.test(rawRow.trim())
+      ? rawRow.trim().toUpperCase()
+      : undefined;
+    const rowIdFromSide = !rowIdFromField ? rawSide.match(/\b(R\d+)\b/i)?.[1]?.toUpperCase() : undefined;
+    const rowId = rowIdFromField || rowIdFromSide;
+
+    const explicitEventId = typeof pk.event_id === 'string' && pk.event_id.trim()
+      ? pk.event_id.trim()
+      : (typeof pk.eventId === 'string' && pk.eventId.trim()
+        ? pk.eventId.trim()
+        : (typeof pk.game_id === 'string' && pk.game_id.trim() ? pk.game_id.trim() : undefined));
+    const rowEntry = rowId ? rowMap.get(rowId) : undefined;
+    let eventId = explicitEventId || rowEntry?.eventId;
+    if (!eventId && rawSide) {
+      const tm = findTeamMentionsInText(rawSide, candidates)[0]?.team;
+      if (tm && tm.eventIds.length === 1) eventId = tm.eventIds[0];
+    }
+    return { ...(eventId ? { eventId } : {}), ...(rowId ? { rowId } : {}), side: rawSide || rowId || '' };
+  };
+
+  const buckets: Array<{ seat: string; picks: any[] }> = [];
+  if (Array.isArray(input?.seatReports) && input.seatReports.length > 0) {
+    input.seatReports.forEach((rep, idx) => {
+      const picks = Array.isArray(rep?.picks) ? rep.picks : [];
+      if (picks.length >= 2) {
+        buckets.push({
+          seat: String(rep?.seat || rep?.role || `seat_${idx + 1}`),
+          picks
+        });
+      }
+    });
+  } else if (Array.isArray(input?.picks) && input.picks.length >= 2) {
+    buckets.push({ seat: 'compiled', picks: input.picks });
+  }
+
+  const violations: IntraSeatDuplicateLegViolation[] = [];
+  for (const bucket of buckets) {
+    const byEvent = new Map<string, { rows: string[]; sides: string[] }>();
+    for (const pk of bucket.picks) {
+      const resolved = resolveCanonicalEventIdForPick(pk);
+      if (!resolved.eventId) continue;
+      const normEv = resolved.eventId.toLowerCase();
+      let entry = byEvent.get(normEv);
+      if (!entry) {
+        entry = { rows: [], sides: [] };
+        byEvent.set(normEv, entry);
+      }
+      if (resolved.rowId) entry.rows.push(resolved.rowId);
+      if (resolved.side) entry.sides.push(resolved.side);
+      else entry.sides.push(resolved.rowId || resolved.eventId);
+    }
+
+    for (const [normEv, info] of byEvent.entries()) {
+      const legCount = Math.max(info.rows.length, info.sides.length);
+      if (legCount >= 2) {
+        const canonicalEv =
+          effectiveHeaders.find(h => h.eventId.toLowerCase() === normEv)?.eventId || normEv;
+        violations.push({
+          seat: bucket.seat,
+          eventId: canonicalEv,
+          rows: info.rows,
+          sides: info.sides
+        });
+      }
+    }
+  }
+
+  if (violations.length === 0) {
+    return { pass: true, flags: [], violations: [] };
+  }
+
+  const desc = violations
+    .map(v => `${v.seat} has ${Math.max(v.rows.length, v.sides.length)} legs on ${v.eventId} (${(v.rows.length > 0 ? v.rows : v.sides).join(', ')})`)
+    .join('; ');
+
+  return {
+    pass: false,
+    flags: ['duplicate_leg'],
+    violations,
+    feedback: `Veto (duplicate_leg): ${desc}.`
+  };
+}
+
