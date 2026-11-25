@@ -459,7 +459,7 @@ describe('wf-1795391975523 Delta Fix Spec (P0-1 through P1-2)', () => {
             json: async () => [
               { player_name: 'Lauri Markkanen', team_abbr: 'UTA', position: 'PF', minutes: 33.4, points: 23.1 },
               { player_name: 'Collin Sexton', team_abbr: 'UTA', position: 'SG', minutes: 29.8, points: 18.2 },
-              { player_name: 'John Collins', team_abbr: 'UTA', position: 'PF', minutes: 30.1, points: 16.8 },
+              { player_name: 'John Collins', team_abbr: 'UTA', position: 'PF', minutes: 30.1, points: 16.8, rebounds: 8.5, assists: 3.0 },
               { player_name: 'Rotation Guard A', team_abbr: 'DAL', position: 'G', minutes: 19.0, points: 9.2 },
               { player_name: 'Rotation Wing B', team_abbr: 'DAL', position: 'F', minutes: 17.5, points: 8.5 },
               { player_name: 'Depth One', team_abbr: 'DAL', position: 'F', minutes: 6.0, points: 1.8 },

@@ -130,7 +130,7 @@ export function selectDecoupledVerifierAgent(params: {
     const baseIs31FlashLite = baseProvider === 'gemini' && baseModelLower === 'gemini-3.1-flash-lite';
     const baseGeminiBlockedByManager503 = baseProvider === 'gemini' && managerSawGemini503;
     const baseFallbacksHave31BeforeCf = (() => {
-        const fbs = baseCriticAgent.getFallbacks();
+        const fbs = typeof baseCriticAgent.getFallbacks === 'function' ? baseCriticAgent.getFallbacks() : [];
         const idx31 = fbs.findIndex(
             (fb) => String(fb.provider).toLowerCase() === 'gemini' && String(fb.modelName || '').toLowerCase() === 'gemini-3.1-flash-lite'
         );
@@ -214,7 +214,8 @@ export function selectDecoupledVerifierAgent(params: {
     const seen = new Set<string>([`${primary.provider}::${primary.modelName}`]);
     const fallbacks: ProviderCredential[] = [];
     const deferred31Fallbacks: ProviderCredential[] = [];
-    for (const fb of [...rest, ...baseCriticAgent.getFallbacks()]) {
+    const baseFallbacks = typeof baseCriticAgent.getFallbacks === 'function' ? baseCriticAgent.getFallbacks() : [];
+    for (const fb of [...rest, ...baseFallbacks]) {
         const fbProv = String(fb.provider).toLowerCase();
         const fbModelLower = String(fb.modelName || '').toLowerCase();
         const k = `${fb.provider}::${fb.modelName || ''}`;
@@ -240,7 +241,9 @@ export function selectDecoupledVerifierAgent(params: {
         baseCriticAgent.maxTokens
     );
     decoupled.preserveFallbackOrder = true;
-    const existingSys = baseCriticAgent.getSystemInstruction();
+    const existingSys = typeof baseCriticAgent.getSystemInstruction === 'function'
+        ? baseCriticAgent.getSystemInstruction()
+        : undefined;
     if (existingSys) decoupled.setSystemInstruction(existingSys);
 
     context.addEvent({
@@ -489,6 +492,24 @@ export function normalizeRepairedFallbackOutput<T extends Record<string, any>>(
     rep.status = 'no_play';
     rep.criticApproved = false;
     rep.wageringPass = true;
+    if (options?.markUnverified !== false) {
+        rep.verified = false;
+    }
+
+    if (Array.isArray(rep.scorecards)) {
+        rep.scorecards = rep.scorecards.map((sc: any) => {
+            if (
+                sc &&
+                typeof sc === 'object' &&
+                /risk\s*critic|^critic$/i.test(String(sc.seat || sc.role || '').trim()) &&
+                String(sc.verdict || '').trim().toLowerCase() !== 'veto'
+            ) {
+                const { notes: _dropNotes, summary: _dropSummary, reason: _dropReason, ...rest } = sc;
+                return rest;
+            }
+            return sc;
+        });
+    }
 
     if (rep.verification && typeof rep.verification === 'object') {
         if (reasons.length > 0) {
@@ -742,9 +763,24 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
             );
             const rescueRejectedTargets = mergeVetoedLegTargets(combinedVetoedLegs, feedbackRejectedLegs);
 
+            const lastAttemptFeedback = typeof lifecycleResult?.criticFeedback === 'string'
+                ? lifecycleResult.criticFeedback.trim()
+                : '';
+            const lastAttemptRejectedTargets = extractRejectedLegTargetsFromFeedback(
+                lastAttemptFeedback,
+                initialPicksSnapshot,
+                parsedHeaders,
+                boardSourceForSanitize
+            );
+            const canAttemptSubsetRescue =
+                p.criticVerdictApproved !== false &&
+                initialPickCount >= 2 &&
+                lastAttemptRejectedTargets.length >= 1 &&
+                lastAttemptRejectedTargets.length < initialPickCount;
+
             let rescued = false;
             if (
-                initialPickCount > 0 &&
+                canAttemptSubsetRescue &&
                 Array.isArray(finalAnalysis.picks) &&
                 finalAnalysis.picks.length > 0 &&
                 (rescueRejectedTargets.length > 0 || initialPickCount > finalAnalysis.picks.length)
@@ -865,21 +901,29 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
     if (finalAnalysis && typeof finalAnalysis === 'object' && Array.isArray(finalAnalysis.picks)) {
         const vetoTextsForSync = dedupeVetoMessages([
             ...(Array.isArray(p.criticVetoes) ? p.criticVetoes : []),
+            ...(Array.isArray(lifecycleResult?.accumulatedVetoes) ? lifecycleResult.accumulatedVetoes : []),
             ...(typeof lifecycleResult?.criticFeedback === 'string' && lifecycleResult.criticFeedback.trim()
                 ? [lifecycleResult.criticFeedback.trim()]
                 : [])
         ]);
         const vetoLegsForSync = mergeVetoedLegTargets(p.vetoedLegs, lifecycleResult?.vetoedLegs);
         const wasUnverifiedPass = finalAnalysis.verified === false && finalAnalysis.picks.length === 0;
-        syncCompilerProseWithFinalPicks(finalAnalysis, {
-            initialPicks: initialPicksSnapshot,
-            headers: parsedHeaders,
-            slateText: rawInput || task || headersText,
-            ...(vetoLegsForSync.length > 0 ? { vetoedLegs: vetoLegsForSync } : {}),
-            ...(vetoTextsForSync.length > 0 ? { vetoTexts: vetoTextsForSync } : {}),
-            ...(p.seatScorecards && p.seatScorecards.length > 0 ? { seatScorecards: p.seatScorecards } : {}),
-            ...(finalAnalysis.criticApproved === false ? { criticApproved: false } : {})
-        });
+        if (!wasUnverifiedPass) {
+            syncCompilerProseWithFinalPicks(finalAnalysis, {
+                initialPicks: initialPicksSnapshot,
+                headers: parsedHeaders,
+                slateText: rawInput || task || headersText,
+                ...(vetoLegsForSync.length > 0 ? { vetoedLegs: vetoLegsForSync } : {}),
+                ...(vetoTextsForSync.length > 0 ? { vetoTexts: vetoTextsForSync } : {}),
+                ...(p.seatScorecards && p.seatScorecards.length > 0 ? { seatScorecards: p.seatScorecards } : {}),
+                ...(finalAnalysis.criticApproved === false ? { criticApproved: false } : {})
+            });
+        } else {
+            ensureRiskCriticVetoScorecard(finalAnalysis, {
+                vetoReason: vetoTextsForSync[0] || 'Verification failed after exhausting retries.',
+                seatScorecards: p.seatScorecards
+            });
+        }
         if (wasUnverifiedPass) {
             finalAnalysis.components = [];
             if (typeof finalAnalysis.summary === 'string' && finalAnalysis.summary.trim() && !/^\[unverified\]/i.test(finalAnalysis.summary.trim())) {

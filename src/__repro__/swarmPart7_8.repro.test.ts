@@ -101,10 +101,10 @@ describe('Engineering Spec Parts 7 + 8 (S1–S6) Acceptance Suite', () => {
   describe('S3: Starter-weighted injury impact scoring & Risk Critic alignment', () => {
     it('classifies nba-401910033 Utah (3 Tier-1 OUT = 9.0) vs Dallas (2 Tier-2 + 3 Tier-3 OUT = 4.5) as away_advantage and avoids symmetric_injury_misread on Dallas', async () => {
       const playerGameLogs = [
-        // Utah Tier-1 stars (>= 28 MPG or >= 15 PPG)
+        // Utah Tier-1 stars (>= 28 MPG + (>= 18 PPG or >= 28 PRA), or >= 31 MPG)
         { player_name: 'Lauri Markkanen', team_abbr: 'UTA', position: 'PF', minutes: 33.4, points: 23.8 },
         { player_name: 'Jaren Jackson Jr.', team_abbr: 'UTA', position: 'PF', minutes: 30.2, points: 21.5 },
-        { player_name: 'Jusuf Nurkic', team_abbr: 'UTA', position: 'C', minutes: 28.5, points: 11.4 },
+        { player_name: 'Jusuf Nurkic', team_abbr: 'UTA', position: 'C', minutes: 28.5, points: 11.4, rebounds: 11.2, assists: 5.8 },
         // Dallas Tier-2 starters (15-27 MPG)
         { player_name: 'Dereck Lively II', team_abbr: 'DAL', position: 'C', minutes: 24.0, points: 9.2 },
         { player_name: 'P.J. Washington', team_abbr: 'DAL', position: 'PF', minutes: 26.5, points: 12.1 },

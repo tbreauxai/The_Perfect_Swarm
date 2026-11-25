@@ -334,20 +334,58 @@ export class Agent {
                     if (skipReason.startsWith('skipped_tpm_wait:')) {
                         console.warn(`[${this.role}][${currentTarget.provider}/${preCheck.targetModel}] ${skipReason}`);
                     }
+                    const isCooldownSkip = skipReason.includes('[COOLDOWN_SKIP]');
+                    let cooldownFallback: ProviderCredential | undefined;
+                    let cooldownFallbackModel = '';
+                    if (isCooldownSkip) {
+                        for (let j = targetIdx + 1; j < targetChain.length; j++) {
+                            const cand = targetChain[j];
+                            const candModel = resolveTargetModelName(cand, String(this.provider), this.modelName);
+                            if (isModelDead(String(cand.provider), candModel)) continue;
+                            if (!globalProviderLimiter.getSkipReason(String(cand.provider), candModel)) {
+                                cooldownFallback = cand;
+                                cooldownFallbackModel = candModel;
+                                break;
+                            }
+                        }
+                        if (cooldownFallback) {
+                            recordRunDebugFailover(
+                                (context as any)?.id,
+                                this.role,
+                                String(cooldownFallback.provider),
+                                seatBudget(String(cooldownFallback.provider)).maxPromptChars
+                            );
+                        }
+                    }
                     lastFailedProvider = String(currentTarget.provider);
                     lastFailedModel = preCheck.targetModel;
                     lastError = new Error(skipReason);
+                    const redactedSkipReason = redactErrorSnippet(skipReason);
                     context.addEvent({
                         agentRole: this.role,
                         action: 'Provider Skipped',
                         modelName: `${currentTarget.provider}/${preCheck.targetModel}`,
                         prompt: `Skipped provider target: ${skipReason}`,
+                        ...(isCooldownSkip ? {
+                            durationMs: 0,
+                            failover: {
+                                fromProvider: String(currentTarget.provider),
+                                fromModel: preCheck.targetModel,
+                                ...(cooldownFallback ? { toProvider: String(cooldownFallback.provider), toModel: cooldownFallbackModel } : {}),
+                                status: null,
+                                reason: '[COOLDOWN_SKIP]',
+                                errorSnippet: redactedSkipReason,
+                                durationMs: 0
+                            }
+                        } : {}),
                         output: {
                             provider: currentTarget.provider,
                             model: preCheck.targetModel,
                             fromProvider: String(currentTarget.provider),
                             fromModel: preCheck.targetModel,
-                            reason: skipReason,
+                            ...(cooldownFallback ? { toProvider: String(cooldownFallback.provider), toModel: cooldownFallbackModel } : {}),
+                            reason: isCooldownSkip ? '[COOLDOWN_SKIP]' : skipReason,
+                            ...(isCooldownSkip ? { errorSnippet: redactedSkipReason, durationMs: 0 } : {}),
                             ...(skipReason.startsWith('skipped_tpm_wait:')
                                 ? { skipped_tpm_wait: Math.ceil(preCheck.estimatedWaitMs) }
                                 : {})

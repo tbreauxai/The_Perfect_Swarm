@@ -760,7 +760,10 @@ interface AggregatedPlayerLogStats {
   games: number;
   mpg: number | null;
   ppg: number | null;
+  pra: number | null;
   toi: number | null;
+  avgTargets: number | null;
+  avgRushAttempts: number | null;
   totalPoints: number;
   totalPassAttempts: number;
   totalTouches: number;
@@ -770,6 +773,7 @@ interface AggregatedPlayerLogStats {
   depthChartOrder: number | null;
   hasSeasonStats?: boolean;
   hasDepthChart?: boolean;
+  zeroUsageOnly?: boolean;
 }
 
 interface TeamLogIndex {
@@ -943,8 +947,14 @@ function buildTeamLogIndex(
       minCnt: number;
       ptsSum: number;
       ptsCnt: number;
+      praSum: number;
+      praCnt: number;
       toiSum: number;
       toiCnt: number;
+      targetsSum: number;
+      targetsCnt: number;
+      rushAttSum: number;
+      rushAttCnt: number;
       totalPoints: number;
       totalPassAttempts: number;
       totalTouches: number;
@@ -954,6 +964,7 @@ function buildTeamLogIndex(
       depthChartOrder: number | null;
       hasSeasonStats: boolean;
       hasDepthChart: boolean;
+      zeroUsageRows: number;
     }
   >();
 
@@ -1021,8 +1032,14 @@ function buildTeamLogIndex(
         minCnt: 0,
         ptsSum: 0,
         ptsCnt: 0,
+        praSum: 0,
+        praCnt: 0,
         toiSum: 0,
         toiCnt: 0,
+        targetsSum: 0,
+        targetsCnt: 0,
+        rushAttSum: 0,
+        rushAttCnt: 0,
         totalPoints: 0,
         totalPassAttempts: 0,
         totalTouches: 0,
@@ -1031,7 +1048,8 @@ function buildTeamLogIndex(
         isStarter: false,
         depthChartOrder: null,
         hasSeasonStats: false,
-        hasDepthChart: false
+        hasDepthChart: false,
+        zeroUsageRows: 0
       };
       acc.set(key, entry);
     }
@@ -1045,13 +1063,15 @@ function buildTeamLogIndex(
     entry.games += rowIsSeasonStats && gamesPlayedVal !== null && gamesPlayedVal > 1 ? gamesPlayedVal : 1;
 
     const minVal = parseNumericStat(row.mpg ?? row.avg_minutes ?? row.minutes ?? row.min ?? stObj.mpg ?? stObj.avg_minutes ?? stObj.minutes ?? stObj.min);
-    if (minVal !== null) {
+    if (minVal !== null && minVal > 0) {
       entry.minSum += minVal;
       entry.minCnt += 1;
     }
     const ptsVal = parseNumericStat(row.ppg ?? row.avg_points ?? (row as any).points_per_game ?? row.points ?? row.pts ?? stObj.ppg ?? stObj.avg_points ?? stObj.points_per_game ?? stObj.points ?? stObj.pts);
+    const rebVal = parseNumericStat((row as any).rpg ?? (row as any).avg_rebounds ?? (row as any).rebounds ?? (row as any).reb ?? stObj.rpg ?? stObj.avg_rebounds ?? stObj.rebounds ?? stObj.reb);
+    const explicitPra = parseNumericStat((row as any).avg_pra ?? (row as any).pra ?? stObj.avg_pra ?? stObj.pra);
     const goalsVal = parseNumericStat(row.goals ?? stObj.goals ?? stObj.g);
-    const assistsVal = parseNumericStat(row.assists ?? stObj.assists ?? stObj.a);
+    const assistsVal = parseNumericStat(row.assists ?? (row as any).apg ?? (row as any).avg_assists ?? (row as any).ast ?? stObj.assists ?? stObj.apg ?? stObj.avg_assists ?? stObj.ast ?? stObj.a);
     if (ptsVal !== null) {
       if (rowIsSeasonStats && targetSport === 'nhl' && gamesPlayedVal !== null && gamesPlayedVal >= 5 && ptsVal > 5) {
         // NHL season totals (e.g. 95 points in 70 GP) -> compute per-game average while keeping totalPoints
@@ -1074,22 +1094,31 @@ function buildTeamLogIndex(
       }
       entry.totalPoints += comb;
     }
+    if (explicitPra !== null) {
+      entry.praSum += explicitPra;
+      entry.praCnt += 1;
+    } else if (ptsVal !== null && (rebVal !== null || (targetSport === 'nba' && assistsVal !== null))) {
+      entry.praSum += ptsVal + (rebVal ?? 0) + (assistsVal ?? 0);
+      entry.praCnt += 1;
+    }
 
-    const toiVal = parseNumericStat(
-      row.avg_toi ??
-      (row as any).avg_toi_minutes ??
-      (row as any).toi_per_game ??
-      (row as any).time_on_ice_per_game ??
-      row.toi_minutes ??
-      row.toi ??
-      row.time_on_ice ??
-      stObj.avg_toi ??
-      stObj.toi_per_game ??
-      stObj.toi ??
-      stObj.time_on_ice ??
-      stObj.toi_minutes
-    );
-    if (toiVal !== null) {
+    const rawToiSec = parseNumericStat((row as any).toi_seconds ?? stObj.toi_seconds);
+    const toiVal =
+      parseNumericStat(
+        row.avg_toi ??
+        (row as any).avg_toi_minutes ??
+        (row as any).toi_per_game ??
+        (row as any).time_on_ice_per_game ??
+        row.toi_minutes ??
+        row.toi ??
+        row.time_on_ice ??
+        stObj.avg_toi ??
+        stObj.toi_per_game ??
+        stObj.toi ??
+        stObj.time_on_ice ??
+        stObj.toi_minutes
+      ) ?? (rawToiSec !== null ? rawToiSec / 60 : null);
+    if (toiVal !== null && toiVal > 0) {
       entry.toiSum += toiVal;
       entry.toiCnt += 1;
     }
@@ -1097,10 +1126,20 @@ function buildTeamLogIndex(
     const passAtt = parseNumericStat(row.pass_attempts ?? row.passing_attempts ?? row.pass_att ?? row.attempts ?? stObj.pass_attempts ?? stObj.pass_att);
     if (passAtt !== null) entry.totalPassAttempts += passAtt;
 
-    const rushAtt = parseNumericStat(row.rush_attempts ?? row.rushing_attempts ?? stObj.rush_attempts ?? stObj.rush_att) ?? 0;
-    const targets = parseNumericStat(row.targets ?? stObj.targets) ?? 0;
+    const rawRushAtt = parseNumericStat(row.rush_attempts ?? row.rushing_attempts ?? stObj.rush_attempts ?? stObj.rush_att);
+    const rawTargets = parseNumericStat(row.targets ?? stObj.targets);
+    const rushAtt = rawRushAtt ?? 0;
+    const targets = rawTargets ?? 0;
     const rec = parseNumericStat(row.receptions ?? stObj.receptions ?? stObj.rec) ?? 0;
     entry.totalTouches += rushAtt + Math.max(targets, rec);
+    if (rawTargets !== null) {
+      entry.targetsSum += rowIsSeasonStats && gamesPlayedVal !== null && gamesPlayedVal >= 5 && rawTargets > 20 ? rawTargets / gamesPlayedVal : rawTargets;
+      entry.targetsCnt += 1;
+    }
+    if (rawRushAtt !== null) {
+      entry.rushAttSum += rowIsSeasonStats && gamesPlayedVal !== null && gamesPlayedVal >= 5 && rawRushAtt > 25 ? rawRushAtt / gamesPlayedVal : rawRushAtt;
+      entry.rushAttCnt += 1;
+    }
 
     const startsNum = parseNumericStat(
       row.goalie_starts ??
@@ -1125,6 +1164,19 @@ function buildTeamLogIndex(
       entry.depthChartOrder = entry.depthChartOrder === null ? depthOrd : Math.min(entry.depthChartOrder, depthOrd);
       teamHasDepthChart = true;
     }
+    const isZeroUsageRow =
+      !rowIsDepthChart &&
+      !rowIsSeasonStats &&
+      ((minVal === 0 && (toiVal === null || toiVal === 0)) || (toiVal === 0 && (minVal === null || minVal === 0))) &&
+      (ptsVal === null || ptsVal === 0) &&
+      rushAtt === 0 &&
+      targets === 0 &&
+      (passAtt === null || passAtt === 0) &&
+      (startsNum === null || startsNum === 0) &&
+      (snapPct === null || snapPct === 0);
+    if (isZeroUsageRow) {
+      entry.zeroUsageRows += 1;
+    }
   }
 
   const playersByName = new Map<string, AggregatedPlayerLogStats>();
@@ -1132,6 +1184,19 @@ function buildTeamLogIndex(
   const allStats: AggregatedPlayerLogStats[] = [];
 
   for (const [key, e] of acc.entries()) {
+    const zeroUsageOnly =
+      e.zeroUsageRows > 0 &&
+      e.minCnt === 0 &&
+      e.toiCnt === 0 &&
+      e.totalPoints === 0 &&
+      e.ptsSum === 0 &&
+      e.praSum === 0 &&
+      e.totalTouches === 0 &&
+      e.totalPassAttempts === 0 &&
+      e.starts === 0 &&
+      (e.snapMax === null || e.snapMax === 0) &&
+      !e.hasDepthChart &&
+      !e.hasSeasonStats;
     const agg: AggregatedPlayerLogStats = {
       playerKey: key,
       ...(e.playerId ? { playerId: e.playerId } : {}),
@@ -1141,7 +1206,10 @@ function buildTeamLogIndex(
       games: e.games,
       mpg: e.minCnt > 0 ? e.minSum / e.minCnt : null,
       ppg: e.ptsCnt > 0 ? e.ptsSum / e.ptsCnt : null,
+      pra: e.praCnt > 0 ? e.praSum / e.praCnt : null,
       toi: e.toiCnt > 0 ? e.toiSum / e.toiCnt : null,
+      avgTargets: e.targetsCnt > 0 ? e.targetsSum / e.targetsCnt : null,
+      avgRushAttempts: e.rushAttCnt > 0 ? e.rushAttSum / e.rushAttCnt : null,
       totalPoints: e.totalPoints,
       totalPassAttempts: e.totalPassAttempts,
       totalTouches: e.totalTouches,
@@ -1150,7 +1218,8 @@ function buildTeamLogIndex(
       isStarter: e.isStarter,
       depthChartOrder: e.depthChartOrder,
       ...(e.hasSeasonStats ? { hasSeasonStats: true } : {}),
-      ...(e.hasDepthChart ? { hasDepthChart: true } : {})
+      ...(e.hasDepthChart ? { hasDepthChart: true } : {}),
+      ...(zeroUsageOnly ? { zeroUsageOnly: true } : {})
     };
     playersByName.set(key, agg);
     if (agg.playerId) {
@@ -1276,8 +1345,18 @@ function classifyPlayerInjuryImpact(
   const inlineStats = player?.stats && typeof player.stats === 'object' ? player.stats : {};
   const inlineMpg = parseNumericStat(player?.mpg ?? player?.avg_minutes ?? player?.minutes ?? inlineStats.mpg ?? inlineStats.avg_minutes ?? inlineStats.minutes);
   const inlinePpg = parseNumericStat(player?.ppg ?? player?.avg_points ?? player?.points ?? inlineStats.ppg ?? inlineStats.avg_points ?? inlineStats.points);
+  const inlineReb = parseNumericStat(player?.rpg ?? player?.avg_rebounds ?? player?.rebounds ?? player?.reb ?? inlineStats.rpg ?? inlineStats.avg_rebounds ?? inlineStats.rebounds ?? inlineStats.reb);
+  const inlineAst = parseNumericStat(player?.apg ?? player?.avg_assists ?? player?.assists ?? player?.ast ?? inlineStats.apg ?? inlineStats.avg_assists ?? inlineStats.assists ?? inlineStats.ast);
+  const inlineExplicitPra = parseNumericStat(player?.avg_pra ?? player?.pra ?? inlineStats.avg_pra ?? inlineStats.pra);
+  const inlinePra = inlineExplicitPra !== null
+    ? inlineExplicitPra
+    : (inlinePpg !== null && (inlineReb !== null || (sport === 'nba' && inlineAst !== null))
+      ? inlinePpg + (inlineReb ?? 0) + (inlineAst ?? 0)
+      : null);
   const inlineToi = parseNumericStat(player?.avg_toi ?? player?.toi_minutes ?? player?.toi ?? player?.time_on_ice ?? inlineStats.avg_toi ?? inlineStats.toi ?? inlineStats.toi_minutes);
   const inlinePassAtt = parseNumericStat(player?.pass_attempts ?? player?.passing_attempts ?? player?.pass_att ?? inlineStats.pass_attempts ?? inlineStats.pass_att);
+  const inlineTargets = parseNumericStat(player?.targets ?? inlineStats.targets);
+  const inlineRushAtt = parseNumericStat(player?.rush_attempts ?? player?.rushing_attempts ?? inlineStats.rush_attempts ?? inlineStats.rush_att);
   const inlineStarts = parseNumericStat(player?.goalie_starts ?? player?.games_started ?? player?.starts ?? inlineStats.goalie_starts ?? inlineStats.games_started ?? inlineStats.starts);
   const inlineSnapPct = parseNumericStat(player?.snap_pct ?? inlineStats.snap_pct);
   const inlineDepth = parseNumericStat(player?.depth_chart_order ?? player?.depth_rank ?? inlineStats.depth_chart_order ?? inlineStats.depth_rank);
@@ -1290,11 +1369,26 @@ function classifyPlayerInjuryImpact(
 
   const inlineTierNum = parseNumericStat(player?.impact_tier);
   const hasExplicitTier = inlineTierNum === 1 || inlineTierNum === 2 || inlineTierNum === 3;
+  const hasInlinePositiveStat =
+    (inlineMpg !== null && inlineMpg > 0) ||
+    (inlinePpg !== null && inlinePpg > 0) ||
+    (inlinePra !== null && inlinePra > 0) ||
+    (inlineToi !== null && inlineToi > 0) ||
+    (inlinePassAtt !== null && inlinePassAtt > 0) ||
+    (inlineTargets !== null && inlineTargets > 0) ||
+    (inlineRushAtt !== null && inlineRushAtt > 0) ||
+    (inlineStarts !== null && inlineStarts > 0) ||
+    (inlineSnapPct !== null && inlineSnapPct > 0) ||
+    inlineDepth !== null ||
+    inlineStarter;
   const hasInlineStat =
     inlineMpg !== null ||
     inlinePpg !== null ||
+    inlinePra !== null ||
     inlineToi !== null ||
     inlinePassAtt !== null ||
+    inlineTargets !== null ||
+    inlineRushAtt !== null ||
     inlineStarts !== null ||
     inlineSnapPct !== null ||
     inlineDepth !== null ||
@@ -1318,11 +1412,16 @@ function classifyPlayerInjuryImpact(
     return { tier: null, weight: 1.0, usedWeightedScoring: false, roleLabel: 'unlogged' };
   }
 
-  // S2: Stop labeling unlogged players as "depth" (0.5) without proof.
-  // If the player has 0 log rows and no inline stats, only assign depth (0.5) when the team has
-  // >= 5 distinct logged game_dates proving the player is genuinely unused/inactive depth.
-  // Otherwise label them `unlogged` at neutral weight 1.0 (never "depth").
-  if (!logStats && !hasInlineStat) {
+  // S2: Stop labeling unlogged or 0-min/0-TOI DNP boxscore rows as "depth" (0.5) when < 5 distinct game dates exist.
+  const isZeroMinOrToiOnly = Boolean(
+    (logStats?.zeroUsageOnly && !hasInlinePositiveStat) ||
+    (!logStats &&
+      !hasExplicitTier &&
+      !hasInlinePositiveStat &&
+      ((inlineMpg === 0 && (inlineToi === null || inlineToi === 0)) ||
+        (inlineToi === 0 && (inlineMpg === null || inlineMpg === 0))))
+  );
+  if (isZeroMinOrToiOnly || (!logStats && !hasInlineStat)) {
     if (teamIndex.canProveUnloggedDepth) {
       return { tier: 3, weight: 0.5, usedWeightedScoring: true, roleLabel: 'depth' };
     }
@@ -1332,10 +1431,13 @@ function classifyPlayerInjuryImpact(
   const effPos = pos || logStats?.position || '';
   const effIsQb = /^QB$/i.test(effPos);
   const effIsGoalie = /^(?:G|GK|GOALIE|GOALTENDER)$/i.test(effPos);
-  const mpg = inlineMpg ?? logStats?.mpg ?? null;
-  const ppg = inlinePpg ?? logStats?.ppg ?? null;
-  const toi = inlineToi ?? logStats?.toi ?? null;
+  const mpg = (inlineMpg !== null && inlineMpg > 0 ? inlineMpg : null) ?? logStats?.mpg ?? null;
+  const ppg = (inlinePpg !== null && inlinePpg > 0 ? inlinePpg : null) ?? logStats?.ppg ?? null;
+  const pra = (inlinePra !== null && inlinePra > 0 ? inlinePra : null) ?? logStats?.pra ?? null;
+  const toi = (inlineToi !== null && inlineToi > 0 ? inlineToi : null) ?? logStats?.toi ?? null;
   const passAtt = inlinePassAtt ?? logStats?.totalPassAttempts ?? 0;
+  const avgTargets = inlineTargets ?? logStats?.avgTargets ?? 0;
+  const avgRushAtt = inlineRushAtt ?? logStats?.avgRushAttempts ?? 0;
   const starts = inlineStarts ?? logStats?.starts ?? 0;
   const snapPct = inlineSnapPct ?? logStats?.snapPct ?? null;
   const depthRank = inlineDepth ?? logStats?.depthChartOrder ?? null;
@@ -1356,10 +1458,13 @@ function classifyPlayerInjuryImpact(
     if (/^(?:LT|OT)$/.test(effPos) && isStarter) {
       return { tier: 1, weight: 4.0, usedWeightedScoring: true, roleLabel: 'star' };
     }
-    if (isStarter || (snapPct !== null && snapPct >= 65) || touchesPerGame >= 8) {
+    if (/^(?:EDGE|DE)$/.test(effPos) && isStarter) {
       return { tier: 1, weight: 3.0, usedWeightedScoring: true, roleLabel: 'star' };
     }
-    if (depthRank === 2 || (snapPct !== null && snapPct >= 30) || touchesPerGame >= 2.5 || (logStats && logStats.games >= 2)) {
+    if (avgTargets >= 7 || avgRushAtt >= 12 || (snapPct !== null && snapPct >= 75 && touchesPerGame >= 10)) {
+      return { tier: 1, weight: 3.0, usedWeightedScoring: true, roleLabel: 'star' };
+    }
+    if (isStarter || depthRank === 2 || (snapPct !== null && snapPct >= 30) || touchesPerGame >= 2.5 || (logStats && logStats.games >= 2)) {
       return { tier: 2, weight: 1.5, usedWeightedScoring: true, roleLabel: 'rotation' };
     }
     return { tier: 3, weight: 0.5, usedWeightedScoring: true, roleLabel: 'depth' };
@@ -1370,28 +1475,32 @@ function classifyPlayerInjuryImpact(
       const isStartingG =
         (logStats && teamIndex.topGoalieKey === logStats.playerKey) ||
         isStarter ||
-        starts >= 2 ||
+        starts >= 1 ||
         (toi !== null && toi >= 45);
       if (isStartingG) return { tier: 1, weight: 4.0, usedWeightedScoring: true, roleLabel: 'star' };
       if ((logStats && logStats.games > 0) || depthRank === 2) return { tier: 2, weight: 1.5, usedWeightedScoring: true, roleLabel: 'rotation' };
       return { tier: 3, weight: 0.5, usedWeightedScoring: true, roleLabel: 'depth' };
     }
-    const isTop4Points = Boolean(logStats && teamIndex.top4ScorerKeys.has(logStats.playerKey) && logStats.totalPoints >= 3);
-    const isSeasonStar = Boolean(logStats?.hasSeasonStats && ppg !== null && ppg >= 0.55);
-    if (isStarter || (toi !== null && toi >= 18) || isTop4Points || isSeasonStar) {
+    const isDefenseman = /^(?:D|LD|RD|DEF|DEFENSE|DEFENSEMAN)$/.test(effPos);
+    const isTopLineSkater = toi !== null && toi >= 19.5 && ppg !== null && ppg >= 0.70;
+    const isTopPairDefenseman = isDefenseman && toi !== null && toi >= 21.5;
+    if (isTopLineSkater || isTopPairDefenseman) {
       return { tier: 1, weight: 3.0, usedWeightedScoring: true, roleLabel: 'star' };
     }
-    if (depthRank === 2 || (toi !== null && toi >= 12) || (logStats?.hasSeasonStats && ppg !== null && ppg >= 0.30)) {
+    if (isStarter || depthRank === 2 || (toi !== null && toi >= 13) || (ppg !== null && ppg >= 0.35)) {
       return { tier: 2, weight: 1.5, usedWeightedScoring: true, roleLabel: 'rotation' };
     }
     return { tier: 3, weight: 0.5, usedWeightedScoring: true, roleLabel: 'depth' };
   }
 
   if (sport === 'nba') {
-    if (isStarter || (mpg !== null && mpg >= 28) || (ppg !== null && ppg >= 15)) {
+    const isHighUsageStar =
+      (mpg !== null && mpg >= 28 && ((ppg !== null && ppg >= 18) || (pra !== null && pra >= 28))) ||
+      (mpg !== null && mpg >= 31);
+    if (isHighUsageStar) {
       return { tier: 1, weight: 3.0, usedWeightedScoring: true, roleLabel: 'star' };
     }
-    if (depthRank === 2 || (mpg !== null && mpg >= 15) || (ppg !== null && ppg >= 8)) {
+    if (isStarter || depthRank === 2 || (mpg !== null && mpg >= 15) || (ppg !== null && ppg >= 10)) {
       return { tier: 2, weight: 1.5, usedWeightedScoring: true, roleLabel: 'rotation' };
     }
     return { tier: 3, weight: 0.5, usedWeightedScoring: true, roleLabel: 'depth' };
@@ -1738,7 +1847,20 @@ export function scorePlayerGameLogStarterRow(
       ? rawRank
       : (typeof rawRank === 'string' && /^\d+$/.test(rawRank.trim()) ? Number(rawRank.trim()) : undefined);
     const starterFlag = stats.starter === true || row.starter === true || depthRank === 1;
-    if (starterFlag) {
+    const isTier1DepthPosition = Boolean(
+      position &&
+      (position === 'QB' ||
+        position === 'QUARTERBACK' ||
+        position === 'LT' ||
+        position === 'OT' ||
+        position === 'EDGE' ||
+        position === 'DE' ||
+        position === 'GOALIE' ||
+        position === 'GOALTENDER' ||
+        position === 'GK' ||
+        (position === 'G' && (/nhl|hockey/i.test(String(sportHint || '')))))
+    );
+    if (starterFlag && isTier1DepthPosition) {
       return {
         tier: 1,
         weight: getTier1StarterWeight(position, sportHint),
@@ -1748,13 +1870,13 @@ export function scorePlayerGameLogStarterRow(
         source: 'espn_depthchart'
       };
     }
-    if (depthRank === 2) {
+    if (starterFlag || depthRank === 2) {
       return {
         tier: 2,
         weight: 1.5,
-        starter: false,
+        starter: starterFlag,
         ...(position ? { position } : {}),
-        depthRank,
+        ...(depthRank !== undefined ? { depthRank } : {}),
         source: 'espn_depthchart'
       };
     }
@@ -1771,15 +1893,37 @@ export function scorePlayerGameLogStarterRow(
   const starterFlag = stats.starter === true || row.starter === true || Number(stats.games_started ?? row.games_started ?? 0) > 0;
   const minsVal = parseNumericStat(stats.mpg ?? stats.avg_minutes ?? stats.minutes ?? stats.min ?? row.mpg ?? row.avg_minutes ?? row.minutes ?? row.min);
   const ptsVal = parseNumericStat(stats.ppg ?? stats.avg_points ?? stats.points_per_game ?? stats.points ?? row.ppg ?? row.avg_points ?? row.points_per_game ?? row.points);
+  const rebVal = parseNumericStat((stats as any).rpg ?? (stats as any).avg_rebounds ?? (stats as any).rebounds ?? (stats as any).reb ?? (row as any).rpg ?? (row as any).avg_rebounds ?? (row as any).rebounds ?? (row as any).reb);
+  const explicitPraVal = parseNumericStat((stats as any).avg_pra ?? (stats as any).pra ?? (row as any).avg_pra ?? (row as any).pra);
   const goalsVal = parseNumericStat(stats.goals ?? row.goals);
-  const assistsVal = parseNumericStat(stats.assists ?? row.assists);
+  const assistsVal = parseNumericStat(stats.assists ?? (stats as any).apg ?? (stats as any).avg_assists ?? (stats as any).ast ?? row.assists ?? (row as any).apg ?? (row as any).avg_assists ?? (row as any).ast);
   const gpVal = parseNumericStat(stats.games_played ?? stats.gp ?? row.games_played ?? row.gp);
-  const toiVal = parseNumericStat(stats.avg_toi ?? stats.toi_minutes ?? stats.toi ?? row.avg_toi ?? row.toi_minutes ?? row.toi);
+  const rawToiSec = parseNumericStat((stats as any).toi_seconds ?? (row as any).toi_seconds);
+  const toiVal = parseNumericStat(stats.avg_toi ?? stats.toi_minutes ?? stats.toi ?? row.avg_toi ?? row.toi_minutes ?? row.toi) ?? (rawToiSec !== null ? rawToiSec / 60 : null);
   const snapPctVal = parseNumericStat(stats.snap_pct ?? row.snap_pct);
   const snapsVal = parseNumericStat(stats.snaps ?? row.snaps);
+  const targetsVal = parseNumericStat((stats as any).targets ?? (row as any).targets);
+  const rushAttVal = parseNumericStat((stats as any).rush_attempts ?? (stats as any).rushing_attempts ?? (row as any).rush_attempts ?? (row as any).rushing_attempts);
 
   const isSeasonStats = isSeasonStatsSource(src);
   const normSport = normalizeInjurySport(sportHint);
+  const praVal = explicitPraVal !== null
+    ? explicitPraVal
+    : (ptsVal !== null && (rebVal !== null || (normSport === 'nba' && assistsVal !== null))
+      ? ptsVal + (rebVal ?? 0) + (assistsVal ?? 0)
+      : null);
+
+  if (
+    !isSeasonStats &&
+    !starterFlag &&
+    ((minsVal === 0 && (toiVal === null || toiVal === 0)) || (toiVal === 0 && (minsVal === null || minsVal === 0))) &&
+    (ptsVal === null || ptsVal === 0) &&
+    (snapsVal === null || snapsVal === 0) &&
+    (targetsVal === null || targetsVal === 0) &&
+    (rushAttVal === null || rushAttVal === 0)
+  ) {
+    return null;
+  }
 
   const hasSignal =
     starterFlag ||
@@ -1789,7 +1933,9 @@ export function scorePlayerGameLogStarterRow(
     assistsVal !== null ||
     toiVal !== null ||
     snapPctVal !== null ||
-    snapsVal !== null;
+    snapsVal !== null ||
+    targetsVal !== null ||
+    rushAttVal !== null;
   if (!hasSignal) return null;
 
   const scoreSource: 'season_stats' | 'boxscore' = isSeasonStats ? 'season_stats' : 'boxscore';
@@ -1800,11 +1946,12 @@ export function scorePlayerGameLogStarterRow(
     if (isHockey) {
       const combPts = ptsVal ?? ((goalsVal ?? 0) + (assistsVal ?? 0));
       const ptsPerGame = gpVal !== null && gpVal >= 5 && combPts > 5 ? combPts / gpVal : combPts;
-      const isTier1Nhl =
-        starterFlag ||
-        (toiVal !== null && toiVal >= 18) ||
-        (ptsPerGame !== null && ptsPerGame >= 0.55) ||
-        (combPts >= 35);
+      const isGoaliePos = /^(?:G|GK|GOALIE|GOALTENDER)$/.test(rawPos);
+      const isDefenseman = /^(?:D|LD|RD|DEF|DEFENSE|DEFENSEMAN)$/.test(rawPos);
+      const isTier1Nhl = isGoaliePos
+        ? (starterFlag || (toiVal !== null && toiVal >= 45))
+        : ((toiVal !== null && toiVal >= 19.5 && ptsPerGame !== null && ptsPerGame >= 0.70) ||
+           (isDefenseman && toiVal !== null && toiVal >= 21.5));
       if (isTier1Nhl) {
         return {
           tier: 1,
@@ -1814,11 +1961,11 @@ export function scorePlayerGameLogStarterRow(
           source: 'season_stats'
         };
       }
-      if ((toiVal !== null && toiVal >= 12) || (ptsPerGame !== null && ptsPerGame >= 0.30)) {
+      if (starterFlag || (toiVal !== null && toiVal >= 13) || (ptsPerGame !== null && ptsPerGame >= 0.35)) {
         return {
           tier: 2,
           weight: 1.5,
-          starter: false,
+          starter: starterFlag,
           ...(position ? { position } : {}),
           source: 'season_stats'
         };
@@ -1833,13 +1980,17 @@ export function scorePlayerGameLogStarterRow(
     }
 
     // NBA / NFL / general season stats (espn_season_stats)
-    const isTier1Season =
-      starterFlag ||
-      (minsVal !== null && minsVal >= 28) ||
-      (ptsVal !== null && ptsVal >= 15) ||
-      (toiVal !== null && toiVal >= 18) ||
-      (snapPctVal !== null && snapPctVal >= 65) ||
-      (snapsVal !== null && snapsVal >= 35);
+    const isTier1NbaSeason =
+      (minsVal !== null && minsVal >= 28 && ((ptsVal !== null && ptsVal >= 18) || (praVal !== null && praVal >= 28))) ||
+      (minsVal !== null && minsVal >= 31);
+    const isTier1Season = normSport === 'nba'
+      ? isTier1NbaSeason
+      : (isTier1NbaSeason ||
+        (/^(?:QB|QUARTERBACK|LT|OT|EDGE|DE)$/.test(rawPos) && starterFlag) ||
+        (targetsVal !== null && targetsVal >= 7) ||
+        (rushAttVal !== null && rushAttVal >= 12) ||
+        (toiVal !== null && toiVal >= 19.5 && ptsVal !== null && ptsVal >= 0.70) ||
+        (snapPctVal !== null && snapPctVal >= 75));
     if (isTier1Season) {
       return {
         tier: 1,
@@ -1850,16 +2001,17 @@ export function scorePlayerGameLogStarterRow(
       };
     }
     const isTier2Season =
+      starterFlag ||
       (minsVal !== null && minsVal >= 15) ||
-      (ptsVal !== null && ptsVal >= 8) ||
-      (toiVal !== null && toiVal >= 12) ||
+      (ptsVal !== null && ptsVal >= 10) ||
+      (toiVal !== null && toiVal >= 13) ||
       (snapPctVal !== null && snapPctVal >= 30) ||
       (snapsVal !== null && snapsVal >= 15);
     if (isTier2Season) {
       return {
         tier: 2,
         weight: 1.5,
-        starter: false,
+        starter: starterFlag,
         ...(position ? { position } : {}),
         source: 'season_stats'
       };
@@ -1874,13 +2026,18 @@ export function scorePlayerGameLogStarterRow(
   }
 
   // Regular boxscore log fallback
-  const isStarterByUsage =
-    starterFlag ||
-    (minsVal !== null && minsVal >= 24) ||
-    (ptsVal !== null && ptsVal >= 15 && normSport === 'nba') ||
-    (toiVal !== null && toiVal >= 16) ||
-    (snapPctVal !== null && snapPctVal >= 55) ||
-    (snapsVal !== null && snapsVal >= 35);
+  const isNhlBoxGoalie = normSport === 'nhl' && /^(?:G|GK|GOALIE|GOALTENDER)$/.test(rawPos);
+  const isNhlBoxDef = normSport === 'nhl' && /^(?:D|LD|RD|DEF|DEFENSE|DEFENSEMAN)$/.test(rawPos);
+  const isStarterByUsage = normSport === 'nba'
+    ? ((minsVal !== null && minsVal >= 28 && ((ptsVal !== null && ptsVal >= 18) || (praVal !== null && praVal >= 28))) || (minsVal !== null && minsVal >= 31))
+    : normSport === 'nhl'
+      ? (isNhlBoxGoalie
+          ? (starterFlag || (toiVal !== null && toiVal >= 45))
+          : ((toiVal !== null && toiVal >= 19.5 && ptsVal !== null && ptsVal >= 0.70) || (isNhlBoxDef && toiVal !== null && toiVal >= 21.5)))
+      : ((/^(?:QB|QUARTERBACK|LT|OT|EDGE|DE)$/.test(rawPos) && starterFlag) ||
+         (targetsVal !== null && targetsVal >= 7) ||
+         (rushAttVal !== null && rushAttVal >= 12) ||
+         (snapPctVal !== null && snapPctVal >= 75 && snapsVal !== null && snapsVal >= 45));
   if (isStarterByUsage) {
     return {
       tier: 1,
@@ -1892,16 +2049,17 @@ export function scorePlayerGameLogStarterRow(
   }
 
   const isRotationByUsage =
-    (minsVal !== null && minsVal >= 12) ||
-    (ptsVal !== null && ptsVal >= 8 && normSport === 'nba') ||
-    (toiVal !== null && toiVal >= 10) ||
-    (snapPctVal !== null && snapPctVal >= 25) ||
+    starterFlag ||
+    (minsVal !== null && minsVal >= 15) ||
+    (ptsVal !== null && ptsVal >= 10 && normSport === 'nba') ||
+    (toiVal !== null && toiVal >= 13) ||
+    (snapPctVal !== null && snapPctVal >= 30) ||
     (snapsVal !== null && snapsVal >= 15);
   if (isRotationByUsage) {
     return {
       tier: 2,
       weight: 1.5,
-      starter: false,
+      starter: starterFlag,
       ...(position ? { position } : {}),
       source: scoreSource
     };
@@ -2124,6 +2282,9 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
           continue;
         }
       }
+      const hadExplicitInputTier =
+        parseNumericStat(p.impact_weight) !== null ||
+        parseNumericStat(p.impact_tier ?? p.tier) !== null;
       const tierScore = scoreInjuryStarterTier(p, playerLogs, sportHint);
       const enriched = {
         ...p,
@@ -2132,9 +2293,12 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
         ...(tierScore
           ? {
               position: p.position || p.pos || tierScore.position,
-              impact_tier: tierScore.tier,
-              impact_weight: tierScore.weight,
-              starter: tierScore.starter,
+              ...(hadExplicitInputTier
+                ? {}
+                : {
+                    ...(tierScore.depthRank !== undefined && p.depth_rank === undefined ? { depth_rank: tierScore.depthRank } : {})
+                  }),
+              starter: p.starter ?? tierScore.starter,
               tier_source: tierScore.source
             }
           : {})

@@ -1341,9 +1341,147 @@ interface SpreadSideViolation {
 const DIRECT_STAT_PREFIX_RX = /\b(?:net\s*rating|nrtg|ortg|drtg|point\s*diff(?:erential)?|goal\s*diff(?:erential)?|run\s*diff(?:erential)?|diff(?:erential)?|xgf|xg|ppg|gpg|era|pace|delta|roi|ev|kelly|(?:moved|move|steam(?:ed)?|swing)\s+(?:by|of)|margin\s+of|edge\s+of)\s*[:=of\s]*$/i;
 const DIRECT_STAT_SUFFIX_RX = /^\s*(?:%|(?:spread|line|total|pts?|points?)\s+(?:move|delta|swing|diff|margin|shift)\b|(?:(?:l\d+|last\s*\d+)\s+)?(?:net\s*)?margin\b|units?\b|u\b|net\s*rating\b|nrtg\b|ortg\b|drtg\b|diff(?:erential)?\b|delta\b|swing\b|ppg\b|gpg\b|goals?\b|runs?\b|yards?\b|era\b|roi\b|ev\b)/i;
 
+function collectPickedEventIds(
+  proposal: any,
+  headers: GameHeader[],
+  rowMap: Map<string, RowOptionEntry>,
+  spreadMap: Map<string, AuthoritativeTeamSpread>
+): Set<string> {
+  const out = new Set<string>();
+  if (!proposal || typeof proposal !== 'object') return out;
+  if (Array.isArray(proposal.picks) && proposal.picks.length === 0) return out;
+
+  const rawPicks: any[] = Array.isArray(proposal.picks)
+    ? proposal.picks
+    : (proposal.scorecard && typeof proposal.scorecard === 'object' && (proposal.scorecard.pick || proposal.scorecard.side || proposal.scorecard.selection || proposal.scorecard.row)
+      ? [proposal.scorecard]
+      : []);
+
+  for (const pk of rawPicks) {
+    if (!pk) continue;
+    let rowId: string | undefined;
+    let sideText = '';
+    let eventId: string | undefined;
+    if (typeof pk === 'string') {
+      const m = pk.match(/\b(R\d+)\b/i);
+      rowId = m ? m[1].toUpperCase() : undefined;
+      sideText = pk.trim();
+    } else if (typeof pk === 'object') {
+      const rawRow = pk.row || pk.id;
+      if (typeof rawRow === 'string' && /^R\d+$/i.test(rawRow.trim())) {
+        rowId = rawRow.trim().toUpperCase();
+      }
+      sideText = extractStructuredPickSideText(pk);
+      if (!rowId && sideText) {
+        const m = sideText.match(/\b(R\d+)\b/i);
+        if (m) rowId = m[1].toUpperCase();
+      }
+      const evCand = pk.event_id || pk.eventId || pk.game_id;
+      if (typeof evCand === 'string' && evCand.trim() && evCand.trim() !== 'unknown-game') {
+        eventId = evCand.trim();
+      }
+    }
+    if (!eventId && rowId && rowMap.has(rowId)) {
+      eventId = rowMap.get(rowId)?.eventId;
+    }
+    if (eventId) {
+      out.add(eventId);
+      continue;
+    }
+    if (sideText) {
+      let matchedViaSpread = false;
+      for (const hit of findTeamHitsInClause(sideText, spreadMap)) {
+        if (hit.entry.eventId) {
+          out.add(hit.entry.eventId);
+          matchedViaSpread = true;
+        }
+      }
+      if (!matchedViaSpread && headers.length > 0) {
+        for (const h of headers) {
+          if (!h.eventId) continue;
+          const teamHit = resolveTeamFromText(sideText, h.sport, [h.away, h.home]);
+          if (!teamHit) continue;
+          const awayRes = resolveTeamFromText(h.away, h.sport, [h.away, h.home]);
+          const homeRes = resolveTeamFromText(h.home, h.sport, [h.away, h.home]);
+          if (
+            (awayRes && awayRes.canonical === teamHit.canonical) ||
+            (homeRes && homeRes.canonical === teamHit.canonical)
+          ) {
+            out.add(h.eventId);
+            break;
+          }
+        }
+      }
+    }
+  }
+  return out;
+}
+
+function findVenueMismatchInText(
+  text: string,
+  spreadMap: Map<string, AuthoritativeTeamSpread>,
+  allowedVenueEventIds?: Set<string>
+): SpreadSideViolation | null {
+  if (!text || !text.trim() || spreadMap.size === 0) return null;
+  if (allowedVenueEventIds !== undefined && allowedVenueEventIds.size === 0) return null;
+
+  const cleaned = text.replace(/\b(?:conditional_)?(?:home|away)_advantage\b/gi, ' ');
+  const subClauses = cleaned
+    .split(/[.;,!?]|\s+(?:vs\.?|versus|over|against|while|whereas|although|though|but|and)\s+|\s+at\s+(?!home\b)|\s+@\s+/i)
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  for (const sub of subClauses) {
+    const subHits = findTeamHitsInClause(sub, spreadMap);
+    if (subHits.length === 0) continue;
+
+    for (let i = 0; i < subHits.length; i++) {
+      const hit = subHits[i];
+      const entry = hit.entry;
+      if (allowedVenueEventIds !== undefined && (!entry.eventId || !allowedVenueEventIds.has(entry.eventId))) {
+        continue;
+      }
+
+      const prefix = sub.slice(i > 0 ? subHits[i - 1].end : 0, hit.start);
+      const suffix = sub.slice(hit.end, i + 1 < subHits.length ? subHits[i + 1].start : sub.length);
+
+      if (/\b(?:not|never|no|isn't|aren't|wasn't|weren't|away\s+from|against|vs\.?|versus|facing|over|on\s+the\s+road\s+at)\s+(?:the\s+|a\s+|an\s+)?$/i.test(prefix)) {
+        continue;
+      }
+
+      if (entry.venue === 'away') {
+        const homePreMatch = /(?:^|\b)(?:at\s+home|home(?:\s+(?:team|side|ice|court|field|turf|favorites?|underdogs?|dogs?|chalk))?)\s+$/i.test(prefix);
+        const homePostBlocked = /^\s+(?:[\w-]+\s+){0,3}?\b(?:not|never|isn't|aren't|wasn't|weren't|away\s+from|against|vs\.?|versus|facing|on\s+the\s+road\s+at)\b/i.test(suffix);
+        const homePostMatch = !homePostBlocked && /^(?:'s|s')?\s+(?:(?!(?:not|never|no|isn't|aren't|wasn't|weren't)\b)(?:[\w-]+\s+){0,4}?(?:at\s+home\b|on\s+home\s+(?:ice|court|field|turf|soil)\b|hosting\b|home\s+(?:record|form|edge|advantage|ice|court|field|turf|stand|game|matchup|cooking|crowd|favorites?|underdogs?|dogs?|chalk|team|side|splits?|win|wins|winning|dominance|streak)\b)|(?:is|are|was|were|plays?|playing|remains?|stays?)\s+(?!(?:not|never)\b)(?:[\w-]+\s+){0,2}?(?:at\s+home|the\s+home\s+(?:team|side)|home\b))/i.test(suffix);
+        if (homePreMatch || homePostMatch) {
+          return {
+            kind: 'role_flip',
+            entry,
+            reason: `${entry.teamName} venue mismatch: described as home, but ${entry.teamName} is the away team.`
+          };
+        }
+      } else if (entry.venue === 'home') {
+        const awayPreMatch = /(?:^|\b)(?:on\s+the\s+road|(?:away|road)(?:\s+(?:team|side|favorites?|underdogs?|dogs?))?)\s+$/i.test(prefix);
+        const awayPostBlocked = /^\s+(?:[\w-]+\s+){0,3}?\b(?:not|never|isn't|aren't|wasn't|weren't|away\s+from|against|vs\.?|versus|facing)\b/i.test(suffix);
+        const awayPostMatch = !awayPostBlocked && /^(?:'s|s')?\s+(?:(?!(?:not|never|no|isn't|aren't|wasn't|weren't)\b)(?:[\w-]+\s+){0,4}?(?:on\s+the\s+road\b|visiting\b|(?:road|away)\s+(?:record|form|edge|advantage|trip|game|matchup|favorites?|underdogs?|dogs?|team|side|splits?|win|wins|winning|streak|warriors?)\b)|(?:is|are|was|were|plays?|playing|travels?|traveling)\s+(?!(?:not|never)\b)(?:[\w-]+\s+){0,2}?(?:on\s+the\s+road|away\b(?!\s+from\b)|the\s+(?:road|away)\s+(?:team|side)|(?:road|away)\b(?!\s+from\b)))/i.test(suffix);
+        if (awayPreMatch || awayPostMatch) {
+          return {
+            kind: 'role_flip',
+            entry,
+            reason: `${entry.teamName} venue mismatch: described as away/road, but ${entry.teamName} is the home team.`
+          };
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
 function findSpreadSideViolationInClause(
   clause: string,
-  spreadMap: Map<string, AuthoritativeTeamSpread>
+  spreadMap: Map<string, AuthoritativeTeamSpread>,
+  options?: { allowedVenueEventIds?: Set<string> }
 ): SpreadSideViolation | null {
   if (!clause || !clause.trim() || spreadMap.size === 0) return null;
   const teamHits = findTeamHitsInClause(clause, spreadMap);
@@ -1434,40 +1572,6 @@ function findSpreadSideViolationInClause(
     // If there's a preceding team and no clause/preposition boundary separated it, words immediately after team[i-1] belong to team[i-1]
     const spanBefore = (i > 0 && lastSepEnd === 0) ? '' : rawBefore.slice(lastSepEnd);
 
-    if (entry.venue === 'away') {
-      const homeAfter = spanAfter.match(/\b(?:at\s+home|hosting|home)\b/i);
-      const homeBefore = spanBefore.match(/\b(?:at\s+home|hosting|home)\b/i);
-      const homeMatch = homeAfter ? { text: spanAfter, idx: homeAfter.index! } : (homeBefore ? { text: spanBefore, idx: homeBefore.index! } : null);
-      if (homeMatch) {
-        const localPre = homeMatch.text.slice(Math.max(0, homeMatch.idx - 28), homeMatch.idx);
-        const isNegated = /\b(?:not|never|no|isn't|aren't|away\s+from)\b/i.test(localPre);
-        const refersToOpponent = /\b(?:against|vs\.?|versus|facing|on\s+the\s+road\s+at)\b/i.test(localPre);
-        if (!isNegated && !refersToOpponent) {
-          return {
-            kind: 'role_flip',
-            entry,
-            reason: `${entry.teamName} venue mismatch: described as home, but ${entry.teamName} is the away team.`
-          };
-        }
-      }
-    } else if (entry.venue === 'home') {
-      const awayAfter = spanAfter.match(/\b(?:on\s+the\s+road|road|away)\b/i);
-      const awayBefore = spanBefore.match(/\b(?:on\s+the\s+road|road|away)\b/i);
-      const awayMatch = awayAfter ? { text: spanAfter, idx: awayAfter.index! } : (awayBefore ? { text: spanBefore, idx: awayBefore.index! } : null);
-      if (awayMatch) {
-        const localPre = awayMatch.text.slice(Math.max(0, awayMatch.idx - 28), awayMatch.idx);
-        const isNegated = /\b(?:not|never|no|isn't|aren't|away\s+from)\b/i.test(localPre);
-        const refersToOpponent = /\b(?:against|vs\.?|versus|facing)\b/i.test(localPre);
-        if (!isNegated && !refersToOpponent) {
-          return {
-            kind: 'role_flip',
-            entry,
-            reason: `${entry.teamName} venue mismatch: described as away/road, but ${entry.teamName} is the home team.`
-          };
-        }
-      }
-    }
-
     if (entry.role === 'pickem') continue;
 
     if (entry.role === 'underdog') {
@@ -1505,7 +1609,7 @@ function findSpreadSideViolationInClause(
     }
   }
 
-  return null;
+  return findVenueMismatchInText(clause, spreadMap, options?.allowedVenueEventIds);
 }
 
 function splitClausesPreservingDelimiters(text: string): string[] {
@@ -1836,6 +1940,7 @@ export function auditMarketCoverageAndRowBinding(
   const coverageByGame = extractMarketCoverageByGame(toolEvidenceText, boardText, headers, toolRecords);
   const authoritativeSpreads = extractAuthoritativeTeamSpreads(headers, rowMap, toolEvidenceText, toolRecords, boardText);
   const picks = extractProposalPicks(proposal, headers, rowMap);
+  const pickedEventIds = collectPickedEventIds(proposal, headers, rowMap, authoritativeSpreads);
   const flags: string[] = [];
 
   for (const item of picks) {
@@ -1872,7 +1977,7 @@ export function auditMarketCoverageAndRowBinding(
 
     // 1b. Spread side, sign & value check for rowless or role-contradicted picks
     if (authoritativeSpreads.size > 0) {
-      const pickViolation = findSpreadSideViolationInClause(item.sideText, authoritativeSpreads);
+      const pickViolation = findSpreadSideViolationInClause(item.sideText, authoritativeSpreads, { allowedVenueEventIds: pickedEventIds });
       if (pickViolation) {
         const flagName = pickViolation.kind === 'value_mismatch' ? 'spread_value_mismatch' : 'spread_side_mismatch';
         flags.push(flagName);
@@ -1890,7 +1995,7 @@ export function auditMarketCoverageAndRowBinding(
         };
       }
       if (typeof item.pick === 'object' && item.pick && typeof item.pick.reason === 'string') {
-        const reasonViolation = findSpreadSideViolationInClause(item.pick.reason, authoritativeSpreads);
+        const reasonViolation = findSpreadSideViolationInClause(item.pick.reason, authoritativeSpreads, { allowedVenueEventIds: pickedEventIds });
         if (reasonViolation) {
           const flagName = reasonViolation.kind === 'value_mismatch' ? 'spread_value_mismatch' : 'spread_side_mismatch';
           flags.push(flagName);
@@ -2052,7 +2157,7 @@ export function auditMarketCoverageAndRowBinding(
 
     for (const txt of proseTexts) {
       for (const clause of splitClausesPreservingDelimiters(txt)) {
-        const violation = findSpreadSideViolationInClause(clause, authoritativeSpreads);
+        const violation = findSpreadSideViolationInClause(clause, authoritativeSpreads, { allowedVenueEventIds: pickedEventIds });
         if (violation) {
           const flagName = violation.kind === 'value_mismatch' ? 'spread_value_mismatch' : 'spread_side_mismatch';
           flags.push(flagName);

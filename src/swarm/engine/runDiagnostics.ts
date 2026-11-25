@@ -145,6 +145,38 @@ export function buildCompactRunDiagnostics(params: {
             continue;
         }
 
+        if (action === 'Provider Skipped') {
+            const fo = ev.failover || (ev.output && typeof ev.output === 'object' ? ev.output : undefined);
+            const rawReason = typeof fo?.reason === 'string' ? fo.reason.trim() : '';
+            const promptStr = typeof ev.prompt === 'string' ? ev.prompt : '';
+            const snippetStr = typeof fo?.errorSnippet === 'string' ? fo.errorSnippet : '';
+            if (
+                rawReason === '[COOLDOWN_SKIP]' ||
+                rawReason.includes('[COOLDOWN_SKIP]') ||
+                snippetStr.includes('[COOLDOWN_SKIP]') ||
+                promptStr.includes('[COOLDOWN_SKIP]')
+            ) {
+                const fromProvider = String(fo?.fromProvider || fo?.provider || '').trim();
+                const fromModel = String(fo?.fromModel || fo?.model || '').trim();
+                const toProvider = String(fo?.toProvider || fo?.fallbackProvider || '').trim();
+                const toModel = String(fo?.toModel || fo?.fallbackModel || '').trim();
+                const parsedFrom = fromProvider
+                    ? { provider: fromProvider, model: fromModel }
+                    : parseProviderAndModel(ev.modelName);
+                const rawErr = fo?.errorSnippet || (rawReason.includes('[COOLDOWN_SKIP]') ? rawReason : promptStr) || '[COOLDOWN_SKIP]';
+                failovers.push({
+                    seat,
+                    from: formatEndpoint(parsedFrom.provider, parsedFrom.model),
+                    to: toProvider ? formatEndpoint(toProvider, toModel) : 'none',
+                    status: null,
+                    reason: '[COOLDOWN_SKIP]',
+                    error: redactErrorSnippet(rawErr, 160),
+                    durationMs: 0
+                });
+            }
+            continue;
+        }
+
         if (action === 'Provider Failover Triggered') {
             const fo = ev.failover || (ev.output && typeof ev.output === 'object' ? ev.output : undefined);
             const fromProvider = String(fo?.fromProvider || fo?.failedProvider || '').trim();
@@ -178,6 +210,7 @@ export function buildCompactRunDiagnostics(params: {
             const rawReason = typeof fo?.reason === 'string' ? fo.reason.trim() : '';
             const isExplicitReasonCode =
                 rawReason === 'unparsed_json' ||
+                rawReason === '[COOLDOWN_SKIP]' ||
                 /^[a-z0-9_:-]{3,40}$/i.test(rawReason);
             const rawErr = fo?.errorSnippet || ev.error || rawReason || '';
             const error = redactErrorSnippet(rawErr, isExplicitReasonCode && rawReason === 'unparsed_json' ? 120 : 160);

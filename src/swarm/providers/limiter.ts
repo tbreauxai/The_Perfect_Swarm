@@ -28,6 +28,8 @@ export const PROVIDER_LIMITS: Record<string, ProviderLimitConfig> = {
 export const BREAKER_FAILURE_THRESHOLD = 3;
 export const BREAKER_OPEN_MS = 5 * 60 * 1000;
 export const MODEL_COOLDOWN_MS = 60_000;
+export const MODEL_TIMEOUT_COOLDOWN_MS = 10 * 60 * 1000;
+export const HEAVY_SLATE_TIMEOUT_TOKENS = 6_000;
 export const DEAD_MODEL_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_STRICT_BUDGET_WAIT_MS = 65_000;
 export const INTERACTIVE_MAX_BUDGET_WAIT_MS = 10_000;
@@ -250,6 +252,7 @@ export class ProviderLimiter {
   private modelTokenLogs = new Map<string, Array<{ at: number; tokens: number }>>();
   private deadModels = new Map<string, number>();
   private modelCooldowns = new Map<string, { until: number; reason: string }>();
+  private modelTimeoutCounts = new Map<string, number>();
 
   private readonly limits: Record<string, ProviderLimitConfig>;
   private readonly hasCustomLimits: boolean;
@@ -292,11 +295,12 @@ export class ProviderLimiter {
 
   /** null = callable now; otherwise why the provider/model is skipped instantly. */
   getSkipReason(provider: string, model?: string): string | null {
-    if (!this.isManaged(provider)) return null;
     const t = this.now();
-    const s = this.state(provider);
-    if (s.openUntil > t) {
-      return `circuit open until ${new Date(s.openUntil).toISOString()} (${s.openReason})`;
+    if (this.isManaged(provider)) {
+      const s = this.state(provider);
+      if (s.openUntil > t) {
+        return `circuit open until ${new Date(s.openUntil).toISOString()} (${s.openReason})`;
+      }
     }
     if (model) {
       const key = `${provider}::${model}`;
@@ -323,11 +327,13 @@ export class ProviderLimiter {
   }
 
   recordSuccess(provider: string, model?: string): void {
+    if (model) {
+      const key = `${provider}::${model}`;
+      this.modelCooldowns.delete(key);
+      this.modelTimeoutCounts.delete(key);
+    }
     if (!this.isManaged(provider)) return;
     this.state(provider).consecutiveFailures = 0;
-    if (model) {
-      this.modelCooldowns.delete(`${provider}::${model}`);
-    }
   }
 
   /** Opens a provider-level cooldown immediately (e.g., Gemini 400/401/403/project-wide 429). */
@@ -341,10 +347,35 @@ export class ProviderLimiter {
     }
   }
 
-  recordFailure(provider: string, model: string, message: string, isFinalAttempt: boolean = true): void {
+  recordFailure(
+    provider: string,
+    model: string,
+    message: string,
+    isFinalAttempt: boolean = true,
+    inputTokens: number = 0,
+  ): void {
+    const t = this.now();
+    const isTimeout = /\[TIMEOUT\]|\btimed?\s*out\b|\btimeout\b|AbortError/i.test(message || "");
+    if (model && isFinalAttempt) {
+      const key = `${provider}::${model}`;
+      if (isTimeout) {
+        const nextCount = (this.modelTimeoutCounts.get(key) ?? 0) + 1;
+        this.modelTimeoutCounts.set(key, nextCount);
+        if (nextCount >= 2 || inputTokens > HEAVY_SLATE_TIMEOUT_TOKENS) {
+          this.modelCooldowns.set(key, {
+            until: t + MODEL_TIMEOUT_COOLDOWN_MS,
+            reason:
+              inputTokens > HEAVY_SLATE_TIMEOUT_TOKENS
+                ? `[COOLDOWN_SKIP] timeout on heavy prompt (${inputTokens} > ${HEAVY_SLATE_TIMEOUT_TOKENS} tokens)`
+                : `[COOLDOWN_SKIP] ${nextCount} consecutive timeouts`,
+          });
+        }
+      } else {
+        this.modelTimeoutCounts.delete(key);
+      }
+    }
     if (!this.isManaged(provider)) return;
     const s = this.state(provider);
-    const t = this.now();
     const kind = classifyProviderError(provider, message);
     if (kind === "daily_quota") {
       s.openUntil = nextUtcMidnight(t);
@@ -630,7 +661,7 @@ export class ProviderLimiter {
             await this.sleep(backoffMs);
             continue;
           }
-          this.recordFailure(provider, model, msg);
+          this.recordFailure(provider, model, msg, true, estTokens);
           throw err;
         }
       }
@@ -653,6 +684,7 @@ export class ProviderLimiter {
     this.modelTokenLogs.clear();
     this.deadModels.clear();
     this.modelCooldowns.clear();
+    this.modelTimeoutCounts.clear();
   }
 }
 

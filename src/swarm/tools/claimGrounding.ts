@@ -3569,12 +3569,15 @@ export function ensureRiskCriticVetoScorecard<T extends Record<string, any>>(
         (String(sc.verdict || '').toLowerCase() === 'veto' && !sc.seat && !sc.role))
   );
 
-  const vetoNotes = cleanVetoReasonText(options?.vetoReason || '');
+  const dedupedVetoReason = dedupeVetoMessages([options?.vetoReason || ''])[0] || '';
+  const vetoNotes = cleanVetoReasonText(dedupedVetoReason);
   if (criticIdx >= 0) {
     const prev = merged[criticIdx];
-    const cleanedPrevNotes = typeof prev.notes === 'string' && prev.notes.trim()
-      ? cleanVetoReasonText(prev.notes)
+    const prevWasVeto = String(prev.verdict || '').trim().toLowerCase() === 'veto';
+    const rawPrevNotes = prevWasVeto && typeof prev.notes === 'string' && prev.notes.trim()
+      ? dedupeVetoMessages([prev.notes])[0] || ''
       : '';
+    const cleanedPrevNotes = rawPrevNotes ? cleanVetoReasonText(rawPrevNotes) : '';
     const finalNotes = cleanedPrevNotes || vetoNotes;
     merged[criticIdx] = {
       ...prev,
@@ -3647,7 +3650,12 @@ export function normalizePassIfAllLegsVetoed<T extends Record<string, any>>(
     }
     if (Array.isArray(rep.scorecards)) {
       for (const sc of rep.scorecards) {
-        if (sc && typeof sc === 'object' && /risk\s*critic|critic/i.test(String(sc.seat || sc.role || ''))) {
+        if (
+          sc &&
+          typeof sc === 'object' &&
+          /risk\s*critic|critic/i.test(String(sc.seat || sc.role || '')) &&
+          String(sc.verdict || '').trim().toLowerCase() === 'veto'
+        ) {
           const note = sc.notes || sc.reason || sc.summary;
           if (typeof note === 'string' && note.trim()) rawReasonCandidates.push(note);
         }

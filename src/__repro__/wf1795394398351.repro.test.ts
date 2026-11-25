@@ -301,7 +301,7 @@ describe('SPEC_SWARM_WF (wf-1795394398351): S1, S2, S3', () => {
             json: async () => [
               { player_id: '4066336', sport: 'basketball_nba', team_abbr: 'UTA', stats: { position: 'PF', minutes: 33.4, points: 23.1 } },
               { player_id: '4277811', sport: 'basketball_nba', team_abbr: 'UTA', stats: { position: 'SG', minutes: 29.8, points: 18.2 } },
-              { player_id: '3908845', sport: 'basketball_nba', team_abbr: 'UTA', stats: { position: 'PF', minutes: 30.1, points: 16.8 } },
+              { player_id: '3908845', sport: 'basketball_nba', team_abbr: 'UTA', stats: { position: 'PF', minutes: 30.1, points: 16.8, rebounds: 8.5, assists: 3.0 } },
               { player_id: '5105565', sport: 'basketball_nba', team_abbr: 'DAL', stats: { position: 'G', minutes: 19.0, points: 9.2 } },
               { player_id: '5105566', sport: 'basketball_nba', team_abbr: 'DAL', stats: { position: 'F', minutes: 17.5, points: 8.5 } }
               // 3 Dallas depth players are unlogged on a team that DOES have game-log coverage -> Tier 3 (0.5 each)

@@ -293,7 +293,7 @@ describe('wf-1795618886150 regressions (S1 & S2)', () => {
       [{ source: 'espn_depthchart', player_id: 'pg1', stats: { position: 'PG', depth_rank: 1, starter: true } }],
       'basketball_nba',
     );
-    expect(nbaStarterScore).toMatchObject({ tier: 1, weight: 3.0, starter: true, source: 'espn_depthchart' });
+    expect(nbaStarterScore).toMatchObject({ tier: 2, weight: 1.5, starter: true, source: 'espn_depthchart' });
 
     const mockFetch = vi.fn(async () =>
       new Response(
