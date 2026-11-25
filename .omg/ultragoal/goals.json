@@ -1,27 +1,20 @@
 {
-  "session": "wf-1795618886150",
-  "branch": "fix/swarm-wf-1795618886150",
+  "session": "wf-1795624413788",
+  "branch": "fix/swarm-wf-1795624413788",
   "goals": [
     {
       "id": "G1",
-      "description": "Implement S1: guarantee top-level criticApproved boolean, NHL puckline vs ML price-band guard, and preserve price-band text in digest odds scrubber.",
+      "description": "Implement S1: scope row_side_mismatch strictly to pick side label in src/swarm/tools/marketRowBinding.ts.",
       "status": "completed",
-      "verificationCriteria": "Final compiled payload always has typeof criticApproved === 'boolean'; NHL -1.5 (+205) vs ML (-128) guard active; stripApproximateOdds preserves price-band ranges without 'in the to range' or 'within the / window'.",
-      "evidence": "Implemented resolveFinalCriticApproved + wiring across criticAudit.ts, verificationPipeline.ts, synthesisPipeline.ts, index.ts, responseGuards.ts; added NHL -1.5 vs ML guidance in constants.ts and checkNhlPucklinePriceBand in marketRowBinding.ts; sentinel-protected price bands in stripApproximateOdds."
+      "verificationCriteria": "isolatePickSideLabel strips rationale delimiters while preserving Over <num>, negative spreads, and market prefixes; structured pick.side preferred over prose/note; resolveTeamFromText honors earliest match; checkRowSideBinding, extractProposalPicks, checkPickRowSideBinding, and sanitizeRowMismatchedPicks updated.",
+      "evidence": "Added isolatePickSideLabel & extractStructuredPickSideText in src/swarm/tools/marketRowBinding.ts; updated resolveTeamFromText to prefer earliest match index, checkRowSideBinding to evaluate isolated sideLabel, extractProposalPicks to prefer structured rows and isolate prose phrases, and checkPickRowSideBinding/sanitizeRowMismatchedPicks to exclude pk.note when structured fields exist."
     },
     {
       "id": "G2",
-      "description": "Implement S2: cap heavy-slate proposer dossiers (<= 10 full sections + compact 1-line summaries), support espn_depthchart starter rows, and deduplicate H2H lines by (game_date, sorted_scores).",
+      "description": "Add wf1795624413788 repro unit tests and verify with npx tsc --noEmit and npx vitest run on local feature branch.",
       "status": "completed",
-      "verificationCriteria": "20-game slate gives a1 <= 10 full dossier sections & a2 dossierTruncated === false; espn_depthchart QB/depth_rank=1 scores Tier 1 (5.0); H2H 2026-10-28 PHI/WAS 2-5 + WSH/PHI 5-2 collapses to 1 entry.",
-      "evidence": "Capped heavy-slate (>=12 games) full sections <= 10 with compact 1-line summaries in unifiedDossier.ts; added scorePlayerGameLogStarterRow/scoreInjuryStarterTier for espn_depthchart and deduplicated H2H by (game_date, sorted_scores) in dueloddsRpcTools.ts."
-    },
-    {
-      "id": "G3",
-      "description": "Add wf1795618886150 repro unit tests and run npx tsc --noEmit and npx vitest run cleanly on local feature branch.",
-      "status": "completed",
-      "verificationCriteria": "npx tsc --noEmit exits 0 and npx vitest run passes all targeted and full suite tests.",
-      "evidence": "npx tsc --noEmit exited 0; wf1795618886150.repro.test.ts (6/6) & wf1795307844843.repro.test.ts (5/5) passed; full npx vitest run passed 209/216 files (1634 passed, 6 skipped; 7 pre-existing unrelated failures)."
+      "verificationCriteria": "False-positive R2 New York Islanders ML with Blues in rationale passes; true-positive R2 St. Louis Blues ML triggers row_side_mismatch; npx tsc --noEmit exits 0 and Vitest passes with zero new regressions.",
+      "evidence": "Added src/__repro__/wf1795624413788.repro.test.ts (4/4 passed); npx tsc --noEmit exited 0; targeted 5 Vitest files (34/34 tests) passed; full npx vitest run passed 208/222 files (1680 passed, 6 skipped, 14 pre-existing/upstream failed files from 11b1e4c/origin/main baseline)."
     }
   ]
 }

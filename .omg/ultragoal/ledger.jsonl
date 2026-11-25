@@ -29,3 +29,9 @@
 {"ts":"2026-11-25T09:46:00-06:00","session":"wf-1795618886150","event":"goal_completed","goalId":"G2","nextGoal":"G3","evidence":"Implemented S2 changes in unifiedDossier.ts, analystExecution.ts, clusterPipeline.ts, and dueloddsRpcTools.ts."}
 
 {"ts":"2026-11-25T09:55:00-06:00","session":"wf-1795618886150","event":"goal_completed","goalId":"G3","evidence":"npx tsc --noEmit exited 0; wf1795618886150.repro.test.ts (6/6) and wf1795307844843.repro.test.ts (5/5) passed; full npx vitest run: 209/216 files passed (1634 passed, 6 skipped, 7 pre-existing unrelated failures). Local-only on fix/swarm-wf-1795618886150."}
+
+{"ts":"2026-11-25T11:16:30-06:00","session":"wf-1795624413788","event":"initialized","branch":"fix/swarm-wf-1795624413788","activeGoal":"G1"}
+
+{"ts":"2026-11-25T11:18:00-06:00","session":"wf-1795624413788","event":"goal_completed","goalId":"G1","nextGoal":"G2","evidence":"Implemented isolatePickSideLabel, extractStructuredPickSideText, earliest-mention resolveTeamFromText, and structured pick precedence in src/swarm/tools/marketRowBinding.ts."}
+
+{"ts":"2026-11-25T11:20:00-06:00","session":"wf-1795624413788","event":"goal_completed","goalId":"G2","evidence":"npx tsc --noEmit exited 0; 5 targeted Vitest files (34/34 tests) passed; full npx vitest run passed 208/222 files (1680 passed, 6 skipped, 14 pre-existing/upstream failures). Local-only on fix/swarm-wf-1795624413788."}
