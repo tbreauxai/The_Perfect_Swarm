@@ -206,24 +206,58 @@ export function resolveTeamFromText(
       matchedEntries.push({ raw: ctxTeam, entry });
     }
 
-    // Check full name or nickname matches first so "Los Angeles Clippers" never collides with Lakers
+    // Check full name or nickname matches first so "Los Angeles Clippers" never collides with Lakers,
+    // picking the earliest mention in text when multiple teams from the game appear.
+    const primaryMatches: Array<{ idx: number; priority: number; len: number; canonical: string; name: string }> = [];
     for (const { raw, entry } of matchedEntries) {
       const lowerRaw = raw.toLowerCase();
-      if (new RegExp(`\\b${escapeRegex(lowerRaw)}\\b`, 'i').test(cleaned)) {
-        return { canonical: entry ? `${entry.sport}:${entry.abbr}` : lowerRaw, name: entry?.name || raw };
+      const rawMatch = new RegExp(`\\b${escapeRegex(lowerRaw)}\\b`, 'i').exec(cleaned);
+      if (rawMatch) {
+        primaryMatches.push({
+          idx: rawMatch.index,
+          priority: 0,
+          len: lowerRaw.length,
+          canonical: entry ? `${entry.sport}:${entry.abbr}` : lowerRaw,
+          name: entry?.name || raw
+        });
       }
-      if (entry && new RegExp(`\\b${escapeRegex(entry.nickname.toLowerCase())}\\b`, 'i').test(cleaned)) {
-        return { canonical: `${entry.sport}:${entry.abbr}`, name: entry.name };
+      if (entry) {
+        const nickLower = entry.nickname.toLowerCase();
+        const nickMatch = new RegExp(`\\b${escapeRegex(nickLower)}\\b`, 'i').exec(cleaned);
+        if (nickMatch) {
+          primaryMatches.push({
+            idx: nickMatch.index,
+            priority: 1,
+            len: nickLower.length,
+            canonical: `${entry.sport}:${entry.abbr}`,
+            name: entry.name
+          });
+        }
       }
     }
-    for (const { raw, entry } of matchedEntries) {
+    if (primaryMatches.length > 0) {
+      primaryMatches.sort((a, b) => a.idx - b.idx || a.priority - b.priority || b.len - a.len);
+      return { canonical: primaryMatches[0].canonical, name: primaryMatches[0].name };
+    }
+    const aliasMatches: Array<{ idx: number; len: number; canonical: string; name: string }> = [];
+    for (const { entry } of matchedEntries) {
       if (!entry) continue;
       for (const alias of entry.aliases) {
         if (alias === entry.city.toLowerCase()) continue; // skip ambiguous city until last
-        if (new RegExp(`\\b${escapeRegex(alias)}\\b`, 'i').test(cleaned)) {
-          return { canonical: `${entry.sport}:${entry.abbr}`, name: entry.name };
+        const aliasMatch = new RegExp(`\\b${escapeRegex(alias)}\\b`, 'i').exec(cleaned);
+        if (aliasMatch) {
+          aliasMatches.push({
+            idx: aliasMatch.index,
+            len: alias.length,
+            canonical: `${entry.sport}:${entry.abbr}`,
+            name: entry.name
+          });
         }
       }
+    }
+    if (aliasMatches.length > 0) {
+      aliasMatches.sort((a, b) => a.idx - b.idx || b.len - a.len);
+      return { canonical: aliasMatches[0].canonical, name: aliasMatches[0].name };
     }
     // Check city only if the other team does not share that city
     for (const { entry } of matchedEntries) {
@@ -356,6 +390,72 @@ function formatSigned(n: number): string {
   return n > 0 ? `+${n}` : `${n}`;
 }
 
+/**
+ * Isolates a pick's side label by stripping row ID markers and trailing rationale/opponent clauses
+ * after delimiters (`—`, `–`, spaced `-`, `:`, `because`, `since`, `over` (non-total), `vs`, `versus`, `against`, `facing`).
+ */
+export function isolatePickSideLabel(rawSideText: string, rowId?: string): string {
+  let cleaned = String(rawSideText || '').trim();
+  if (!cleaned) return '';
+
+  if (rowId) {
+    cleaned = cleaned
+      .replace(new RegExp(`\\(\\s*${escapeRegex(rowId)}\\s*\\)`, 'gi'), ' ')
+      .replace(new RegExp(`^${escapeRegex(rowId)}\\s*[:\\-–—]?\\s*`, 'i'), '')
+      .trim();
+  }
+  cleaned = cleaned.replace(/^R\d+\s*[:\-–—]\s*/i, '').trim();
+  if (!cleaned) return '';
+
+  let cutIdx: number | undefined;
+  const considerCut = (idx: number | undefined) => {
+    if (idx === undefined || idx <= 0) return;
+    if (cutIdx === undefined || idx < cutIdx) {
+      cutIdx = idx;
+    }
+  };
+
+  // 1. Em-dash / en-dash delimiter
+  const dashMatch = /(?:\s+[—–]\s*|[—–](?!\s*\d))/.exec(cleaned);
+  if (dashMatch) considerCut(dashMatch.index);
+
+  // 2. Spaced ASCII hyphen delimiter (preserves negative spreads like -9.5 and odds like -122)
+  const hyphenMatch = /\s+-\s+(?!\d)/.exec(cleaned);
+  if (hyphenMatch) considerCut(hyphenMatch.index);
+
+  // 3. Rationale colon delimiter (preserves leading market prefixes like "ML:" / "SPR:")
+  const colonRx = /:/g;
+  let colonMatch: RegExpExecArray | null;
+  while ((colonMatch = colonRx.exec(cleaned)) !== null) {
+    const prefix = cleaned.slice(0, colonMatch.index).trim();
+    if (/^(?:ml|spr|spread|tot|total|o\/u|ou|puckline|runline|pick|side)$/i.test(prefix)) {
+      continue;
+    }
+    if (prefix.length >= 2) {
+      considerCut(colonMatch.index);
+      break;
+    }
+  }
+
+  // 4. Rationale / opponent keywords
+  const kwMatch = /\s+\b(?:because|since|vs\.?|versus|against|facing)\b/i.exec(cleaned);
+  if (kwMatch && cleaned.slice(0, kwMatch.index).replace(/\s+/g, '').length >= 2) {
+    considerCut(kwMatch.index);
+  }
+
+  // 5. Opponent `over` preposition (preserves totals like "Over 6.5")
+  const overMatch = /\s+\bover\b(?!\s*\d+(?:\.\d+)?)/i.exec(cleaned);
+  if (overMatch && cleaned.slice(0, overMatch.index).replace(/\s+/g, '').length >= 2) {
+    considerCut(overMatch.index);
+  }
+
+  if (cutIdx !== undefined) {
+    const head = cleaned.slice(0, cutIdx).trim();
+    if (head.length >= 2) return head;
+  }
+  return cleaned;
+}
+
 export function checkRowSideBinding(
   rowId: string,
   pickSideText: string,
@@ -372,41 +472,43 @@ export function checkRowSideBinding(
     .trim();
   if (!sideWithoutRow) return { valid: true };
 
+  const sideLabel = isolatePickSideLabel(sideWithoutRow, rowId) || sideWithoutRow;
+
   const rowBody = rowEntry.text.trim();
   const contextTeams = [rowEntry.away, rowEntry.home].filter((t): t is string => Boolean(t));
 
   // 1. Over / Under side & total line comparison
   const rowOU = extractOverUnder(rowBody);
-  const pickOU = extractOverUnder(sideWithoutRow);
+  const pickOU = extractOverUnder(sideLabel);
   if (rowOU && pickOU) {
     if (rowOU.side !== pickOU.side) {
       return {
         valid: false,
-        reason: `Row ${rowId} is "${rowBody}", which does not match picked side "${sideWithoutRow}" (Over/Under mismatch).`
+        reason: `Row ${rowId} is "${rowBody}", which does not match picked side "${sideLabel}" (Over/Under mismatch).`
       };
     }
     if (rowOU.line !== undefined && pickOU.line !== undefined && rowOU.line !== pickOU.line) {
       return {
         valid: false,
-        reason: `Row ${rowId} is "${rowBody}" (${rowOU.line}), which does not match picked line "${sideWithoutRow}" (${pickOU.line}).`
+        reason: `Row ${rowId} is "${rowBody}" (${rowOU.line}), which does not match picked line "${sideLabel}" (${pickOU.line}).`
       };
     }
   } else if ((rowOU && !pickOU) || (!rowOU && pickOU)) {
     const rowSpreadCheck = extractSpreadNumber(rowBody);
-    const pickSpreadCheck = extractSpreadNumber(sideWithoutRow);
+    const pickSpreadCheck = extractSpreadNumber(sideLabel);
     const rowMlCheck = isMoneylineText(rowBody);
-    const pickMlCheck = isMoneylineText(sideWithoutRow, marketField);
+    const pickMlCheck = isMoneylineText(sideLabel, marketField);
     if ((rowOU && (pickSpreadCheck !== null || pickMlCheck)) || (pickOU && (rowSpreadCheck !== null || rowMlCheck))) {
       return {
         valid: false,
-        reason: `Row ${rowId} is "${rowBody}", which does not match picked market "${sideWithoutRow}".`
+        reason: `Row ${rowId} is "${rowBody}", which does not match picked market "${sideLabel}".`
       };
     }
   }
 
   // 2. Team identity comparison (must not assign row to opposing/other team)
   const rowTeam = resolveTeamFromText(rowBody, rowEntry.sport, contextTeams);
-  const pickTeam = resolveTeamFromText(sideWithoutRow, rowEntry.sport, contextTeams);
+  const pickTeam = resolveTeamFromText(sideLabel, rowEntry.sport, contextTeams);
   if (rowTeam && pickTeam) {
     const sameTeam =
       rowTeam.canonical === pickTeam.canonical ||
@@ -415,21 +517,21 @@ export function checkRowSideBinding(
     if (!sameTeam) {
       return {
         valid: false,
-        reason: `Row ${rowId} is "${rowBody}" (${rowTeam.name}), cannot be assigned to "${sideWithoutRow}" (${pickTeam.name}).`
+        reason: `Row ${rowId} is "${rowBody}" (${rowTeam.name}), cannot be assigned to "${sideLabel}" (${pickTeam.name}).`
       };
     }
   }
 
   // 3. Spread vs Moneyline & Spread Line/Sign comparison
   const rowSpread = extractSpreadNumber(rowBody);
-  const pickSpread = extractSpreadNumber(sideWithoutRow);
+  const pickSpread = extractSpreadNumber(sideLabel);
   const rowIsML = isMoneylineText(rowBody);
-  const pickIsML = isMoneylineText(sideWithoutRow, marketField);
+  const pickIsML = isMoneylineText(sideLabel, marketField);
 
   if ((rowIsML && pickSpread !== null) || (rowSpread !== null && pickIsML)) {
     return {
       valid: false,
-      reason: `Row ${rowId} is "${rowBody}", which does not match market type of "${sideWithoutRow}".`
+      reason: `Row ${rowId} is "${rowBody}", which does not match market type of "${sideLabel}".`
     };
   }
 
@@ -441,7 +543,7 @@ export function checkRowSideBinding(
       valid: false,
       isSignFlipOnly,
       isValueMismatch: !isSignFlipOnly,
-      reason: `Row ${rowId} is "${rowBody}" (${formatSigned(rowSpread)}), does not match "${sideWithoutRow}" (${formatSigned(pickSpread)}).`
+      reason: `Row ${rowId} is "${rowBody}" (${formatSigned(rowSpread)}), does not match "${sideLabel}" (${formatSigned(pickSpread)}).`
     };
   }
 
@@ -625,9 +727,30 @@ interface PickLikeInfo {
   eventId?: string;
 }
 
+function extractStructuredPickSideText(pk: any): string {
+  if (!pk) return '';
+  if (typeof pk === 'string') return pk.trim();
+  if (typeof pk !== 'object') return '';
+  const seen = new Set<string>();
+  const parts: string[] = [];
+  for (const raw of [pk.side, pk.pick, pk.selection, pk.team]) {
+    if (typeof raw !== 'string') continue;
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      parts.push(trimmed);
+    }
+  }
+  if (parts.length > 0) return parts.join(' ').trim();
+  return typeof pk.note === 'string' ? pk.note.trim() : '';
+}
+
 function extractProposalPicks(proposal: any, headers: GameHeader[], rowMap: Map<string, RowOptionEntry>): PickLikeInfo[] {
   const results: PickLikeInfo[] = [];
   if (!proposal || typeof proposal !== 'object') return results;
+  const structuredRowIds = new Set<string>();
 
   const pushPickObj = (pk: any) => {
     if (!pk || typeof pk !== 'object') return;
@@ -635,14 +758,15 @@ function extractProposalPicks(proposal: any, headers: GameHeader[], rowMap: Map<
       ? pk.row.trim().toUpperCase()
       : (typeof pk.id === 'string' && /^R\d+$/i.test(pk.id.trim()) ? pk.id.trim().toUpperCase() : undefined);
 
-    const sideText = [pk.side, pk.pick, pk.selection, pk.team, pk.note]
-      .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
-      .join(' ')
-      .trim();
+    const sideText = extractStructuredPickSideText(pk);
 
     if (!rowId && sideText) {
       const m = sideText.match(/\b(R\d+)\b/i);
       if (m) rowId = m[1].toUpperCase();
+    }
+
+    if (rowId && sideText) {
+      structuredRowIds.add(rowId);
     }
 
     let eventId = getEventIdForPick(pk, headers);
@@ -663,11 +787,14 @@ function extractProposalPicks(proposal: any, headers: GameHeader[], rowMap: Map<
     for (const pk of proposal.picks) {
       if (typeof pk === 'string') {
         const m = pk.match(/\b(R\d+)\b/i);
+        const rowId = m ? m[1].toUpperCase() : undefined;
+        const isolated = isolatePickSideLabel(pk, rowId) || pk.trim();
+        if (rowId && isolated) structuredRowIds.add(rowId);
         results.push({
           pick: pk,
-          rowId: m ? m[1].toUpperCase() : undefined,
-          sideText: pk,
-          eventId: getEventIdForPick(pk, headers) || (m ? rowMap.get(m[1].toUpperCase())?.eventId : undefined)
+          rowId,
+          sideText: isolated,
+          eventId: getEventIdForPick(pk, headers) || (rowId ? rowMap.get(rowId)?.eventId : undefined)
         });
       } else {
         pushPickObj(pk);
@@ -700,11 +827,13 @@ function extractProposalPicks(proposal: any, headers: GameHeader[], rowMap: Map<
     while ((m = parenRegex.exec(text)) !== null) {
       const phrase = m[1].trim();
       const rowId = m[2].toUpperCase();
-      if (rowMap.has(rowId) && !results.some(r => r.rowId === rowId && r.sideText.includes(phrase))) {
+      if (structuredRowIds.has(rowId)) continue;
+      const isolatedPhrase = isolatePickSideLabel(phrase, rowId) || phrase;
+      if (rowMap.has(rowId) && !results.some(r => r.rowId === rowId && r.sideText.includes(isolatedPhrase))) {
         results.push({
-          pick: phrase,
+          pick: isolatedPhrase,
           rowId,
-          sideText: phrase,
+          sideText: isolatedPhrase,
           eventId: rowMap.get(rowId)?.eventId
         });
       }
@@ -714,11 +843,13 @@ function extractProposalPicks(proposal: any, headers: GameHeader[], rowMap: Map<
     while ((m = prefixRegex.exec(text)) !== null) {
       const rowId = m[1].toUpperCase();
       const phrase = m[2].trim();
-      if (rowMap.has(rowId) && !results.some(r => r.rowId === rowId && r.sideText.includes(phrase))) {
+      if (structuredRowIds.has(rowId)) continue;
+      const isolatedPhrase = isolatePickSideLabel(phrase, rowId) || phrase;
+      if (rowMap.has(rowId) && !results.some(r => r.rowId === rowId && r.sideText.includes(isolatedPhrase))) {
         results.push({
-          pick: phrase,
+          pick: isolatedPhrase,
           rowId,
-          sideText: phrase,
+          sideText: isolatedPhrase,
           eventId: rowMap.get(rowId)?.eventId
         });
       }
@@ -1420,10 +1551,7 @@ export function checkPickRowSideBinding(
     } else if (typeof pk.id === 'string' && /^R\d+$/i.test(pk.id.trim())) {
       rowId = pk.id.trim().toUpperCase();
     }
-    sideText = [pk.side, pk.pick, pk.selection, pk.team, pk.note]
-      .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
-      .join(' ')
-      .trim();
+    sideText = extractStructuredPickSideText(pk);
     if (!rowId && sideText) {
       const m = sideText.match(/\b(R\d+)\b/i);
       if (m) rowId = m[1].toUpperCase();
@@ -1926,10 +2054,7 @@ export function sanitizeRowMismatchedPicks<T extends Record<string, any>>(
     const rowId = typeof pk.row === 'string' && /^R\d+$/i.test(pk.row.trim())
       ? pk.row.trim().toUpperCase()
       : (typeof pk.id === 'string' && /^R\d+$/i.test(pk.id.trim()) ? pk.id.trim().toUpperCase() : undefined);
-    const sideText = [pk.side, pk.pick, pk.selection, pk.team, pk.note]
-      .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
-      .join(' ')
-      .trim();
+    const sideText = extractStructuredPickSideText(pk);
     if (rowId && rowMap.has(rowId)) {
       if (!checkRowSideBinding(rowId, sideText, rowMap.get(rowId)!, pk.market).valid) return false;
     }
