@@ -8,7 +8,13 @@ import { globalPromptCompressor } from '../compression.ts';
 import { guardManagerResponse, sanitizeCompilerProposalOddsAndSummary } from '../parser.ts';
 import { ManagerResponseSchema } from '../schemas.ts';
 import { MANAGER_SYSTEM_INSTRUCTION, NO_ROUNDED_PPG_RULE } from './constants.ts';
-import { renderPromptConsensusBlock, type AnalystConsensusDigest } from './consensusPipeline.ts';
+import {
+    detectOpposingSeatConflicts,
+    findingMentionsSeatConflict,
+    renderPromptConsensusBlock,
+    renderSeatConflictPromptBlock,
+    type AnalystConsensusDigest
+} from './consensusPipeline.ts';
 import { compileDebateDigest } from './coordinationPipeline.ts';
 import { TokenEstimator } from '../compression/tokenEstimator.ts';
 import { seatBudget } from '../context/promptBudget.ts';
@@ -185,8 +191,29 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
             : '';
     }
 
-    const consensusPromptBlock = workflowConsensus ? renderPromptConsensusBlock(workflowConsensus) : '';
-    const consensusSection = consensusPromptBlock ? `${consensusPromptBlock}\n\n` : '';
+    const rawInputForConflict = p.rawInput || (params as any)?.rawInput || '';
+    const conflictHeaders = parseGameHeaders(rawInputForConflict || task, (params as any)?.eventIds);
+    const detectedSeatConflicts = detectOpposingSeatConflicts(allAnalystReports, analysts, conflictHeaders);
+    const effectiveConsensus: AnalystConsensusDigest | undefined = workflowConsensus
+        ? (detectedSeatConflicts.length > 0
+            ? {
+                ...workflowConsensus,
+                unanimousFindings: (workflowConsensus.unanimousFindings || []).filter(f => !findingMentionsSeatConflict(f, detectedSeatConflicts)),
+                majorityFindings: (workflowConsensus.majorityFindings || []).filter(f => !findingMentionsSeatConflict(f, detectedSeatConflicts)),
+                isContested: true,
+                seatConflicts: workflowConsensus.seatConflicts && workflowConsensus.seatConflicts.length > 0
+                    ? workflowConsensus.seatConflicts
+                    : detectedSeatConflicts
+            }
+            : workflowConsensus)
+        : undefined;
+    const consensusPromptBlock = effectiveConsensus ? renderPromptConsensusBlock(effectiveConsensus) : '';
+    const standaloneConflictBlock = !consensusPromptBlock && detectedSeatConflicts.length > 0
+        ? renderSeatConflictPromptBlock(detectedSeatConflicts)
+        : '';
+    const consensusSection = [consensusPromptBlock, standaloneConflictBlock].filter(Boolean).join('\n\n')
+        ? `${[consensusPromptBlock, standaloneConflictBlock].filter(Boolean).join('\n\n')}\n\n`
+        : '';
     if (workflowConsensus?.agreementLevel) {
         recordRunDebugAgreement((context as any)?.id, workflowConsensus.agreementLevel);
     }

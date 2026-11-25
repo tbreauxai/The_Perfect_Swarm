@@ -15,8 +15,12 @@ import {
     MAX_BUDGET_WAIT_MS,
     DEFAULT_STRICT_BUDGET_WAIT_MS,
     INTERACTIVE_MAX_BUDGET_WAIT_MS,
+    FAILOVER_MAX_TPM_WAIT_MS,
     PROMPT_EXCEEDS_LIMIT_REASON,
-    UNSATISFIABLE_BUDGET_WAIT_MS
+    UNSATISFIABLE_BUDGET_WAIT_MS,
+    MODEL_COOLDOWN_MS,
+    BREAKER_OPEN_MS,
+    isGeminiProjectWideFailure
 } from './providers/limiter.js';
 import { parseRetryAfterMs } from './utils/httpTimeouts.js';
 import { isModelDead, DEFAULT_PROVIDER_MODELS } from './server/modelsProvider.js';
@@ -35,15 +39,77 @@ export { DEFAULT_PROVIDER_MODELS } from './server/modelsProvider.js';
  * - Multi-provider failover cascades on free-tier rate limits (429), timeouts, and 5xx errors
  * - Robust reasoning model sanitization (<think> tag stripping)
  */
+/**
+ * Extracts a numeric HTTP status code (e.g. 400, 429, 503) from an adapter error object or message.
+ */
+export function extractHttpStatus(err: unknown): number | null {
+    if (!err) return null;
+    if (typeof err === 'object') {
+        const obj = err as Record<string, any>;
+        const direct = obj.status ?? obj.statusCode ?? obj.code ?? obj.response?.status;
+        if (typeof direct === 'number' && direct >= 100 && direct <= 599) {
+            return direct;
+        }
+        if (typeof direct === 'string' && /^\d{3}$/.test(direct.trim())) {
+            const parsed = Number(direct.trim());
+            if (parsed >= 100 && parsed <= 599) return parsed;
+        }
+    }
+    const msg = typeof err === 'string' ? err : String((err as any)?.message || err || '');
+    const tagged = msg.match(/(?:RATE_LIMIT_|SERVER_ERROR_|HTTP\s+|status[=:\s]+|API Error\s*\()([1-5]\d{2})\b/i);
+    if (tagged) return Number(tagged[1]);
+    const generic = msg.match(/\b(400|401|402|403|404|408|409|422|429|500|502|503|504)\b/);
+    if (generic) return Number(generic[1]);
+    return null;
+}
+
+/**
+ * Redacts API keys/tokens and truncates error text to <= maxLen (default 160 chars) for Flight Recorder / SSE telemetry.
+ */
+export function redactErrorSnippet(err: unknown, maxLen: number = 160): string {
+    const raw = typeof err === 'string' ? err : String((err as any)?.message || err || '');
+    const redacted = raw
+        .replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, '$1[REDACTED]')
+        .replace(/([?&](?:key|api_key|apikey|token|access_token|secret)=)[^&\s'"]+/gi, '$1[REDACTED]')
+        .replace(/\b(?:AIza[0-9A-Za-z_-]{8,}|gsk_[0-9A-Za-z_-]{8,}|sk-(?:or-v1-)?[0-9A-Za-z_-]{8,}|ghp_[0-9A-Za-z_-]{8,}|nvapi-[0-9A-Za-z_-]{8,})\b/g, '[REDACTED]')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (redacted.length <= maxLen) return redacted;
+    return `${redacted.slice(0, Math.max(0, maxLen - 3))}...`;
+}
+
+function resolveTargetModelName(
+    target: { provider: string; modelName?: string },
+    primaryProvider: string,
+    defaultModelName: string
+): string {
+    return (
+        target.modelName ||
+        (target.provider === primaryProvider ? defaultModelName : null) ||
+        DEFAULT_PROVIDER_MODELS[target.provider] ||
+        defaultModelName
+    );
+}
+
 function checkTargetLimits(
     target: { provider: string; modelName?: string },
     defaultModelName: string,
     prompt: string,
     systemInstruction: string | undefined,
     maxBudgetWait: number,
-    groqMode?: 'chat' | 'morning'
-): { ok: boolean; targetModel: string; reason?: string; needsBudgetWait?: boolean; estimatedTokens: number } {
-    const targetModel = target.modelName || defaultModelName;
+    groqMode?: 'chat' | 'morning',
+    primaryProvider?: string
+): {
+    ok: boolean;
+    targetModel: string;
+    reason?: string;
+    needsBudgetWait?: boolean;
+    estimatedTokens: number;
+    estimatedWaitMs: number;
+} {
+    const targetModel = primaryProvider
+        ? resolveTargetModelName(target, primaryProvider, defaultModelName)
+        : (target.modelName || defaultModelName);
     const knownSkip = globalProviderLimiter.getSkipReason(String(target.provider), targetModel);
     const promptCharCap = target.provider === 'groq' ? groqPromptCharCap(groqMode) : prompt.length;
     const effectivePrompt = target.provider === 'groq' && prompt.length > promptCharCap
@@ -53,38 +119,85 @@ function checkTargetLimits(
         ? `${systemInstruction}\n${effectivePrompt}`
         : effectivePrompt;
     const estimatedTokens = estimateTokens(payloadToEstimate);
-    if (globalProviderLimiter.exceedsTokenBudgetCapacity(String(target.provider), estimatedTokens)) {
+    if (globalProviderLimiter.exceedsTokenBudgetCapacity(String(target.provider), estimatedTokens, targetModel)) {
         return {
             ok: false,
             targetModel,
             reason: knownSkip || PROMPT_EXCEEDS_LIMIT_REASON,
             needsBudgetWait: false,
-            estimatedTokens
+            estimatedTokens,
+            estimatedWaitMs: UNSATISFIABLE_BUDGET_WAIT_MS
         };
     }
-    const budgetWait = globalProviderLimiter.budgetWaitMs(String(target.provider), estimatedTokens);
-    if (knownSkip || !Number.isFinite(budgetWait) || budgetWait >= UNSATISFIABLE_BUDGET_WAIT_MS || budgetWait > maxBudgetWait) {
-        const waitReason = !Number.isFinite(budgetWait) || budgetWait >= UNSATISFIABLE_BUDGET_WAIT_MS
+    const limiterWait = globalProviderLimiter.budgetWaitMs(String(target.provider), estimatedTokens, targetModel);
+    const managerWait = globalTokenBudgetManager.canAllocate(target.provider as any, estimatedTokens, targetModel)
+        ? 0
+        : globalTokenBudgetManager.estimateWaitMs(target.provider as any, estimatedTokens, targetModel);
+    const estimatedWaitMs = Math.max(limiterWait, managerWait);
+
+    if (knownSkip || !Number.isFinite(limiterWait) || limiterWait >= UNSATISFIABLE_BUDGET_WAIT_MS || limiterWait > maxBudgetWait) {
+        const waitReason = !Number.isFinite(limiterWait) || limiterWait >= UNSATISFIABLE_BUDGET_WAIT_MS
             ? PROMPT_EXCEEDS_LIMIT_REASON
-            : `token budget needs ${Math.ceil(budgetWait)}ms`;
+            : `skipped_tpm_wait: ${Math.ceil(limiterWait)}ms`;
         return {
             ok: false,
             targetModel,
             reason: knownSkip || waitReason,
             needsBudgetWait: false,
-            estimatedTokens
+            estimatedTokens,
+            estimatedWaitMs
         };
     }
-    if (!globalTokenBudgetManager.canAllocate(target.provider as any, estimatedTokens)) {
+    if (!globalTokenBudgetManager.canAllocate(target.provider as any, estimatedTokens, targetModel)) {
+        if (managerWait > maxBudgetWait) {
+            return {
+                ok: false,
+                targetModel,
+                reason: `skipped_tpm_wait: ${Math.ceil(managerWait)}ms`,
+                needsBudgetWait: false,
+                estimatedTokens,
+                estimatedWaitMs
+            };
+        }
         return {
             ok: false,
             targetModel,
-            reason: `token budget remaining ${globalTokenBudgetManager.getRemainingBudget(target.provider as any)} < ${estimatedTokens}; shifting seat`,
+            reason: `token budget remaining ${globalTokenBudgetManager.getRemainingBudget(target.provider as any, targetModel)} < ${estimatedTokens}; shifting seat`,
             needsBudgetWait: true,
-            estimatedTokens
+            estimatedTokens,
+            estimatedWaitMs
         };
     }
-    return { ok: true, targetModel, estimatedTokens };
+    return { ok: true, targetModel, estimatedTokens, estimatedWaitMs };
+}
+
+function hasHealthyFastAlternative(
+    targetChain: ProviderCredential[],
+    currentIndex: number,
+    primaryProvider: string,
+    defaultModelName: string,
+    prompt: string,
+    systemInstruction: string | undefined,
+    groqMode?: 'chat' | 'morning'
+): boolean {
+    for (let j = currentIndex + 1; j < targetChain.length; j++) {
+        const cand = targetChain[j];
+        const candModel = resolveTargetModelName(cand, primaryProvider, defaultModelName);
+        if (isModelDead(String(cand.provider), candModel)) continue;
+        const candCheck = checkTargetLimits(
+            cand,
+            defaultModelName,
+            prompt,
+            systemInstruction,
+            FAILOVER_MAX_TPM_WAIT_MS,
+            groqMode,
+            primaryProvider
+        );
+        if (candCheck.ok && candCheck.estimatedWaitMs <= FAILOVER_MAX_TPM_WAIT_MS) {
+            return true;
+        }
+    }
+    return false;
 }
 
 export class Agent {
@@ -148,7 +261,9 @@ export class Agent {
         const startTime = Date.now();
         const roleNorm = this.role.toLowerCase();
         const isCriticRole = roleNorm.includes('critic') || roleNorm.includes('risk');
-        const timeoutMs = config?.timeoutMs || (isCriticRole ? 45000 : PROVIDER_CALL_TIMEOUT_MS); // Fresh budget per target in targetChain
+        const isQuantRole = roleNorm.includes('quant') || this.id === 'a1';
+        const rawTimeoutMs = config?.timeoutMs || (isCriticRole ? 45000 : (isQuantRole ? 30000 : PROVIDER_CALL_TIMEOUT_MS));
+        const timeoutMs = isQuantRole ? Math.min(rawTimeoutMs, 30000) : rawTimeoutMs; // Fresh budget per target in targetChain (NVIDIA a1 further capped to 15s below)
 
         const lb = (config?.loadBalancer as AdaptiveLoadBalancer) || this.loadBalancer || globalLoadBalancer;
         const candidateFallbacks = config?.fallbackProviders || this.fallbacks;
@@ -187,13 +302,38 @@ export class Agent {
             // Don't call a provider the limiter already knows will refuse. A circuit,
             // a dead model, or a token budget that needs more than the wait cap is not
             // an error worth logging: move to the next target.
-            const maxBudgetWait = config?.interactive
+            // Hard failover wait cap (5000ms): if this candidate needs > 5s of TPM wait AND
+            // another healthy failover provider has <= 5s wait, immediately skip without sleeping.
+            const baseMaxBudgetWait = config?.interactive
                 ? INTERACTIVE_MAX_BUDGET_WAIT_MS
                 : (config?.maxBudgetWaitMs ?? DEFAULT_STRICT_BUDGET_WAIT_MS);
-            const preCheck = checkTargetLimits(currentTarget, this.modelName, prompt, this.systemInstruction, maxBudgetWait, config?.groqMode);
+            const hasFastBackup = hasHealthyFastAlternative(
+                targetChain,
+                targetIdx,
+                String(this.provider),
+                this.modelName,
+                prompt,
+                this.systemInstruction,
+                config?.groqMode
+            );
+            const maxBudgetWait = hasFastBackup
+                ? Math.min(baseMaxBudgetWait, FAILOVER_MAX_TPM_WAIT_MS)
+                : baseMaxBudgetWait;
+            const preCheck = checkTargetLimits(
+                currentTarget,
+                this.modelName,
+                prompt,
+                this.systemInstruction,
+                maxBudgetWait,
+                config?.groqMode,
+                String(this.provider)
+            );
             if (!preCheck.ok) {
                 if (!preCheck.needsBudgetWait) {
                     const skipReason = preCheck.reason || 'skipped by limiter/budget';
+                    if (skipReason.startsWith('skipped_tpm_wait:')) {
+                        console.warn(`[${this.role}][${currentTarget.provider}/${preCheck.targetModel}] ${skipReason}`);
+                    }
                     lastFailedProvider = String(currentTarget.provider);
                     lastFailedModel = preCheck.targetModel;
                     lastError = new Error(skipReason);
@@ -202,17 +342,29 @@ export class Agent {
                         action: 'Provider Skipped',
                         modelName: `${currentTarget.provider}/${preCheck.targetModel}`,
                         prompt: `Skipped provider target: ${skipReason}`,
-                        output: { provider: currentTarget.provider, model: preCheck.targetModel, reason: skipReason }
+                        output: {
+                            provider: currentTarget.provider,
+                            model: preCheck.targetModel,
+                            fromProvider: String(currentTarget.provider),
+                            fromModel: preCheck.targetModel,
+                            reason: skipReason,
+                            ...(skipReason.startsWith('skipped_tpm_wait:')
+                                ? { skipped_tpm_wait: Math.ceil(preCheck.estimatedWaitMs) }
+                                : {})
+                        }
                     });
                     continue;
                 }
 
-                const waitMs = Math.min(60000, globalProviderLimiter.budgetWaitMs(String(currentTarget.provider), preCheck.estimatedTokens));
+                const waitMs = Math.min(
+                    maxBudgetWait,
+                    globalProviderLimiter.budgetWaitMs(String(currentTarget.provider), preCheck.estimatedTokens, preCheck.targetModel)
+                );
                 if (Number.isFinite(waitMs) && waitMs > 0) {
                     await new Promise(resolve => setTimeout(resolve, waitMs));
                 }
-                if (!globalTokenBudgetManager.canAllocate(currentTarget.provider, preCheck.estimatedTokens)) {
-                    const reason = `token budget remaining ${globalTokenBudgetManager.getRemainingBudget(currentTarget.provider)} < ${preCheck.estimatedTokens}; shifting seat`;
+                if (!globalTokenBudgetManager.canAllocate(currentTarget.provider, preCheck.estimatedTokens, preCheck.targetModel)) {
+                    const reason = `token budget remaining ${globalTokenBudgetManager.getRemainingBudget(currentTarget.provider, preCheck.targetModel)} < ${preCheck.estimatedTokens}; shifting seat`;
                     lastFailedProvider = String(currentTarget.provider);
                     lastFailedModel = preCheck.targetModel;
                     lastError = new Error(reason);
@@ -221,7 +373,13 @@ export class Agent {
                         action: 'Provider Skipped',
                         modelName: `${currentTarget.provider}/${preCheck.targetModel}`,
                         prompt: `Skipped provider target: ${reason}`,
-                        output: { provider: currentTarget.provider, model: preCheck.targetModel, reason }
+                        output: {
+                            provider: currentTarget.provider,
+                            model: preCheck.targetModel,
+                            fromProvider: String(currentTarget.provider),
+                            fromModel: preCheck.targetModel,
+                            reason
+                        }
                     });
                     continue;
                 }
@@ -229,23 +387,33 @@ export class Agent {
             // Two attempts max: fail fast on free-tier stalls. Fatal (4xx) errors
             // never recover by retrying; transient (429/5xx/timeout) errors either
             // fail over immediately (when a backup exists) or get one quick retry.
+            // S3.2: a1/Quant on NVIDIA uses a single-attempt 30s timeout so stalls fail over immediately.
             // config.noRetry (startup benchmark): one attempt per target, so a 429 is never retried.
-            const maxRetries = config?.noRetry ? 1 : 2;
+            const maxRetries = (config?.noRetry || (isQuantRole && currentTarget.provider === 'nvidia')) ? 1 : 2;
 
             for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                const attemptStartTime = Date.now();
                 try {
                     const adapter = ProviderRegistry.get(currentTarget.provider);
                     
                     const roleLower = this.role.toLowerCase();
+                    const isNvidiaReasoningTarget =
+                        currentTarget.provider === 'nvidia' &&
+                        /nemotron|deepseek-r1|qwq/i.test(targetModel);
                     const defaultRoleTokens = roleLower.includes('grader') ? 60
                         : roleLower.includes('prompt generator') ? 300
                         : roleLower.includes('manager') ? 2000
-                        : roleLower.includes('quant') ? 4096 // backstop; reasoning capped in nvidia.ts
+                        : isNvidiaReasoningTarget ? 4096
+                        : isQuantRole ? 1800
                         : 1500;
 
+                    const requestedTokens = config?.maxTokens ?? this.maxTokens ?? defaultRoleTokens;
+                    const effectiveMaxTokens = isNvidiaReasoningTarget
+                        ? Math.max(requestedTokens, 4096)
+                        : (isQuantRole ? Math.min(requestedTokens, 1800) : requestedTokens);
                     const effectiveConfig: AgentRunConfig = {
                         ...config,
-                        maxTokens: config?.maxTokens ?? this.maxTokens ?? defaultRoleTokens
+                        maxTokens: effectiveMaxTokens
                     };
                     const isStrictJsonRequest =
                         effectiveConfig.responseMimeType === 'application/json' ||
@@ -321,6 +489,10 @@ export class Agent {
                                 currentTarget.provider,
                                 async () => {
                                     let capturedHeaders: any = null;
+                                    const isQuantNvidiaTarget =
+                                        currentTarget.provider === 'nvidia' &&
+                                        (isQuantRole || /nemotron.*ultra|550b/i.test(targetModel));
+                                    const targetTimeoutMs = isQuantNvidiaTarget ? Math.min(timeoutMs, 15000) : timeoutMs;
                                     const out = await adapter.call({
                                         modelName: targetModel,
                                         prompt,
@@ -328,15 +500,15 @@ export class Agent {
                                         apiKey: currentTarget.apiKey,
                                         aiClient: currentTarget.aiClient || this.aiClient,
                                         config: effectiveRuntimeConfig,
-                                        timeoutMs,
+                                        timeoutMs: targetTimeoutMs,
                                         role: this.role,
                                         onHeaders: (headers) => {
                                             capturedHeaders = headers;
-                                            globalTokenBudgetManager.applyProviderHeaders(currentTarget.provider, headers);
+                                            globalTokenBudgetManager.applyProviderHeaders(currentTarget.provider, headers, targetModel);
                                         }
                                     });
                                     if (capturedHeaders) {
-                                        globalTokenBudgetManager.applyProviderHeaders(currentTarget.provider, capturedHeaders);
+                                        globalTokenBudgetManager.applyProviderHeaders(currentTarget.provider, capturedHeaders, targetModel);
                                     }
                                     return out;
                                 }
@@ -366,6 +538,28 @@ export class Agent {
                             const hasParsedKeys = candidate && typeof candidate === 'object' && (
                                 Array.isArray(candidate) ? candidate.length > 0 : Object.keys(candidate).length > 0
                             );
+                            // S2: Treat unparsed/truncated non-JSON output on proposer seats (a1/a2) as parse_failed
+                            // and trigger failover instead of returning status: "ok" with "[Quant Proposer] unparsed output".
+                            const isProposerSeat =
+                                this.id === 'a1' ||
+                                this.id === 'a2' ||
+                                /\b(?:quant|market)\s*proposer\b|\bquant\b|\bmarket\s*analyst\b/i.test(this.role || '');
+                            const hasNativeToolCallInText =
+                                typeof textOutput === 'string' &&
+                                /"tool"\s*:|"tool_calls"\s*:|get_(?:matchup|injury|market|environment|player_prop|historical)/i.test(textOutput);
+                            if (
+                                !hasParsedKeys &&
+                                isProposerSeat &&
+                                !hasNativeToolCallInText &&
+                                targetIdx < targetChain.length - 1
+                            ) {
+                                const rawSnippet = redactErrorSnippet(textOutput || 'empty response', 120);
+                                const parseErr: any = new Error(`[PARSE_FAILED:unparsed_json] ${rawSnippet}`);
+                                parseErr.reason = 'unparsed_json';
+                                parseErr.parseFailed = true;
+                                parseErr.rawSnippet = rawSnippet;
+                                throw parseErr;
+                            }
                             parsedOutput = hasParsedKeys ? candidate : textOutput;
                             
                             if (config?.zodSchema) {
@@ -444,12 +638,38 @@ export class Agent {
                         continue;
                     }
 
+                    const isParseFailure = Boolean(err?.parseFailed) || errMsg.includes('[PARSE_FAILED:unparsed_json]');
+                    const httpStatus = isParseFailure ? null : extractHttpStatus(err);
+                    const errorSnippet = isParseFailure
+                        ? redactErrorSnippet(err?.rawSnippet || errMsg.replace(/^\[PARSE_FAILED:[^\]]+\]\s*/i, ''), 120)
+                        : redactErrorSnippet(err, 160);
+                    const failoverReason = typeof err?.reason === 'string' && err.reason.trim()
+                        ? err.reason.trim()
+                        : errorSnippet;
+                    const attemptDurationMs = Math.max(0, Date.now() - attemptStartTime);
                     const errorEvent = {
                         agentRole: this.role,
                         action: `Provider Failover Triggered`,
-                        modelName: `${currentTarget.provider} / ${currentTarget.modelName || this.modelName}`,
+                        modelName: `${currentTarget.provider} / ${targetModel}`,
                         prompt,
-                        error: errMsg
+                        error: errorSnippet,
+                        durationMs: attemptDurationMs,
+                        output: {
+                            fromProvider: String(currentTarget.provider),
+                            fromModel: targetModel,
+                            status: httpStatus,
+                            errorSnippet,
+                            reason: failoverReason,
+                            durationMs: attemptDurationMs
+                        },
+                        failover: {
+                            fromProvider: String(currentTarget.provider),
+                            fromModel: targetModel,
+                            status: httpStatus,
+                            errorSnippet,
+                            reason: failoverReason,
+                            durationMs: attemptDurationMs
+                        }
                     };
                     context.addEvent(errorEvent);
                     SwarmTracer.getInstance().logEvent(errorEvent);
@@ -483,6 +703,7 @@ export class Agent {
 
                     const isFailoverEligible = 
                         isTransientRateLimitOrSkip ||
+                        isParseFailure ||
                         errMsg.includes('EMPTY_COMPLETION') ||
                         errMsg.includes('503') ||
                         errMsg.includes('502') ||
@@ -516,6 +737,17 @@ export class Agent {
                         errLower.includes('does not exist') ||
                         errLower.includes('unsupported model');
 
+                    const skipGeminiSiblings =
+                        currentTarget.provider === 'gemini' && isGeminiProjectWideFailure(err);
+                    if (skipGeminiSiblings) {
+                        const cooldownMs = (httpStatus === 401 || httpStatus === 403) ? BREAKER_OPEN_MS : MODEL_COOLDOWN_MS;
+                        globalProviderLimiter.openProviderCooldown(
+                            'gemini',
+                            cooldownMs,
+                            `gemini project-wide error (${httpStatus ?? 'unknown'}): ${errorSnippet}`
+                        );
+                    }
+
                     const hasNextProvider = targetIdx < targetChain.length - 1;
 
                     if ((isFatal || isLimiterSkip) && !hasNextProvider) {
@@ -525,15 +757,32 @@ export class Agent {
                     // If eligible for failover and a backup provider is ready, failover immediately without waiting
                     if ((isFailoverEligible || isFatal || isTransientRateLimitOrSkip) && hasNextProvider) {
                         let realFallback: typeof currentTarget | undefined;
+                        let realFallbackIdx = -1;
                         for (let j = targetIdx + 1; j < targetChain.length; j++) {
                             const cand = targetChain[j];
-                            if (checkTargetLimits(cand, this.modelName, prompt, this.systemInstruction, maxBudgetWait, config?.groqMode).ok) {
+                            if (skipGeminiSiblings && cand.provider === 'gemini') continue;
+                            const candModel = resolveTargetModelName(cand, String(this.provider), this.modelName);
+                            if (isModelDead(String(cand.provider), candModel)) continue;
+                            const candHasFastBackup = hasHealthyFastAlternative(
+                                targetChain,
+                                j,
+                                String(this.provider),
+                                this.modelName,
+                                prompt,
+                                this.systemInstruction,
+                                config?.groqMode
+                            );
+                            const candMaxWait = candHasFastBackup
+                                ? Math.min(baseMaxBudgetWait, FAILOVER_MAX_TPM_WAIT_MS)
+                                : baseMaxBudgetWait;
+                            if (checkTargetLimits(cand, this.modelName, prompt, this.systemInstruction, candMaxWait, config?.groqMode, String(this.provider)).ok) {
                                 realFallback = cand;
+                                realFallbackIdx = j;
                                 break;
                             }
                         }
                         if (realFallback) {
-                            const fallbackModel = realFallback.modelName || DEFAULT_PROVIDER_MODELS[realFallback.provider] || this.modelName;
+                            const fallbackModel = resolveTargetModelName(realFallback, String(this.provider), this.modelName);
                             recordRunDebugFailover(
                                 (context as any)?.id,
                                 this.role,
@@ -543,21 +792,45 @@ export class Agent {
                             context.addEvent({
                                 agentRole: this.role,
                                 action: 'Provider Failover Triggered',
-                                modelName: `${currentTarget.provider}/${targetModel} -> ${realFallback.provider}/${fallbackModel}`,
-                                prompt: `Cascading to backup provider due to error: ${errMsg}`,
+                                modelName: `${currentTarget.provider} -> ${realFallback.provider}`,
+                                prompt: `Cascading to backup provider due to error: ${errorSnippet}`,
+                                durationMs: attemptDurationMs,
                                 output: {
+                                    fromProvider: String(currentTarget.provider),
+                                    fromModel: targetModel,
+                                    toProvider: String(realFallback.provider),
+                                    toModel: fallbackModel,
                                     failedProvider: currentTarget.provider,
                                     failedModel: targetModel,
                                     fallbackProvider: realFallback.provider,
                                     fallbackModel,
-                                    reason: errMsg
+                                    status: httpStatus,
+                                    errorSnippet,
+                                    reason: failoverReason,
+                                    durationMs: attemptDurationMs
                                 },
                                 failover: {
                                     fromProvider: String(currentTarget.provider),
+                                    fromModel: targetModel,
                                     toProvider: String(realFallback.provider),
-                                    reason: errMsg
+                                    toModel: fallbackModel,
+                                    status: httpStatus,
+                                    errorSnippet,
+                                    reason: failoverReason,
+                                    durationMs: attemptDurationMs
                                 }
                             });
+                            // S3.1: Jump directly to the chosen non-Gemini fallback in 1 hop
+                            if (skipGeminiSiblings && realFallbackIdx > targetIdx + 1) {
+                                targetIdx = realFallbackIdx - 1;
+                            }
+                        } else if (skipGeminiSiblings) {
+                            // No non-Gemini fallback available; skip remaining Gemini siblings so loop exits cleanly
+                            let lastSkippedIdx = targetIdx;
+                            while (lastSkippedIdx + 1 < targetChain.length && targetChain[lastSkippedIdx + 1].provider === 'gemini') {
+                                lastSkippedIdx += 1;
+                            }
+                            targetIdx = lastSkippedIdx;
                         }
                         break; // Exit retry loop to advance to next target in chain
                     }

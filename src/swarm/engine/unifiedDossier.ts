@@ -36,6 +36,7 @@ export interface UnifiedGameDossierEntry {
   matchup: string;
   sport: string;
   rows?: string;
+  modelSignal?: string;
   fundamentals?: string;
   injuries?: string;
   market?: string;
@@ -139,6 +140,52 @@ export interface QualitativePillarEvaluation {
   outCountDiff: number;
   netMarginGap: number;
   weightedMarginRank: number;
+  contraSteamRiskSide?: 'home' | 'away' | null;
+  contraSteamTag?: string;
+}
+
+function americanOddsToImpliedPct(odds: number): number | null {
+  if (!Number.isFinite(odds) || odds === 0) return null;
+  if (odds < 0) return (-odds / (-odds + 100)) * 100;
+  return (100 / (odds + 100)) * 100;
+}
+
+function extractSharpSteamMetrics(rawText: string): { impliedShiftPp: number; spreadMovePts: number } {
+  if (!rawText) return { impliedShiftPp: 0, spreadMovePts: 0 };
+  let impliedShiftPp = 0;
+  let spreadMovePts = 0;
+
+  const ppMatches = rawText.matchAll(/([+-]?\d+(?:\.\d+)?)\s*(?:pp\s*imp(?:lied)?|%\s*imp(?:lied)?|pp\b)/gi);
+  for (const m of ppMatches) {
+    const v = Math.abs(parseFloat(m[1]));
+    if (Number.isFinite(v) && v > impliedShiftPp) impliedShiftPp = v;
+  }
+
+  const arrowMatches = rawText.matchAll(/([+-]?\d+(?:\.\d+)?)\s*(?:->|→)\s*([+-]?\d+(?:\.\d+)?)/g);
+  for (const m of arrowMatches) {
+    const a = parseFloat(m[1]);
+    const b = parseFloat(m[2]);
+    if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+    if (Math.abs(a) >= 100 || Math.abs(b) >= 100) {
+      const pA = americanOddsToImpliedPct(a);
+      const pB = americanOddsToImpliedPct(b);
+      if (pA !== null && pB !== null) {
+        const delta = Math.abs(pB - pA);
+        if (delta > impliedShiftPp) impliedShiftPp = Math.round(delta * 10) / 10;
+      }
+    } else if (Math.abs(a) < 50 && Math.abs(b) < 50) {
+      const pts = Math.abs(b - a);
+      if (pts > spreadMovePts) spreadMovePts = Math.round(pts * 10) / 10;
+    }
+  }
+
+  const ptsMatch = rawText.match(/([+-]?\d+(?:\.\d+)?)\s*pts?\b/i);
+  if (ptsMatch) {
+    const pts = Math.abs(parseFloat(ptsMatch[1]));
+    if (Number.isFinite(pts) && pts > spreadMovePts) spreadMovePts = pts;
+  }
+
+  return { impliedShiftPp, spreadMovePts };
 }
 
 interface ParsedTeamLine {
@@ -332,6 +379,38 @@ export function evaluateQualitativePillars(entry: UnifiedGameDossierEntry): Qual
     }
   }
 
+  // S1.1 (wf-1795638625511): Detect sharp contra-steam (`AGAINST <side>` with >=2.5pp ML implied shift
+  // or >=1.0 pt spread move) and penalize that side unless `model_signal` explicitly favors it.
+  let contraSteamRiskSide: 'home' | 'away' | null = null;
+  let contraSteamTag = '';
+  const againstMatch = mkt.match(/\bAGAINST\s+(home|away)\s+([^|\n;]+)/i);
+  if (againstMatch) {
+    const againstRole = againstMatch[1].toLowerCase() as 'home' | 'away';
+    const againstRaw = againstMatch[2].trim();
+    const againstTeamClean = againstRaw.replace(/\s*\([^)]*\)\s*/g, '').replace(/\s+(?:ML|moneyline|spread)\s*$/i, '').trim();
+    // Measure move across the full Steam segment (covers both TOWARD (...) and AGAINST (...))
+    const steamSegMatch = mkt.match(/(?:Side\s+)?Steam:\s*[^\n;]+/i);
+    const metrics = extractSharpSteamMetrics(steamSegMatch ? steamSegMatch[0] : mkt);
+    const isSharpContra = metrics.impliedShiftPp >= 2.5 || metrics.spreadMovePts >= 1.0;
+
+    const rawModelSig = String(
+      entry.modelSignal ||
+      `${entry.rows || ''} ${fund} ${mkt}`.match(/\bmodel_signal\s*=\s*(lean_home|lean_away|neutral|none)\b/i)?.[1] ||
+      ''
+    ).trim().toLowerCase();
+    const modelFavorsAgainst =
+      (againstRole === 'home' && rawModelSig === 'lean_home') ||
+      (againstRole === 'away' && rawModelSig === 'lean_away');
+
+    if (isSharpContra && !modelFavorsAgainst) {
+      contraSteamRiskSide = againstRole;
+      const shiftLabel = metrics.impliedShiftPp >= 2.5
+        ? ` +${metrics.impliedShiftPp.toFixed(1)}pp`
+        : (metrics.spreadMovePts >= 1.0 ? ` ${metrics.spreadMovePts.toFixed(1)}pt` : '');
+      contraSteamTag = `[contra_steam_risk: AGAINST ${againstRole}${againstTeamClean ? ` ${againstTeamClean}` : ''}${shiftLabel}]`;
+    }
+  }
+
   // S5: Score pillars independently per side (home vs away). Never sum opposing sides or count Total steam as a side pillar.
   const homeTags: string[] = [];
   const awayTags: string[] = [];
@@ -345,8 +424,9 @@ export function evaluateQualitativePillars(entry: UnifiedGameDossierEntry): Qual
   if (healthSide === 'home' && healthLabel) homeTags.push(`health=${healthLabel}`);
   else if (healthSide === 'away' && healthLabel) awayTags.push(`health=${healthLabel}`);
 
-  const homeCount = homeTags.length;
-  const awayCount = awayTags.length;
+  // Subtract 1 pillar from a side facing sharp contra-steam without model_signal override
+  const homeCount = Math.max(0, homeTags.length - (contraSteamRiskSide === 'home' ? 1 : 0));
+  const awayCount = Math.max(0, awayTags.length - (contraSteamRiskSide === 'away' ? 1 : 0));
 
   let winningSide: 'home' | 'away' | null = null;
   if (homeCount > awayCount) {
@@ -354,15 +434,21 @@ export function evaluateQualitativePillars(entry: UnifiedGameDossierEntry): Qual
   } else if (awayCount > homeCount) {
     winningSide = 'away';
   } else if (homeCount > 0) {
-    // Tie-break: prefer side with directional side steam, then health, then home
-    if (steamSide === 'away') winningSide = 'away';
+    // Tie-break: prefer side NOT facing sharp contra-steam, then directional side steam, then health, then home
+    if (contraSteamRiskSide === 'away' && homeCount > 0) winningSide = 'home';
+    else if (contraSteamRiskSide === 'home' && awayCount > 0) winningSide = 'away';
+    else if (steamSide === 'away') winningSide = 'away';
     else if (steamSide === 'home') winningSide = 'home';
     else if (healthSide === 'away') winningSide = 'away';
     else winningSide = 'home';
   }
 
-  const winningTags = winningSide === 'home' ? homeTags : winningSide === 'away' ? awayTags : [];
-  const alignedPillarCount = winningTags.length;
+  const winningTags = winningSide === 'home'
+    ? [...homeTags, ...(contraSteamRiskSide === 'home' && contraSteamTag ? [contraSteamTag] : [])]
+    : winningSide === 'away'
+      ? [...awayTags, ...(contraSteamRiskSide === 'away' && contraSteamTag ? [contraSteamTag] : [])]
+      : [];
+  const alignedPillarCount = winningSide === 'home' ? homeCount : winningSide === 'away' ? awayCount : 0;
   const resolveTeamLabel = (side: 'home' | 'away' | null): string => {
     if (side === 'home') {
       return homeSide?.abbr || homeMatchupName.split(/\s+/).pop() || 'HOME';
@@ -386,6 +472,8 @@ export function evaluateQualitativePillars(entry: UnifiedGameDossierEntry): Qual
     homePillarCount: homeCount,
     awayPillarCount: awayCount,
     ...(totalSteamTag ? { totalSteamTag } : {}),
+    ...(contraSteamRiskSide ? { contraSteamRiskSide } : {}),
+    ...(contraSteamTag ? { contraSteamTag } : {}),
     tags: winningTags,
     hasDirectionalSteam,
     isUncertainQuestionable,
@@ -494,6 +582,7 @@ export async function fetchTwoHopSlateDossier(
           matchup: `${h.away} @ ${h.home}`,
           sport: h.sport,
           ...(compactRows ? { rows: compactRows } : {}),
+          ...(h.modelSignal ? { modelSignal: h.modelSignal } : {}),
           hasDirectionalSteam: false,
           outCountDiff: 0,
           netMarginGap: 0,
@@ -602,6 +691,7 @@ export async function fetchTwoHopSlateDossier(
       matchup: `${h.away} @ ${h.home}`,
       sport: h.sport,
       ...(compactRows ? { rows: compactRows } : {}),
+      ...(h.modelSignal ? { modelSignal: h.modelSignal } : {}),
       hasDirectionalSteam: false,
       outCountDiff: 0,
       netMarginGap: 0,
@@ -833,7 +923,11 @@ export function formatUnifiedPerGameDossier(
 
   let indexHeader = '';
   if (!options?.omitIndexHeader) {
-    const strongCandidates = sorted.filter((item) => item.eval.pillarCount >= 2);
+    const strongCandidates = sorted.filter(
+      (item) =>
+        item.eval.pillarCount >= 2 &&
+        !(item.eval.contraSteamRiskSide && item.eval.winningSide === item.eval.contraSteamRiskSide),
+    );
     const headerPool =
       strongCandidates.length > 0
         ? strongCandidates.slice(0, 8)
@@ -847,7 +941,11 @@ export function formatUnifiedPerGameDossier(
             ? ` (${item.eval.winningSide}${item.eval.winningTeam ? ` ${item.eval.winningTeam}` : ''})`
             : '';
           const totalNote = item.eval.totalSteamTag ? ` | total_steam=${item.eval.totalSteamTag}` : '';
-          return `- ${item.entry.eventId} [${count} pillar${count === 1 ? '' : 's'}${sideLabel}: ${item.eval.tags.join(', ')}]${totalNote}`;
+          const contraNote =
+            item.eval.contraSteamTag && !item.eval.tags.includes(item.eval.contraSteamTag)
+              ? ` | ${item.eval.contraSteamTag}`
+              : '';
+          return `- ${item.entry.eventId} [${count} pillar${count === 1 ? '' : 's'}${sideLabel}: ${item.eval.tags.join(', ')}]${totalNote}${contraNote}`;
         }),
       ];
       const candidateHeader = headerLines.join('\n');

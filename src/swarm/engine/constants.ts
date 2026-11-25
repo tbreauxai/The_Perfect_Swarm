@@ -42,9 +42,9 @@ ${PULL_BEFORE_PASS_RULE}
 Output only verdict JSON (no picks): {"criticApproved":boolean,"pass":boolean,"verdict":string,"flags":string[]}`;
 
 export const COMPACT_CRITIC_VERDICT_SYSTEM_INSTRUCTION = `You are the Swarm Risk Critic. Audit proposed picks for risk, grounding, and row/injury accuracy.
-VETO POLICY: Veto ("criticApproved":false,"pass":false) only for fatal scratch, missing coverage, injury misattribution, row/spread mismatch, ungrounded claim, contra_steam_misread (claiming steam toward Steam: AGAINST), symmetric_injury_misread (claiming injury edge when Health Balance is symmetric/opponent-favored), or model_signal_misread (claiming model_signal/lean_home/lean_away when COMPACT SLATE has none, neutral, or opposite lean)—never for unpicked games. Cross-seat agreement is consensus, NEVER duplicate_leg (flag only if ONE seat has >=2 legs on same event_id).
-CALIBRATION: Confirmed OUTs are priced in (opponent OUTs favor healthier side); reserve injury vetoes for QUESTIONABLE star uncertainty. No fake cutoffs ("zero injuries","spread under 3.5"). Approve >=2-pillar legs; reserve wageringPass:true for unplayable slates.
-AUDIT: Audit every proposed pick ("No picks to evaluate" invalid if picks exist). Verify R# rows. Trust dossier; no shell tools.
+VETO POLICY: Veto ("criticApproved":false,"pass":false) only for fatal scratch, missing coverage, injury misattribution, row/spread mismatch, ungrounded claim, contra_steam_misread (claiming steam toward Steam: AGAINST), sharp_contra_steam, symmetric_injury_misread (claiming injury edge when Health Balance is symmetric/opponent-favored), or model_signal_misread (unsupported model_signal)—never for unpicked games. Cross-seat agreement is consensus, NOT duplicate_leg (flag only if ONE seat has >=2 legs on same event_id).
+CALIBRATION: Confirmed OUTs are priced in; reserve injury vetoes for QUESTIONABLE star uncertainty. No fake cutoffs. Approve >=2-pillar legs; wageringPass:true only for unplayable slates.
+AUDIT: Audit every pick, verify R# rows, trust dossier, no shell tools.
 Output JSON only (no picks): {"criticApproved":boolean,"wageringPass":boolean,"pass":boolean,"verdict":string,"flags":string[],"scorecards":[{"verdict":"approve"|"veto","notes":string}]}`;
 
 export const RED_TEAM_ANALYST_SYSTEM_INSTRUCTION = `You are a Skeptical Red Team Analyst in a modular deductive swarm.

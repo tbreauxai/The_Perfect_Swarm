@@ -941,7 +941,7 @@ function findHealthViolationInClause(
 }
 
 const LEG_VETO_SIGNAL_REGEX =
-  /\b(?:veto(?:ed|ing)?(?:\s+leg)?|reject(?:ed|ing)?(?:\s+leg)?|remov(?:ed|e)(?:\s+leg)?|drop(?:ped)?(?:\s+leg)?|disqualif(?:ied|y)|exclud(?:ed|e)|do\s+not\s+(?:bet|play|back|pick|recommend)|cannot\s+(?:bet|play|back|pick|recommend)|must\s+be\s+removed|fatal\s+injury|critical\s+roster\s+scratch|injury\s+misattribution|contra_steam_misread|symmetric_injury_misread|model_signal_misread|contra-?steam|symmetric-?injury|missing_(?:moneyline|spread|total)_coverage|missing\s+(?:moneyline|spread|total)\s+coverage|ungrounded|contradicted)\b/i;
+  /\b(?:veto(?:ed|ing)?(?:\s+leg)?|reject(?:ed|ing)?(?:\s+leg)?|remov(?:ed|e)(?:\s+leg)?|drop(?:ped)?(?:\s+leg)?|disqualif(?:ied|y)|exclud(?:ed|e)|do\s+not\s+(?:bet|play|back|pick|recommend)|cannot\s+(?:bet|play|back|pick|recommend)|must\s+be\s+removed|fatal\s+injury|critical\s+roster\s+scratch|injury\s+misattribution|contra_steam_misread|sharp_contra_steam|symmetric_injury_misread|model_signal_misread|contra-?steam|symmetric-?injury|missing_(?:moneyline|spread|total)_coverage|missing\s+(?:moneyline|spread|total)\s+coverage|ungrounded|contradicted)\b/i;
 
 const EXPLICIT_LEG_REF_IN_CLAUSE_REGEX =
   /\b(?:leg|pick|side|parlay|must\s+be\s+removed|vetoed\s+leg|R\d+|ML|moneyline|puckline|over\s+\d|under\s+\d)\b|[+-]\d+(?:\.5|\.0)\b/i;
@@ -1432,6 +1432,9 @@ export function auditClaimGrounding(
     vetoedClaims?: string[];
     curatedDossier?: string | { sections?: Array<{ tool?: string; event_id?: string; summary?: string }> };
     skipRowSideCheck?: boolean;
+    riskProfile?: string;
+    allowParlay?: boolean;
+    task?: string;
   }
 ): GroundingAuditResult {
   if (!proposal) return { pass: true, violations: [], flags: [] };
@@ -1722,7 +1725,10 @@ export function auditClaimGrounding(
 
   const premiseAudit = auditCriticPremiseContradictions(proposal, evidenceText, slateText, {
     headers,
-    skipRowSideCheck: options?.skipRowSideCheck
+    skipRowSideCheck: options?.skipRowSideCheck,
+    ...(options?.riskProfile ? { riskProfile: options.riskProfile } : {}),
+    ...(options?.allowParlay !== undefined ? { allowParlay: options.allowParlay } : {}),
+    ...(options?.task ? { task: options.task } : {})
   });
   if (!premiseAudit.pass) {
     for (const f of premiseAudit.flags) {
@@ -1766,6 +1772,7 @@ interface ParsedSteamEntry {
   againstTeam?: string;
   againstDesc?: TeamDescriptor;
   impliedShiftPp?: number;
+  spreadShiftPts?: number;
 }
 
 interface ParsedInjuryBalanceEntry {
@@ -1879,12 +1886,47 @@ function inferPickedRoleAndTeam(
   return { pickedRole, pickedDesc, pickedTeamLabel, isTotal: false };
 }
 
+function americanOddsToImpliedPct(odds: number): number | undefined {
+  if (!Number.isFinite(odds) || odds === 0 || Math.abs(odds) < 100) return undefined;
+  if (odds < 0) return ((-odds) / (-odds + 100)) * 100;
+  return (100 / (odds + 100)) * 100;
+}
+
 function extractImpliedShiftPpFromParen(parenText: string): number | undefined {
   if (!parenText) return undefined;
   const m = parenText.match(/([+-]?\d+(?:\.\d+)?)\s*(?:pp\s*implied|%\s*imp(?:lied)?)\b/i);
-  if (!m) return undefined;
-  const val = Math.abs(parseFloat(m[1]));
-  return Number.isFinite(val) ? val : undefined;
+  if (m) {
+    const val = Math.abs(parseFloat(m[1]));
+    if (Number.isFinite(val)) return val;
+  }
+  const oddsMove = parenText.match(/([+-]\d{3,4})\s*(?:->|→|to)\s*([+-]\d{3,4})/i);
+  if (oddsMove) {
+    const p1 = americanOddsToImpliedPct(parseFloat(oddsMove[1]));
+    const p2 = americanOddsToImpliedPct(parseFloat(oddsMove[2]));
+    if (p1 !== undefined && p2 !== undefined) {
+      return Math.round(Math.abs(p2 - p1) * 10) / 10;
+    }
+  }
+  return undefined;
+}
+
+function extractSpreadShiftPtsFromParen(parenText: string, marketText: string = ''): number | undefined {
+  const combined = `${marketText} ${parenText}`;
+  if (!combined.trim()) return undefined;
+  const ptsExplicit = combined.match(/([+-]?\d+(?:\.\d+)?)\s*(?:pts?|points?)\b/i);
+  if (ptsExplicit) {
+    const v = Math.abs(parseFloat(ptsExplicit[1]));
+    if (Number.isFinite(v)) return v;
+  }
+  const lineMove = combined.match(/([+-]?\d+(?:\.\d+)?)\s*(?:->|→|to)\s*([+-]?\d+(?:\.\d+)?)/i);
+  if (lineMove) {
+    const fromVal = parseFloat(lineMove[1]);
+    const toVal = parseFloat(lineMove[2]);
+    if (Number.isFinite(fromVal) && Number.isFinite(toVal) && Math.abs(fromVal) <= 60 && Math.abs(toVal) <= 60) {
+      return Math.round(Math.abs(toVal - fromVal) * 100) / 100;
+    }
+  }
+  return undefined;
 }
 
 const FABRICATED_STEAM_SHIFT_RX =
@@ -1949,7 +1991,7 @@ function parseSteamEntriesFromEvidence(
     if (!line) continue;
     const lineEv = extractLineEventId(line);
     if (lineEv) currentEventId = lineEv;
-    if (!/\b(?:TOWARD|Steam:)/i.test(line)) continue;
+    if (!/\b(?:TOWARD|AGAINST|Steam:)/i.test(line)) continue;
 
     const eventId = lineEv || currentEventId;
     const eventCands = eventId
@@ -1970,11 +2012,21 @@ function parseSteamEntriesFromEvidence(
         const towardParen = m[3] || '';
         const againstRole = m[4].toLowerCase() as 'home' | 'away';
         const againstRaw = m[5].trim();
+        const againstParen = m[6] || '';
         const towardTeam = cleanSteamTeamLabel(towardRaw);
         const againstTeam = cleanSteamTeamLabel(againstRaw);
-        const impliedShiftPp = extractImpliedShiftPpFromParen(towardParen);
+        const shiftCandidates = [
+          extractImpliedShiftPpFromParen(towardParen),
+          extractImpliedShiftPpFromParen(againstParen)
+        ].filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+        const impliedShiftPp = shiftCandidates.length > 0 ? Math.max(...shiftCandidates) : undefined;
+        const spreadCandidates = [
+          extractSpreadShiftPtsFromParen(towardParen, towardRaw),
+          extractSpreadShiftPtsFromParen(againstParen, againstRaw)
+        ].filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+        const spreadShiftPts = spreadCandidates.length > 0 ? Math.max(...spreadCandidates) : undefined;
         const marketKind: 'moneyline' | 'spread' =
-          /\bML\b/i.test(`${towardRaw} ${againstRaw}`) || /(?:%\s*imp|pp\s*implied)/i.test(towardParen) ? 'moneyline' : 'spread';
+          /\bML\b/i.test(`${towardRaw} ${againstRaw}`) || /(?:%\s*imp|pp\s*implied)/i.test(`${towardParen} ${againstParen}`) ? 'moneyline' : 'spread';
         const towardDesc = findTeamMentionsInText(towardTeam, pool)[0]?.team || (matchTeamByLabel(towardTeam) ? descriptorFromEntry(matchTeamByLabel(towardTeam)!) : undefined);
         const againstDesc = findTeamMentionsInText(againstTeam, pool)[0]?.team || (matchTeamByLabel(againstTeam) ? descriptorFromEntry(matchTeamByLabel(againstTeam)!) : undefined);
         entries.push({
@@ -1986,7 +2038,8 @@ function parseSteamEntriesFromEvidence(
           againstRole,
           againstTeam,
           ...(againstDesc ? { againstDesc } : {}),
-          ...(impliedShiftPp !== undefined ? { impliedShiftPp } : {})
+          ...(impliedShiftPp !== undefined ? { impliedShiftPp } : {}),
+          ...(spreadShiftPts !== undefined && marketKind === 'spread' ? { spreadShiftPts } : {})
         });
       }
 
@@ -2007,6 +2060,9 @@ function parseSteamEntriesFromEvidence(
       if (!matchedStructured) {
         const oneWayToward = /\bTOWARD\s+(home|away)\s+([^|(;\n]+?)(?:\s*(\([^)\n]*\)))?(?=$|;|\n|\s*\|)/i.exec(seg);
         const legacySteam = !oneWayToward ? /\bSteam:\s*(home|away)\s+([^(\n;]+?)(?:\s*(\([^)\n]*\)))?(?=$|;|\n|\s*\|)/i.exec(seg) : null;
+        const oneWayAgainst = !oneWayToward && !legacySteam
+          ? /\bAGAINST\s+(home|away)\s+([^|(;\n]+?)(?:\s*(\([^)\n]*\)))?(?=$|;|\n|\s*\|)/i.exec(seg)
+          : null;
         const sm = oneWayToward || legacySteam;
         if (sm) {
           const towardRole = sm[1].toLowerCase() as 'home' | 'away';
@@ -2016,6 +2072,7 @@ function parseSteamEntriesFromEvidence(
           const againstRole: 'home' | 'away' = towardRole === 'home' ? 'away' : 'home';
           const againstTeam = hdr ? (againstRole === 'home' ? hdr.home : hdr.away) : undefined;
           const impliedShiftPp = extractImpliedShiftPpFromParen(towardParen);
+          const spreadShiftPts = extractSpreadShiftPtsFromParen(towardParen, towardRaw);
           const marketKind: 'moneyline' | 'spread' =
             /\bML\b/i.test(towardRaw) || /(?:%\s*imp|pp\s*implied)/i.test(towardParen) ? 'moneyline' : 'spread';
           const towardDesc = findTeamMentionsInText(towardTeam, pool)[0]?.team;
@@ -2029,7 +2086,33 @@ function parseSteamEntriesFromEvidence(
             againstRole,
             ...(againstTeam ? { againstTeam } : {}),
             ...(againstDesc ? { againstDesc } : {}),
-            ...(impliedShiftPp !== undefined ? { impliedShiftPp } : {})
+            ...(impliedShiftPp !== undefined ? { impliedShiftPp } : {}),
+            ...(spreadShiftPts !== undefined && marketKind === 'spread' ? { spreadShiftPts } : {})
+          });
+        } else if (oneWayAgainst) {
+          const againstRole = oneWayAgainst[1].toLowerCase() as 'home' | 'away';
+          const againstRaw = oneWayAgainst[2].trim();
+          const againstParen = oneWayAgainst[3] || '';
+          const againstTeam = cleanSteamTeamLabel(againstRaw);
+          const towardRole: 'home' | 'away' = againstRole === 'home' ? 'away' : 'home';
+          const towardTeam = hdr ? (towardRole === 'home' ? hdr.home : hdr.away) : undefined;
+          const impliedShiftPp = extractImpliedShiftPpFromParen(againstParen);
+          const spreadShiftPts = extractSpreadShiftPtsFromParen(againstParen, againstRaw);
+          const marketKind: 'moneyline' | 'spread' =
+            /\bML\b/i.test(againstRaw) || /(?:%\s*imp|pp\s*implied)/i.test(againstParen) ? 'moneyline' : 'spread';
+          const againstDesc = findTeamMentionsInText(againstTeam, pool)[0]?.team || (matchTeamByLabel(againstTeam) ? descriptorFromEntry(matchTeamByLabel(againstTeam)!) : undefined);
+          const towardDesc = towardTeam ? findTeamMentionsInText(towardTeam, pool)[0]?.team : undefined;
+          entries.push({
+            ...(eventId ? { eventId } : {}),
+            marketKind,
+            towardRole,
+            ...(towardTeam ? { towardTeam } : {}),
+            ...(towardDesc ? { towardDesc } : {}),
+            againstRole,
+            againstTeam,
+            ...(againstDesc ? { againstDesc } : {}),
+            ...(impliedShiftPp !== undefined ? { impliedShiftPp } : {}),
+            ...(spreadShiftPts !== undefined && marketKind === 'spread' ? { spreadShiftPts } : {})
           });
         }
       }
@@ -2223,6 +2306,9 @@ export function auditCriticPremiseContradictions(
   options?: {
     headers?: GameHeader[];
     skipRowSideCheck?: boolean;
+    riskProfile?: string;
+    allowParlay?: boolean;
+    task?: string;
   }
 ): GroundingAuditResult {
   if (!proposal) return { pass: true, violations: [], flags: [] };
@@ -2299,10 +2385,15 @@ export function auditCriticPremiseContradictions(
       return;
     }
 
+    const isOptimalParlayMode =
+      String(options?.riskProfile || '').trim().toLowerCase() === 'optimal' ||
+      options?.allowParlay === true ||
+      (typeof options?.task === 'string' && /\boptimal\b/i.test(options.task));
     const combinedReasons = normalizeText(reasonTexts.filter(Boolean).join('. ')).trim();
     const combinedSeatContext = normalizeText(seatContextTexts.filter(Boolean).join('. ')).trim();
+    const allowReasonlessSharpContraCheck = isOptimalParlayMode && steamEntries.length > 0;
     if (
-      (!combinedReasons && !combinedSeatContext) ||
+      (!combinedReasons && !combinedSeatContext && !allowReasonlessSharpContraCheck) ||
       (steamEntries.length === 0 && injuryBalances.size === 0 && modelSignals.size === 0)
     ) {
       return;
@@ -2391,6 +2482,29 @@ export function auditCriticPremiseContradictions(
           buildVetoTargetFromPick(pk, headers, rowMap, candidates, msg),
           clause
         );
+      }
+
+      // S1.2: Deterministic sharp contra-steam guard in optimal / parlay mode even when the proposer omits steam.
+      if (isOptimalParlayMode && !isTotal) {
+        const isSharpMlShift = typeof se.impliedShiftPp === 'number' && se.impliedShiftPp >= 2.5;
+        const isSharpSpreadShift = typeof se.spreadShiftPts === 'number' && se.spreadShiftPts >= 1.0;
+        if (isSharpMlShift || isSharpSpreadShift) {
+          const actualModelSig = eventId ? (modelSignals.get(eventId) ?? 'none') : 'none';
+          const modelFavorsPick =
+            (pickedRole === 'home' && actualModelSig === 'lean_home') ||
+            (pickedRole === 'away' && actualModelSig === 'lean_away');
+          if (!modelFavorsPick) {
+            const shiftDesc = isSharpMlShift
+              ? `+${se.impliedShiftPp!.toFixed(1)}pp implied ML shift`
+              : `${se.spreadShiftPts!.toFixed(1)}pt spread move`;
+            const msg = `sharp_contra_steam: Pick "${pickDisplay}" in optimal mode is on the Steam: AGAINST side (${se.againstTeam || se.againstRole}, ${shiftDesc}) without model_signal support (${actualModelSig}).`;
+            addFinding(
+              'sharp_contra_steam',
+              msg,
+              buildVetoTargetFromPick(pk, headers, rowMap, candidates, msg)
+            );
+          }
+        }
       }
     }
 
@@ -3345,7 +3459,7 @@ function normalizeGrammaticalSentence(raw: string): string {
 }
 
 const VETO_PREFIX_STRIP_REGEX =
-  /^(?:\[UNVERIFIED\]\s*)?(?:Veto(?:\s*\([^)]*\))?\s*[:\-—–]\s*)*(?:(?:Row\s+side\s+mismatch|row_side_mismatch|contra_steam_misread|symmetric_injury_misread|model_signal_misread|duplicate_leg|injury_misattribution)\s*[:\-—–]\s*)*/i;
+  /^(?:\[UNVERIFIED\]\s*)?(?:Veto(?:\s*\([^)]*\))?\s*[:\-—–]\s*)*(?:(?:Row\s+side\s+mismatch|row_side_mismatch|contra_steam_misread|sharp_contra_steam|symmetric_injury_misread|model_signal_misread|duplicate_leg|injury_misattribution)\s*[:\-—–]\s*)*/i;
 
 const COMPOUND_VETO_SPLIT_REGEX =
   /\s+\|\s+|\s+(?=Veto(?:\s*\([^)]*\))?\s*[:\-—–])/gi;

@@ -928,6 +928,10 @@ export class AnalysisLifecycle {
                 }
 
                 const auditRowMap = extractRowOptions([boardSourceForAudit], allParsedHeaders);
+                const isOptimalVerificationMode =
+                    String((rawData as any)?.riskProfile || '').trim().toLowerCase() === 'optimal' ||
+                    (rawData as any)?.allowParlay === true ||
+                    /\boptimal\b/i.test(String(proposerPrompt || ''));
                 const groundingAudit = auditClaimGrounding(
                     currentProposal,
                     combinedToolSummary,
@@ -937,7 +941,8 @@ export class AnalysisLifecycle {
                         vetoTexts: accumulatedVetoTexts,
                         vetoedLegs: accumulatedVetoedLegs,
                         vetoedClaims: accumulatedVetoedClaims,
-                        skipRowSideCheck: marketVetoTriggered
+                        skipRowSideCheck: marketVetoTriggered,
+                        ...(isOptimalVerificationMode ? { riskProfile: 'optimal', allowParlay: true } : {})
                     }
                 );
                 let groundingVetoTriggered = false;

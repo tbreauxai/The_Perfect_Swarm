@@ -8,6 +8,7 @@
 
 import type { Agent } from '../agent.ts';
 import type { SwarmContext } from '../context.ts';
+import { parseGameHeaders, type GameHeader } from '../context/gameHeaders.ts';
 import {
     computeCalibratedEnsemble,
     countVerifiedCitations,
@@ -15,6 +16,22 @@ import {
 } from './predictionEnsemble.ts';
 
 export type { CalibratedEnsembleDigest };
+
+export interface SeatConflictProposal {
+    seatRole: string;
+    sideRole: 'home' | 'away' | 'over' | 'under';
+    rowId?: string;
+    pickLabel: string;
+}
+
+export interface SeatConflictEntry {
+    eventId: string;
+    matchup?: string;
+    homeTeam?: string;
+    awayTeam?: string;
+    seats: SeatConflictProposal[];
+    tag: 'seat_conflict';
+}
 
 export interface AnalystConsensusDigest {
     totalAnalysts: number;
@@ -32,6 +49,7 @@ export interface AnalystConsensusDigest {
     sampleVariance?: number;
     sampleStdDev?: number;
     isContested?: boolean;
+    seatConflicts?: SeatConflictEntry[];
 }
 
 const STOP_WORDS = new Set([
@@ -118,6 +136,194 @@ export function extractAnalystInsights(reports: any[]): string[] {
     return Array.from(new Set(insights.filter(i => i.trim().length > 0)));
 }
 
+function normalizeTeamTextForMatch(text: string): string {
+    return String(text || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function teamNameMatchesPickText(teamName: string, pickText: string): boolean {
+    const normTeam = normalizeTeamTextForMatch(teamName);
+    const normPick = normalizeTeamTextForMatch(pickText);
+    if (!normTeam || !normPick) return false;
+    if (normPick.includes(normTeam)) return true;
+    const words = normTeam.split(' ').filter(w => w.length >= 4);
+    const mascot = words[words.length - 1];
+    if (mascot && new RegExp(`\\b${mascot}\\b`, 'i').test(normPick)) return true;
+    return false;
+}
+
+/**
+ * S1.3: Detects when two distinct non-critic proposer seats propose opposing sides
+ * (`home` vs `away`, or `over` vs `under`) on the same `event_id`.
+ */
+export function detectOpposingSeatConflicts(
+    allAnalystReports: any[][],
+    analysts: Agent[],
+    headers: GameHeader[] = []
+): SeatConflictEntry[] {
+    const activeCount = Math.min(allAnalystReports.length, analysts.length);
+    if (activeCount < 2) return [];
+
+    const headerById = new Map<string, GameHeader>();
+    const rowToMeta = new Map<string, { eventId: string; optionText: string }>();
+    for (const h of headers || []) {
+        if (!h?.eventId) continue;
+        headerById.set(h.eventId, h);
+        for (const opt of h.options || []) {
+            const id = String(opt?.id || '').toUpperCase().trim();
+            if (id) rowToMeta.set(id, { eventId: h.eventId, optionText: String(opt?.text || '') });
+        }
+    }
+
+    const proposalsByEvent = new Map<string, SeatConflictProposal[]>();
+
+    for (let i = 0; i < activeCount; i++) {
+        const seatRole = String(analysts[i]?.role || `Analyst ${i + 1}`).trim();
+        const roleLower = seatRole.toLowerCase();
+        if (roleLower.includes('critic') || roleLower.includes('risk')) continue;
+
+        const reports = Array.isArray(allAnalystReports[i]) ? allAnalystReports[i] : [];
+        const seatPicks: any[] = [];
+        for (const r of reports) {
+            if (!r || typeof r !== 'object' || (r as any)._placeholder === true) continue;
+            const rLabel = String((r as any).seat || (r as any).role || '').toLowerCase();
+            if (rLabel.includes('critic') || rLabel.includes('risk')) continue;
+            if (Array.isArray((r as any).picks)) seatPicks.push(...(r as any).picks);
+            if ((r as any).scorecard?.pick) seatPicks.push((r as any).scorecard.pick);
+            if (Array.isArray((r as any).scorecards)) {
+                for (const sc of (r as any).scorecards) {
+                    if (sc?.pick) seatPicks.push(sc.pick);
+                    if (Array.isArray(sc?.picks)) seatPicks.push(...sc.picks);
+                }
+            }
+        }
+
+        for (const pk of seatPicks) {
+            if (!pk) continue;
+            const rawText = typeof pk === 'string'
+                ? pk
+                : [pk.row, pk.rowId, pk.row_id, pk.side, pk.pick, pk.selection, pk.team, pk.market, pk.label, pk.matchup]
+                    .filter(Boolean)
+                    .join(' ');
+            const rowMatch = (typeof pk === 'object' ? String(pk.row || pk.rowId || pk.row_id || '') : '').match(/\b(R\d+)\b/i)
+                || rawText.match(/\b(R\d+)\b/i);
+            const rowId = rowMatch ? rowMatch[1].toUpperCase() : undefined;
+            const rowMeta = rowId ? rowToMeta.get(rowId) : undefined;
+
+            let eventId = (typeof pk === 'object'
+                ? String(pk.eventId || pk.event_id || pk.gameId || pk.game_id || '').trim()
+                : '') || rowMeta?.eventId || '';
+
+            const combinedText = [rawText, rowMeta?.optionText].filter(Boolean).join(' ').trim();
+            if (!eventId) {
+                for (const h of headers || []) {
+                    if (
+                        (h.eventId && combinedText.toLowerCase().includes(h.eventId.toLowerCase())) ||
+                        teamNameMatchesPickText(h.home, combinedText) ||
+                        teamNameMatchesPickText(h.away, combinedText)
+                    ) {
+                        eventId = h.eventId;
+                        break;
+                    }
+                }
+            }
+            if (!eventId) continue;
+
+            const hdr = headerById.get(eventId);
+            let sideRole: 'home' | 'away' | 'over' | 'under' | undefined;
+            if (/\bover\b/i.test(combinedText) && !/\bML\b/i.test(combinedText) && !/\bovertime\b/i.test(combinedText)) {
+                sideRole = 'over';
+            } else if (/\bunder\b/i.test(combinedText) && !/\bML\b/i.test(combinedText)) {
+                sideRole = 'under';
+            } else {
+                const pickTargetText = [
+                    typeof pk === 'object' ? [pk.side, pk.pick, pk.selection, pk.team, pk.label].filter(Boolean).join(' ') : pk,
+                    rowMeta?.optionText
+                ].filter(Boolean).join(' ').trim();
+                const matchesHome = hdr ? teamNameMatchesPickText(hdr.home, pickTargetText) : false;
+                const matchesAway = hdr ? teamNameMatchesPickText(hdr.away, pickTargetText) : false;
+                if (matchesHome && !matchesAway) {
+                    sideRole = 'home';
+                } else if (matchesAway && !matchesHome) {
+                    sideRole = 'away';
+                } else if (/\baway\b/i.test(pickTargetText) && !/\bhome\b/i.test(pickTargetText)) {
+                    sideRole = 'away';
+                } else if (/\bhome\b/i.test(pickTargetText) && !/\baway\b/i.test(pickTargetText)) {
+                    sideRole = 'home';
+                }
+            }
+            if (!sideRole) continue;
+
+            const pickLabel = (
+                (typeof pk === 'object'
+                    ? [rowId, pk.side || pk.pick || pk.selection || pk.team || rowMeta?.optionText].filter(Boolean).join(' ')
+                    : String(pk)) || rowMeta?.optionText || sideRole
+            ).trim();
+
+            const list = proposalsByEvent.get(eventId) || [];
+            if (!list.some(x => x.seatRole === seatRole && x.sideRole === sideRole)) {
+                list.push({ seatRole, sideRole, ...(rowId ? { rowId } : {}), pickLabel });
+                proposalsByEvent.set(eventId, list);
+            }
+        }
+    }
+
+    const conflicts: SeatConflictEntry[] = [];
+    for (const [eventId, seats] of proposalsByEvent.entries()) {
+        const distinctSeats = new Set(seats.map(s => s.seatRole));
+        if (distinctSeats.size < 2) continue;
+        const hasHome = seats.some(s => s.sideRole === 'home');
+        const hasAway = seats.some(s => s.sideRole === 'away');
+        const hasOver = seats.some(s => s.sideRole === 'over');
+        const hasUnder = seats.some(s => s.sideRole === 'under');
+        const opposingSides = (hasHome && hasAway) || (hasOver && hasUnder);
+        if (!opposingSides) continue;
+        const hdr = headerById.get(eventId);
+        conflicts.push({
+            eventId,
+            ...(hdr ? { matchup: `${hdr.away} @ ${hdr.home}`, homeTeam: hdr.home, awayTeam: hdr.away } : {}),
+            seats,
+            tag: 'seat_conflict'
+        });
+    }
+
+    return conflicts;
+}
+
+export function findingMentionsSeatConflict(text: string, conflicts: SeatConflictEntry[]): boolean {
+    if (!text || conflicts.length === 0) return false;
+    const lower = text.toLowerCase();
+    for (const c of conflicts) {
+        if (c.eventId && lower.includes(c.eventId.toLowerCase())) return true;
+        if (c.homeTeam && teamNameMatchesPickText(c.homeTeam, text)) return true;
+        if (c.awayTeam && teamNameMatchesPickText(c.awayTeam, text)) return true;
+        for (const s of c.seats) {
+            if (s.rowId && new RegExp(`\\b${s.rowId}\\b`, 'i').test(text)) return true;
+        }
+    }
+    return false;
+}
+
+export function renderSeatConflictPromptBlock(conflicts: SeatConflictEntry[]): string {
+    if (!Array.isArray(conflicts) || conflicts.length === 0) return '';
+    const lines: string[] = [
+        '[SEAT_CONFLICT — OPPOSING PROPOSER SIDES (DO NOT CALL "Majority Consensus")]:'
+    ];
+    for (const c of conflicts) {
+        const sidesDesc = c.seats
+            .map(s => `${s.seatRole} -> ${s.pickLabel} (${s.sideRole})`)
+            .join(' vs ');
+        const matchupPart = c.matchup ? ` (${c.matchup})` : '';
+        lines.push(
+            `- seat_conflict | event_id=${c.eventId}${matchupPart}: ${sidesDesc}. NEVER describe this split game as "Majority Consensus" or seat agreement; prefer unconflicted legs agreed upon or unopposed by the other proposer.`
+        );
+    }
+    return lines.join('\n');
+}
+
 /**
  * Analyzes specialist reports across all analysts and computes consensus, majority agreements,
  * dissenting observations, evidence citation weights, and Brier-calibrated log-odds ensemble pooling.
@@ -125,7 +331,8 @@ export function extractAnalystInsights(reports: any[]): string[] {
 export function extractAnalystConsensus(
     allAnalystReports: any[][],
     analysts: Agent[],
-    task: string
+    task: string,
+    headers?: GameHeader[]
 ): AnalystConsensusDigest {
     const activeAnalystCount = Math.min(allAnalystReports.length, analysts.length);
     if (activeAnalystCount === 0) {
@@ -421,13 +628,38 @@ export function extractAnalystConsensus(
         confidenceScore = Math.min(confidenceScore, 0.65);
     }
 
+    const resolvedHeaders = headers && headers.length > 0 ? headers : parseGameHeaders(task);
+    const seatConflicts = detectOpposingSeatConflicts(allAnalystReports, analysts, resolvedHeaders);
+    if (seatConflicts.length > 0) {
+        for (let i = unanimousFindings.length - 1; i >= 0; i--) {
+            if (findingMentionsSeatConflict(unanimousFindings[i], seatConflicts)) {
+                unanimousFindings.splice(i, 1);
+            }
+        }
+        for (let i = majorityFindings.length - 1; i >= 0; i--) {
+            if (findingMentionsSeatConflict(majorityFindings[i], seatConflicts)) {
+                majorityFindings.splice(i, 1);
+            }
+        }
+        for (const c of seatConflicts) {
+            const sidesDesc = c.seats.map(s => `${s.seatRole}: ${s.pickLabel} (${s.sideRole})`).join(' vs ');
+            dissentingOpinions.unshift(`[seat_conflict] ${c.eventId}${c.matchup ? ` (${c.matchup})` : ''}: ${sidesDesc}`);
+        }
+        isContested = true;
+        if (agreementLevel === 'strong') {
+            agreementLevel = (unanimousFindings.length > 0 || majorityFindings.length > 0) ? 'moderate' : 'divergent';
+        }
+        confidenceScore = Math.min(confidenceScore, 0.65);
+    }
+
     const summaryParts: string[] = [
         `Cross-Analyst Consensus: ${agreementLevel.toUpperCase()} (Score: ${(normalizedConsensus * 100).toFixed(0)}%, Evidence-Weighted: ${(evidenceWeightedScore * 100).toFixed(0)}%, Confidence: ${confidenceScore})`,
         `Specialists Analyzed: ${activeAnalystCount}`,
         `Unanimous Findings: ${unanimousFindings.length}`,
         `Majority Findings: ${majorityFindings.length}`,
         `Dissenting Observations: ${dissentingOpinions.length}`,
-        `Verified Citations: ${calibratedEnsemble.totalVerifiedCitations}`
+        `Verified Citations: ${calibratedEnsemble.totalVerifiedCitations}`,
+        ...(seatConflicts.length > 0 ? [`Seat Conflicts: ${seatConflicts.length}`] : [])
     ];
 
     return {
@@ -436,7 +668,7 @@ export function extractAnalystConsensus(
         evidenceWeightedScore,
         agreementLevel,
         majorityFindings: majorityFindings.slice(0, 6),
-        dissentingOpinions: dissentingOpinions.slice(0, 4),
+        dissentingOpinions: dissentingOpinions.slice(0, 6),
         unanimousFindings: unanimousFindings.slice(0, 6),
         confidenceScore,
         summaryText: summaryParts.join(' | '),
@@ -445,7 +677,8 @@ export function extractAnalystConsensus(
         calibratedEnsemble,
         sampleVariance,
         sampleStdDev,
-        isContested
+        isContested,
+        ...(seatConflicts.length > 0 ? { seatConflicts } : {})
     };
 }
 
@@ -510,7 +743,11 @@ export function renderPromptConsensusBlock(digest: AnalystConsensusDigest): stri
         lines.push('• High Divergence Warning: Specialist opinions sharply diverge with low consensus confidence (< 0.45). Directive: Evaluate a no_play / pass rating rather than forcing low-conviction picks.');
     }
 
-    lines.push('Directives: Give highest synthesis weight to Unanimous and Majority findings corroborated by verified citations and Brier-calibrated seat weights. Address Dissenting Observations if corroborated by data.');
+    if (Array.isArray(digest.seatConflicts) && digest.seatConflicts.length > 0) {
+        lines.push(renderSeatConflictPromptBlock(digest.seatConflicts));
+    }
+
+    lines.push('Directives: Give highest synthesis weight to Unanimous and Majority findings corroborated by verified citations and Brier-calibrated seat weights. Never label a seat_conflict game as Majority Consensus; prefer unconflicted legs agreed upon or unopposed by the other proposer. Address Dissenting Observations if corroborated by data.');
 
     return lines.join('\n');
 }

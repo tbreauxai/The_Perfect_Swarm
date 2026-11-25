@@ -1,6 +1,8 @@
 import { cleanToken, buildStandardMessages, isKnownReasoningModel, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
 import { executeOpenAiCompatibleChat } from './baseOpenAi.ts';
 
+export const QUANT_NVIDIA_TIMEOUT_MS = 15000;
+
 export class NvidiaAdapter implements ProviderAdapter {
     readonly providerName = 'nvidia';
 
@@ -16,8 +18,8 @@ export class NvidiaAdapter implements ProviderAdapter {
         const isQuantOrUltra =
             /quant|\ba1\b/i.test(String(options.role || '')) ||
             /nemotron.*ultra|550b/i.test(options.modelName || '');
-        const requestedTimeout = options.timeoutMs || options.config?.timeoutMs || (isQuantOrUltra ? 30000 : 25000);
-        const timeoutMs = isQuantOrUltra ? Math.min(requestedTimeout, 30000) : requestedTimeout;
+        const requestedTimeout = options.timeoutMs || options.config?.timeoutMs || (isQuantOrUltra ? QUANT_NVIDIA_TIMEOUT_MS : 25000);
+        const timeoutMs = isQuantOrUltra ? Math.min(requestedTimeout, QUANT_NVIDIA_TIMEOUT_MS) : requestedTimeout;
         const requestedMaxTokens = options.config?.maxTokens || (isReasoning ? 4096 : 2048);
         // S2: Never cap NVIDIA reasoning models below 4096 tokens so thinking streams cannot truncate JSON output
         const maxTokens = isReasoning

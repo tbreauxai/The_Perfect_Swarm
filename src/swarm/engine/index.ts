@@ -544,7 +544,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 finalAnalysis = clusterResult.earlyFinalAnalysis;
             } else {
                 // Step 4b: Cross-Analyst Consensus Synthesis
-                workflowConsensus = extractAnalystConsensus(clusterResult.allAnalystReports, analysts, task);
+                const consensusSlateHeaders = parseGameHeaders(profilingResult.rawInput || task, (params as any)?.eventIds);
+                workflowConsensus = extractAnalystConsensus(clusterResult.allAnalystReports, analysts, task, consensusSlateHeaders);
                 if (workflowConsensus?.agreementLevel) {
                     recordRunDebugAgreement((context as any)?.id, workflowConsensus.agreementLevel);
                 }

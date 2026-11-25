@@ -263,7 +263,7 @@ export class Agent {
         const isCriticRole = roleNorm.includes('critic') || roleNorm.includes('risk');
         const isQuantRole = roleNorm.includes('quant') || this.id === 'a1';
         const rawTimeoutMs = config?.timeoutMs || (isCriticRole ? 45000 : (isQuantRole ? 30000 : PROVIDER_CALL_TIMEOUT_MS));
-        const timeoutMs = isQuantRole ? Math.min(rawTimeoutMs, 30000) : rawTimeoutMs; // Fresh budget per target in targetChain (<=30s on a1/Quant)
+        const timeoutMs = isQuantRole ? Math.min(rawTimeoutMs, 30000) : rawTimeoutMs; // Fresh budget per target in targetChain (NVIDIA a1 further capped to 15s below)
 
         const lb = (config?.loadBalancer as AdaptiveLoadBalancer) || this.loadBalancer || globalLoadBalancer;
         const candidateFallbacks = config?.fallbackProviders || this.fallbacks;
@@ -489,6 +489,10 @@ export class Agent {
                                 currentTarget.provider,
                                 async () => {
                                     let capturedHeaders: any = null;
+                                    const isQuantNvidiaTarget =
+                                        currentTarget.provider === 'nvidia' &&
+                                        (isQuantRole || /nemotron.*ultra|550b/i.test(targetModel));
+                                    const targetTimeoutMs = isQuantNvidiaTarget ? Math.min(timeoutMs, 15000) : timeoutMs;
                                     const out = await adapter.call({
                                         modelName: targetModel,
                                         prompt,
@@ -496,7 +500,7 @@ export class Agent {
                                         apiKey: currentTarget.apiKey,
                                         aiClient: currentTarget.aiClient || this.aiClient,
                                         config: effectiveRuntimeConfig,
-                                        timeoutMs,
+                                        timeoutMs: targetTimeoutMs,
                                         role: this.role,
                                         onHeaders: (headers) => {
                                             capturedHeaders = headers;

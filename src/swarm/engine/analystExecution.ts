@@ -962,12 +962,19 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                 const preCheckEvidence = [seatDossierText, prefetchedInjurySummary, ...priorSummaryLines, config.curatedDossier || '']
                     .filter(Boolean)
                     .join('\n');
+                const isOptimalAuditMode =
+                    String((settings as any)?.riskProfile || '').trim().toLowerCase() === 'optimal' ||
+                    (settings as any)?.allowParlay === true ||
+                    /\boptimal\b/i.test(String(task || ''));
                 if (preCheckEvidence || fullRawSource || renderedHeadersText || mergedHeadersForRowCheck.length > 0) {
                     const preAudit = auditCriticPremiseContradictions(
                         preCheckProposal,
                         preCheckEvidence,
                         fullRawSource || renderedHeadersText,
-                        { headers: mergedHeadersForRowCheck }
+                        {
+                            headers: mergedHeadersForRowCheck,
+                            ...(isOptimalAuditMode ? { riskProfile: 'optimal', allowParlay: true } : {})
+                        }
                     );
                     if (!preAudit.pass) {
                         const prePrefix = '\n\n[Deterministic Pre-Check Flags]: ';
@@ -1511,11 +1518,18 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                 }
 
                 const marketHasRowSideVeto = !marketRowAudit.pass && marketRowAudit.flags.includes('row_side_mismatch');
+                const isOptimalPostAuditMode =
+                    String((settings as any)?.riskProfile || '').trim().toLowerCase() === 'optimal' ||
+                    (settings as any)?.allowParlay === true ||
+                    /\boptimal\b/i.test(String(task || ''));
+                const optimalAuditOpts = isOptimalPostAuditMode
+                    ? { riskProfile: 'optimal', allowParlay: true }
+                    : {};
                 const groundingAudit = auditClaimGrounding(
                     groundingTargetProposal,
                     criticGroundingEvidence,
                     fullRawSource || renderedHeadersText,
-                    { headers: mergedHeadersForRowCheck, skipRowSideCheck: marketHasRowSideVeto }
+                    { headers: mergedHeadersForRowCheck, skipRowSideCheck: marketHasRowSideVeto, ...optimalAuditOpts }
                 );
                 const premiseEvidence = [
                     criticGroundingEvidence,
@@ -1527,7 +1541,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                     groundingTargetProposal,
                     premiseEvidence,
                     fullRawSource || renderedHeadersText,
-                    { headers: mergedHeadersForRowCheck, skipRowSideCheck: marketHasRowSideVeto }
+                    { headers: mergedHeadersForRowCheck, skipRowSideCheck: marketHasRowSideVeto, ...optimalAuditOpts }
                 );
                 const groundingAuditPassed = groundingAudit.pass && premiseAudit.pass;
                 if (!groundingAuditPassed) {

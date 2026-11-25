@@ -1409,17 +1409,28 @@ function formatImpactDetailSegment(
   namedOutPlayers: string[],
   depthOutCount: number,
   weightedMode: boolean,
-  unloggedOutCount: number = 0
+  unloggedOutCount: number = 0,
+  tier1OutCount: number = 0,
+  tier2OutCount: number = 0
 ): string {
   if (!weightedMode) return `${outCount} OUT`;
-  const names = namedOutPlayers.slice(0, 4);
   const parts: string[] = [];
+  if (unloggedOutCount > 0) {
+    // S3: Partial-coverage transparent tier labeling (e.g. "[impact 5.0: 1 Tier-1, 2 unlogged]" or "[impact 3.0: 3 unlogged]")
+    // without ever labeling unlogged players as "depth".
+    if (tier1OutCount > 0) parts.push(`${tier1OutCount} Tier-1`);
+    if (tier2OutCount > 0) parts.push(`${tier2OutCount} Tier-2`);
+    if (tier1OutCount === 0 && tier2OutCount === 0 && namedOutPlayers.length > 0) {
+      parts.push(namedOutPlayers.slice(0, 4).join(', '));
+    }
+    if (depthOutCount > 0) parts.push(`${depthOutCount} depth`);
+    parts.push(`${unloggedOutCount} unlogged`);
+    return `${outCount} OUT [impact ${outImpact.toFixed(1)}: ${parts.join(', ')}]`;
+  }
+  const names = namedOutPlayers.slice(0, 4);
   if (names.length > 0) parts.push(names.join(', '));
   if (depthOutCount > 0) {
     parts.push(parts.length > 0 ? `+ ${depthOutCount} depth` : `${depthOutCount} depth`);
-  }
-  if (unloggedOutCount > 0) {
-    parts.push(parts.length > 0 ? `+ ${unloggedOutCount} unlogged` : `${unloggedOutCount} unlogged`);
   }
   const detailStr = parts.length > 0 ? `: ${parts.join(' ')}` : '';
   return `${outCount} OUT [impact ${outImpact.toFixed(1)}${detailStr}]`;
@@ -1441,9 +1452,13 @@ export function classifyInjuryHealthBalance(params: {
   homeNamedOut?: string[];
   homeDepthOut?: number;
   homeUnloggedOut?: number;
+  homeTier1OutCount?: number;
+  homeTier2OutCount?: number;
   awayNamedOut?: string[];
   awayDepthOut?: number;
   awayUnloggedOut?: number;
+  awayTier1OutCount?: number;
+  awayTier2OutCount?: number;
   homeTier1Q?: string[];
   awayTier1Q?: string[];
   weightedMode?: boolean;
@@ -1529,7 +1544,9 @@ export function classifyInjuryHealthBalance(params: {
       params.homeNamedOut || [],
       params.homeDepthOut || 0,
       weightedMode,
-      params.homeUnloggedOut || 0
+      params.homeUnloggedOut || 0,
+      params.homeTier1OutCount || 0,
+      params.homeTier2OutCount || 0
     );
     const awaySeg = formatImpactDetailSegment(
       awayOut,
@@ -1537,7 +1554,9 @@ export function classifyInjuryHealthBalance(params: {
       params.awayNamedOut || [],
       params.awayDepthOut || 0,
       weightedMode,
-      params.awayUnloggedOut || 0
+      params.awayUnloggedOut || 0,
+      params.awayTier1OutCount || 0,
+      params.awayTier2OutCount || 0
     );
 
     return {
@@ -2177,6 +2196,8 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
       depthOut: number;
       unloggedOut: number;
       tier1Q: string[];
+      tier1OutCount: number;
+      tier2OutCount: number;
       usedWeightedScoring: boolean;
       hasSufficientCoverage: boolean;
       items: any[];
@@ -2205,6 +2226,8 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
       const namedOut: Array<{ name: string; weight: number }> = [];
       let depthOut = 0;
       let unloggedOut = 0;
+      let tier1OutCount = 0;
+      let tier2OutCount = 0;
       const tier1Q: string[] = [];
       let usedWeightedScoring = false;
       let allItemsIndividuallyWeighted = items.length > 0;
@@ -2225,7 +2248,11 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
         if (isOutTag(st)) {
           outCount++;
           outImpact += impact.weight;
-          if (impact.tier === 1 || impact.tier === 2) {
+          if (impact.tier === 1) {
+            tier1OutCount++;
+            namedOut.push({ name: playerName, weight: impact.weight });
+          } else if (impact.tier === 2) {
+            tier2OutCount++;
             namedOut.push({ name: playerName, weight: impact.weight });
           } else if (impact.roleLabel === 'depth') {
             depthOut++;
@@ -2258,6 +2285,8 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
         namedOut: namedOut.map((n) => n.name),
         depthOut,
         unloggedOut,
+        tier1OutCount,
+        tier2OutCount,
         tier1Q,
         usedWeightedScoring,
         hasSufficientCoverage: teamHasCoverageParity,
@@ -2318,18 +2347,19 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
       const homeNamedOut: string[] = [];
       let homeDepthOut = 0;
       let homeUnloggedOut = 0;
+      let homeTier1OutCount = 0;
+      let homeTier2OutCount = 0;
       const awayNamedOut: string[] = [];
       let awayDepthOut = 0;
       let awayUnloggedOut = 0;
+      let awayTier1OutCount = 0;
+      let awayTier2OutCount = 0;
       const homeTier1Q: string[] = [];
       const awayTier1Q: string[] = [];
       let anyWeightedScoring = false;
-      let homeCoverageOk = true;
-      let awayCoverageOk = true;
 
       for (const st of groupStats) {
         if (st.usedWeightedScoring) anyWeightedScoring = true;
-        const hasInjured = st.outCount + st.qCount > 0;
         if (matchesTeamDisplay(st, homeTeamDisplay)) {
           homeOut += st.outCount;
           homeQ += st.qCount;
@@ -2338,8 +2368,9 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
           homeNamedOut.push(...st.namedOut);
           homeDepthOut += st.depthOut;
           homeUnloggedOut += st.unloggedOut;
+          homeTier1OutCount += st.tier1OutCount;
+          homeTier2OutCount += st.tier2OutCount;
           homeTier1Q.push(...st.tier1Q);
-          if (hasInjured && !st.hasSufficientCoverage) homeCoverageOk = false;
         } else if (matchesTeamDisplay(st, awayTeamDisplay)) {
           awayOut += st.outCount;
           awayQ += st.qCount;
@@ -2348,14 +2379,16 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
           awayNamedOut.push(...st.namedOut);
           awayDepthOut += st.depthOut;
           awayUnloggedOut += st.unloggedOut;
+          awayTier1OutCount += st.tier1OutCount;
+          awayTier2OutCount += st.tier2OutCount;
           awayTier1Q.push(...st.tier1Q);
-          if (hasInjured && !st.hasSufficientCoverage) awayCoverageOk = false;
         }
       }
 
-      // S2: Require both-team coverage parity (every team with >= 1 injured player must have >= 3 distinct
-      // game_dates or depthchart/season_stats coverage) before comparing weighted [impact X.X] totals.
-      const useWeightedParity = anyWeightedScoring && homeCoverageOk && awayCoverageOk;
+      // S3: Activate weighted [impact X.X] summary whenever >= 1 injured player in the game
+      // has a real logged row (espn_boxscore, espn_depthchart, nhl_club_stats, or espn_season_stats).
+      // Unlogged players on < 5-date teams stay at neutral 1.0 weight on BOTH sides (never 0.5 depth).
+      const useWeightedParity = anyWeightedScoring;
 
       if (!useWeightedParity) {
         // Normalize unlogged items to neutral 1.0 weight when falling back to unweighted mode
@@ -2387,9 +2420,13 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
               homeNamedOut,
               homeDepthOut,
               homeUnloggedOut,
+              homeTier1OutCount,
+              homeTier2OutCount,
               awayNamedOut,
               awayDepthOut,
               awayUnloggedOut,
+              awayTier1OutCount,
+              awayTier2OutCount,
               homeTier1Q,
               awayTier1Q,
               weightedMode: true
@@ -2399,14 +2436,16 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
       summaryHeaderLine = healthSummaryObj.line;
     } else if (groupStats.length === 1) {
       const only = groupStats[0];
-      const useWeightedSingle = only.usedWeightedScoring && only.hasSufficientCoverage;
+      const useWeightedSingle = only.usedWeightedScoring;
       const seg = formatImpactDetailSegment(
         only.outCount,
         only.outImpact,
         only.namedOut,
         only.depthOut,
         useWeightedSingle,
-        only.unloggedOut
+        only.unloggedOut,
+        only.tier1OutCount,
+        only.tier2OutCount
       );
       const fallbackSuffix = useWeightedSingle ? '' : ' [unweighted_fallback]';
       summaryHeaderLine = `Summary: ${only.name} (${seg}, ${only.qCount} Q) | Health Balance: single_team_only${fallbackSuffix}`;

@@ -116,6 +116,28 @@ export function selectDecoupledVerifierAgent(params: {
         : globalTokenBudgetManager.estimateWaitMs(baseProvider as Provider, estTokens, baseModel);
     const baseWaitMs = Math.max(limiterWait, managerWait);
 
+    const managerSawGemini503 = (Array.isArray(context?.events) ? context.events : []).some((ev) => {
+        const role = String(ev?.agentRole || '');
+        const model = String(ev?.modelName || '');
+        const err = String(ev?.error || ev?.failover?.errorSnippet || '');
+        const fromProv = String(ev?.failover?.fromProvider || '').toLowerCase();
+        const status = ev?.failover?.status;
+        const isGeminiEv = fromProv === 'gemini' || /\bgemini\b/i.test(model);
+        const is503Err = status === 503 || /\b503\b|SERVER_ERROR_503|overloaded|high demand/i.test(err);
+        return isGeminiEv && is503Err && /manager|compiler|synthesis/i.test(role);
+    });
+
+    const baseIs31FlashLite = baseProvider === 'gemini' && baseModelLower === 'gemini-3.1-flash-lite';
+    const baseGeminiBlockedByManager503 = baseProvider === 'gemini' && managerSawGemini503;
+    const baseFallbacksHave31BeforeCf = (() => {
+        const fbs = baseCriticAgent.getFallbacks();
+        const idx31 = fbs.findIndex(
+            (fb) => String(fb.provider).toLowerCase() === 'gemini' && String(fb.modelName || '').toLowerCase() === 'gemini-3.1-flash-lite'
+        );
+        const idxCf = fbs.findIndex((fb) => String(fb.provider).toLowerCase() === 'cloudflare');
+        return idx31 !== -1 && (idxCf === -1 || idx31 < idxCf);
+    })();
+
     const collidesWithPass1Groq =
         baseProvider === 'groq' &&
         (
@@ -125,15 +147,23 @@ export function selectDecoupledVerifierAgent(params: {
         );
     const isThrottled = baseWaitMs > FAILOVER_MAX_TPM_WAIT_MS;
 
-    if (!collidesWithPass1Groq && !isThrottled) {
+    if (
+        !collidesWithPass1Groq &&
+        !isThrottled &&
+        !baseIs31FlashLite &&
+        !baseGeminiBlockedByManager503 &&
+        !baseFallbacksHave31BeforeCf
+    ) {
         return baseCriticAgent;
     }
 
-    // S3.3: Always prefer gemini-3.5-flash-lite ahead of gemini-3.1-flash-lite
-    // to avoid gemini-3.1-flash-lite's frequent 503 spikes during verification.
+    // S2.2 (wf-1795638625511): Route Verifier directly to gemini-3.5-flash-lite -> cloudflare -> groq/openai/gpt-oss-20b.
+    // Never try gemini-3.1-flash-lite ahead of gemini-3.5-flash-lite or cloudflare (and skip Gemini first-try when
+    // Manager already saw a 503 on Gemini so Verification goes straight to Cloudflare).
     const orderedCandidates: Array<{ provider: Provider; model: string }> = [
-        { provider: 'gemini' as Provider, model: 'gemini-3.5-flash-lite' },
-        { provider: 'gemini' as Provider, model: 'gemini-3.1-flash-lite' },
+        ...(!managerSawGemini503
+            ? [{ provider: 'gemini' as Provider, model: 'gemini-3.5-flash-lite' }]
+            : []),
         { provider: 'cloudflare' as Provider, model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast' },
         { provider: 'groq' as Provider, model: 'openai/gpt-oss-20b' },
         { provider: 'groq' as Provider, model: 'llama-3.3-70b-versatile' }
@@ -183,12 +213,20 @@ export function selectDecoupledVerifierAgent(params: {
     const [primary, ...rest] = readyPool;
     const seen = new Set<string>([`${primary.provider}::${primary.modelName}`]);
     const fallbacks: ProviderCredential[] = [];
+    const deferred31Fallbacks: ProviderCredential[] = [];
     for (const fb of [...rest, ...baseCriticAgent.getFallbacks()]) {
+        const fbProv = String(fb.provider).toLowerCase();
+        const fbModelLower = String(fb.modelName || '').toLowerCase();
         const k = `${fb.provider}::${fb.modelName || ''}`;
         if (seen.has(k)) continue;
         seen.add(k);
+        if (fbProv === 'gemini' && fbModelLower === 'gemini-3.1-flash-lite') {
+            if (!managerSawGemini503) deferred31Fallbacks.push(fb);
+            continue;
+        }
         fallbacks.push(fb);
     }
+    fallbacks.push(...deferred31Fallbacks);
 
     const decoupled = new Agent(
         baseCriticAgent.role,
