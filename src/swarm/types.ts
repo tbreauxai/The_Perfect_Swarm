@@ -172,7 +172,11 @@ export interface SwarmEvent {
     durationMs?: number;
     failover?: {
         fromProvider: string;
-        toProvider: string;
+        fromModel?: string;
+        toProvider?: string;
+        toModel?: string;
+        status?: number | null;
+        errorSnippet?: string;
         reason: string;
     };
 }

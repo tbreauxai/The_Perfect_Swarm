@@ -103,6 +103,12 @@ export function computeGroqMaxTokens(options: ProviderCallOptions, estimatedProm
     return maxTokens;
 }
 
+export const GROQ_GPT_OSS_120B_MAX_COMPLETION_TOKENS = 1_500;
+
+export function isGroqGptOss120b(modelName?: string): boolean {
+    return String(modelName || '').trim().toLowerCase() === 'openai/gpt-oss-120b';
+}
+
 export class GroqAdapter implements ProviderAdapter {
     readonly providerName = 'groq';
 
@@ -153,6 +159,29 @@ export class GroqAdapter implements ProviderAdapter {
 
         const isJson = options.config?.responseMimeType === 'application/json';
         const timeoutMs = options.timeoutMs || options.config?.timeoutMs || 30000;
+        const roleLower = String(options.role || '').toLowerCase();
+        const isCriticOrVerifier = roleLower.includes('critic') || roleLower.includes('verif') || roleLower.includes('risk');
+
+        let extraBody: Record<string, any> | undefined;
+        if (isGroqGptOss120b(options.modelName)) {
+            const explicitEffort = String(
+                (options.config as any)?.reasoning_effort ||
+                (options.config as any)?.reasoningEffort ||
+                options.config?.reasoning?.effort ||
+                ''
+            ).toLowerCase().trim();
+            const reasoningEffort = (explicitEffort === 'low' || explicitEffort === 'medium' || explicitEffort === 'high')
+                ? explicitEffort
+                : 'low';
+            const cappedCompletionTokens = Math.min(maxTokens, GROQ_GPT_OSS_120B_MAX_COMPLETION_TOKENS);
+            if (isJson || isCriticOrVerifier) {
+                maxTokens = cappedCompletionTokens;
+            }
+            extraBody = {
+                reasoning_effort: reasoningEffort,
+                max_completion_tokens: cappedCompletionTokens
+            };
+        }
 
         return executeOpenAiCompatibleChat(options, {
             providerName: this.providerName,
@@ -163,7 +192,8 @@ export class GroqAdapter implements ProviderAdapter {
             messages,
             maxTokens,
             isJson,
-            timeoutMs
+            timeoutMs,
+            ...(extraBody ? { extraBody } : {})
         });
     }
 }

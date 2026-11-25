@@ -32,6 +32,13 @@ export const DEAD_MODEL_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_STRICT_BUDGET_WAIT_MS = 65_000;
 export const INTERACTIVE_MAX_BUDGET_WAIT_MS = 10_000;
 export const MAX_BUDGET_WAIT_MS = 10_000;
+/** Hard cap for failover TPM bucket waits when another healthy provider has <= 5s wait. */
+export const FAILOVER_MAX_TPM_WAIT_MS = 5_000;
+export const GROQ_MODEL_TPM_LIMITS: Record<string, number> = {
+  "openai/gpt-oss-120b": 8_000,
+  "openai/gpt-oss-20b": 8_000,
+  "llama-3.3-70b-versatile": 12_000,
+};
 export const UNSATISFIABLE_BUDGET_WAIT_MS = DEFAULT_STRICT_BUDGET_WAIT_MS + 1;
 export const PROMPT_EXCEEDS_LIMIT_REASON = "prompt_exceeds_provider_limit";
 export const PROVIDER_CALL_TIMEOUT_MS = 25_000;
@@ -176,23 +183,23 @@ export interface LimiterRunRequest {
 
 export class ProviderLimiter {
   private states = new Map<string, ProviderState>();
+  private modelTokenLogs = new Map<string, Array<{ at: number; tokens: number }>>();
   private deadModels = new Map<string, number>();
   private modelCooldowns = new Map<string, { until: number; reason: string }>();
 
   private readonly limits: Record<string, ProviderLimitConfig>;
+  private readonly hasCustomLimits: boolean;
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
 
   constructor(
-    limits: Record<
-      string,
-      ProviderLimitConfig
-    > = PROVIDER_LIMITS,
+    limits?: Record<string, ProviderLimitConfig>,
     now: () => number = () => Date.now(),
     sleep: (ms: number) => Promise<void> = (ms) =>
       new Promise<void>((r) => setTimeout(r, ms)),
   ) {
-    this.limits = limits;
+    this.hasCustomLimits = limits !== undefined;
+    this.limits = limits ?? PROVIDER_LIMITS;
     this.now = now;
     this.sleep = sleep;
   }
@@ -321,30 +328,65 @@ export class ProviderLimiter {
     return MAX_BUDGET_WAIT_MS;
   }
 
-  /** True when the request can never fit into the provider's bucket capacity or refill rate <= 0. */
-  exceedsTokenBudgetCapacity(provider: string, estTokens: number): boolean {
+  private getTokenLimit(provider: string, model?: string): number | undefined {
     const cfg = this.limits[provider];
-    if (!cfg || cfg.tokensPerMinute === undefined) return false;
-    const limit = cfg.tokensPerMinute;
+    if (!cfg || cfg.tokensPerMinute === undefined) return undefined;
+    if (provider === "groq" && model && !this.hasCustomLimits) {
+      const normModel = model.trim().toLowerCase();
+      if (normModel === "llama-3.3-70b-versatile") {
+        return GROQ_MODEL_TPM_LIMITS["llama-3.3-70b-versatile"];
+      }
+      // Keep the conservative 7,000 TPM floor for 8K-TPM Groq models (gpt-oss-120b, gpt-oss-20b)
+      return cfg.tokensPerMinute;
+    }
+    return cfg.tokensPerMinute;
+  }
+
+  private getTokenLog(provider: string, model?: string): Array<{ at: number; tokens: number }> {
+    if (provider === "groq" && model && model.trim()) {
+      const key = `groq::${model.trim().toLowerCase()}`;
+      let log = this.modelTokenLogs.get(key);
+      if (!log) {
+        log = [];
+        this.modelTokenLogs.set(key, log);
+      }
+      return log;
+    }
+    return this.state(provider).tokenLog;
+  }
+
+  private setTokenLog(provider: string, model: string | undefined, log: Array<{ at: number; tokens: number }>): void {
+    if (provider === "groq" && model && model.trim()) {
+      this.modelTokenLogs.set(`groq::${model.trim().toLowerCase()}`, log);
+      return;
+    }
+    this.state(provider).tokenLog = log;
+  }
+
+  /** True when the request can never fit into the provider's bucket capacity or refill rate <= 0. */
+  exceedsTokenBudgetCapacity(provider: string, estTokens: number, model?: string): boolean {
+    const limit = this.getTokenLimit(provider, model);
+    if (limit === undefined) return false;
     const tokensPerMs = limit / TOKEN_WINDOW_MS;
     if (!Number.isFinite(limit) || limit <= 0 || tokensPerMs <= 0) return true;
     return !Number.isFinite(estTokens) || estTokens > limit;
   }
 
-  private tokensUsed(s: ProviderState, t: number): number {
-    s.tokenLog = s.tokenLog.filter((e) => t - e.at < TOKEN_WINDOW_MS);
-    return s.tokenLog.reduce((sum, e) => sum + e.tokens, 0);
+  private tokensUsed(provider: string, model: string | undefined, t: number): number {
+    const fresh = this.getTokenLog(provider, model).filter((e) => t - e.at < TOKEN_WINDOW_MS);
+    this.setTokenLog(provider, model, fresh);
+    return fresh.reduce((sum, e) => sum + e.tokens, 0);
   }
 
   /**
    * Finite ms until estTokens fits the per-minute budget (0 = fits now).
    * Never returns Infinity or NaN; returns UNSATISFIABLE_BUDGET_WAIT_MS when
    * requestedTokens > bucketCapacity or tokensPerMs <= 0.
+   * For Groq, token windows are tracked independently per `(provider, model)`.
    */
-  budgetWaitMs(provider: string, estTokens: number): number {
-    const cfg = this.limits[provider];
-    if (!cfg || cfg.tokensPerMinute === undefined) return 0;
-    const limit = cfg.tokensPerMinute;
+  budgetWaitMs(provider: string, estTokens: number, model?: string): number {
+    const limit = this.getTokenLimit(provider, model);
+    if (limit === undefined) return 0;
     const tokensPerMs = limit / TOKEN_WINDOW_MS;
     if (!Number.isFinite(limit) || limit <= 0 || tokensPerMs <= 0) {
       return UNSATISFIABLE_BUDGET_WAIT_MS;
@@ -353,12 +395,12 @@ export class ProviderLimiter {
       return UNSATISFIABLE_BUDGET_WAIT_MS;
     }
     const t = this.now();
-    const s = this.state(provider);
-    const used = this.tokensUsed(s, t);
+    const used = this.tokensUsed(provider, model, t);
     if (used + estTokens <= limit) return 0;
     const mustFree = used + estTokens - limit;
     let freed = 0;
-    for (const e of s.tokenLog) {
+    const log = this.getTokenLog(provider, model);
+    for (const e of log) {
       freed += e.tokens;
       if (freed >= mustFree) return Math.max(0, e.at + TOKEN_WINDOW_MS - t);
     }
@@ -409,14 +451,14 @@ export class ProviderLimiter {
     const skip = this.getSkipReason(provider, model);
     if (skip) throw new LimiterSkipError(provider, model, skip);
 
-    if (this.exceedsTokenBudgetCapacity(provider, estTokens)) {
+    if (this.exceedsTokenBudgetCapacity(provider, estTokens, model)) {
       throw new LimiterSkipError(provider, model, PROMPT_EXCEEDS_LIMIT_REASON);
     }
 
     await this.acquireSlot(provider, model, req.maxBudgetWaitMs ?? 60_000);
     try {
       const maxBudgetWait = this.getMaxBudgetWaitMs(provider, req.maxBudgetWaitMs);
-      const wait = this.budgetWaitMs(provider, estTokens);
+      const wait = this.budgetWaitMs(provider, estTokens, model);
       if (!Number.isFinite(wait) || wait >= UNSATISFIABLE_BUDGET_WAIT_MS) {
         throw new LimiterSkipError(provider, model, PROMPT_EXCEEDS_LIMIT_REASON);
       }
@@ -424,12 +466,12 @@ export class ProviderLimiter {
         throw new LimiterSkipError(
           provider,
           model,
-          `token budget needs ${Math.ceil(wait)}ms of waiting (max ${maxBudgetWait}ms); skipping to next fallback`,
+          `skipped_tpm_wait: ${Math.ceil(wait)}ms (max ${maxBudgetWait}ms); skipping to next fallback`,
         );
       }
       if (wait > 0) await this.sleep(wait);
-      if (this.limits[provider].tokensPerMinute) {
-        this.state(provider).tokenLog.push({
+      if (this.getTokenLimit(provider, model) !== undefined) {
+        this.getTokenLog(provider, model).push({
           at: this.now(),
           tokens: estTokens,
         });
@@ -469,11 +511,13 @@ export class ProviderLimiter {
     for (const st of this.states.values()) {
       st.tokenLog.length = 0;
     }
+    this.modelTokenLogs.clear();
   }
 
   /** Clears all breaker/budget/cooldown state (tests). */
   reset(): void {
     this.states.clear();
+    this.modelTokenLogs.clear();
     this.deadModels.clear();
     this.modelCooldowns.clear();
   }

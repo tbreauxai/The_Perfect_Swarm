@@ -21,8 +21,15 @@ export interface TokenBudgetMetrics {
     totalCumulativeTokens: number;
 }
 
+export const GROQ_MODEL_TPM_DEFAULTS: Record<string, number> = {
+    'groq:openai/gpt-oss-120b': 8000,
+    'groq:openai/gpt-oss-20b': 8000,
+    'groq:llama-3.3-70b-versatile': 12000,
+};
+
 /**
  * Tracks token allocation, sliding-window consumption, and prevents provider quota bottlenecks.
+ * Groq enforces TPM per model, so Groq usage is tracked per `(provider, model)` bucket when model is provided.
  */
 export class TokenBudgetManager {
     private tpmLimits: Map<string, number> = new Map();
@@ -37,10 +44,13 @@ export class TokenBudgetManager {
 
         // Default free-tier safe calibrated TPMs
         const defaultLimits: Record<string, number> = {
-            groq: 6000,          // Groq free-tier TPM threshold (6000 TPM)
+            groq: 6000,          // Legacy provider-level Groq fallback threshold
+            ...GROQ_MODEL_TPM_DEFAULTS,
+            cloudflare: 30000,   // Cloudflare Workers AI high TPM window
             mistral: 30000,      // Mistral free tier
             github: 40000,       // GitHub Models free tier
             openrouter: 25000,   // OpenRouter free tier
+            nvidia: 30000,       // NVIDIA NIM free tier
             gemini: 1000000,     // Gemini free tier large window
             simulated: 10000000, // Zero limits for local simulation
             mock: 10000000,
@@ -53,18 +63,31 @@ export class TokenBudgetManager {
         }
     }
 
-    private cleanOldRecords(providerKey: string, now: number): void {
-        const records = this.usageRecords.get(providerKey);
+    resolveBucketKey(provider: Provider | string, model?: string): string {
+        const prov = String(provider).toLowerCase().trim();
+        const mod = typeof model === 'string' ? model.toLowerCase().trim() : '';
+        if (prov === 'groq' && mod) {
+            return `groq:${mod}`;
+        }
+        return prov;
+    }
+
+    private cleanOldRecords(bucketKey: string, now: number): void {
+        const records = this.usageRecords.get(bucketKey);
         if (!records || records.length === 0) return;
         const cutoff = now - this.windowMs;
         const fresh = records.filter(r => r.timestamp > cutoff);
-        this.usageRecords.set(providerKey, fresh);
+        this.usageRecords.set(bucketKey, fresh);
     }
 
-    getTpmLimit(provider: Provider): number {
-        const key = String(provider).toLowerCase();
+    getTpmLimit(provider: Provider, model?: string): number {
+        const key = this.resolveBucketKey(provider, model);
         if (this.tpmLimits.has(key)) {
             return this.tpmLimits.get(key)!;
+        }
+        const baseProv = key.includes(':') ? key.slice(0, key.indexOf(':')) : key;
+        if (this.tpmLimits.has(baseProv)) {
+            return this.tpmLimits.get(baseProv)!;
         }
         if (key.includes('mock') || key.includes('test') || key.includes('sim')) {
             return 10000000;
@@ -72,12 +95,13 @@ export class TokenBudgetManager {
         return this.defaultTpmLimit;
     }
 
-    setTpmLimit(provider: Provider, limit: number): void {
-        this.tpmLimits.set(String(provider).toLowerCase(), Math.max(100, limit));
+    setTpmLimit(provider: Provider, limit: number, model?: string): void {
+        const key = this.resolveBucketKey(provider, model);
+        this.tpmLimits.set(key, Math.max(100, limit));
     }
 
-    recordUsage(provider: Provider, tokens: number, agentId?: string): void {
-        const key = String(provider).toLowerCase();
+    recordUsage(provider: Provider, tokens: number, agentId?: string, model?: string): void {
+        const key = this.resolveBucketKey(provider, model);
         const now = Date.now();
         const safeTokens = Math.max(0, Math.round(tokens));
 
@@ -94,27 +118,54 @@ export class TokenBudgetManager {
         this.cumulativeTokens.set(key, prevCum + safeTokens);
     }
 
-    getTokensUsedInWindow(provider: Provider): number {
-        const key = String(provider).toLowerCase();
+    getTokensUsedInWindow(provider: Provider, model?: string): number {
+        const key = this.resolveBucketKey(provider, model);
         const now = Date.now();
         this.cleanOldRecords(key, now);
         const records = this.usageRecords.get(key) || [];
         return records.reduce((sum, r) => sum + r.tokens, 0);
     }
 
-    getRemainingBudget(provider: Provider): number {
-        const limit = this.getTpmLimit(provider);
-        const used = this.getTokensUsedInWindow(provider);
+    getRemainingBudget(provider: Provider, model?: string): number {
+        const limit = this.getTpmLimit(provider, model);
+        const used = this.getTokensUsedInWindow(provider, model);
         return Math.max(0, limit - used);
     }
 
-    canAllocate(provider: Provider, tokens: number): boolean {
-        return this.getRemainingBudget(provider) >= tokens;
+    canAllocate(provider: Provider, tokens: number, model?: string): boolean {
+        return this.getRemainingBudget(provider, model) >= tokens;
     }
 
-    applyProviderHeaders(provider: Provider | string, headers: any): void {
+    /**
+     * Finite ms until `tokens` fit inside the sliding TPM window for `(provider, model)`.
+     * Returns 0 when capacity is available immediately, or `windowMs + 1` when `tokens > limit`.
+     */
+    estimateWaitMs(provider: Provider, tokens: number, model?: string): number {
+        const limit = this.getTpmLimit(provider, model);
+        if (!Number.isFinite(limit) || limit <= 0 || !Number.isFinite(tokens) || tokens > limit) {
+            return this.windowMs + 1;
+        }
+        const key = this.resolveBucketKey(provider, model);
+        const now = Date.now();
+        this.cleanOldRecords(key, now);
+        const records = this.usageRecords.get(key) || [];
+        const used = records.reduce((sum, r) => sum + r.tokens, 0);
+        if (used + tokens <= limit) return 0;
+
+        const mustFree = used + tokens - limit;
+        let freed = 0;
+        for (const r of records) {
+            freed += r.tokens;
+            if (freed >= mustFree) {
+                return Math.max(0, r.timestamp + this.windowMs - now);
+            }
+        }
+        return this.windowMs;
+    }
+
+    applyProviderHeaders(provider: Provider | string, headers: any, model?: string): void {
         if (!headers) return;
-        const key = String(provider).toLowerCase();
+        const key = this.resolveBucketKey(provider, model);
 
         const getHeader = (name: string): string | null => {
             if (typeof headers.get === 'function') {
@@ -152,10 +203,10 @@ export class TokenBudgetManager {
         }
     }
 
-    getUtilizationRatio(provider: Provider): number {
-        const limit = this.getTpmLimit(provider);
+    getUtilizationRatio(provider: Provider, model?: string): number {
+        const limit = this.getTpmLimit(provider, model);
         if (limit <= 0) return 1.0;
-        const used = this.getTokensUsedInWindow(provider);
+        const used = this.getTokensUsedInWindow(provider, model);
         return Math.min(1.0, used / limit);
     }
 

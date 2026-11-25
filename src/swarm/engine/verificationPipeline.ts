@@ -1,8 +1,12 @@
-import type { Agent } from '../agent.ts';
+import { Agent } from '../agent.ts';
 import type { SwarmContext } from '../context.ts';
 import { AnalysisLifecycle } from '../lifecycle.ts';
 import { guardManagerResponse, sanitizeCompilerProposalOddsAndSummary, splitSentencesSafe } from '../parser.ts';
 import { globalSpecialistProfiler } from '../loadBalancer.ts';
+import { globalTokenBudgetManager } from '../loadBalancer/tokenBudgetManager.ts';
+import { globalProviderLimiter, FAILOVER_MAX_TPM_WAIT_MS } from '../providers/limiter.ts';
+import { isModelDead } from '../server/modelsProvider.ts';
+import { resolveProvider } from './utils.ts';
 import { getManagerContextTokenCeiling } from './synthesisPipeline.ts';
 import { formatRunDebugOutputDigest, recordRunDebugSeat } from './runDebugRecord.ts';
 import { parseGameHeaders, renderHeaders, filterPicksByCoverage, type GameHeader } from '../context/gameHeaders.ts';
@@ -34,7 +38,190 @@ import type { ToolEvidenceItem } from './seatToolLoop.ts';
 import type { ToolRegistry } from '../tools/registry.ts';
 import type { GameQueryCache } from '../cache/gameQueryCache.ts';
 
-import type { SwarmEngineSettings } from '../types.ts';
+import type { Provider, ProviderCredential, SwarmEngineSettings } from '../types.ts';
+
+function parseProviderModelPair(modelName?: string): { provider: string; model: string } | null {
+    const raw = String(modelName || '').trim();
+    if (!raw) return null;
+    const arrowIdx = raw.lastIndexOf('->');
+    const segment = arrowIdx >= 0 ? raw.slice(arrowIdx + 2).trim() : raw;
+    const slashSpaced = segment.match(/^([a-z0-9_-]+)\s*\/\s*(.+)$/i);
+    if (slashSpaced) {
+        return {
+            provider: slashSpaced[1].trim().toLowerCase(),
+            model: slashSpaced[2].trim()
+        };
+    }
+    return null;
+}
+
+function detectPass1CriticTarget(
+    context: SwarmContext,
+    analysts: Agent[]
+): { provider: string; model: string } | null {
+    const events = Array.isArray(context?.events) ? context.events : [];
+    for (let i = events.length - 1; i >= 0; i--) {
+        const ev = events[i];
+        const role = String(ev?.agentRole || '');
+        if (!/(?:critic|risk)/i.test(role)) continue;
+        const action = String(ev?.action || '');
+        if (
+            action.startsWith('Completed execution') ||
+            action === 'Started execution'
+        ) {
+            const parsed = parseProviderModelPair(ev?.modelName);
+            if (parsed) return parsed;
+        }
+    }
+    const criticAnalyst = analysts.find(a => /(?:critic|risk)/i.test(String(a?.role || '')));
+    if (criticAnalyst) {
+        return {
+            provider: String(criticAnalyst.provider).toLowerCase(),
+            model: String(criticAnalyst.modelName || '')
+        };
+    }
+    return null;
+}
+
+/**
+ * Decouples Critic Verification from Risk Critic Pass 1's Groq TPM bucket.
+ * When the base critic would collide with Pass 1's Groq model bucket or face a >5s TPM wait,
+ * routes Verification to a fast 0ms-wait provider/model that did NOT just run Pass 1:
+ * Gemini (`gemini-3.5-flash-lite` / `gemini-3.1-flash-lite`), Cloudflare (`@cf/meta/llama-3.3-70b-instruct-fp8-fast`),
+ * or a separate Groq model (`openai/gpt-oss-20b` / `llama-3.3-70b-versatile`).
+ */
+export function selectDecoupledVerifierAgent(params: {
+    baseCriticAgent: Agent;
+    managerAgent: Agent;
+    analysts: Agent[];
+    context: SwarmContext;
+    settings?: SwarmEngineSettings;
+    estimatedTokens?: number;
+}): Agent {
+    const { baseCriticAgent, managerAgent, analysts, context, settings } = params;
+    const estTokens = Math.max(500, params.estimatedTokens ?? 1_500);
+    const baseProvider = String(baseCriticAgent.provider || '').toLowerCase();
+    const baseModel = String(baseCriticAgent.modelName || '').trim();
+    const baseModelLower = baseModel.toLowerCase();
+
+    const pass1Target = detectPass1CriticTarget(context, analysts);
+    const pass1Provider = pass1Target?.provider?.toLowerCase() || '';
+    const pass1ModelLower = pass1Target?.model?.toLowerCase() || '';
+
+    const limiterWait = globalProviderLimiter.budgetWaitMs(baseProvider, estTokens, baseModel);
+    const managerUsed = globalTokenBudgetManager.getTokensUsedInWindow(baseProvider as Provider, baseModel);
+    const managerWait = globalTokenBudgetManager.canAllocate(baseProvider as Provider, estTokens, baseModel)
+        ? 0
+        : globalTokenBudgetManager.estimateWaitMs(baseProvider as Provider, estTokens, baseModel);
+    const baseWaitMs = Math.max(limiterWait, managerWait);
+
+    const collidesWithPass1Groq =
+        baseProvider === 'groq' &&
+        (
+            (pass1Provider === 'groq' && (!pass1ModelLower || pass1ModelLower === baseModelLower)) ||
+            baseWaitMs > 0 ||
+            managerUsed > 0
+        );
+    const isThrottled = baseWaitMs > FAILOVER_MAX_TPM_WAIT_MS;
+
+    if (!collidesWithPass1Groq && !isThrottled) {
+        return baseCriticAgent;
+    }
+
+    const managerIs35Lite =
+        String(managerAgent.provider).toLowerCase() === 'gemini' &&
+        String(managerAgent.modelName || '').toLowerCase() === 'gemini-3.5-flash-lite';
+
+    const orderedCandidates: Array<{ provider: Provider; model: string }> = [
+        ...(managerIs35Lite
+            ? [
+                { provider: 'gemini' as Provider, model: 'gemini-3.1-flash-lite' },
+                { provider: 'gemini' as Provider, model: 'gemini-3.5-flash-lite' }
+            ]
+            : [
+                { provider: 'gemini' as Provider, model: 'gemini-3.5-flash-lite' },
+                { provider: 'gemini' as Provider, model: 'gemini-3.1-flash-lite' }
+            ]),
+        { provider: 'cloudflare' as Provider, model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast' },
+        { provider: 'groq' as Provider, model: 'openai/gpt-oss-20b' },
+        { provider: 'groq' as Provider, model: 'llama-3.3-70b-versatile' }
+    ];
+
+    const readyZeroWait: Array<{ cred: ProviderCredential; waitMs: number }> = [];
+    const readyFastWait: Array<{ cred: ProviderCredential; waitMs: number }> = [];
+    const baseApiKey = String((baseCriticAgent as any).apiKey || '').trim();
+
+    for (const cand of orderedCandidates) {
+        const candProv = String(cand.provider).toLowerCase();
+        const candModelLower = cand.model.toLowerCase();
+        if (candProv === pass1Provider && candModelLower === pass1ModelLower) continue;
+        if (baseProvider === 'groq' && candProv === 'groq' && candModelLower === baseModelLower) continue;
+        if (isModelDead(candProv, cand.model)) continue;
+        if (!globalProviderLimiter.isAvailable(candProv, cand.model)) continue;
+
+        const resolved = resolveProvider(cand.provider, (settings || {}) as SwarmEngineSettings);
+        const key = resolved.key || (candProv === baseProvider ? baseApiKey : '');
+        if (!key) continue;
+
+        const cLimiterWait = globalProviderLimiter.budgetWaitMs(candProv, estTokens, cand.model);
+        const cManagerWait = globalTokenBudgetManager.canAllocate(cand.provider, estTokens, cand.model)
+            ? 0
+            : globalTokenBudgetManager.estimateWaitMs(cand.provider, estTokens, cand.model);
+        const cWait = Math.max(cLimiterWait, cManagerWait);
+        if (!Number.isFinite(cWait) || cWait > FAILOVER_MAX_TPM_WAIT_MS) continue;
+
+        const cred: ProviderCredential = {
+            provider: cand.provider,
+            modelName: cand.model,
+            apiKey: key,
+            ...(resolved.client ? { aiClient: resolved.client } : {})
+        };
+        if (cWait === 0) {
+            readyZeroWait.push({ cred, waitMs: cWait });
+        } else {
+            readyFastWait.push({ cred, waitMs: cWait });
+        }
+    }
+
+    const readyPool = [...readyZeroWait, ...readyFastWait].map(r => r.cred);
+    if (readyPool.length === 0) {
+        return baseCriticAgent;
+    }
+
+    const [primary, ...rest] = readyPool;
+    const seen = new Set<string>([`${primary.provider}::${primary.modelName}`]);
+    const fallbacks: ProviderCredential[] = [];
+    for (const fb of [...rest, ...baseCriticAgent.getFallbacks()]) {
+        const k = `${fb.provider}::${fb.modelName || ''}`;
+        if (seen.has(k)) continue;
+        seen.add(k);
+        fallbacks.push(fb);
+    }
+
+    const decoupled = new Agent(
+        baseCriticAgent.role,
+        primary.modelName || baseModel,
+        primary.provider,
+        primary.apiKey,
+        primary.aiClient,
+        fallbacks,
+        undefined,
+        baseCriticAgent.id,
+        baseCriticAgent.maxTokens
+    );
+    decoupled.preserveFallbackOrder = true;
+    const existingSys = baseCriticAgent.getSystemInstruction();
+    if (existingSys) decoupled.setSystemInstruction(existingSys);
+
+    context.addEvent({
+        agentRole: 'Analysis Lifecycle',
+        action: 'Verifier Bucket Decoupled',
+        modelName: `${primary.provider} / ${primary.modelName}`,
+        prompt: `Decoupled Critic Verification from ${baseProvider}/${baseModel} (wait=${Math.ceil(baseWaitMs)}ms) to ${primary.provider}/${primary.modelName}`
+    });
+
+    return decoupled;
+}
 
 export interface VerificationPipelineParams {
     task: string;
@@ -338,9 +525,17 @@ export async function runDeepAnalysisVerification(
     } = p;
     const settings = settingsOverride || paramSettings;
 
-    // Select critic: Prefer dedicated critic, then cross-provider analyst (different from manager), then first analyst
+    // Select critic: Prefer dedicated critic, then cross-provider analyst (different from manager), then first analyst.
+    // Decouple Critic Verification from Risk Critic Pass 1's Groq bucket when Pass 1 ran on the same Groq model or bucket is throttled.
     const crossProviderAnalyst = analysts.find(a => a.provider !== managerAgent.provider);
-    const criticAgent = dedicatedCriticAgent || crossProviderAnalyst || analysts[0];
+    const baseCriticAgent = dedicatedCriticAgent || crossProviderAnalyst || analysts[0];
+    const criticAgent = selectDecoupledVerifierAgent({
+        baseCriticAgent,
+        managerAgent,
+        analysts,
+        context,
+        settings
+    });
 
     const isMorningJudge = (settings as any)?.responseSchema === 'morning_judge';
     if (isMorningJudge) {

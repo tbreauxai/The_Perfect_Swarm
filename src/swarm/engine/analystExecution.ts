@@ -1634,9 +1634,9 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                 }
             }
 
-            // Record response token telemetry
+            // Record response token telemetry (per-model for Groq)
             const outTokens = Math.max(10, Math.ceil((typeof rawOutput === 'string' ? rawOutput.length : JSON.stringify(rawOutput).length) / 4));
-            globalTokenBudgetManager.recordUsage(analyst.provider, outTokens, analyst.role);
+            globalTokenBudgetManager.recordUsage(analyst.provider, outTokens, analyst.role, analyst.modelName);
 
             const durationMs = Date.now() - startTime;
             globalSpecialistProfiler.recordOutcome(analyst.role, {

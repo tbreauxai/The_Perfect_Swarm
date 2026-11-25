@@ -308,15 +308,17 @@ describe('Consolidated Spec (wf-1795448851648 + Nov 2026 Gemini Catalog): S1–S
       vi.stubEnv('GROQ_API_KEY', 'groq-key');
       vi.stubEnv('MISTRAL_API_KEY', 'mis-key');
       vi.stubEnv('CLOUDFLARE_API_TOKEN', 'acc:cf-key');
+      vi.stubEnv('OPENROUTER_API_KEY', '');
       vi.stubEnv('NVIDIA_API_KEY', 'nv-key');
 
       expect(MANAGER_CHAIN.map((e) => `${e.provider}:${e.model}`)).toEqual([
         'gemini:gemini-3.5-flash-lite',
         'gemini:gemini-3.1-flash-lite',
         'gemini:gemini-3.8-flash',
-        'groq:openai/gpt-oss-120b',
+        'cloudflare:@cf/meta/llama-3.3-70b-instruct-fp8-fast',
         'mistral:mistral-small-latest',
-        'cloudflare:@cf/meta/llama-3.1-8b-instruct',
+        'openrouter:nvidia/nemotron-3.5-lightning:free',
+        'groq:openai/gpt-oss-120b',
         'nvidia:nvidia/nemotron-3.5-lightning-30b-a3b',
       ]);
 
@@ -331,14 +333,14 @@ describe('Consolidated Spec (wf-1795448851648 + Nov 2026 Gemini Catalog): S1–S
       );
       // Persisted gemini-2.5-flash auto-remapped to gemini-3.5-flash-lite
       expect(managerAgent.modelName).toBe('gemini-3.5-flash-lite');
-      // Gemini siblings preserved BEFORE external providers
+      // Gemini siblings preserved BEFORE external providers, and high-TPM providers ahead of Groq
       const fbIds = managerAgent.getFallbacks().map((f) => `${f.provider}:${f.modelName}`);
       expect(fbIds.slice(0, 6)).toEqual([
         'gemini:gemini-3.1-flash-lite',
         'gemini:gemini-3.8-flash',
-        'groq:openai/gpt-oss-120b',
+        'cloudflare:@cf/meta/llama-3.3-70b-instruct-fp8-fast',
         'mistral:mistral-small-latest',
-        'cloudflare:@cf/meta/llama-3.1-8b-instruct',
+        'groq:openai/gpt-oss-120b',
         'nvidia:nvidia/nemotron-3.5-lightning-30b-a3b',
       ]);
 

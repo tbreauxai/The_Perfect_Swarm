@@ -27,14 +27,15 @@ describe("MANAGER_CHAIN + analyst pool (PS3)", () => {
     globalProviderLimiter.reset();
   });
 
-  it("MANAGER_CHAIN follows Gemini siblings -> groq -> mistral -> cloudflare -> nvidia (no github)", () => {
+  it("MANAGER_CHAIN follows Gemini siblings -> cloudflare -> mistral -> openrouter -> groq -> nvidia (no github)", () => {
     expect(MANAGER_CHAIN.map((e) => `${e.provider}:${e.model}`)).toEqual([
       "gemini:gemini-3.5-flash-lite",
       "gemini:gemini-3.1-flash-lite",
       "gemini:gemini-3.8-flash",
-      "groq:openai/gpt-oss-120b",
+      "cloudflare:@cf/meta/llama-3.3-70b-instruct-fp8-fast",
       "mistral:mistral-small-latest",
-      "cloudflare:@cf/meta/llama-3.1-8b-instruct",
+      "openrouter:nvidia/nemotron-3.5-lightning:free",
+      "groq:openai/gpt-oss-120b",
       "nvidia:nvidia/nemotron-3.5-lightning-30b-a3b",
     ]);
     expect(MANAGER_CHAIN.some((e) => String(e.provider) === "github")).toBe(
@@ -47,13 +48,13 @@ describe("MANAGER_CHAIN + analyst pool (PS3)", () => {
       "gemini:gemini-3.5-flash-lite",
       "gemini:gemini-3.1-flash-lite",
       "gemini:gemini-3.8-flash",
-      "groq:openai/gpt-oss-120b",
       "mistral:mistral-small-latest",
+      "groq:openai/gpt-oss-120b",
     ]);
     vi.stubEnv("GEMINI_API_KEY", "");
     expect(buildManagerChain().map((c) => c.provider)).toEqual([
-      "groq",
       "mistral",
+      "groq",
     ]);
   });
 
@@ -66,8 +67,8 @@ describe("MANAGER_CHAIN + analyst pool (PS3)", () => {
     expect(ids(buildManagerChain())).toEqual([
       "gemini:gemini-3.1-flash-lite",
       "gemini:gemini-3.8-flash",
-      "groq:openai/gpt-oss-120b",
       "mistral:mistral-small-latest",
+      "groq:openai/gpt-oss-120b",
     ]);
     globalProviderLimiter.recordFailure(
       "mistral",
@@ -89,8 +90,8 @@ describe("MANAGER_CHAIN + analyst pool (PS3)", () => {
     expect(ids(chain)).toEqual([
       "gemini:gemini-3.1-flash-lite",
       "gemini:gemini-3.8-flash",
-      "groq:openai/gpt-oss-120b",
       "mistral:mistral-small-latest",
+      "groq:openai/gpt-oss-120b",
     ]);
     const noMistral = buildManagerChain(undefined, { provider: "mistral" });
     expect(noMistral.map((c) => c.provider)).toEqual([
