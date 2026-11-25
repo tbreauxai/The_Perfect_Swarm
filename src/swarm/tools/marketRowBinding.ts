@@ -710,7 +710,7 @@ function extractProposalPicks(proposal: any, headers: GameHeader[], rowMap: Map<
       }
     }
     // Pattern B: "R48: <Team/Side>" or "R48 - <Team/Side>"
-    const prefixRegex = /\b(R\d+)\s*[:\-]\s*([^.;,\n|]{3,65})/gi;
+    const prefixRegex = /\b(R\d+)[ \t]*[:\-][ \t]*([^.;,\n|]{3,65})/gi;
     while ((m = prefixRegex.exec(text)) !== null) {
       const rowId = m[1].toUpperCase();
       const phrase = m[2].trim();
@@ -1470,6 +1470,107 @@ export function checkPickRowSideBinding(
 }
 
 /**
+ * Extracts a printed 3-4 digit American odds price from a compact slate row string (e.g. `(+205)` -> 205, `(-128)` -> -128).
+ */
+export function extractRowAmericanOdds(rowText: string): number | null {
+  if (!rowText) return null;
+  const parenMatches = Array.from(rowText.matchAll(/\(\s*([+-]\d{3,4})\s*\)/g));
+  if (parenMatches.length > 0) {
+    const val = parseInt(parenMatches[parenMatches.length - 1][1], 10);
+    if (Number.isFinite(val)) return val;
+  }
+  const inlineMatches = Array.from(rowText.matchAll(/(?:^|[\s|/])([+-]\d{3,4})(?=$|[\s,|/])/g));
+  if (inlineMatches.length > 0) {
+    const val = parseInt(inlineMatches[inlineMatches.length - 1][1], 10);
+    if (Number.isFinite(val)) return val;
+  }
+  return null;
+}
+
+/**
+ * Checks whether an NHL `-1.5` puckline pick is priced outside the optimal American odds band
+ * (default `-220` to `+150`) when the same team's Moneyline row in the same game sits inside the band.
+ */
+export function checkNhlPucklinePriceBand(
+  pk: any,
+  rowMap: Map<string, RowOptionEntry>,
+  options?: { minOdds?: number; maxOdds?: number }
+): {
+  outOfBand: boolean;
+  rowId?: string;
+  odds?: number;
+  preferredMlRowId?: string;
+  preferredMlText?: string;
+  preferredMlOdds?: number;
+  reason?: string;
+} {
+  if (!pk || rowMap.size === 0) return { outOfBand: false };
+  const minOdds = options?.minOdds ?? -220;
+  const maxOdds = options?.maxOdds ?? 150;
+
+  let rowId: string | undefined;
+  let sideText = '';
+  if (typeof pk === 'string') {
+    const m = pk.match(/\b(R\d+)\b/i);
+    rowId = m ? m[1].toUpperCase() : undefined;
+    sideText = pk.trim();
+  } else if (typeof pk === 'object') {
+    if (typeof pk.row === 'string' && /^R\d+$/i.test(pk.row.trim())) {
+      rowId = pk.row.trim().toUpperCase();
+    } else if (typeof pk.id === 'string' && /^R\d+$/i.test(pk.id.trim())) {
+      rowId = pk.id.trim().toUpperCase();
+    }
+    sideText = [pk.side, pk.pick, pk.selection, pk.team].filter((x): x is string => typeof x === 'string' && x.trim().length > 0).join(' ').trim();
+  }
+
+  if (!rowId) return { outOfBand: false };
+  const rowEntry = rowMap.get(rowId);
+  if (!rowEntry) return { outOfBand: false };
+
+  const isNhl =
+    Boolean(rowEntry.eventId && /^nhl-/i.test(rowEntry.eventId)) ||
+    Boolean(rowEntry.sport && /\b(?:nhl|icehockey)\b/i.test(rowEntry.sport)) ||
+    /\bpuckline\b/i.test(`${sideText} ${rowEntry.text}`);
+  if (!isNhl) return { outOfBand: false };
+
+  const spread = extractSpreadNumber(rowEntry.text);
+  if (spread !== -1.5) return { outOfBand: false };
+
+  const rowOdds = extractRowAmericanOdds(rowEntry.text);
+  if (rowOdds === null || (rowOdds >= minOdds && rowOdds <= maxOdds)) {
+    return { outOfBand: false };
+  }
+
+  const contextTeams = [rowEntry.away, rowEntry.home].filter((t): t is string => Boolean(t));
+  const pickedTeam = resolveTeamFromText(rowEntry.text, rowEntry.sport || 'icehockey_nhl', contextTeams);
+
+  for (const [candId, candEntry] of rowMap.entries()) {
+    if (candId === rowId) continue;
+    if (rowEntry.eventId && candEntry.eventId && candEntry.eventId !== rowEntry.eventId) continue;
+    if (!isMoneylineText(candEntry.text)) continue;
+    const candOdds = extractRowAmericanOdds(candEntry.text);
+    if (candOdds === null || candOdds < minOdds || candOdds > maxOdds) continue;
+    if (pickedTeam) {
+      const candTeam = resolveTeamFromText(candEntry.text, candEntry.sport || 'icehockey_nhl', contextTeams);
+      if (!candTeam || candTeam.canonical !== pickedTeam.canonical) continue;
+    }
+    const fmtRowOdds = rowOdds > 0 ? `+${rowOdds}` : `${rowOdds}`;
+    const fmtCandOdds = candOdds > 0 ? `+${candOdds}` : `${candOdds}`;
+    return {
+      outOfBand: true,
+      rowId,
+      odds: rowOdds,
+      preferredMlRowId: candId,
+      preferredMlText: candEntry.text,
+      preferredMlOdds: candOdds,
+      reason: `NHL -1.5 puckline ${rowId} (${fmtRowOdds}) is outside the ${minOdds} to +${maxOdds} optimal price band; prefer Moneyline ${candId} (${candEntry.text}, ${fmtCandOdds}).`
+    };
+  }
+
+  return { outOfBand: false };
+}
+
+/**
  * Deterministic Critic audit for:
  *  A) Market coverage (ML is covered when ml_home or ml_away is present; fails if tool checked and market truly absent)
  *  B) Row side binding (each cited R-id must match the team, market type, and line/sign of the picked leg)
@@ -1563,6 +1664,39 @@ export function auditMarketCoverageAndRowBinding(
               : {})
           };
         }
+      }
+    }
+
+    // 1c. NHL -1.5 puckline vs Moneyline price-band guard (-220 to +150)
+    const nhlBandCheck = checkNhlPucklinePriceBand(item.pick, rowMap);
+    if (nhlBandCheck.outOfBand && nhlBandCheck.preferredMlRowId) {
+      const pickReason = typeof item.pick === 'object' && item.pick && typeof item.pick.reason === 'string'
+        ? item.pick.reason
+        : '';
+      const combinedClaims = [
+        pickReason,
+        typeof proposal?.summary === 'string' ? proposal.summary : '',
+        typeof proposal?.analysis === 'string' ? proposal.analysis : '',
+        ...(Array.isArray(proposal?.insights) ? proposal.insights.filter((x: any) => typeof x === 'string') : [])
+      ].join(' ');
+      const claimsOptimalBand = /\b(?:price[\s-]*band|optimal\s*(?:band|range|window)|-220\s*(?:to|\/|-)\s*\+?150|within\s+(?:the\s+)?(?:band|range|window))\b/i.test(combinedClaims);
+      const boardMentionsBand = /-220\s*(?:to|\/|-)\s*\+?150/i.test(boardText);
+      if (claimsOptimalBand || boardMentionsBand) {
+        flags.push('price_band_misread');
+        const msg = `Veto (PRICE BAND): ${nhlBandCheck.reason}`;
+        const rowEntry = item.rowId ? rowMap.get(item.rowId) : undefined;
+        return {
+          pass: false,
+          feedback: msg,
+          flags,
+          vetoedLegs: [{
+            ...(item.rowId ? { rowId: item.rowId } : {}),
+            ...(rowEntry?.eventId ? { eventId: rowEntry.eventId } : (item.eventId ? { eventId: item.eventId } : {})),
+            ...(rowEntry?.text ? { teamLabel: rowEntry.text } : {}),
+            teamAliases: [],
+            reason: msg.slice(0, 140)
+          }]
+        };
       }
     }
 

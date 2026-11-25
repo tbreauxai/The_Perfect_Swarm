@@ -11,22 +11,30 @@ import { parseJsonSafe, parseJsonSafeWithStatus } from './parseJsonSafe.ts';
 
 const POLICY_PRICE_BAND_REGEXES: RegExp[] = [
     /\bbetween\s+-\d{3,4}(?!\.\d)\s+and\s+\+\d{3,4}(?!\.\d)\b/gi,
-    /\b(?:within|inside|in)\s+(?:the\s+|a\s+)?(?:policy\s+|price\s+|odds\s+)?-\d{3,4}(?!\.\d)\s*(?:to|–|—|-)\s*\+\d{3,4}(?!\.\d)(?:\s+(?:window|band|range|corridor|zone|limit|cap|pricing|odds|policy))?\b/gi,
-    /(?<![(\dA-Za-z.-])-\d{3,4}(?!\.\d)\s+to\s+\+\d{3,4}(?!\.\d)\s+(?:window|band|range|corridor|zone|limit|cap|pricing|odds|policy)\b/gi,
+    /\b(?:within|inside|in)\s+(?:the\s+|a\s+)?(?:policy\s+|price\s+|odds\s+)?-\d{3,4}(?!\.\d)\s*(?:to|\/|–|—|-)\s*\+\d{3,4}(?!\.\d)(?:\s+(?:window|band|range|corridor|zone|limit|cap|pricing|odds|policy))?\b/gi,
+    /(?<![(\dA-Za-z.-])-\d{3,4}(?!\.\d)\s+(?:to|\/)\s+\+\d{3,4}(?!\.\d)\s+(?:window|band|range|corridor|zone|limit|cap|pricing|odds|policy)\b/gi,
     /\b(?:steeper|heavier|juicier|worse|shorter|longer|capped|floor|ceiling|max(?:imum)?|min(?:imum)?)\s+(?:than|at|of)\s+[+-]\d{3,4}(?!\.\d)\b/gi
 ];
 
+const RANGE_SUFFIX_PRICE_BAND_REGEXES: RegExp[] = [
+    /\b(?:within|inside|in)\s+(?:the\s+|a\s+)?(?:policy\s+|price\s+|odds\s+|optimal\s+)?[+-]\d{3,4}(?!\.\d)\s*(?:to|\/|–|—|-)\s*[+-]\d{3,4}(?!\.\d)\s+(?:window|band|range|corridor|zone|limit|cap|pricing|odds|policy|optimal(?:\s+(?:band|range|window))?)\b/gi,
+    /(?<![(\dA-Za-z.-])[+-]\d{3,4}(?!\.\d)\s*(?:to|\/|–|—)\s*[+-]\d{3,4}(?!\.\d)\s+(?:window|band|range|corridor|zone|limit|cap|pricing|odds|policy|optimal(?:\s+(?:band|range|window))?)\b/gi
+];
+
 const BARE_POLICY_PRICE_BAND_REGEX =
-    /(?<![(\dA-Za-z.-])-\d{3,4}(?!\.\d)\s+to\s+\+\d{3,4}(?!\.\d)\b/gi;
+    /(?<![(\dA-Za-z.-])-\d{3,4}(?!\.\d)\s*(?:to|\/)\s*\+\d{3,4}(?!\.\d)\b/gi;
 
 function protectPolicyPriceBands(
     text: string,
-    includeBareOppositeSignBand: boolean
+    includeBareOppositeSignBand: boolean,
+    includeRangeSuffixBand: boolean = false
 ): { masked: string; tokens: string[] } {
     const tokens: string[] = [];
-    const patterns = includeBareOppositeSignBand
-        ? [...POLICY_PRICE_BAND_REGEXES, BARE_POLICY_PRICE_BAND_REGEX]
-        : POLICY_PRICE_BAND_REGEXES;
+    const patterns = [
+        ...POLICY_PRICE_BAND_REGEXES,
+        ...(includeRangeSuffixBand ? RANGE_SUFFIX_PRICE_BAND_REGEXES : []),
+        ...(includeBareOppositeSignBand ? [BARE_POLICY_PRICE_BAND_REGEX] : [])
+    ];
     let masked = text;
     for (const rx of patterns) {
         masked = masked.replace(rx, (match) => {
@@ -48,7 +56,7 @@ function restorePolicyPriceBands(text: string, tokens: string[]): string {
  */
 export function stripApproximateOdds(text: string, options?: { allowExactOdds?: boolean }): string {
     if (!text || typeof text !== 'string') return text;
-    const { masked, tokens } = protectPolicyPriceBands(text, true);
+    const { masked, tokens } = protectPolicyPriceBands(text, true, true);
     let out = masked
         .replace(/(?:~=|~|≈)\s*[+-]?\d+(?:\.\d+)?%?/g, '')
         .replace(/~=/g, '')
@@ -76,6 +84,8 @@ export function stripApproximateOdds(text: string, options?: { allowExactOdds?: 
     });
     out = restorePolicyPriceBands(out, tokens);
     return out
+        .replace(/,?\s*\b(?:well\s+)?(?:in|within|inside)\s+the\s+(?:to|\/|–|—|-)\s+(?:range|window|band)\b/gi, '')
+        .replace(/,?\s*\bbetween\s+and\b/gi, '')
         .replace(/,\s*,+/g, ',')
         .replace(/\s+([,.;:!?])/g, '$1')
         .replace(/[ \t]{2,}/g, ' ')
@@ -654,6 +664,24 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
         }
     }
 
+    const resolvedCriticApproved = typeof raw?.criticApproved === 'boolean'
+        ? raw.criticApproved
+        : (Array.isArray(raw?.scorecards)
+            ? (() => {
+                const criticCards = raw.scorecards.filter(
+                    (sc: any) => sc && typeof sc === 'object' && /critic|\brisk\b/i.test(String(sc.seat || sc.role || ''))
+                );
+                if (criticCards.length === 0) return undefined;
+                if (criticCards.some((sc: any) => /^(?:veto|vetoed|reject|rejected|fail|failed)$/i.test(String(sc.verdict || '').trim()))) {
+                    return false;
+                }
+                if (criticCards.some((sc: any) => /^(?:approve|approved|pass|passed|accept)$/i.test(String(sc.verdict || '').trim()))) {
+                    return true;
+                }
+                return undefined;
+            })()
+            : undefined);
+
     const parsed = ManagerResponseSchema.safeParse(raw);
     if (parsed.success) {
         const rawAnalysisVal = typeof raw?.analysis === 'string' && raw.analysis.trim().length > 0
@@ -670,7 +698,7 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
             ...(Array.isArray(raw?.picks) ? { picks: raw.picks } : {}),
             ...(Array.isArray(raw?.scorecards) ? { scorecards: raw.scorecards } : {}),
             ...(typeof raw?.pass === 'boolean' ? { pass: raw.pass } : {}),
-            ...(typeof raw?.criticApproved === 'boolean' ? { criticApproved: raw.criticApproved } : {}),
+            ...(typeof resolvedCriticApproved === 'boolean' ? { criticApproved: resolvedCriticApproved } : {}),
             ...(typeof raw?.wageringPass === 'boolean' ? { wageringPass: raw.wageringPass } : {}),
             components: parsed.data.components.map((comp) => {
                 if (comp.type === 'InsightList') {
@@ -837,7 +865,7 @@ export function guardManagerResponse(input: unknown, defaultTitle: string = 'Exe
         ...(raw && Array.isArray(raw.picks) ? { picks: raw.picks } : {}),
         ...(raw && Array.isArray(raw.scorecards) ? { scorecards: raw.scorecards } : {}),
         ...(raw && typeof raw.pass === 'boolean' ? { pass: raw.pass } : {}),
-        ...(raw && typeof raw.criticApproved === 'boolean' ? { criticApproved: raw.criticApproved } : {}),
+        ...(typeof resolvedCriticApproved === 'boolean' ? { criticApproved: resolvedCriticApproved } : {}),
         ...(raw && typeof raw.wageringPass === 'boolean' ? { wageringPass: raw.wageringPass } : {}),
         ...(raw && raw.status ? { status: raw.status } : {}),
         ...(raw && raw.reason ? { reason: raw.reason } : {}),

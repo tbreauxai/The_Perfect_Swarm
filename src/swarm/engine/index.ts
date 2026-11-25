@@ -33,6 +33,7 @@ import {
 } from "./partialResult.ts";
 import { runDeepAnalysisVerification } from "./verificationPipeline.ts";
 import { runLearningPipeline } from "./learningPipeline.ts";
+import { resolveFinalCriticApproved } from "../tools/criticAudit.ts";
 import { isScorecardMode } from "./scorecard.ts";
 import { buildBlackboard } from "./blackboard.ts";
 import {
@@ -729,16 +730,23 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     Boolean((r as any)?.scorecard?.pick) ||
                     (Array.isArray((r as any)?.scorecards) && (r as any).scorecards.some((s: any) => s?.pick || (Array.isArray(s?.picks) && s.picks.length > 0)))
                 );
+                let stage2CriticApproved: boolean | undefined = stage2CriticAuditFailed ? false : undefined;
                 for (const cr of criticReports) {
                     const auditMeta = (cr as any)?.criticAudit;
                     if (auditMeta && auditMeta.criticSkippedAudit === true) {
                         stage2CriticAuditFailed = true;
+                        stage2CriticApproved = false;
                         if (Array.isArray(auditMeta.unauditedLegs) && auditMeta.unauditedLegs.length > 0) {
                             stage2UnauditedLegs = mergeVetoedLegTargets(stage2UnauditedLegs, auditMeta.unauditedLegs);
                         }
                         if (typeof auditMeta.auditNote === 'string' && auditMeta.auditNote.trim()) {
                             stage2AuditNote = auditMeta.auditNote.trim();
                         }
+                    }
+                    if (cr && (cr.pass === false || (cr as any).criticApproved === false)) {
+                        stage2CriticApproved = false;
+                    } else if (cr && stage2CriticApproved === undefined && (cr.pass === true || (cr as any).criticApproved === true)) {
+                        stage2CriticApproved = true;
                     }
                     if (cr && cr.pass === false) {
                         const parts = [
@@ -877,6 +885,9 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                         ui_title: 'Insufficient data',
                         picks: [],
                         reason: criticSummary || 'all seats requested data without actionable insights',
+                        criticApproved: typeof firstCritic?.criticApproved === 'boolean'
+                            ? firstCritic.criticApproved
+                            : (typeof firstCritic?.pass === 'boolean' ? firstCritic.pass : false),
                         ...(criticSummary ? { summary: criticSummary, analysis: criticSummary } : {}),
                         ...(criticVerdict !== undefined ? { critic: criticVerdict } : {})
                     };
@@ -929,6 +940,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                 ...(stage2VetoedClaims.length > 0 ? { vetoedClaims: stage2VetoedClaims } : {}),
                                 ...(stageSeatScorecards.length > 0 ? { seatScorecards: stageSeatScorecards } : {}),
                                 ...(stage1HadProposedPicks ? { hadProposedPicks: true } : {}),
+                                ...(typeof stage2CriticApproved === 'boolean' ? { criticVerdictApproved: stage2CriticApproved } : {}),
                                 ...(verifierToolResults ? { toolResults: verifierToolResults } : {}),
                                 ...(allToolEvidenceItems.length > 0 ? { toolEvidenceItems: allToolEvidenceItems } : {}),
                                 ...(synthesisResult.appComputedCounts ? { appComputedCounts: synthesisResult.appComputedCounts } : {})
@@ -964,6 +976,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                     ...(stage2CriticAuditFailed ? { criticAuditFailed: true } : {}),
                                     ...(stage2UnauditedLegs.length > 0 ? { unauditedLegs: stage2UnauditedLegs } : {}),
                                     ...(stage1HadProposedPicks ? { hadProposedPicks: true } : {}),
+                                    ...(typeof stage2CriticApproved === 'boolean' ? { criticVerdictApproved: stage2CriticApproved } : {}),
                                     ...(stage2AuditNote ? { auditNote: stage2AuditNote } : {}),
                                     rawBoard: profilingResult.rawInput,
                                     ...(allToolCallTrace.length > 0 ? { toolCallTrace: allToolCallTrace } : {}),
@@ -1133,6 +1146,13 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 }
                 if (resolvedFinalSeatVisibility.length > 0 && !Array.isArray(finalAnalysis.seat_visibility)) {
                     finalAnalysis.seat_visibility = resolvedFinalSeatVisibility;
+                }
+                const isMorningPayload =
+                    (settings as any)?.responseSchema === 'morning_judge' ||
+                    'winProbHome' in finalAnalysis ||
+                    'win_prob_home' in finalAnalysis;
+                if (!isMorningPayload && typeof finalAnalysis.criticApproved !== 'boolean') {
+                    finalAnalysis.criticApproved = resolveFinalCriticApproved(finalAnalysis);
                 }
             }
 

@@ -98,6 +98,7 @@ export interface ClusterPipelineResult {
         coveredEventIds: string[];
         dossierChars: number;
         dossierSectionsIncluded: number;
+        dossierFullSectionsIncluded?: number;
         dossierTruncated: boolean;
     }>;
 }

@@ -135,6 +135,7 @@ export interface AnalystExecutorConfig {
         coveredEventIds: string[];
         dossierChars: number;
         dossierSectionsIncluded: number;
+        dossierFullSectionsIncluded?: number;
         dossierTruncated: boolean;
     }) => void;
 }
@@ -782,6 +783,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
             let seatPrompt = effectiveAnalystPrompt;
             let seatDossierChars = 0;
             let seatDossierSectionsIncluded = 0;
+            let seatDossierFullSectionsIncluded = 0;
             let seatDossierTruncated = false;
             let seatDossierText = '';
             const finalReserve = isCritic ? 260 : 180;
@@ -822,6 +824,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                             seatDossierText = scoped.text;
                             seatDossierChars = scoped.text.length;
                             seatDossierSectionsIncluded = scoped.sectionsIncluded;
+                            seatDossierFullSectionsIncluded = scoped.fullSectionsIncluded ?? scoped.sectionsIncluded;
                             seatDossierTruncated = scoped.truncated;
                         }
                     }
@@ -860,6 +863,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                             seatDossierText = formatted.text;
                             seatDossierChars = formatted.text.length;
                             seatDossierSectionsIncluded = formatted.sectionsIncluded;
+                            seatDossierFullSectionsIncluded = formatted.fullSectionsIncluded ?? formatted.sectionsIncluded;
                             seatDossierTruncated = formatted.truncated;
                         } else {
                             seatDossierTruncated = true;
@@ -1069,6 +1073,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                 coveredEventIds: resolvedCoveredIds,
                 dossierChars: seatDossierChars,
                 dossierSectionsIncluded: seatDossierSectionsIncluded,
+                dossierFullSectionsIncluded: seatDossierFullSectionsIncluded,
                 dossierTruncated: seatDossierTruncated
             });
             recordRunDebugSeat((context as any)?.id, seat, {

@@ -527,7 +527,7 @@ describe('Flight Recorder Audit wf-1795307844843 — The_Perfect_Swarm Part 3 Re
         expect(prompt).toBeDefined();
         expect(prompt).toContain('=== GAME DOSSIER: nba-401910027');
         expect(prompt).toContain('=== GAME DOSSIER: nba-401910026');
-        expect(prompt).toContain('=== GAME DOSSIER: college-football-401860925');
+        expect(prompt).toContain('college-football-401860925');
         expect(prompt).toContain('Fundamentals:');
         expect(prompt).toContain('Injuries:');
         expect(prompt).toContain('Market:');

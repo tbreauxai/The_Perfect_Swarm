@@ -21,3 +21,11 @@
 {"timestamp":"2026-11-21T14:41:10Z","event":"session_initialized","activeGoalId":"goal-nov21a-s0-repro","note":"Initialized ultragoal session for todo.md (runNov21a, S0-S4 + VERIFY, base 4be594b9)."}
 {"ts":"2026-11-21T09:42:33-06:00","session":"runNov21b","event":"initialized","baseCommit":"cd53c93c","activeGoal":"S0"}
 {"ts":"2026-11-21T10:50:28-06:00","session":"runNov21d","event":"initialized","baseCommit":"651a40ad","activeGoal":"S0"}
+
+{"ts":"2026-11-25T09:41:10-06:00","session":"wf-1795618886150","event":"initialized","branch":"fix/swarm-wf-1795618886150","activeGoal":"G1"}
+
+{"ts":"2026-11-25T09:44:00-06:00","session":"wf-1795618886150","event":"goal_completed","goalId":"G1","nextGoal":"G2","evidence":"Implemented S1 changes in criticAudit.ts, verificationPipeline.ts, synthesisPipeline.ts, index.ts, responseGuards.ts, constants.ts, and marketRowBinding.ts."}
+
+{"ts":"2026-11-25T09:46:00-06:00","session":"wf-1795618886150","event":"goal_completed","goalId":"G2","nextGoal":"G3","evidence":"Implemented S2 changes in unifiedDossier.ts, analystExecution.ts, clusterPipeline.ts, and dueloddsRpcTools.ts."}
+
+{"ts":"2026-11-25T09:55:00-06:00","session":"wf-1795618886150","event":"goal_completed","goalId":"G3","evidence":"npx tsc --noEmit exited 0; wf1795618886150.repro.test.ts (6/6) and wf1795307844843.repro.test.ts (5/5) passed; full npx vitest run: 209/216 files passed (1634 passed, 6 skipped, 7 pre-existing unrelated failures). Local-only on fix/swarm-wf-1795618886150."}

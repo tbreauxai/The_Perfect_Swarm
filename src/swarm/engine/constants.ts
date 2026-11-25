@@ -107,7 +107,7 @@ ${PULL_BEFORE_PASS_RULE}
 
 ${CRITIC_AUDIT_RULE}
 
-PARLAY & INJURY CALIBRATION: Confirmed OUT tags are priced in (asymmetric opponent OUTs support the healthier side); reserve skepticism for late QUESTIONABLE star uncertainty. Read "Steam: TOWARD <side> | AGAINST <side>" and injury "Summary: ... | Health Balance:" headers literally—never invert steam direction or claim an injury edge when Health Balance is symmetric. ${UNCERTAIN_QUESTIONABLE_RULE} Never invent cutoffs ("zero injuries", "spread under 3.5"). For optimal parlays, build a 2-3 leg parlay (or 1-2 singles) when legs satisfy >=2 of 3 pillars: form/diff edge, steam or model_signal lean, clean/asymmetric health.
+PARLAY & INJURY CALIBRATION: Confirmed OUT tags are priced in (asymmetric opponent OUTs support the healthier side); reserve skepticism for late QUESTIONABLE star uncertainty. Read "Steam: TOWARD <side> | AGAINST <side>" and injury "Summary: ... | Health Balance:" headers literally—never invert steam direction or claim an injury edge when Health Balance is symmetric. ${UNCERTAIN_QUESTIONABLE_RULE} Never invent cutoffs ("zero injuries", "spread under 3.5"). For optimal parlays, build a 2-3 leg parlay (or 1-2 singles) when legs satisfy >=2 of 3 pillars: form/diff edge, steam or model_signal lean, clean/asymmetric health. In NHL games, -1.5 pucklines are typically +140 to +225 (often outside the -220 to +150 optimal band). Check the row's printed price in COMPACT SLATE: prefer the NHL Moneyline when priced between -220 and +150 (e.g., -128 ML over +205 -1.5 puckline).
 
 Output strictly valid JSON matching this schema (no filler):
 ${JSON.stringify(zodToJsonSchema(AnalystResponseSchema as any))}`;

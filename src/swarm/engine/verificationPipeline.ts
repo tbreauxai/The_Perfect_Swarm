@@ -28,7 +28,7 @@ import {
     type ToolCallTraceEntry
 } from '../tools/pullBeforePass.ts';
 import { CRITIC_EVIDENCE_RULE } from '../tools/criticEvidence.ts';
-import { CRITIC_AUDIT_RULE, enforceCriticAuditOnFinalAnalysis } from '../tools/criticAudit.ts';
+import { CRITIC_AUDIT_RULE, enforceCriticAuditOnFinalAnalysis, resolveFinalCriticApproved } from '../tools/criticAudit.ts';
 import { syncCompilerProseWithFinalPicks } from '../tools/compilerProseSync.ts';
 import type { ToolEvidenceItem } from './seatToolLoop.ts';
 import type { ToolRegistry } from '../tools/registry.ts';
@@ -56,6 +56,7 @@ export interface VerificationPipelineParams {
     vetoedLegs?: VetoedLegTarget[];
     vetoedClaims?: string[];
     hadProposedPicks?: boolean;
+    criticVerdictApproved?: boolean;
     appComputedCounts?: string;
     toolRegistry?: ToolRegistry;
     queryCache?: GameQueryCache;
@@ -499,6 +500,7 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
                 vetoReason: lifecycleResult?.criticFeedback || combinedVetoTexts[0] || 'Risk Critic audit failed.',
                 seatScorecards: p.seatScorecards
             });
+            finalAnalysis.criticApproved = false;
         } else if (lifecycleResult.success === false) {
             const verificationReasons = Array.from(
                 new Set(
@@ -605,6 +607,7 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
                 unauditedLegs,
                 hadProposedPicks
             });
+            finalAnalysis.criticApproved = false;
         } else {
             finalAnalysis.verified = true;
             finalAnalysis.verification = {
@@ -628,6 +631,13 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
                 unauditedLegs,
                 hadProposedPicks
             });
+            const finalSurvivingCount = Array.isArray(finalAnalysis.picks) ? finalAnalysis.picks.length : 0;
+            finalAnalysis.criticApproved = resolveFinalCriticApproved(finalAnalysis, {
+                criticAuditFailed: false,
+                verificationSuccess: true,
+                criticVerdictApproved: p.criticVerdictApproved,
+                hadFullVeto: initialPickCount > 0 && hadVetoedLegs && finalSurvivingCount === 0
+            });
         }
     }
 
@@ -637,6 +647,7 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
         if (finalAnalysis.picks.length === 0 && originalCount > 0) {
             finalAnalysis.ui_title = 'Insufficient data';
             finalAnalysis.reason = 'no picks with specialist coverage';
+            finalAnalysis.criticApproved = false;
         }
     }
 
