@@ -56,3 +56,8 @@
 {"ts":"2026-11-25T19:49:00-06:00","session":"feat-swarm-live-models","event":"goal_completed","goalId":"G2","nextGoal":"G3","evidence":"Mounted GET /api/swarm/models/live and GET /api/models/live in src/swarm/server/routes/models.ts."}
 
 {"ts":"2026-11-25T19:53:30-06:00","session":"feat-swarm-live-models","event":"goal_completed","goalId":"G3","evidence":"npx tsc --noEmit exited 0; 4 server Vitest files (27/27 tests incl. liveModels.test.ts 4/4) passed. Local-only on feat/swarm-live-models."}
+
+{"ts":"2026-11-26T15:31:00-06:00","session":"fix-swarm-cortex-learning-loop","event":"initialized","branch":"fix/swarm-cortex-learning-loop","activeGoal":"G1"}
+{"ts":"2026-11-26T21:35:15Z","goal":"G1","to":"completed","evidence":"tsc --noEmit exit 0; 7/7 targeted vitest files (46/46 tests) passed; rg audit clean"}
+{"ts":"2026-11-26T21:35:15Z","goal":"G2","to":"completed","evidence":"cortexLearningLoop.test.ts S2, qdrantStorage.test.ts, inMemoryStorage.test.ts passed"}
+{"ts":"2026-11-26T21:35:15Z","goal":"G3","to":"completed","evidence":"cortexLearningLoop.test.ts S3, tsc --noEmit, and rg audit passed"}

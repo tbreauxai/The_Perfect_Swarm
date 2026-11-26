@@ -1,7 +1,8 @@
-export const DEFAULT_CORTEX_COLLECTION = 'pwa_swarm_dev_cortex_v3';
+export const DEFAULT_CORTEX_COLLECTION = 'pwa_swarm_dev_cortex_v4';
 
 export const LEGACY_CORTEX_COLLECTIONS = new Set<string>([
-    'pwa_swarm_dev_cortex_v2'
+    'pwa_swarm_dev_cortex_v2',
+    'pwa_swarm_dev_cortex_v3'
 ]);
 
 export const MAX_USER_PROMPT_CHARS = 160;
@@ -193,10 +194,16 @@ export function isGradedWagerWin(record: any): boolean {
     if (typeof record.picksCount === 'number' && record.picksCount <= 0) return false;
     if (Array.isArray(record.picks) && record.picks.length === 0) return false;
 
+    const hasPositiveClv =
+        (typeof record.clv === 'number' && record.clv > 0) ||
+        (typeof record.closingLineValue === 'number' && record.closingLineValue > 0);
     return (
         record.outcome === 'win' ||
+        record.outcome === 'won' ||
+        hasPositiveClv ||
         (record.feedbackProcessed === true &&
             record.outcome !== 'loss' &&
+            record.outcome !== 'lost' &&
             record.outcome !== 'push' &&
             typeof record.qualityRating === 'number' &&
             record.qualityRating >= 0.8)
@@ -216,7 +223,13 @@ export function isGradedWagerLoss(record: any): boolean {
     if (typeof record.picksCount === 'number' && record.picksCount <= 0) return false;
     if (Array.isArray(record.picks) && record.picks.length === 0) return false;
 
-    if (record.outcome === 'loss') return true;
+    const clvVal = typeof record.clv === 'number'
+        ? record.clv
+        : (typeof record.closingLineValue === 'number' ? record.closingLineValue : null);
+    if (record.outcome === 'loss' || record.outcome === 'lost') {
+        return clvVal === null || clvVal <= 0;
+    }
+    if (record.vetoFlag === true) return true;
     if (record.feedbackProcessed === true) {
         if (typeof record.brierScore === 'number' && record.brierScore >= 0.28) return true;
         if (typeof record.qualityRating === 'number' && record.qualityRating <= 0.25) return true;

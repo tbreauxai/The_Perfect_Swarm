@@ -70,7 +70,12 @@ describe('QdrantStorageAdapter', () => {
                 verified: { data_type: 'bool' },
                 rule_type: { data_type: 'keyword' },
                 sport: { data_type: 'keyword' },
-                market_type: { data_type: 'keyword' }
+                market_type: { data_type: 'keyword' },
+                clv: { data_type: 'float' },
+                market: { data_type: 'keyword' },
+                vetoFlag: { data_type: 'bool' },
+                lessonId: { data_type: 'keyword' },
+                embedModel: { data_type: 'keyword' }
                 // Notice outcome, gradedAt, and feedbackProcessed are missing!
             }
         });

@@ -6,6 +6,7 @@ import { ToolRegistry, globalToolRegistry } from '../tools/index.ts';
 import { sanitizeApiKey } from './utils.ts';
 import { getOrCreateDefaultCortex } from './cortex.ts';
 import { resolveCortexCollectionName } from '../memory/memorySanitizer.ts';
+import { resolveGeminiEmbeddingModel } from '../memory/embeddings.ts';
 
 const safeEnv = typeof process !== "undefined" ? process.env : {} as Record<string, string | undefined>;
 
@@ -22,6 +23,7 @@ export function bindCortexAndTools(
 ): CortexBindingResult {
     let memoryCortex: MemoryCortex | undefined = params.memoryCortex || params.cortex;
     const resolvedCollectionName = resolveCortexCollectionName(settings?.qdrantCollectionName);
+    const resolvedEmbeddingModel = resolveGeminiEmbeddingModel(settings?.qdrantEmbeddingModel);
 
     if (!memoryCortex) {
         const qdrantUrl = settings?.qdrantUrl;
@@ -42,7 +44,7 @@ export function bindCortexAndTools(
                     apiKey: qdrantApiKey,
                     collectionName: resolvedCollectionName,
                     aiClient: cortexAiClient,
-                    embeddingModel: settings?.qdrantEmbeddingModel,
+                    embeddingModel: resolvedEmbeddingModel,
                     defaultAppId: targetAppId,
                     persistPath,
                     autoSave
@@ -53,7 +55,7 @@ export function bindCortexAndTools(
                         defaultAppId: targetAppId,
                         collectionName: resolvedCollectionName,
                         aiClient: cortexAiClient,
-                        embeddingModel: settings?.qdrantEmbeddingModel,
+                        embeddingModel: resolvedEmbeddingModel,
                         persistPath,
                         autoSave
                     })
@@ -65,7 +67,7 @@ export function bindCortexAndTools(
                     defaultAppId: targetAppId,
                     collectionName: resolvedCollectionName,
                     aiClient: cortexAiClient,
-                    embeddingModel: settings?.qdrantEmbeddingModel,
+                    embeddingModel: resolvedEmbeddingModel,
                     persistPath,
                     autoSave
                 })

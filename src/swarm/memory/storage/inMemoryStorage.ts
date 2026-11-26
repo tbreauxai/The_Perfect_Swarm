@@ -115,7 +115,12 @@ export class InMemoryStorageAdapter implements StorageBackend {
             }
         }
 
-        this.points.push(point);
+        const existingIdx = this.points.findIndex(p => p.id === point.id);
+        if (existingIdx >= 0) {
+            this.points[existingIdx] = point;
+        } else {
+            this.points.push(point);
+        }
         this.vectorIndex.insert(point.id, point.denseVector, point);
         return point.id;
     }

@@ -320,6 +320,10 @@ export async function resolveMemoryGrounding(
                     snapshotHash: snapshotHashKey
                 };
 
+                if (typeof (memoryCortex as any).resetTelemetryState === 'function') {
+                    (memoryCortex as any).resetTelemetryState();
+                }
+
                 const [rawRetrieved, exemplars, contrastive] = disableMemoryRetrieval
                     ? [[], '', { wins: [], losses: [], formattedBlock: '' }]
                     : await Promise.all([
@@ -337,7 +341,7 @@ export async function resolveMemoryGrounding(
                               ? (memoryCortex as any)
                                     .retrieveContrastivePostMortems(task, {
                                         ...scopedQueryOpts,
-                                        limit: 2
+                                        limit: 3
                                     })
                                     .catch(() => ({ wins: [], losses: [], formattedBlock: '' }))
                               : Promise.resolve({ wins: [], losses: [], formattedBlock: '' })
@@ -489,18 +493,45 @@ export async function resolveMemoryGrounding(
                     }
                 }
 
+                const telemetryState = typeof (memoryCortex as any).getTelemetryState === 'function'
+                    ? (memoryCortex as any).getTelemetryState()
+                    : { collectionName: null, embedModel: null, embedError: null, qdrantError: null, topRawScore: null };
+                const collectionPointCount = typeof (memoryCortex as any).getCollectionPointCount === 'function'
+                    ? await (memoryCortex as any).getCollectionPointCount(trustedAppId).catch(() => null)
+                    : null;
+                const appliedDomains = inferredDomainsFromEvents && inferredDomainsFromEvents.length > 0
+                    ? inferredDomainsFromEvents
+                    : (effectiveDomain ? [effectiveDomain] : []);
+                const embedError = telemetryState.embedError || null;
+                const qdrantError = telemetryState.qdrantError || null;
+                const cortexStatus: 'Success' | 'Empty' | 'Error' = (embedError || qdrantError)
+                    ? 'Error'
+                    : (retrieved.length === 0 && !safeExemplars && !safeContrastiveBlock ? 'Empty' : 'Success');
+                const cortexSummary = {
+                    status: cortexStatus,
+                    recordsFound: retrieved.length,
+                    exemplarsIncluded: Boolean(safeExemplars),
+                    contrastiveWins: contrastive?.wins?.length || 0,
+                    contrastiveLosses: contrastive?.losses?.length || 0,
+                    collectionName: telemetryState.collectionName,
+                    embedModel: telemetryState.embedModel,
+                    collectionPointCount,
+                    appliedDomains,
+                    scoreThreshold: 0.35,
+                    topRawScore: telemetryState.topRawScore ?? null,
+                    embedError,
+                    qdrantError,
+                    message: historicalContext
+                };
+
                 context.addEvent({
                     agentRole: 'System Orchestrator',
                     action: 'Cortex Retrieval Complete',
                     prompt: 'Retrieval completed',
                     modelName: cortexName,
                     output: {
-                        recordsFound: retrieved.length,
-                        exemplarsIncluded: Boolean(safeExemplars),
-                        contrastiveWins: contrastive?.wins?.length || 0,
-                        contrastiveLosses: contrastive?.losses?.length || 0,
-                        status: 'Success',
-                        message: historicalContext
+                        ...cortexSummary,
+                        cortexSummary
                     },
                     durationMs: 12
                 });

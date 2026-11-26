@@ -2,10 +2,27 @@ import { GoogleGenAI } from '@google/genai';
 import type { EmbeddingProvider } from './types.ts';
 import { djb2Index } from '../utils/hash.ts';
 
-const RETIRED_EMBEDDING_MODELS = new Set(['text-embedding-004', 'text-embedding-005', 'models/text-embedding-004', 'models/text-embedding-005']);
+const RETIRED_EMBEDDING_MODELS = new Set([
+    'text-embedding-004',
+    'text-embedding-005',
+    'embedding-001',
+    'models/text-embedding-004',
+    'models/text-embedding-005',
+    'models/embedding-001'
+]);
+
+export const DEFAULT_GEMINI_EMBEDDING_MODEL = 'gemini-embedding-2';
+
+export function resolveGeminiEmbeddingModel(modelName?: string): string {
+    const trimmed = typeof modelName === 'string' ? modelName.replace(/^models\//i, '').trim() : '';
+    if (!trimmed || RETIRED_EMBEDDING_MODELS.has(trimmed.toLowerCase())) {
+        return DEFAULT_GEMINI_EMBEDDING_MODEL;
+    }
+    return trimmed;
+}
 
 /**
- * Google AI Gemini dense embedding provider using gemini-embedding-2-preview / gemini-embedding-001 (768-dim).
+ * Google AI Gemini dense embedding provider using gemini-embedding-2 / gemini-embedding-001 (768-dim).
  */
 export class GeminiEmbeddingProvider implements EmbeddingProvider {
     readonly dimension = 768;
@@ -13,22 +30,34 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
     private aiClient: GoogleGenAI;
     private modelNames: string[];
     private timeoutMs: number;
+    private lastSuccessfulModel: string | null = null;
+    private lastErrorMessage: string | null = null;
 
     constructor(
         aiClient: GoogleGenAI,
-        modelName: string = 'gemini-embedding-2-preview',
+        modelName: string = DEFAULT_GEMINI_EMBEDDING_MODEL,
         timeoutMs: number = 5000
     ) {
         this.aiClient = aiClient;
-        const normalizedPrimary = RETIRED_EMBEDDING_MODELS.has(modelName)
-            ? 'gemini-embedding-2-preview'
-            : modelName;
+        const normalizedPrimary = resolveGeminiEmbeddingModel(modelName);
         this.modelNames = Array.from(new Set([
             normalizedPrimary,
-            'gemini-embedding-2-preview',
+            DEFAULT_GEMINI_EMBEDDING_MODEL,
             'gemini-embedding-001'
         ]));
         this.timeoutMs = timeoutMs;
+    }
+
+    getActiveModel(): string {
+        return this.lastSuccessfulModel || this.modelNames[0] || DEFAULT_GEMINI_EMBEDDING_MODEL;
+    }
+
+    getLastError(): string | null {
+        return this.lastErrorMessage;
+    }
+
+    static resetUnsupportedModels(): void {
+        GeminiEmbeddingProvider.unsupportedModels.clear();
     }
 
     private normalizeDimension(values: number[]): number[] {
@@ -44,7 +73,7 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
         return out;
     }
 
-    async embed(text: string): Promise<number[]> {
+    async embed(text: string, taskType?: string): Promise<number[]> {
         let timeoutId: any;
         const timeoutPromise = new Promise<never>((_, reject) => {
             timeoutId = setTimeout(() => {
@@ -59,22 +88,39 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
 
             for (const model of modelsToTry) {
                 try {
+                    const isEmbedding2 = /^gemini-embedding-2/i.test(model);
+                    const reqConfig: Record<string, any> = {
+                        outputDimensionality: this.dimension
+                    };
+                    // taskType is unsupported on gemini-embedding-2; only pass for gemini-embedding-001 if requested
+                    if (!isEmbedding2 && taskType && model === 'gemini-embedding-001') {
+                        reqConfig.taskType = taskType;
+                    }
                     const response: any = await Promise.race([
                         this.aiClient.models.embedContent({
                             model,
                             contents: [text],
-                            config: { outputDimensionality: this.dimension }
+                            config: reqConfig
                         }),
                         timeoutPromise
                     ]);
                     const rawValues = response.embeddings?.[0]?.values || response.embeddings?.[0]?.value || [];
                     if (Array.isArray(rawValues) && rawValues.length > 0) {
+                        this.lastSuccessfulModel = model;
+                        this.lastErrorMessage = null;
                         return this.normalizeDimension(rawValues);
                     }
                 } catch (err: any) {
                     lastError = err;
                     const msg = String(err?.message || err || '');
-                    if (msg.includes('404') || msg.includes('not found') || msg.includes('NOT_FOUND') || msg.includes('not supported')) {
+                    this.lastErrorMessage = msg;
+                    if (
+                        msg.includes('404') ||
+                        msg.includes('503') ||
+                        msg.includes('not found') ||
+                        msg.includes('NOT_FOUND') ||
+                        msg.includes('not supported')
+                    ) {
                         GeminiEmbeddingProvider.unsupportedModels.add(model);
                         continue;
                     }
