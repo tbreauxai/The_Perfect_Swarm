@@ -1,27 +1,27 @@
 {
-  "session": "wf-1795652004895",
-  "branch": "fix/swarm-wf-1795652004895",
+  "session": "feat-swarm-live-models",
+  "branch": "feat/swarm-live-models",
   "goals": [
     {
       "id": "G1",
-      "description": "Implement S1 in src/swarm/tools/claimGrounding.ts: isolate symmetric_injury_misread, model_signal_misread, and contra_steam_misread to each pick's own claims and leg-targeted seat sentences while ignoring generic 3-pillar overview sentences.",
+      "description": "Implement per-provider live model discovery with 6h in-memory cache and secret redaction in src/swarm/server/liveModels.ts.",
       "status": "completed",
-      "verificationCriteria": "wf-1795652004895 3-leg fixture with generic 3-pillar intro produces 0 symmetric_injury_misread and 0 model_signal_misread vetoes; true-positive health/model_signal misreads still veto.",
-      "evidence": "Added GENERIC_PILLAR_FRAMEWORK_REGEX and leg-targeted seat-clause filtering for model_signal_misread and symmetric_injury_misread in src/swarm/tools/claimGrounding.ts."
+      "verificationCriteria": "Gemini intersects /v1beta/models with pricing.md.txt Free of charge; NVIDIA filters embed/rerank/OCR and falls back to models.dev; Groq/Mistral/OpenRouter/Cloudflare return filtered free/text models without leaking keys.",
+      "evidence": "Implemented discoverLiveModels, parseGeminiPricingMdFreeModels, redactSecretValues, and 6h cache in src/swarm/server/liveModels.ts."
     },
     {
       "id": "G2",
-      "description": "Implement S2 across gemini.ts, agent.ts, limiter.ts, agentResolution.ts, and analystExecution.ts: Gemini 4/3.6+ thinking/sampling hygiene, a1 medium on 3.5-flash-lite failover, 15s proposer timeout + Gemini sibling ordering, and instant 0ms per-model skip on free_tier limit: 0.",
+      "description": "Mount GET /api/swarm/models/live and GET /api/models/live behind existing /api/* auth middleware in src/swarm/server/routes/models.ts.",
       "status": "completed",
-      "verificationCriteria": "gemini-4-hydrogen sends thinkingLevel low (never minimal), strips thinking_budget/temperature, aborts at 15000ms; a1 failover to gemini-3.5-flash-lite uses medium; 429 free_tier limit: 0 skips in <50ms without blocking Gemini siblings.",
-      "evidence": "Updated buildGeminiRequestConfig in gemini.ts, isFreeTierZeroLimitError + per-model cooldown in limiter.ts, 15s proposer timeout & seat thinkingLevel in agent.ts, a1 sibling ordering in agentResolution.ts, and fastJsonBackups in analystExecution.ts."
+      "verificationCriteria": "Routes accept ?provider=, ?refresh=true, ?probe=true, use process.env keys, and pass appAuth middleware.",
+      "evidence": "Mounted GET /api/swarm/models/live and GET /api/models/live in src/swarm/server/routes/models.ts and exported from src/swarm/server/index.ts."
     },
     {
       "id": "G3",
-      "description": "Implement S3 in src/swarm/tools/dueloddsRpcTools.ts (0-row OUT players always score 1.0 unlogged on dated teams), add wf1795652004895.repro.test.ts, and verify with npx tsc --noEmit and npx vitest run.",
+      "description": "Add unit & route tests in src/swarm/server/liveModels.test.ts and run npx tsc --noEmit and npx vitest run.",
       "status": "completed",
-      "verificationCriteria": "Team with 6 logged game_dates scores 0-row OUT star at 1.0 unlogged while 3-game 9.2 MPG player scores 0.5 depth; npx tsc --noEmit exits 0 and targeted Vitest passes.",
-      "evidence": "Updated classifyPlayerInjuryImpact in src/swarm/tools/dueloddsRpcTools.ts; added src/__repro__/wf1795652004895.repro.test.ts (4/4); npx tsc --noEmit exited 0 and 9 targeted Vitest files (90/90 tests) passed."
+      "verificationCriteria": "Gemini, NVIDIA, OpenRouter, caching, refresh, and auth route tests pass; npx tsc --noEmit exits 0.",
+      "evidence": "Added src/swarm/server/liveModels.test.ts (4/4); npx tsc --noEmit exited 0; 4 server Vitest files (27/27 tests) passed."
     }
   ]
 }

@@ -49,3 +49,10 @@
 {"ts":"2026-11-25T19:23:45-06:00","session":"wf-1795652004895","event":"goal_completed","goalId":"G2","nextGoal":"G3","evidence":"Wired Gemini 4/3.6+ thinking/sampling hygiene, 15s proposer timeout, a1 sibling order, and 0ms free_tier limit: 0 per-model skip across gemini.ts, limiter.ts, agent.ts, agentResolution.ts, analystExecution.ts."}
 
 {"ts":"2026-11-25T19:26:30-06:00","session":"wf-1795652004895","event":"goal_completed","goalId":"G3","evidence":"npx tsc --noEmit exited 0; 9 targeted Vitest files (90/90 tests) passed including wf1795652004895.repro.test.ts (4/4). Local-only on fix/swarm-wf-1795652004895."}
+
+{"ts":"2026-11-25T19:48:00-06:00","session":"feat-swarm-live-models","event":"initialized","branch":"feat/swarm-live-models","activeGoal":"G1"}
+
+{"ts":"2026-11-25T19:49:00-06:00","session":"feat-swarm-live-models","event":"goal_completed","goalId":"G1","nextGoal":"G2","evidence":"Created src/swarm/server/liveModels.ts with 6h cache, secret redaction, and discovery for gemini, nvidia, groq, mistral, openrouter, and cloudflare."}
+{"ts":"2026-11-25T19:49:00-06:00","session":"feat-swarm-live-models","event":"goal_completed","goalId":"G2","nextGoal":"G3","evidence":"Mounted GET /api/swarm/models/live and GET /api/models/live in src/swarm/server/routes/models.ts."}
+
+{"ts":"2026-11-25T19:53:30-06:00","session":"feat-swarm-live-models","event":"goal_completed","goalId":"G3","evidence":"npx tsc --noEmit exited 0; 4 server Vitest files (27/27 tests incl. liveModels.test.ts 4/4) passed. Local-only on feat/swarm-live-models."}
