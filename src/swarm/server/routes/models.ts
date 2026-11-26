@@ -8,11 +8,35 @@ import { analystLedger } from '../../feedback.ts';
 import { globalSpecialistProfiler } from '../../loadBalancer.ts';
 import { buildCortexDiagnostics } from '../cortexDiagnostics.ts';
 import { ensureCatalogProbeFresh, fetchProviderModels } from '../modelsProvider.ts';
+import { discoverLiveModels, LiveModelsError, redactSecretValues } from '../liveModels.ts';
 import type { ServerRouteContext } from './types.ts';
 import { resolveEnvironment, handleServerError } from './helpers.ts';
 
 export function registerModelsRoutes(app: Hono, ctx: ServerRouteContext): void {
     const { defaultCortex } = ctx;
+
+    const handleLiveModels = async (c: any) => {
+        const env = resolveEnvironment(c);
+        try {
+            const provider = c.req.query('provider');
+            if (!provider) {
+                return c.json({ error: 'Missing required query parameter: provider' }, 400);
+            }
+            const refresh = String(c.req.query('refresh') || '').toLowerCase() === 'true';
+            const probe = String(c.req.query('probe') || '').toLowerCase() === 'true';
+            const result = await discoverLiveModels(provider, env, { refresh, probe });
+            return c.json(result);
+        } catch (err: any) {
+            const safeMsg = redactSecretValues(err?.message || err, env);
+            if (err instanceof LiveModelsError) {
+                return c.json({ error: safeMsg }, err.status as any);
+            }
+            return handleServerError('LiveModels', new Error(safeMsg), c);
+        }
+    };
+
+    app.get('/api/swarm/models/live', handleLiveModels);
+    app.get('/api/models/live', handleLiveModels);
 
     app.get('/api/swarm/models', async (c) => {
         try {
