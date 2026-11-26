@@ -4,6 +4,7 @@ import type { SwarmWorkflowParams } from './types.ts';
 import type { SwarmEngineSettings } from '../types.ts';
 import type { AgentVariantConfig } from '../experiment.ts';
 import { ToolRegistry } from '../tools/index.ts';
+import { dedupePicksByDistinctEventId } from '../tools/claimGrounding.ts';
 import { parseGameHeaders, renderHeaders } from '../context/gameHeaders.ts';
 import { filterHeadersByEventIds, resolveSelectedGameIds } from '../context/selectedGames.ts';
 import {
@@ -694,7 +695,13 @@ export async function runClusterPipeline(p: ClusterPipelineParams): Promise<Clus
                     const rep = allAnalystReports[idx]?.[0];
                     if (!rep) continue;
                     auditProposerReports.push(rep);
-                    const picks = Array.isArray(rep.picks) ? rep.picks : [];
+                    const rawPicks = Array.isArray(rep.picks) ? rep.picks : [];
+                    const picks = rawPicks.length > 0
+                        ? dedupePicksByDistinctEventId(rawPicks, parsedChunkHeaders, rawChunk || headersPayload)
+                        : [];
+                    if (picks.length !== rawPicks.length) {
+                        rep.picks = picks;
+                    }
                     if (picks.length > 0) {
                         for (const pk of picks) collectedProposedPicks.push(pk);
                         const pickDescs = picks.map((pk: any) => {

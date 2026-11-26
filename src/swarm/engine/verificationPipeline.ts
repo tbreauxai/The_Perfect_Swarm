@@ -18,6 +18,7 @@ import {
     VETO_STICKS_RULE,
     auditClaimGrounding,
     auditCriticPremiseContradictions,
+    dedupePicksByDistinctEventId,
     dedupeVetoMessages,
     ensureRiskCriticVetoScorecard,
     extractVetoedLegTargets,
@@ -1010,6 +1011,10 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
             finalAnalysis.criticApproved = false;
             finalAnalysis.wageringPass = true;
         }
+    }
+
+    if (Array.isArray(finalAnalysis?.picks) && finalAnalysis.picks.length > 1) {
+        finalAnalysis.picks = dedupePicksByDistinctEventId(finalAnalysis.picks, parsedHeaders, rawInput || task || headersText);
     }
 
     const effectiveFinalPicksMissing = !Array.isArray(finalAnalysis?.picks) || finalAnalysis.picks.length === 0;

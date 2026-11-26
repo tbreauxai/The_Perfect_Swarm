@@ -10,21 +10,18 @@ import { globalProviderLimiter } from "../providers/limiter.ts";
 import { DEFAULT_PROVIDER_MODELS } from "../agent.ts";
 
 /**
- * Ordered server-side manager fallback chain (S1 high-TPM-first order).
- * Free tiers only: Gemini primary -> Gemini siblings -> Cloudflare -> Mistral -> OpenRouter -> Groq -> NVIDIA (last resort).
+ * Ordered server-side manager/critic fallback chain (S2 non-Google-first order).
+ * Non-Google providers first; Gemini 3.5 Flash Lite last resort; NEVER includes gemini-4-hydrogen.
  */
 export const MANAGER_CHAIN: ReadonlyArray<{
   provider: Provider;
   model: string;
 }> = [
-  { provider: "gemini" as Provider, model: "gemini-3.5-flash-lite" },
-  { provider: "gemini" as Provider, model: "gemini-3.1-flash-lite" },
-  { provider: "gemini" as Provider, model: "gemini-3.8-flash" },
   { provider: "cloudflare" as Provider, model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
-  { provider: "mistral" as Provider, model: "mistral-small-latest" },
-  { provider: "openrouter" as Provider, model: "nvidia/nemotron-3.5-lightning:free" },
-  { provider: "groq" as Provider, model: "openai/gpt-oss-120b" },
+  { provider: "groq" as Provider, model: "qwen/qwen3.8-27b" },
+  { provider: "groq" as Provider, model: "openai/gpt-oss-20b" },
   { provider: "nvidia" as Provider, model: "nvidia/nemotron-3.5-lightning-30b-a3b" },
+  { provider: "gemini" as Provider, model: "gemini-3.5-flash-lite" },
 ];
 
 /**

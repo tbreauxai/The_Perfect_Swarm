@@ -37,10 +37,11 @@ export class LiveModelsError extends Error {
 }
 
 const GEMINI_PRICING_MD_URL = 'https://ai.google.dev/gemini-api/docs/pricing.md.txt';
-const GEMINI_MODELS_EXCLUDE_RE = /embedding|imagen|veo|lyria|tts|native-audio|robotics|aqa/i;
-const NVIDIA_MODELS_EXCLUDE_RE = /embed|rerank|parse|ocr|guard|shield|cosmos|sdxl|flux|canary|parakeet|riva|deplot|paligemma|vila|neva/i;
-const GROQ_MODELS_EXCLUDE_RE = /whisper|tts|playai|guard|safeguard|embed/i;
+const GEMINI_MODELS_EXCLUDE_RE = /embedding|imagen|veo|lyria|tts|native-audio|robotics|aqa|transcribe|audio|live/i;
+const NVIDIA_MODELS_EXCLUDE_RE = /gliner|pii|synthetic-video|ising-calibration|content-safety|nvclip|starcoder|laguna|embed|rerank|parse|ocr|guard|shield|cosmos|sdxl|flux|canary|parakeet|riva|deplot|paligemma|vila|neva/i;
+const GROQ_MODELS_EXCLUDE_RE = /orpheus|playai|whisper|tts|guard|safeguard|embed|distil-whisper/i;
 const MISTRAL_MODELS_EXCLUDE_RE = /embed|ocr|moderation|voxtral/i;
+const CLOUDFLARE_MODELS_EXCLUDE_RE = /guard|vision|coder|whisper|bge|m2m|resnet|detr|stable-diffusion|flux|melotts|deepgram|aura/i;
 
 const SECRET_ENV_KEYS = [
     'GEMINI_API_KEY',
@@ -521,12 +522,16 @@ async function discoverCloudflareLiveModels(env: Record<string, any>, fetchFn: t
             );
             const raw: any[] = Array.isArray(data?.result) ? data.result : [];
             const models: LiveModelEntry[] = raw
-                .map((m) => ({
-                    id: String(m?.name || m?.id || '').trim(),
-                    label: String(m?.description || m?.name || '').trim() || String(m?.name || m?.id || '').trim(),
-                    freeTierVerified: true
-                }))
-                .filter((m) => m.id.length > 0);
+                .map((m) => {
+                    const id = String(m?.name || m?.id || '').trim();
+                    const slug = id.replace(/^@cf\//i, '');
+                    return {
+                        id,
+                        label: slug || id,
+                        freeTierVerified: true
+                    };
+                })
+                .filter((m) => m.id.length > 0 && !CLOUDFLARE_MODELS_EXCLUDE_RE.test(m.id));
             if (models.length > 0) {
                 return {
                     provider: 'cloudflare',

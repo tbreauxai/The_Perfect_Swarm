@@ -1,27 +1,34 @@
 {
-  "session": "fix-swarm-wf-1795730839067",
-  "branch": "fix/swarm-wf-1795730839067",
+  "session": "deterministic-verifier-and-failover-hygiene",
+  "branch": "feat/deterministic-verifier-and-failover-hygiene",
   "goals": [
     {
       "id": "G1",
-      "description": "S1: Match valid split/overall/L5/W-L numeric records (e.g. 4-1 Home, W-L 4-1, Season 9-1, L5 5-0, slate splits) in record/form grounding checks without requiring literal '4-1 form' phrasing, while still flagging fabricated records.",
+      "description": "S1: Replace post-manager LLM verifier with pure deterministic TypeScript verifier (0 LLM calls, provider: 'local', model: 'deterministic-verifier', single manager repair loop).",
       "status": "completed",
-      "verificationCriteria": "wf-1795730839067 fixture passes with 0 Ungrounded record/form claim vetoes; fabricated '7-0 form' still vetoes.",
-      "evidence": "npx tsc --noEmit exited 0; wf1795730839067.groundingAndVerifierSeat.repro.test.ts S1 test passed."
+      "verificationCriteria": "Clean manager output verifies with 0 LLM calls; invalid output triggers 1 manager repair and passes deterministically on Attempt 2.",
+      "evidence": "wf1795734233660.deterministicVerifierAndFailover.repro.test.ts S1 tests passed; rg confirmed 0 this.critic.run calls."
     },
     {
       "id": "G2",
-      "description": "S2: Make symmetric_injury_misread (and audit sibling grounding regexes contra_steam_misread / model_signal_misread) negation- and disclaimer-aware so explicit disclaimers like 'Health Balance is uncertain_questionable for Buffalo, treating as disqualifying for roster health edge.' do not trigger false vetoes while genuine affirmative claims still veto.",
+      "description": "S2: Cap single-attempt timeouts (18s non-Google, 20s a1 gemini-4-hydrogen), zero retry on [TIMEOUT] + 10m cooldown, non-Google-first failover order, and exclude gemini-4-hydrogen from critic/manager/verifier failover chains.",
       "status": "completed",
-      "verificationCriteria": "wf-1795730839067 disclaimer produces 0 symmetric_injury_misread vetoes; affirmative health advantage claim on symmetric game still vetoes.",
-      "evidence": "wf1795730839067.groundingAndVerifierSeat.repro.test.ts S2, wf1795446433463.repro.test.ts, wf1795367633040.p0_2.repro.test.ts, and swarmPart7_8.repro.test.ts all passed."
+      "verificationCriteria": "Hanging NVIDIA fetch aborts <= 18,000ms with 1 fetch call and places provider/model on cooldown; manager failover prefers non-Google before gemini-3.5-flash-lite and never selects gemini-4-hydrogen.",
+      "evidence": "wf1795734233660.deterministicVerifierAndFailover.repro.test.ts S2 & failover-timeout.test.ts (9/9) passed."
     },
     {
       "id": "G3",
-      "description": "S3: Separate 'verifier' seat ID from 'critic' (and audit all failover-synthesis callers) so diagnostics.failovers[] stops emitting phantom failovers when Pass 1 critic and Verification verifier run different configured models with status 'ok'.",
+      "description": "S3 + same-event_id hard constraint: Isolate pipe-delimited digest entries, preserve surviving legs on partial vetoes, and enforce hard proposer constraint + pre-critic filter against duplicate event_id / opposing sides with distinct-game parlay cap.",
       "status": "completed",
-      "verificationCriteria": "Pass 1 critic (groq/openai/gpt-oss-120b, status 'ok') + verifier (gemini/gemini-3.5-flash-lite, status 'ok') produces diagnostics.failovers === []. tsc and targeted vitest pass.",
-      "evidence": "wf1795730839067.groundingAndVerifierSeat.repro.test.ts S3 & wf1795711383683.criticVerdictFailoverSport.repro.test.ts passed (37/37 across 5 files)."
+      "verificationCriteria": "wf-1795734233660 preserves R9 while vetoing R5/R8 without R5 bleeding onto R2; duplicate event_id legs are blocked/filtered and parlay legs capped at distinct games.",
+      "evidence": "wf1795734233660.deterministicVerifierAndFailover.repro.test.ts S3 & wf1795446433463.repro.test.ts (7/7) passed."
+    },
+    {
+      "id": "G4",
+      "description": "S4: Fix Cloudflare /models/live dropdown labels (never description) and tighten non-chat model exclusions across Gemini, Cloudflare, Groq, NVIDIA; run repo grep audit, tsc, and targeted vitest.",
+      "status": "completed",
+      "verificationCriteria": "Cloudflare label is concise slug/name; non-chat models excluded; repo grep audit, tsc --noEmit, and targeted vitest pass.",
+      "evidence": "wf1795734233660.deterministicVerifierAndFailover.repro.test.ts S4 passed; tsc exit 0; 33/33 tests across 5 files passed."
     }
   ]
 }
