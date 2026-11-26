@@ -1,77 +1,87 @@
-# Engineering Spec — `The_Perfect_Swarm` (Live Free-Tier Model Discovery Endpoint Using Render `process.env` Keys)
+# Engineering Fix Spec — `The_Perfect_Swarm` (`wf-1795711383683`: Authoritative Critic Verdict Lock, Complete Failover Diagnostics & Sport-Scoped Team Resolution)
 
 **Repo Scope:** `C:\Dev\Workspaces\The_Perfect_Swarm` ONLY. Zero cross-repo edits and zero SQL migrations.
-**Architecture:** All provider API keys live on Render (`process.env`), NOT in `DuelOdds`. `The_Perfect_Swarm` exposes a live, cached model-discovery route that `DuelOdds` proxies via `/api/proxy/swarm/models/live`.
+**Baseline:** `31.2s` end-to-end runtime, `10.3s` Attempt-1 `nemotron-3.5-lightning-30b-a3b` Manager synthesis, `1.72s` `gpt-oss-20b` Verifier, and per-pick grounding isolation are verified live. Do NOT re-audit them.
+**Observed Failures (`wf-1795711383683`):**
+1. Pass 1 Risk Critic returned `"approved"` (`anomalies: []`), yet Manager emitted `picks: [R9]` alongside a contradictory Risk Critic scorecard `{ criticApproved: true, wageringPass: false, verdict: "veto" }`. Post-processing flipped top-level `criticApproved: false` without clearing `picks` and omitted `wageringPass`, wiping out a valid bet.
+2. Both `a1` (`gemini-4-hydrogen -> groq/gpt-oss-120b`, `2.66s`) and `critic (Pass 1)` (`groq/gpt-oss-120b -> cloudflare`, `2.48s`) recorded `status: "failover"` in `diagnostics.seatTimings`, yet `diagnostics.failovers` was `[]`.
+3. `get_injury_and_roster_delta` mapped `Texas Tech Red Raiders` (`college-football-401856879`) to `Las Vegas Raiders` via cross-sport mascot matching.
 
 ---
 
 ## Execution Rules & Token-Saving Guardrails
-
 1. **HARD CONSTRAINT (Local-Only):** Local edits, `npx tsc --noEmit`, and targeted `npx vitest run` ONLY. Do **NOT** run `git push`, merge to `main`, deploy scripts, or mutate live Render/Supabase/Qdrant services.
-2. **Branch Check First:** Confirm you are on a feature branch (e.g., `feat/swarm-live-models`), NOT `main`.
+2. **Branch Check First:** Confirm you are on a feature branch (e.g., `fix/swarm-wf-1795711383683`), NOT `main`.
 3. **Minimal File Reads:** Grep using the exact **Search Anchors** below and read ONLY matched files/functions.
 
 ---
 
-## S1: Add Live Free-Tier Model Discovery Endpoint (`GET /models/live` & `GET /api/models/live`)
+## S1: Lock Authoritative Pass 1 Risk Critic Verdict & Enforce Strict `criticApproved` / `wageringPass` / `picks` Invariants
+
+### Observed Failure (`wf-1795711383683`)
+- Risk Critic Pass 1 approved `R9` (`anomalies: []`).
+- Manager (`nemotron-3.5-lightning-30b-a3b`) returned `picks: [R9]`, `scorecards: [..., { seat: "Risk Critic", criticApproved: true, wageringPass: false, verdict: "veto" }]`, and omitted top-level `wageringPass`.
+- Compiler post-processor flipped top-level `criticApproved: false` while keeping `picks: [R9]`.
 
 ### Search Anchors
-
-- `"/stream"`, `"/health"`, `"GEMINI_API_KEY"`, `"NVIDIA_API_KEY"`, `"GROQ_API_KEY"`, `"MISTRAL_API_KEY"`, `"OPENROUTER_API_KEY"`
+- `"criticApproved"`, `"wageringPass"`, `"scorecards"`, `"verdict"`, `"Risk Critic"`, `"no_play"`
 
 ### Required Changes
-
-1. **Expose Route Matching Existing Swarm Route Prefix:**
-   - Inspect how `/stream` (e.g., `/api/swarm/stream` or `/swarm/stream`) is mounted on the HTTP server, and mount `GET .../models/live` (and alias `/api/models/live`) behind the same auth middleware used by `/stream`.
-   - Accept `?provider=gemini|nvidia|groq|mistral|openrouter|cloudflare` (and optional `?refresh=true` to bypass the `6h` in-memory cache; optional `?probe=true` for manual 1-token Gemini free-tier check).
-   - Never leak or echo any `process.env` API key values in responses or error strings.
-   - Return normalized JSON:
-     ```json
-     {
-       "provider": "gemini",
-       "keyConfigured": true,
-       "source": "live_api+official_pricing_md",
-       "verifiedAt": "2026-11-26T01:44:00.000Z",
-       "models": [
-         {
-           "id": "gemini-4-hydrogen",
-           "label": "Gemini 4 Hydrogen",
-           "freeTierVerified": true,
-           "supportsThinking": true,
-           "inputTokenLimit": 1048576
-         }
-       ]
-     }
-     ```
-2. **Per-Provider Live Discovery Using Render `process.env` Keys (6-Hour In-Memory Cache):**
-   - **Gemini (`process.env.GEMINI_API_KEY`):**
-     - Fetch `https://ai.google.dev/gemini-api/docs/pricing.md.txt` and parse model IDs whose Free Tier column states `Free of charge` (and NOT `Not available`).
-     - Fetch `GET https://generativelanguage.googleapis.com/v1beta/models?key=${GEMINI_API_KEY}&pageSize=100`, filter to `supportedGenerationMethods.includes("generateContent")` excluding `/embedding|imagen|veo|lyria|tts|native-audio|robotics|aqa/i` (do **NOT** filter by `/flash|pro/i`, which drops `gemini-4-hydrogen`).
-     - Intersect live `/v1beta/models` against the `pricing.md.txt` free-tier set (if `GEMINI_API_KEY` is absent, still return `pricing.md.txt` free models with `keyConfigured: false`).
-     - Only when `?probe=true` is explicitly requested: run a 1-token `maxOutputTokens: 1` check on unclassified chat models (`200` -> `freeTierVerified: true`, `429` with `free_tier` + `limit: 0` -> `freeTierVerified: false`).
-   - **NVIDIA (`process.env.NVIDIA_API_KEY`):**
-     - Fetch `GET https://integrate.api.nvidia.com/v1/models` with `Authorization: Bearer ${NVIDIA_API_KEY}`, excluding `/embed|rerank|parse|ocr|guard|shield|cosmos|sdxl|flux|canary|parakeet|riva|deplot|paligemma|vila|neva/i`.
-     - If `NVIDIA_API_KEY` is missing or upstream fails, fall back to `https://models.dev/api.json` (`nvidia` text-chat models) so the endpoint still returns live NVIDIA models.
-   - **Groq (`process.env.GROQ_API_KEY`):**
-     - Fetch `GET https://api.groq.com/openai/v1/models`, excluding `/whisper|tts|playai|guard|safeguard|embed/i`.
-   - **Mistral (`process.env.MISTRAL_API_KEY`):**
-     - Fetch `GET https://api.mistral.ai/v1/models`, excluding `/embed|ocr|moderation|voxtral/i`.
-   - **OpenRouter:**
-     - Fetch `GET https://openrouter.ai/api/v1/models` and filter strictly to `Number(pricing?.prompt) === 0 && Number(pricing?.completion) === 0` (or `:free` IDs).
-   - **Cloudflare:**
-     - Query Cloudflare Workers AI text-generation models if `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN` are set, otherwise return the active Workers AI text-gen list (`@cf/meta/llama-3.3-70b-instruct-fp8-fast`, etc.).
+1. **Do Not Let Manager Overwrite an Authoritative Critic Approval With a Hallucinated `"veto"`:**
+   - Track authoritative `criticPass1Approved` + `deterministicVetoes` from Pass 1 Risk Critic and deterministic grounding checks.
+   - When `criticPass1Approved === true` AND `deterministicVetoes.length === 0` AND `compiled.picks.length > 0` (every compiled leg was approved by Critic):
+     - Keep top-level `criticApproved = true` and `wageringPass = false`.
+     - Normalize the `Risk Critic` scorecard entry to `verdict: "approve"` (never let Manager's `verdict: "veto"` typo or a `Market Proposer` dissent override an actual Risk Critic approval).
+2. **Always Emit Explicit Top-Level `wageringPass` & Enforce Mutual Exclusion:**
+   - Always include boolean `wageringPass` at the top level of `rawFinalAnalysisPayload` (never omit it).
+   - If `criticApproved === false` (genuine Risk Critic veto or exhausted verification retries), ALWAYS enforce `picks: []` and `wageringPass: true` so the payload can never emit `criticApproved: false` alongside non-empty `picks`.
+   - If `criticApproved === true && picks.length > 0`, ALWAYS enforce `wageringPass: false`.
 
 ### Acceptance Criteria
+- Unit test (`wf-1795711383683` fixture): Pass 1 Critic approved `R9` (`anomalies: []`); Manager outputs `picks: [R9]` with contradictory `Risk Critic` scorecard `{ criticApproved: true, verdict: "veto" }` and missing top-level `wageringPass` -> post-processor reconciles to `criticApproved: true`, `wageringPass: false`, `picks: [R9]`, and `Risk Critic` scorecard `verdict: "approve"`.
+- Unit test (genuine veto): Pass 1 Critic vetoed `R9` -> post-processor enforces `criticApproved: false`, `wageringPass: true`, `picks: []`.
 
-- Unit test (Gemini): Intersecting `/v1beta/models` with `pricing.md.txt` includes `gemini-4-hydrogen` (`freeTierVerified: true`) and excludes paid-only `gemini-4-carbon` / `gemini-4-argon` and `gemini-embedding-001`.
-- Unit test (NVIDIA): Uses `process.env.NVIDIA_API_KEY`, filters out embed/rerank/OCR models, and falls back to `models.dev` if `NVIDIA_API_KEY` is unset.
-- Unit test (OpenRouter): Returns strictly zero-cost (`prompt === "0" && completion === "0"`) models.
-- Unit test (caching): Second call within `6h` serves from memory (`0` upstream fetches); `?refresh=true` forces a fresh fetch.
+---
+
+## S2: Record Every Failover / Skip Into `diagnostics.failovers[]` (Close Silent Failover Gap)
+
+### Observed Failure (`wf-1795711383683`)
+- `diagnostics.seatTimings` logged `status: "failover"` on `a1` (`gemini-4-hydrogen -> groq/gpt-oss-120b`) and `critic` (`groq/gpt-oss-120b -> cloudflare`), yet `diagnostics.failovers` was `[]`.
+
+### Search Anchors
+- `"diagnostics"`, `"failovers"`, `"seatTimings"`, `"LIMITER_SKIP"`, `"COOLDOWN_SKIP"`, `"Provider Failover"`
+
+### Required Changes
+- Audit every failover / fallback / cooldown / limiter-skip / parse-retry transition across `a1`, `a2`, `critic`, `manager`, and `verifier`.
+- Ensure EVERY transition from configured `(provider, model)` to a different `(provider, model)` appends a structured entry to `diagnostics.failovers`:
+  `{ seat, from: "${fromProvider}/${fromModel}", to: "${toProvider}/${toModel}", status: httpStatus ?? null, error: sanitizedSnippet(<= 160 chars), durationMs }`.
+- Add a final safeguard before emitting `diagnostics`: if any `seatTimings` entry has `status === "failover"` (or executed on a different `provider/model` than configured) and has no matching entry in `diagnostics.failovers`, synthesize one from the seat's recorded failure reason so `failovers` can NEVER be `[]` when a seat failed over.
+
+### Acceptance Criteria
+- Unit test: Mocking `gemini-4-hydrogen` to fail with HTTP `400` or `429` or `[COOLDOWN_SKIP]` and recovering on `groq/openai/gpt-oss-120b` produces both `seatTimings[a1].status === "failover"` AND a matching `diagnostics.failovers` record with exact `from`, `to`, `status`, and `error`.
+
+---
+
+## S3: Scope Team Resolution in `get_injury_and_roster_delta` Strictly by Sport (Fix `Texas Tech Red Raiders` -> `Las Vegas Raiders`)
+
+### Observed Failure (`wf-1795711383683`)
+- `college-football-401856879` (`TCU Horned Frogs @ Texas Tech Red Raiders`) rendered `Summary: Las Vegas Raiders (0 OUT, 0 Q) vs TCU Horned Frogs (0 OUT, 0 Q)`.
+
+### Search Anchors
+- `"get_injury_and_roster_delta"`, `"Las Vegas Raiders"`, `"team_name"`, `"home_team"`, `"away_team"`
+
+### Required Changes
+- In `get_injury_and_roster_delta` (and any shared team-name normalizer it calls):
+  - Prefer the exact `home_team` / `away_team` strings from the game record/snapshot (`Texas Tech Red Raiders`, `TCU Horned Frogs`) instead of passing them through a sport-agnostic pro mascot lookup.
+  - Whenever canonical team lookup IS needed, filter strictly by the game's sport/league (`americanfootball_ncaaf` != `americanfootball_nfl`, `icehockey_nhl` != `americanfootball_nfl`, `basketball_nba` != `icehockey_nhl`) so shared mascots (`Raiders`, `Panthers`, `Cardinals`, `Giants`, `Kings`, `Jets`, `Rangers`, `Tigers`, `Bears`) can never cross sports.
+
+### Acceptance Criteria
+- Unit test (`college-football-401856879`, `Texas Tech Red Raiders` vs `TCU Horned Frogs`): Summary header renders `Texas Tech Red Raiders (0 OUT, 0 Q) vs TCU Horned Frogs (0 OUT, 0 Q)`, NEVER `Las Vegas Raiders`.
+- Unit test (cross-sport mascots): `Carolina Panthers` (`nfl`) never maps to `Florida Panthers` (`nhl`); `Los Angeles Kings` (`nhl`) never maps to `Sacramento Kings` (`nba`).
 
 ---
 
 ## Verification Commands
-
 ```powershell
 npx tsc --noEmit
 npx vitest run

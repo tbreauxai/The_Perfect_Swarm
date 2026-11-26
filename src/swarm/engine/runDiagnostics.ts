@@ -108,12 +108,38 @@ export function buildCompactRunDiagnostics(params: {
     const seatTimings: SeatTimingDiagnostic[] = [];
     const failovers: FailoverDiagnostic[] = [];
 
+    interface PendingSeatFailure {
+        from: string;
+        to: string;
+        status: number | null;
+        reason?: string;
+        error: string;
+        durationMs: number;
+        failoverIdx?: number;
+        isCooldownSkip?: boolean;
+    }
+
+    const configuredEndpointBySeat = new Map<string, string>();
+    const episodeStartFailoverIdxBySeat = new Map<string, number>();
+    const pendingFailuresBySeat = new Map<string, PendingSeatFailure[]>();
+
     for (let i = 0; i < events.length; i++) {
         const ev = events[i];
         if (!ev || typeof ev !== 'object') continue;
         const action = String(ev.action || '');
         const role = String(ev.agentRole || '').trim();
         const seat = canonicalizeSeatId(role);
+
+        if (action === 'Started execution') {
+            const { provider, model } = parseProviderAndModel(ev.modelName);
+            const configured = formatEndpoint(provider, model);
+            if (configured !== 'unknown' && configured !== 'unknown/unknown') {
+                configuredEndpointBySeat.set(seat, configured);
+            }
+            episodeStartFailoverIdxBySeat.set(seat, failovers.length);
+            pendingFailuresBySeat.set(seat, []);
+            continue;
+        }
 
         if (
             action === 'Completed execution' ||
@@ -129,9 +155,22 @@ export function buildCompactRunDiagnostics(params: {
                 : 0;
             const isParseFailedErr =
                 typeof ev.error === 'string' && /parse_failed|unparsed_json|unparsed output/i.test(ev.error);
+
+            const executedEndpoint = formatEndpoint(provider, model);
+            const configuredEndpoint = configuredEndpointBySeat.get(seat);
+            const shiftedFromConfigured = Boolean(
+                action !== 'Failed execution' &&
+                configuredEndpoint &&
+                configuredEndpoint !== 'unknown' &&
+                configuredEndpoint !== 'unknown/unknown' &&
+                executedEndpoint !== 'unknown' &&
+                executedEndpoint !== 'unknown/unknown' &&
+                configuredEndpoint !== executedEndpoint
+            );
+
             const status: SeatTimingDiagnostic['status'] = action === 'Failed execution'
                 ? (isParseFailedErr ? 'parse_failed' : 'error')
-                : (action.includes('failover') ? 'failover' : 'ok');
+                : ((action.includes('failover') || shiftedFromConfigured) ? 'failover' : 'ok');
 
             seatTimings.push({
                 seat,
@@ -142,6 +181,56 @@ export function buildCompactRunDiagnostics(params: {
                 inputTokens,
                 status
             });
+
+            if (action !== 'Failed execution') {
+                const episodeStartIdx = episodeStartFailoverIdxBySeat.get(seat) ?? 0;
+                const episodeFailovers = failovers
+                    .slice(episodeStartIdx)
+                    .filter(f => f.seat === seat);
+
+                // Backfill any unresolved 'to: "none"' records in this episode with actual executed endpoint
+                for (const fo of episodeFailovers) {
+                    if ((!fo.to || fo.to === 'none' || fo.to === 'unknown') && executedEndpoint !== 'unknown') {
+                        fo.to = executedEndpoint;
+                    }
+                }
+
+                // Safeguard: if this seat completed via failover or executed on a different provider/model than
+                // configured and still has no failover entry for this episode, promote its skip/failure event
+                // or synthesize one so diagnostics.failovers is never [] when a seat failed over.
+                if (status === 'failover' && episodeFailovers.length === 0) {
+                    const seatFailures = pendingFailuresBySeat.get(seat) || [];
+                    const preferredFailure =
+                        seatFailures.find(pf => configuredEndpoint && pf.from === configuredEndpoint) ||
+                        seatFailures[0];
+                    if (preferredFailure) {
+                        const foEntry: FailoverDiagnostic = {
+                            seat,
+                            from: preferredFailure.from,
+                            to: (preferredFailure.to && preferredFailure.to !== 'none' && preferredFailure.to !== 'unknown')
+                                ? preferredFailure.to
+                                : executedEndpoint,
+                            status: preferredFailure.status,
+                            ...(preferredFailure.reason ? { reason: preferredFailure.reason } : {}),
+                            error: preferredFailure.error,
+                            durationMs: preferredFailure.durationMs
+                        };
+                        failovers.push(foEntry);
+                    } else {
+                        failovers.push({
+                            seat,
+                            from: configuredEndpoint || 'unknown',
+                            to: executedEndpoint,
+                            status: null,
+                            error: redactErrorSnippet(ev.error || 'Failover transition executed without failure event', 160),
+                            durationMs: 0
+                        });
+                    }
+                }
+            }
+
+            episodeStartFailoverIdxBySeat.set(seat, failovers.length);
+            pendingFailuresBySeat.set(seat, []);
             continue;
         }
 
@@ -150,30 +239,59 @@ export function buildCompactRunDiagnostics(params: {
             const rawReason = typeof fo?.reason === 'string' ? fo.reason.trim() : '';
             const promptStr = typeof ev.prompt === 'string' ? ev.prompt : '';
             const snippetStr = typeof fo?.errorSnippet === 'string' ? fo.errorSnippet : '';
-            if (
+            const fromProvider = String(fo?.fromProvider || fo?.provider || '').trim();
+            const fromModel = String(fo?.fromModel || fo?.model || '').trim();
+            const toProvider = String(fo?.toProvider || fo?.fallbackProvider || '').trim();
+            const toModel = String(fo?.toModel || fo?.fallbackModel || '').trim();
+            const parsedFrom = fromProvider
+                ? { provider: fromProvider, model: fromModel }
+                : parseProviderAndModel(ev.modelName);
+            const isCooldownSkip =
                 rawReason === '[COOLDOWN_SKIP]' ||
                 rawReason.includes('[COOLDOWN_SKIP]') ||
                 snippetStr.includes('[COOLDOWN_SKIP]') ||
-                promptStr.includes('[COOLDOWN_SKIP]')
-            ) {
-                const fromProvider = String(fo?.fromProvider || fo?.provider || '').trim();
-                const fromModel = String(fo?.fromModel || fo?.model || '').trim();
-                const toProvider = String(fo?.toProvider || fo?.fallbackProvider || '').trim();
-                const toModel = String(fo?.toModel || fo?.fallbackModel || '').trim();
-                const parsedFrom = fromProvider
-                    ? { provider: fromProvider, model: fromModel }
-                    : parseProviderAndModel(ev.modelName);
-                const rawErr = fo?.errorSnippet || (rawReason.includes('[COOLDOWN_SKIP]') ? rawReason : promptStr) || '[COOLDOWN_SKIP]';
+                promptStr.includes('[COOLDOWN_SKIP]');
+            const rawErr = fo?.errorSnippet || rawReason || promptStr || '[SKIPPED]';
+            const rawStatus = fo?.status;
+            const status = typeof rawStatus === 'number' && Number.isFinite(rawStatus)
+                ? rawStatus
+                : extractHttpStatus(rawErr);
+            const reasonCode = isCooldownSkip
+                ? '[COOLDOWN_SKIP]'
+                : (/^(?:LIMITER_SKIP|dead_model|unparsed_json|[a-z0-9_:-]{3,40})$/i.test(rawReason) ? rawReason : undefined);
+            const skipDurationMs = typeof fo?.durationMs === 'number' && Number.isFinite(fo.durationMs)
+                ? Math.max(0, Math.round(fo.durationMs))
+                : (typeof ev.durationMs === 'number' && Number.isFinite(ev.durationMs) ? Math.max(0, Math.round(ev.durationMs)) : 0);
+
+            const fromEp = formatEndpoint(parsedFrom.provider, parsedFrom.model);
+            const toEp = toProvider ? formatEndpoint(toProvider, toModel) : 'none';
+            const errorText = redactErrorSnippet(rawErr, 160);
+
+            const pendingList = pendingFailuresBySeat.get(seat) || [];
+            const pendingRec: PendingSeatFailure = {
+                from: fromEp,
+                to: toEp,
+                status,
+                ...(reasonCode ? { reason: reasonCode } : {}),
+                error: errorText,
+                durationMs: skipDurationMs,
+                isCooldownSkip
+            };
+
+            if (isCooldownSkip) {
+                pendingRec.failoverIdx = failovers.length;
                 failovers.push({
                     seat,
-                    from: formatEndpoint(parsedFrom.provider, parsedFrom.model),
-                    to: toProvider ? formatEndpoint(toProvider, toModel) : 'none',
-                    status: null,
+                    from: fromEp,
+                    to: toEp,
+                    status,
                     reason: '[COOLDOWN_SKIP]',
-                    error: redactErrorSnippet(rawErr, 160),
-                    durationMs: 0
+                    error: errorText,
+                    durationMs: skipDurationMs
                 });
             }
+            pendingList.push(pendingRec);
+            pendingFailuresBySeat.set(seat, pendingList);
             continue;
         }
 
@@ -218,7 +336,7 @@ export function buildCompactRunDiagnostics(params: {
                 ? Math.max(0, Math.round(fo.durationMs))
                 : (typeof ev.durationMs === 'number' && Number.isFinite(ev.durationMs) ? Math.max(0, Math.round(ev.durationMs)) : 0);
 
-            failovers.push({
+            const foEntry: FailoverDiagnostic = {
                 seat,
                 from: formatEndpoint(parsedFrom.provider, parsedFrom.model),
                 to: toProvider ? formatEndpoint(toProvider, toModel) : 'none',
@@ -226,7 +344,21 @@ export function buildCompactRunDiagnostics(params: {
                 ...(isExplicitReasonCode ? { reason: rawReason } : {}),
                 error,
                 durationMs
+            };
+            const failoverIdx = failovers.length;
+            failovers.push(foEntry);
+
+            const pendingList = pendingFailuresBySeat.get(seat) || [];
+            pendingList.push({
+                from: foEntry.from,
+                to: foEntry.to,
+                status: foEntry.status,
+                ...(foEntry.reason ? { reason: foEntry.reason } : {}),
+                error: foEntry.error,
+                durationMs: foEntry.durationMs,
+                failoverIdx
             });
+            pendingFailuresBySeat.set(seat, pendingList);
             continue;
         }
 
@@ -255,6 +387,39 @@ export function buildCompactRunDiagnostics(params: {
                 inputTokens: 0,
                 status: 'timeout'
             });
+        }
+    }
+
+    // Final safeguard: ensure every seatTimings entry with status === 'failover' (or shifted from
+    // configured endpoint) has a corresponding record in failovers[].
+    const coveredSeats = new Set<string>(failovers.map(f => f.seat));
+    for (const st of seatTimings) {
+        const executedEp = formatEndpoint(st.provider, st.model);
+        const configuredEp = configuredEndpointBySeat.get(st.seat);
+        const needsFailoverRecord =
+            st.status === 'failover' ||
+            (st.status === 'ok' &&
+                Boolean(configuredEp) &&
+                configuredEp !== 'unknown' &&
+                configuredEp !== 'unknown/unknown' &&
+                executedEp !== 'unknown' &&
+                executedEp !== 'unknown/unknown' &&
+                configuredEp !== executedEp);
+        if (needsFailoverRecord && !coveredSeats.has(st.seat)) {
+            const pendingList = pendingFailuresBySeat.get(st.seat) || [];
+            const firstFailure = pendingList[0];
+            failovers.push({
+                seat: st.seat,
+                from: firstFailure?.from || configuredEp || 'unknown',
+                to: (firstFailure?.to && firstFailure.to !== 'none' && firstFailure.to !== 'unknown')
+                    ? firstFailure.to
+                    : executedEp,
+                status: firstFailure?.status ?? null,
+                ...(firstFailure?.reason ? { reason: firstFailure.reason } : {}),
+                error: redactErrorSnippet(firstFailure?.error || 'Failover transition detected from seat execution', 160),
+                durationMs: firstFailure?.durationMs ?? 0
+            });
+            coveredSeats.add(st.seat);
         }
     }
 

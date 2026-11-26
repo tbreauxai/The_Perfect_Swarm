@@ -35,7 +35,7 @@ import {
     sanitizePullBeforePassClaims,
     type ToolCallTraceEntry
 } from '../tools/pullBeforePass.ts';
-import { enforceCriticAuditOnFinalAnalysis, resolveFinalCriticApproved } from '../tools/criticAudit.ts';
+import { enforceCriticAuditOnFinalAnalysis, reconcileFinalVerdictAndPicks, resolveFinalCriticApproved } from '../tools/criticAudit.ts';
 import { syncCompilerProseWithFinalPicks } from '../tools/compilerProseSync.ts';
 
 export const MANAGER_MAX_PROMPT_CHARS = 9000;
@@ -954,7 +954,8 @@ export async function executeManagerSynthesis(
         finalResult.criticApproved = resolveFinalCriticApproved(finalResult, {
             criticAuditFailed: groundingContext?.criticAuditFailed === true,
             criticVerdictApproved: groundingContext?.criticVerdictApproved,
-            hadFullVeto
+            hadFullVeto,
+            hadDeterministicVetoes: hadVetoes
         });
         const isDivergentRun = groundingContext?.agreementLevel === 'divergent'
             || /\bagreement=divergent\b/i.test(safeDynamicPrompt)
@@ -982,12 +983,31 @@ export async function executeManagerSynthesis(
             finalResult.ui_title = 'Insufficient data';
             finalResult.reason = 'no picks with specialist coverage';
             finalResult.criticApproved = false;
+            finalResult.wageringPass = true;
         }
     }
 
     if (finalResult && typeof finalResult === 'object' && Array.isArray(finalResult.picks)) {
         const syncBoardSource = groundingContext?.rawBoard || safeDynamicPrompt;
         const syncVetoedLegs = mergeVetoedLegTargets(groundingContext?.vetoedLegs);
+        const syncDetVetoes = [
+            ...(groundingContext?.criticVetoes || []),
+            ...syncVetoedLegs,
+            ...mergeVetoedClaims(groundingContext?.vetoedClaims)
+        ];
+        const hadCoverageZero = initialPicksSnapshot.length > 0 && finalResult.picks.length === 0;
+        reconcileFinalVerdictAndPicks(finalResult, {
+            criticPass1Approved: groundingContext?.criticVerdictApproved,
+            criticVerdictApproved: groundingContext?.criticVerdictApproved,
+            deterministicVetoes: syncDetVetoes,
+            hadDeterministicVetoes: groundingContext?.criticAuditFailed === true || syncDetVetoes.length > 0 || hadCoverageZero,
+            hadFullVeto: hadCoverageZero && syncDetVetoes.length > 0,
+            criticAuditFailed: groundingContext?.criticAuditFailed === true,
+            vetoTexts: groundingContext?.criticVetoes,
+            vetoedLegs: syncVetoedLegs,
+            seatScorecards: groundingContext?.seatScorecards,
+            initialPicks: initialPicksSnapshot
+        });
         syncCompilerProseWithFinalPicks(finalResult, {
             initialPicks: initialPicksSnapshot,
             headers: parseGameHeaders(syncBoardSource),
@@ -998,6 +1018,18 @@ export async function executeManagerSynthesis(
             ...(finalResult.criticApproved === false ? { criticApproved: false } : {})
         });
         sanitizeCompilerProposalOddsAndSummary(finalResult);
+        reconcileFinalVerdictAndPicks(finalResult, {
+            criticPass1Approved: groundingContext?.criticVerdictApproved,
+            criticVerdictApproved: groundingContext?.criticVerdictApproved,
+            deterministicVetoes: syncDetVetoes,
+            hadDeterministicVetoes: groundingContext?.criticAuditFailed === true || syncDetVetoes.length > 0 || (initialPicksSnapshot.length > 0 && finalResult.picks.length === 0),
+            hadFullVeto: initialPicksSnapshot.length > 0 && finalResult.picks.length === 0 && syncDetVetoes.length > 0,
+            criticAuditFailed: groundingContext?.criticAuditFailed === true,
+            vetoTexts: groundingContext?.criticVetoes,
+            vetoedLegs: syncVetoedLegs,
+            seatScorecards: groundingContext?.seatScorecards,
+            initialPicks: initialPicksSnapshot
+        });
     }
 
     if (groundingContext?.agreementLevel) {

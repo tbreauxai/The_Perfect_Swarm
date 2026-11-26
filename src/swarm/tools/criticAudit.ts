@@ -571,6 +571,23 @@ export function enforceCriticAuditOnFinalAnalysis<T extends Record<string, any>>
   return finalAnalysis;
 }
 
+const SCORECARD_VETO_VERDICT_REGEX = /^(?:veto|vetoed|reject|rejected|fail|failed)$/i;
+const SCORECARD_APPROVE_VERDICT_REGEX = /^(?:approve|approved|pass|passed|accept|accepted)$/i;
+
+function isRiskCriticScorecard(sc: any): boolean {
+  return Boolean(sc && typeof sc === 'object' && /critic|\brisk\b/i.test(String(sc.seat || sc.role || '')));
+}
+
+function isContradictoryManagerVetoScorecard(sc: any, picksCount: number): boolean {
+  if (!isRiskCriticScorecard(sc)) return false;
+  return (
+    sc.criticApproved === true &&
+    sc.wageringPass === false &&
+    picksCount > 0 &&
+    SCORECARD_VETO_VERDICT_REGEX.test(String(sc.verdict || '').trim())
+  );
+}
+
 /**
  * Resolves the authoritative top-level boolean `criticApproved` flag for a final
  * compiled analysis payload, synchronized with Risk Critic's verdict and verification state.
@@ -581,7 +598,9 @@ export function resolveFinalCriticApproved(
     criticAuditFailed?: boolean;
     criticVerdictApproved?: boolean;
     verificationSuccess?: boolean;
+    verificationApproved?: boolean;
     hadFullVeto?: boolean;
+    hadDeterministicVetoes?: boolean;
   }
 ): boolean {
   if (
@@ -596,25 +615,49 @@ export function resolveFinalCriticApproved(
     return false;
   }
 
+  const survivingPicks = Array.isArray(finalAnalysis?.picks) ? finalAnalysis.picks.length : 0;
+
+  // S1 (wf-1795711383683): Authoritative Pass 1 Risk Critic approval with zero deterministic vetoes
+  // and non-empty compiled picks locks criticApproved = true even if Manager hallucinated
+  // { seat: "Risk Critic", verdict: "veto" } or a Market Proposer seat dissented.
+  if (
+    options?.criticVerdictApproved === true &&
+    options?.hadDeterministicVetoes !== true &&
+    survivingPicks > 0
+  ) {
+    return true;
+  }
+
+  // Genuine Pass 1 Risk Critic veto sticks unless Pass 2 verification explicitly approved
+  // a clean repaired proposal without deterministic vetoes.
+  if (options?.criticVerdictApproved === false && options?.verificationApproved !== true) {
+    return false;
+  }
+
   if (Array.isArray(finalAnalysis?.scorecards) && finalAnalysis.scorecards.length > 0) {
-    const criticCards = finalAnalysis.scorecards.filter(
-      (sc: any) => sc && typeof sc === 'object' && /critic|\brisk\b/i.test(String(sc.seat || sc.role || ''))
-    );
+    const criticCards = finalAnalysis.scorecards.filter(isRiskCriticScorecard);
     const cardsToCheck = criticCards.length > 0
       ? criticCards
       : finalAnalysis.scorecards.filter((sc: any) => sc && typeof sc === 'object' && typeof sc.verdict === 'string');
 
     if (cardsToCheck.length > 0) {
-      const hasVeto = cardsToCheck.some((sc: any) =>
-        /^(?:veto|vetoed|reject|rejected|fail|failed)$/i.test(String(sc.verdict || '').trim())
-      );
-      if (hasVeto) return false;
+      const hasEffectiveVeto = cardsToCheck.some((sc: any) => {
+        if (isContradictoryManagerVetoScorecard(sc, survivingPicks) && options?.hadDeterministicVetoes !== true) {
+          return false;
+        }
+        return (
+          SCORECARD_VETO_VERDICT_REGEX.test(String(sc.verdict || '').trim()) ||
+          (isRiskCriticScorecard(sc) && sc.criticApproved === false)
+        );
+      });
+      if (hasEffectiveVeto) return false;
 
-      const hasApprove = cardsToCheck.some((sc: any) =>
-        /^(?:approve|approved|pass|passed|accept)$/i.test(String(sc.verdict || '').trim())
+      const hasApprove = cardsToCheck.some(
+        (sc: any) =>
+          SCORECARD_APPROVE_VERDICT_REGEX.test(String(sc.verdict || '').trim()) ||
+          sc.criticApproved === true
       );
       if (hasApprove) {
-        const survivingPicks = Array.isArray(finalAnalysis.picks) ? finalAnalysis.picks.length : 0;
         if (options?.criticVerdictApproved === false && survivingPicks === 0) {
           return false;
         }
@@ -647,3 +690,156 @@ export function resolveFinalCriticApproved(
   }
   return true;
 }
+
+export interface ReconcileFinalVerdictOptions {
+  criticPass1Approved?: boolean;
+  criticVerdictApproved?: boolean;
+  deterministicVetoes?: Array<unknown>;
+  hadDeterministicVetoes?: boolean;
+  hadFullVeto?: boolean;
+  criticAuditFailed?: boolean;
+  verificationSuccess?: boolean;
+  verificationApproved?: boolean;
+  vetoTexts?: string[];
+  vetoedLegs?: VetoedLegTarget[];
+  seatScorecards?: any[];
+  initialPicks?: any[];
+}
+
+/**
+ * Enforces the authoritative Risk Critic verdict lock, normalizes contradictory
+ * Manager `Risk Critic` scorecard verdicts when Pass 1 approved cleanly, always emits
+ * explicit top-level boolean `wageringPass`, and enforces strict mutual exclusion:
+ * - `criticApproved === false` => ALWAYS `picks: []` and `wageringPass: true`
+ * - `criticApproved === true && picks.length > 0` => ALWAYS `wageringPass: false`
+ */
+export function reconcileFinalVerdictAndPicks<T extends Record<string, any>>(
+  finalAnalysis: T,
+  options?: ReconcileFinalVerdictOptions
+): T {
+  if (!finalAnalysis || typeof finalAnalysis !== 'object') return finalAnalysis;
+
+  const rep = finalAnalysis as Record<string, any>;
+  if ('winProbHome' in rep || 'win_prob_home' in rep) {
+    return finalAnalysis;
+  }
+
+  const pass1Approved =
+    typeof options?.criticPass1Approved === 'boolean'
+      ? options.criticPass1Approved
+      : options?.criticVerdictApproved;
+  const deterministicVetoesCount = Array.isArray(options?.deterministicVetoes)
+    ? options.deterministicVetoes.length
+    : 0;
+  const hadDeterministicVetoes = Boolean(
+    options?.hadDeterministicVetoes ||
+      deterministicVetoesCount > 0 ||
+      options?.criticAuditFailed === true ||
+      options?.verificationSuccess === false ||
+      rep.verified === false ||
+      rep.verification?.success === false
+  );
+
+  const currentPicksCount = Array.isArray(rep.picks) ? rep.picks.length : 0;
+  const authoritativelyApproved =
+    pass1Approved === true &&
+    !hadDeterministicVetoes &&
+    options?.hadFullVeto !== true &&
+    currentPicksCount > 0;
+
+  if (authoritativelyApproved) {
+    rep.criticApproved = true;
+    rep.wageringPass = false;
+    if (rep.pass === true) rep.pass = false;
+    if (Array.isArray(rep.scorecards)) {
+      rep.scorecards = rep.scorecards.map((sc: any) => {
+        if (!isRiskCriticScorecard(sc)) return sc;
+        return {
+          ...sc,
+          seat: sc.seat || 'Risk Critic',
+          verdict: 'approve',
+          criticApproved: true,
+          wageringPass: false
+        };
+      });
+    }
+    return finalAnalysis;
+  }
+
+  const resolvedApproved = resolveFinalCriticApproved(rep, {
+    criticAuditFailed: options?.criticAuditFailed,
+    criticVerdictApproved: pass1Approved,
+    verificationSuccess: options?.verificationSuccess,
+    verificationApproved: options?.verificationApproved,
+    hadFullVeto: options?.hadFullVeto,
+    hadDeterministicVetoes
+  });
+
+  rep.criticApproved = resolvedApproved;
+
+  if (!resolvedApproved) {
+    const initialCount = Math.max(
+      options?.initialPicks?.length ?? 0,
+      currentPicksCount,
+      options?.vetoedLegs?.length ?? 0
+    );
+    const hadAnyCandidateOrPicks =
+      initialCount > 0 ||
+      Boolean(options?.vetoTexts?.length) ||
+      Boolean(options?.vetoedLegs?.length);
+
+    rep.picks = [];
+    if (Array.isArray(rep.components)) {
+      rep.components = rep.components.filter((c: any) => {
+        if (!c || typeof c !== 'object') return false;
+        if (c.type === 'DataTable') {
+          const title = String(c.props?.title || '');
+          if (/\b(?:selected|recommended)\s+(?:wagers?|bets?|picks?|plays?)|parlay\s+legs?\b/i.test(title)) {
+            return false;
+          }
+          return true;
+        }
+        return c.type === 'InsightList';
+      });
+    }
+
+    if (hadAnyCandidateOrPicks) {
+      const normalizedVetoTexts =
+        Array.isArray(options?.vetoTexts) && options.vetoTexts.length > 0
+          ? options.vetoTexts
+          : (typeof rep.reason === 'string' && rep.reason.trim()
+              ? [rep.reason.trim()]
+              : ['All proposed selections were vetoed by the Risk Critic.']);
+      normalizePassIfAllLegsVetoed(rep, Math.max(initialCount, 1), true, {
+        vetoTexts: normalizedVetoTexts,
+        vetoedLegs: options?.vetoedLegs,
+        seatScorecards: options?.seatScorecards,
+        criticApproved: false
+      });
+    }
+    rep.criticApproved = false;
+    rep.wageringPass = true;
+    rep.pass = true;
+    if (!rep.status) rep.status = 'no_play';
+    return finalAnalysis;
+  }
+
+  // resolvedApproved === true
+  const survivingCount = Array.isArray(rep.picks) ? rep.picks.length : 0;
+  rep.wageringPass = survivingCount === 0;
+  if (survivingCount > 0 && Array.isArray(rep.scorecards)) {
+    rep.scorecards = rep.scorecards.map((sc: any) => {
+      if (!isContradictoryManagerVetoScorecard(sc, survivingCount)) return sc;
+      return {
+        ...sc,
+        seat: sc.seat || 'Risk Critic',
+        verdict: 'approve',
+        criticApproved: true,
+        wageringPass: false
+      };
+    });
+  }
+
+  return finalAnalysis;
+}
+

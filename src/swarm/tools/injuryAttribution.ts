@@ -182,18 +182,50 @@ export const ESPN_TEAMS: EspnTeamEntry[] = RAW_TEAMS.map(t => {
   };
 });
 
+export function isExplicitNonProSportHint(hint?: string): boolean {
+  if (!hint || typeof hint !== 'string') return false;
+  const s = hint.toLowerCase().trim();
+  if (!s) return false;
+  return (
+    /\b(?:ncaa|ncaaf|ncaab|ncaaw|cfb|cbb|college|wnba|mls|epl|uefa|fifa|soccer|tennis|atp|wta|pga|golf|ufc|mma|f1|boxing|cfl|ufl|xfl|euroleague)\b/i.test(s) ||
+    /(?:college-football|college_football|college-basketball|college_basketball|americanfootball_ncaaf|basketball_ncaab|basketball_wncaab|basketball_wnba|baseball_ncaa|icehockey_ncaa|womens-college)/i.test(s)
+  );
+}
+
 export function normalizeSportHint(hint?: string): 'nhl' | 'nba' | 'nfl' | 'mlb' | undefined {
   if (!hint || typeof hint !== 'string') return undefined;
   const s = hint.toLowerCase().trim();
-  if (s.startsWith('nhl') || s.includes('hockey') || s.includes('nhl')) return 'nhl';
-  if (s.startsWith('nba') || s.includes('basketball') || s.includes('nba')) return 'nba';
-  if (s.startsWith('nfl') || s.includes('football') || s.includes('nfl')) return 'nfl';
-  if (s.startsWith('mlb') || s.includes('baseball') || s.includes('mlb')) return 'mlb';
+  if (!s || isExplicitNonProSportHint(s)) return undefined;
+  if (/^(?:nhl|icehockey_nhl|icehockey|hockey)\b|\b(?:nhl|icehockey_nhl|icehockey|hockey)\b/.test(s)) return 'nhl';
+  if (/^(?:nba|basketball_nba|basketball)\b|\b(?:nba|basketball_nba|basketball)\b/.test(s)) return 'nba';
+  if (/^(?:nfl|americanfootball_nfl|football)\b|\b(?:nfl|americanfootball_nfl|football)\b/.test(s)) return 'nfl';
+  if (/^(?:mlb|baseball_mlb|baseball)\b|\b(?:mlb|baseball_mlb|baseball)\b/.test(s)) return 'mlb';
   return undefined;
+}
+
+function escapeTeamRx(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function isConsistentCityOrAliasPrefix(remaining: string, team: { city: string; name: string; aliases: string[] }): boolean {
+  if (!remaining) return true;
+  const remWords = remaining.split(/\s+/).filter(Boolean);
+  if (remWords.length === 0) return true;
+  const cityLower = team.city.toLowerCase();
+  const cityWords = cityLower.split(/\s+/).filter(Boolean);
+  const cityInitials = cityWords.length >= 2 ? cityWords.map(w => w[0]).join('') : '';
+  const allowedTokens = new Set<string>([
+    ...cityWords,
+    ...(cityInitials ? [cityInitials] : []),
+    ...team.aliases.flatMap(a => a.split(/\s+/).filter(Boolean))
+  ]);
+  return remWords.every(w => allowedTokens.has(w));
 }
 
 export function matchTeamByLabel(label: string, sportHint?: string): EspnTeamEntry | undefined {
   if (!label || typeof label !== 'string') return undefined;
+  if (isExplicitNonProSportHint(sportHint)) return undefined;
+
   const cleaned = label
     .replace(/\([^)]*\)/g, ' ')
     .replace(/[^a-zA-Z0-9.\s-]/g, ' ')
@@ -220,18 +252,49 @@ export function matchTeamByLabel(label: string, sportHint?: string): EspnTeamEnt
       return t;
     }
   }
-  // 3. Substring match on full name or nickname
+  // 3a. Word-boundary substring match on full team name or team-identifying multi-word aliases (never bare city names)
+  const cityLowerNormalized = (t: EspnTeamEntry) => t.city.toLowerCase();
   for (const t of candidates) {
-    if (cleaned.includes(t.name.toLowerCase()) || cleaned.includes(t.nickname.toLowerCase())) {
+    const fullRx = new RegExp(`\\b${escapeTeamRx(t.name.toLowerCase())}\\b`);
+    if (fullRx.test(cleaned)) {
       return t;
     }
-  }
-  // If sportHint narrowed too far, try all sports on exact name/nickname
-  if (sport) {
-    for (const t of ESPN_TEAMS) {
-      if (t.name.toLowerCase() === cleaned || t.nickname.toLowerCase() === cleaned) {
+    const nickLower = t.nickname.toLowerCase();
+    const cityLow = cityLowerNormalized(t);
+    for (const alias of t.aliases) {
+      if (!alias.includes(' ') || alias === cityLow) continue;
+      // Ignore punctuation-stripped bare city aliases (e.g., "st louis", "las vegas") unless the nickname/prefix is consistent
+      const aliasRx = new RegExp(`\\b${escapeTeamRx(alias)}\\b`);
+      if (!aliasRx.test(cleaned)) continue;
+      if (alias.includes(nickLower)) {
         return t;
       }
+      const rem = cleaned
+        .replace(aliasRx, ' ')
+        .replace(/\b(?:r\d+|spr|ml|tot|moneyline|spread|over|under|total|home|away|pick|play|team|vs|at)\b/gi, ' ')
+        .replace(/[+-]?\d+(?:\.\d+)?/g, ' ')
+        .replace(/[^a-z\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (isConsistentCityOrAliasPrefix(rem, t)) {
+        return t;
+      }
+    }
+  }
+  // 3b. Word-boundary nickname match ONLY when remaining team prefix words do not contradict the team city
+  for (const t of candidates) {
+    const nick = t.nickname.toLowerCase();
+    const nickRx = new RegExp(`\\b${escapeTeamRx(nick)}\\b`);
+    if (!nickRx.test(cleaned)) continue;
+    const withoutNick = cleaned
+      .replace(new RegExp(`\\b${escapeTeamRx(nick)}\\b`, 'g'), ' ')
+      .replace(/\b(?:r\d+|spr|ml|tot|moneyline|spread|over|under|total|home|away|pick|play|team|vs|at)\b/gi, ' ')
+      .replace(/[+-]?\d+(?:\.\d+)?/g, ' ')
+      .replace(/[^a-z\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (isConsistentCityOrAliasPrefix(withoutNick, t)) {
+      return t;
     }
   }
   return undefined;
@@ -244,15 +307,16 @@ export function resolveEspnTeam(
 ): EspnTeamEntry | undefined {
   const id = String(rawTeamId || '').trim();
   if (!id) return undefined;
+  if (isExplicitNonProSportHint(sportHint)) return undefined;
 
   let sport = normalizeSportHint(sportHint);
   const cleanMatchup = (matchupTeams || [])
     .map(m => (typeof m === 'string' ? m.trim() : ''))
     .filter(m => m && !/^(away|home|unknown|tbd)$/i.test(m));
 
-  if (!sport && cleanMatchup.length > 0) {
+  if (!sport && cleanMatchup.length > 0 && !isExplicitNonProSportHint(cleanMatchup.join(' '))) {
     for (const m of cleanMatchup) {
-      const matched = matchTeamByLabel(m);
+      const matched = matchTeamByLabel(m, sportHint);
       if (matched) {
         sport = matched.sport;
         break;
@@ -263,7 +327,7 @@ export function resolveEspnTeam(
   // If matchup teams are known, check if rawTeamId matches one of the matchup teams in its sport
   if (cleanMatchup.length > 0) {
     const resolvedMatchupEntries = cleanMatchup
-      .map(m => matchTeamByLabel(m, sport))
+      .map(m => matchTeamByLabel(m, sport || sportHint))
       .filter((e): e is EspnTeamEntry => Boolean(e));
     for (const entry of resolvedMatchupEntries) {
       if (entry.id === id || entry.abbr.toLowerCase() === id.toLowerCase() || entry.name.toLowerCase() === id.toLowerCase()) {
@@ -277,6 +341,7 @@ export function resolveEspnTeam(
     if (byId) return byId;
     const byLabel = matchTeamByLabel(id, sport);
     if (byLabel) return byLabel;
+    return undefined;
   }
 
   // Unique high-number ESPN IDs (like 129764 for Utah Mammoth, 124292 for Seattle Kraken, 33 for BAL, 34 for HOU, 37 for VGK)
@@ -286,7 +351,7 @@ export function resolveEspnTeam(
   }
 
   if (!/^\d+$/.test(id)) {
-    return matchTeamByLabel(id, sport);
+    return matchTeamByLabel(id, sportHint);
   }
 
   return undefined;

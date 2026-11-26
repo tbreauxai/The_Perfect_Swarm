@@ -297,6 +297,52 @@ export class Agent {
                 lastFailedProvider = String(currentTarget.provider);
                 lastFailedModel = targetModel;
                 lastError = new Error(`model marked dead by catalog probe`);
+                let deadFallback: ProviderCredential | undefined;
+                let deadFallbackModel = '';
+                for (let j = targetIdx + 1; j < targetChain.length; j++) {
+                    const cand = targetChain[j];
+                    const candModel = resolveTargetModelName(cand, String(this.provider), this.modelName);
+                    if (isModelDead(String(cand.provider), candModel)) continue;
+                    if (!globalProviderLimiter.getSkipReason(String(cand.provider), candModel)) {
+                        deadFallback = cand;
+                        deadFallbackModel = candModel;
+                        break;
+                    }
+                }
+                if (deadFallback) {
+                    recordRunDebugFailover(
+                        (context as any)?.id,
+                        this.role,
+                        String(deadFallback.provider),
+                        seatBudget(String(deadFallback.provider)).maxPromptChars
+                    );
+                }
+                context.addEvent({
+                    agentRole: this.role,
+                    action: 'Provider Skipped',
+                    modelName: `${currentTarget.provider}/${targetModel}`,
+                    prompt: `Skipped provider target: model marked dead by catalog probe`,
+                    durationMs: 0,
+                    failover: {
+                        fromProvider: String(currentTarget.provider),
+                        fromModel: targetModel,
+                        ...(deadFallback ? { toProvider: String(deadFallback.provider), toModel: deadFallbackModel } : {}),
+                        status: null,
+                        reason: 'dead_model',
+                        errorSnippet: 'model marked dead by catalog probe',
+                        durationMs: 0
+                    },
+                    output: {
+                        provider: currentTarget.provider,
+                        model: targetModel,
+                        fromProvider: String(currentTarget.provider),
+                        fromModel: targetModel,
+                        ...(deadFallback ? { toProvider: String(deadFallback.provider), toModel: deadFallbackModel } : {}),
+                        reason: 'model marked dead by catalog probe',
+                        errorSnippet: 'model marked dead by catalog probe',
+                        durationMs: 0
+                    }
+                });
                 continue;
             }
             // Don't call a provider the limiter already knows will refuse. A circuit,
@@ -335,57 +381,55 @@ export class Agent {
                         console.warn(`[${this.role}][${currentTarget.provider}/${preCheck.targetModel}] ${skipReason}`);
                     }
                     const isCooldownSkip = skipReason.includes('[COOLDOWN_SKIP]');
-                    let cooldownFallback: ProviderCredential | undefined;
-                    let cooldownFallbackModel = '';
-                    if (isCooldownSkip) {
-                        for (let j = targetIdx + 1; j < targetChain.length; j++) {
-                            const cand = targetChain[j];
-                            const candModel = resolveTargetModelName(cand, String(this.provider), this.modelName);
-                            if (isModelDead(String(cand.provider), candModel)) continue;
-                            if (!globalProviderLimiter.getSkipReason(String(cand.provider), candModel)) {
-                                cooldownFallback = cand;
-                                cooldownFallbackModel = candModel;
-                                break;
-                            }
+                    let nextHealthyFallback: ProviderCredential | undefined;
+                    let nextHealthyFallbackModel = '';
+                    for (let j = targetIdx + 1; j < targetChain.length; j++) {
+                        const cand = targetChain[j];
+                        const candModel = resolveTargetModelName(cand, String(this.provider), this.modelName);
+                        if (isModelDead(String(cand.provider), candModel)) continue;
+                        if (!globalProviderLimiter.getSkipReason(String(cand.provider), candModel)) {
+                            nextHealthyFallback = cand;
+                            nextHealthyFallbackModel = candModel;
+                            break;
                         }
-                        if (cooldownFallback) {
-                            recordRunDebugFailover(
-                                (context as any)?.id,
-                                this.role,
-                                String(cooldownFallback.provider),
-                                seatBudget(String(cooldownFallback.provider)).maxPromptChars
-                            );
-                        }
+                    }
+                    if (nextHealthyFallback) {
+                        recordRunDebugFailover(
+                            (context as any)?.id,
+                            this.role,
+                            String(nextHealthyFallback.provider),
+                            seatBudget(String(nextHealthyFallback.provider)).maxPromptChars
+                        );
                     }
                     lastFailedProvider = String(currentTarget.provider);
                     lastFailedModel = preCheck.targetModel;
                     lastError = new Error(skipReason);
                     const redactedSkipReason = redactErrorSnippet(skipReason);
+                    const resolvedReason = isCooldownSkip ? '[COOLDOWN_SKIP]' : skipReason;
                     context.addEvent({
                         agentRole: this.role,
                         action: 'Provider Skipped',
                         modelName: `${currentTarget.provider}/${preCheck.targetModel}`,
                         prompt: `Skipped provider target: ${skipReason}`,
-                        ...(isCooldownSkip ? {
-                            durationMs: 0,
-                            failover: {
-                                fromProvider: String(currentTarget.provider),
-                                fromModel: preCheck.targetModel,
-                                ...(cooldownFallback ? { toProvider: String(cooldownFallback.provider), toModel: cooldownFallbackModel } : {}),
-                                status: null,
-                                reason: '[COOLDOWN_SKIP]',
-                                errorSnippet: redactedSkipReason,
-                                durationMs: 0
-                            }
-                        } : {}),
+                        durationMs: 0,
+                        failover: {
+                            fromProvider: String(currentTarget.provider),
+                            fromModel: preCheck.targetModel,
+                            ...(nextHealthyFallback ? { toProvider: String(nextHealthyFallback.provider), toModel: nextHealthyFallbackModel } : {}),
+                            status: null,
+                            reason: resolvedReason,
+                            errorSnippet: redactedSkipReason,
+                            durationMs: 0
+                        },
                         output: {
                             provider: currentTarget.provider,
                             model: preCheck.targetModel,
                             fromProvider: String(currentTarget.provider),
                             fromModel: preCheck.targetModel,
-                            ...(cooldownFallback ? { toProvider: String(cooldownFallback.provider), toModel: cooldownFallbackModel } : {}),
-                            reason: isCooldownSkip ? '[COOLDOWN_SKIP]' : skipReason,
-                            ...(isCooldownSkip ? { errorSnippet: redactedSkipReason, durationMs: 0 } : {}),
+                            ...(nextHealthyFallback ? { toProvider: String(nextHealthyFallback.provider), toModel: nextHealthyFallbackModel } : {}),
+                            reason: resolvedReason,
+                            errorSnippet: redactedSkipReason,
+                            durationMs: 0,
                             ...(skipReason.startsWith('skipped_tpm_wait:')
                                 ? { skipped_tpm_wait: Math.ceil(preCheck.estimatedWaitMs) }
                                 : {})
@@ -403,6 +447,27 @@ export class Agent {
                 }
                 if (!globalTokenBudgetManager.canAllocate(currentTarget.provider, preCheck.estimatedTokens, preCheck.targetModel)) {
                     const reason = `token budget remaining ${globalTokenBudgetManager.getRemainingBudget(currentTarget.provider, preCheck.targetModel)} < ${preCheck.estimatedTokens}; shifting seat`;
+                    let budgetFallback: ProviderCredential | undefined;
+                    let budgetFallbackModel = '';
+                    for (let j = targetIdx + 1; j < targetChain.length; j++) {
+                        const cand = targetChain[j];
+                        const candModel = resolveTargetModelName(cand, String(this.provider), this.modelName);
+                        if (isModelDead(String(cand.provider), candModel)) continue;
+                        if (!globalProviderLimiter.getSkipReason(String(cand.provider), candModel)) {
+                            budgetFallback = cand;
+                            budgetFallbackModel = candModel;
+                            break;
+                        }
+                    }
+                    if (budgetFallback) {
+                        recordRunDebugFailover(
+                            (context as any)?.id,
+                            this.role,
+                            String(budgetFallback.provider),
+                            seatBudget(String(budgetFallback.provider)).maxPromptChars
+                        );
+                    }
+                    const redactedBudgetReason = redactErrorSnippet(reason);
                     lastFailedProvider = String(currentTarget.provider);
                     lastFailedModel = preCheck.targetModel;
                     lastError = new Error(reason);
@@ -411,12 +476,25 @@ export class Agent {
                         action: 'Provider Skipped',
                         modelName: `${currentTarget.provider}/${preCheck.targetModel}`,
                         prompt: `Skipped provider target: ${reason}`,
+                        durationMs: Math.max(0, Math.round(waitMs || 0)),
+                        failover: {
+                            fromProvider: String(currentTarget.provider),
+                            fromModel: preCheck.targetModel,
+                            ...(budgetFallback ? { toProvider: String(budgetFallback.provider), toModel: budgetFallbackModel } : {}),
+                            status: null,
+                            reason: 'LIMITER_SKIP',
+                            errorSnippet: redactedBudgetReason,
+                            durationMs: Math.max(0, Math.round(waitMs || 0))
+                        },
                         output: {
                             provider: currentTarget.provider,
                             model: preCheck.targetModel,
                             fromProvider: String(currentTarget.provider),
                             fromModel: preCheck.targetModel,
-                            reason
+                            ...(budgetFallback ? { toProvider: String(budgetFallback.provider), toModel: budgetFallbackModel } : {}),
+                            reason,
+                            errorSnippet: redactedBudgetReason,
+                            durationMs: Math.max(0, Math.round(waitMs || 0))
                         }
                     });
                     continue;
@@ -734,6 +812,7 @@ export class Agent {
 
                     const isLimiterSkip = errMsg.includes('[LIMITER_SKIP]');
                     const isRateLimit429 =
+                        httpStatus === 429 ||
                         errMsg.includes('429') ||
                         errMsg.includes('RATE_LIMIT') ||
                         errLower.includes('rate limit') ||
@@ -757,11 +836,12 @@ export class Agent {
                     const isQuotaExhausted =
                         errMsg.includes('RESOURCE_EXHAUSTED') ||
                         errLower.includes('quota') ||
-                        (errMsg.includes('429') && errLower.includes('quota'));
+                        ((httpStatus === 429 || errMsg.includes('429')) && errLower.includes('quota'));
 
-                    const isFailoverEligible = 
+                    const isFailoverEligible =
                         isTransientRateLimitOrSkip ||
                         isParseFailure ||
+                        (httpStatus !== null && httpStatus >= 500) ||
                         errMsg.includes('EMPTY_COMPLETION') ||
                         errMsg.includes('503') ||
                         errMsg.includes('502') ||
@@ -779,10 +859,17 @@ export class Agent {
                         errLower.includes('high traffic') ||
                         errLower.includes('overloaded') ||
                         errLower.includes('unavailable') ||
-                        errLower.includes('capacity');
+                        errLower.includes('capacity') ||
+                        errLower.includes('econnreset') ||
+                        errLower.includes('fetch failed');
 
-                    const isFatal = 
-                        errMsg.includes('404') || 
+                    const isFatal =
+                        httpStatus === 400 ||
+                        httpStatus === 401 ||
+                        httpStatus === 402 ||
+                        httpStatus === 403 ||
+                        httpStatus === 404 ||
+                        errMsg.includes('404') ||
                         errMsg.includes('NOT_FOUND') ||
                         errMsg.includes('400') ||
                         errMsg.includes('401') ||
@@ -813,7 +900,7 @@ export class Agent {
                     }
 
                     // If eligible for failover and a backup provider is ready, failover immediately without waiting
-                    if ((isFailoverEligible || isFatal || isTransientRateLimitOrSkip) && hasNextProvider) {
+                    if ((isFailoverEligible || isFatal || isTransientRateLimitOrSkip || attempt === maxRetries) && hasNextProvider) {
                         let realFallback: typeof currentTarget | undefined;
                         let realFallbackIdx = -1;
                         for (let j = targetIdx + 1; j < targetChain.length; j++) {

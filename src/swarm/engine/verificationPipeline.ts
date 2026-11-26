@@ -33,7 +33,7 @@ import {
     type ToolCallTraceEntry
 } from '../tools/pullBeforePass.ts';
 import { CRITIC_EVIDENCE_RULE } from '../tools/criticEvidence.ts';
-import { CRITIC_AUDIT_RULE, enforceCriticAuditOnFinalAnalysis, resolveFinalCriticApproved } from '../tools/criticAudit.ts';
+import { CRITIC_AUDIT_RULE, enforceCriticAuditOnFinalAnalysis, reconcileFinalVerdictAndPicks, resolveFinalCriticApproved } from '../tools/criticAudit.ts';
 import { syncCompilerProseWithFinalPicks } from '../tools/compilerProseSync.ts';
 import type { ToolEvidenceItem } from './seatToolLoop.ts';
 import type { ToolRegistry } from '../tools/registry.ts';
@@ -882,8 +882,10 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
             finalAnalysis.criticApproved = resolveFinalCriticApproved(finalAnalysis, {
                 criticAuditFailed: false,
                 verificationSuccess: true,
+                verificationApproved: lifecycleResult.success === true && !hadVetoedLegs && combinedVetoTexts.length === 0,
                 criticVerdictApproved: p.criticVerdictApproved,
-                hadFullVeto: initialPickCount > 0 && hadVetoedLegs && finalSurvivingCount === 0
+                hadFullVeto: initialPickCount > 0 && hadVetoedLegs && finalSurvivingCount === 0,
+                hadDeterministicVetoes: hadVetoedLegs || combinedVetoTexts.length > 0 || combinedVetoedClaims.length > 0
             });
         }
     }
@@ -895,6 +897,7 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
             finalAnalysis.ui_title = 'Insufficient data';
             finalAnalysis.reason = 'no picks with specialist coverage';
             finalAnalysis.criticApproved = false;
+            finalAnalysis.wageringPass = true;
         }
     }
 
@@ -951,6 +954,35 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
             });
         }
         sanitizeCompilerProposalOddsAndSummary(finalAnalysis);
+
+        const finalDetVetoes = [
+            ...vetoTextsForSync,
+            ...vetoLegsForSync,
+            ...(Array.isArray(p.vetoedClaims) ? p.vetoedClaims : []),
+            ...(Array.isArray(lifecycleResult?.vetoedClaims) ? lifecycleResult.vetoedClaims : [])
+        ];
+        reconcileFinalVerdictAndPicks(finalAnalysis, {
+            criticPass1Approved: p.criticVerdictApproved,
+            criticVerdictApproved: p.criticVerdictApproved,
+            deterministicVetoes: finalDetVetoes,
+            hadDeterministicVetoes:
+                lifecycleResult?.criticAuditFailed === true ||
+                lifecycleResult?.success === false ||
+                finalAnalysis.verified === false ||
+                finalDetVetoes.length > 0 ||
+                (initialPicksSnapshot.length > 0 && finalAnalysis.picks.length === 0),
+            hadFullVeto: initialPicksSnapshot.length > 0 && finalAnalysis.picks.length === 0,
+            criticAuditFailed: lifecycleResult?.criticAuditFailed === true,
+            verificationSuccess: lifecycleResult?.success !== false && finalAnalysis.verified !== false,
+            verificationApproved:
+                lifecycleResult?.success === true &&
+                finalDetVetoes.length === 0 &&
+                p.criticVerdictApproved !== false,
+            vetoTexts: vetoTextsForSync,
+            vetoedLegs: vetoLegsForSync,
+            seatScorecards: p.seatScorecards,
+            initialPicks: initialPicksSnapshot
+        });
     }
 
     recordRunDebugSeat((context as any)?.id, 'manager', {

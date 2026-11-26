@@ -6,7 +6,7 @@
 
 import type { SwarmTool } from './types.ts';
 import { QdrantClient } from '@qdrant/js-client-rest';
-import { resolveInjuryTeam, matchTeamByLabel } from './injuryAttribution.ts';
+import { resolveInjuryTeam, matchTeamByLabel, isExplicitNonProSportHint } from './injuryAttribution.ts';
 
 export interface SupabaseRpcConfig {
   supabaseUrl: string;
@@ -721,10 +721,11 @@ type NormalizedInjurySport = 'nba' | 'nhl' | 'nfl' | 'ncaaf' | 'other';
 
 function normalizeInjurySport(sportHint?: string, gameId?: string): NormalizedInjurySport {
   const scope = `${sportHint || ''} ${gameId || ''}`.toLowerCase();
-  if (/\b(?:nba|basketball_nba)\b|^nba-/.test(scope)) return 'nba';
-  if (/\b(?:nhl|icehockey_nhl)\b|^nhl-/.test(scope)) return 'nhl';
-  if (/\b(?:ncaaf|college-football|americanfootball_ncaaf)\b|^(?:ncaaf|college-football)-/.test(scope)) return 'ncaaf';
-  if (/\b(?:nfl|americanfootball_nfl)\b|^nfl-/.test(scope)) return 'nfl';
+  if (/(?:^|\s)(?:ncaab|college-basketball|college_basketball|basketball_ncaab|basketball_wncaab|womens-college)|^ncaab-/.test(scope)) return 'other';
+  if (/(?:^|\s)(?:ncaaf|college-football|college_football|americanfootball_ncaaf)|^(?:ncaaf|college-football)-/.test(scope)) return 'ncaaf';
+  if (/(?:^|\s)(?:nba|basketball_nba)(?:[\s_-]|$)/.test(scope)) return 'nba';
+  if (/(?:^|\s)(?:nhl|icehockey_nhl)(?:[\s_-]|$)/.test(scope)) return 'nhl';
+  if (/(?:^|\s)(?:nfl|americanfootball_nfl)(?:[\s_-]|$)/.test(scope)) return 'nfl';
   return 'other';
 }
 
@@ -2420,11 +2421,10 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
       return 3;
     };
 
-    const sportHint = String(
-      [d.sport, ctxAny?.game?.sport, gameId].find(
-        (s) => s && !/^unknown$/i.test(String(s).trim()) && Boolean(String(s).trim())
-      ) || ''
-    );
+    const sportHint = [d.sport, ctxAny?.game?.sport, d.league, ctxAny?.game?.league, gameId]
+      .map((s) => String(s || '').trim())
+      .filter((s) => s && !/^unknown$/i.test(s))
+      .join(' ');
     const matchupTeams = [
       d.away_team,
       d.home_team,
@@ -2505,23 +2505,33 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
     const isQTag = (statusRaw: unknown): boolean =>
       /^(?:questionable|doubtful|day[- ]to[- ]day|gtd|game[- ]time\s+decision)$/i.test(String(statusRaw || '').trim());
 
-    const resolveFullTeamDisplay = (raw: unknown): string | undefined => {
+    const isNonProGame = isExplicitNonProSportHint(sportHint) || isExplicitNonProSportHint(gameId);
+    const resolveFullTeamDisplay = (raw: unknown, allowCanonicalLookup: boolean = true): string | undefined => {
       if (typeof raw !== 'string' || !raw.trim()) return undefined;
       const trimmed = raw.trim();
+      if (isNonProGame || !allowCanonicalLookup) {
+        return trimmed;
+      }
+      // Prefer exact multi-word team names from the game record/snapshot instead of running
+      // sport-agnostic mascot matching that could remap a college or non-matching club.
+      const isMultiWordFullName = trimmed.includes(' ') && trimmed.length > 5;
+      if (isMultiWordFullName) {
+        return trimmed;
+      }
       const matched = matchTeamByLabel(trimmed, sportHint);
       return matched ? matched.name : trimmed;
     };
 
     let homeTeamDisplay =
-      resolveFullTeamDisplay(d.home_team) ??
-      resolveFullTeamDisplay(d.home?.name) ??
-      resolveFullTeamDisplay(ctxAny?.game?.home_team) ??
-      resolveFullTeamDisplay(d.home_team_abbr ?? d.home_abbr ?? d.home?.abbr ?? ctxAny?.game?.home_team_abbr);
+      resolveFullTeamDisplay(d.home_team, false) ??
+      resolveFullTeamDisplay(d.home?.name, false) ??
+      resolveFullTeamDisplay(ctxAny?.game?.home_team, false) ??
+      resolveFullTeamDisplay(d.home_team_abbr ?? d.home_abbr ?? d.home?.abbr ?? ctxAny?.game?.home_team_abbr, true);
     let awayTeamDisplay =
-      resolveFullTeamDisplay(d.away_team) ??
-      resolveFullTeamDisplay(d.away?.name) ??
-      resolveFullTeamDisplay(ctxAny?.game?.away_team) ??
-      resolveFullTeamDisplay(d.away_team_abbr ?? d.away_abbr ?? d.away?.abbr ?? ctxAny?.game?.away_team_abbr);
+      resolveFullTeamDisplay(d.away_team, false) ??
+      resolveFullTeamDisplay(d.away?.name, false) ??
+      resolveFullTeamDisplay(ctxAny?.game?.away_team, false) ??
+      resolveFullTeamDisplay(d.away_team_abbr ?? d.away_abbr ?? d.away?.abbr ?? ctxAny?.game?.away_team_abbr, true);
 
     const normalizedSport = normalizeInjurySport(sportHint || d.sport || ctxAny?.game?.sport, gameId);
     const suppliedPlayerLogs: PlayerGameLogRow[] = Array.isArray(ctxAny?.playerGameLogs)
@@ -2558,8 +2568,10 @@ export const getInjuryAndRosterDeltaTool: SwarmTool = {
     const injuryLines: string[] = [];
     for (const [groupKey, { label, items }] of grouped.entries()) {
       const firstName = items[0]?.team_name || label.replace(/\s*\([^)]*\)\s*$/, '').trim();
-      const matchedEntry = matchTeamByLabel(firstName, sportHint) || matchTeamByLabel(groupKey, sportHint);
-      const teamNameResolved = matchedEntry?.name || firstName;
+      const matchedEntry = isNonProGame
+        ? undefined
+        : (matchTeamByLabel(firstName, sportHint) || matchTeamByLabel(groupKey, sportHint));
+      const teamNameResolved = (firstName && firstName.includes(' ')) ? firstName : (matchedEntry?.name || firstName);
       const teamAbbrResolved = matchedEntry?.abbr || items[0]?.team_abbr || groupKey;
       const teamPlayerIds = items
         .map((it: any) => it?.player_id ?? it?.espn_id ?? it?.athlete_id)
