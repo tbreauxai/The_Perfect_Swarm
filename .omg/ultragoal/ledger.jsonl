@@ -35,3 +35,10 @@
 {"ts":"2026-11-25T11:18:00-06:00","session":"wf-1795624413788","event":"goal_completed","goalId":"G1","nextGoal":"G2","evidence":"Implemented isolatePickSideLabel, extractStructuredPickSideText, earliest-mention resolveTeamFromText, and structured pick precedence in src/swarm/tools/marketRowBinding.ts."}
 
 {"ts":"2026-11-25T11:20:00-06:00","session":"wf-1795624413788","event":"goal_completed","goalId":"G2","evidence":"npx tsc --noEmit exited 0; 5 targeted Vitest files (34/34 tests) passed; full npx vitest run passed 208/222 files (1680 passed, 6 skipped, 14 pre-existing/upstream failures). Local-only on fix/swarm-wf-1795624413788."}
+
+{"ts":"2026-11-25T17:52:00-06:00","session":"wf-1795647813045","event":"initialized","branch":"fix/swarm-final-polish","activeGoal":"G1"}
+
+{"ts":"2026-11-25T17:53:40-06:00","session":"wf-1795647813045","event":"goal_completed","goalId":"G1","nextGoal":"G2","evidence":"Implemented S1 boxscore sample gate, unlogged <5-date guard, and espn_roster_meta/nhl_roster_meta scoring in src/swarm/tools/dueloddsRpcTools.ts."}
+{"ts":"2026-11-25T17:53:40-06:00","session":"wf-1795647813045","event":"goal_completed","goalId":"G2","nextGoal":"G3","evidence":"Implemented picks=<N> reconciliation in syncCompilerProseWithFinalPicks in src/swarm/tools/compilerProseSync.ts."}
+
+{"ts":"2026-11-25T17:57:00-06:00","session":"wf-1795647813045","event":"goal_completed","goalId":"G3","evidence":"npx tsc --noEmit exited 0; 6 targeted Vitest files (69/69 tests) passed after final edit. Local-only on fix/swarm-final-polish."}

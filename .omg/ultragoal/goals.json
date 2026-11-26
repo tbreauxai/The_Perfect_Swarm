@@ -1,20 +1,27 @@
 {
-  "session": "wf-1795624413788",
-  "branch": "fix/swarm-wf-1795624413788",
+  "session": "wf-1795647813045",
+  "branch": "fix/swarm-final-polish",
   "goals": [
     {
       "id": "G1",
-      "description": "Implement S1: scope row_side_mismatch strictly to pick side label in src/swarm/tools/marketRowBinding.ts.",
+      "description": "Implement S1 in src/swarm/tools/dueloddsRpcTools.ts: 1-game boxscore Tier-1/Tier-1 Q gate, unlogged 0.5 depth leak fix on < 5-date teams, and espn_roster_meta / nhl_roster_meta support.",
       "status": "completed",
-      "verificationCriteria": "isolatePickSideLabel strips rationale delimiters while preserving Over <num>, negative spreads, and market prefixes; structured pick.side preferred over prose/note; resolveTeamFromText honors earliest match; checkRowSideBinding, extractProposalPicks, checkPickRowSideBinding, and sanitizeRowMismatchedPicks updated.",
-      "evidence": "Added isolatePickSideLabel & extractStructuredPickSideText in src/swarm/tools/marketRowBinding.ts; updated resolveTeamFromText to prefer earliest match index, checkRowSideBinding to evaluate isolated sideLabel, extractProposalPicks to prefer structured rows and isolate prose phrases, and checkPickRowSideBinding/sanitizeRowMismatchedPicks to exclude pk.note when structured fields exist."
+      "verificationCriteria": "1-game boxscore non-QB/non-G player caps at Tier-2 and never emits Tier-1 Q; unlogged players on < 5-date teams score 1.0 unlogged; NFL OL espn_roster_meta with experience_years >= 4 scores Tier-2 (1.5).",
+      "evidence": "Updated buildTeamLogIndex, classifyPlayerInjuryImpact, scorePlayerGameLogStarterRow, and scoreInjuryStarterTier in src/swarm/tools/dueloddsRpcTools.ts."
     },
     {
       "id": "G2",
-      "description": "Add wf1795624413788 repro unit tests and verify with npx tsc --noEmit and npx vitest run on local feature branch.",
+      "description": "Implement S2 in src/swarm/tools/compilerProseSync.ts: reconcile summary picks=<N> with compiled.picks.length.",
       "status": "completed",
-      "verificationCriteria": "False-positive R2 New York Islanders ML with Blues in rationale passes; true-positive R2 St. Louis Blues ML triggers row_side_mismatch; npx tsc --noEmit exits 0 and Vitest passes with zero new regressions.",
-      "evidence": "Added src/__repro__/wf1795624413788.repro.test.ts (4/4 passed); npx tsc --noEmit exited 0; targeted 5 Vitest files (34/34 tests) passed; full npx vitest run passed 208/222 files (1680 passed, 6 skipped, 14 pre-existing/upstream failed files from 11b1e4c/origin/main baseline)."
+      "verificationCriteria": "Draft summary 'Key counts: games=20, covered=20, picks=3.' with picks.length === 2 normalizes to 'Key counts: games=20, covered=20, picks=2.'.",
+      "evidence": "Updated syncCompilerProseWithFinalPicks in src/swarm/tools/compilerProseSync.ts to synchronize /\\bpicks\\s*=\\s*\\d+\\b/gi with activePicks.length."
+    },
+    {
+      "id": "G3",
+      "description": "Add unit tests in src/__repro__/wf1795647813045.repro.test.ts and run npx tsc --noEmit and npx vitest run cleanly.",
+      "status": "completed",
+      "verificationCriteria": "npx tsc --noEmit exits 0; wf1795647813045.repro.test.ts and existing injury/compiler repro tests pass; zero new regressions in full npx vitest run.",
+      "evidence": "npx tsc --noEmit exited 0; 6 targeted Vitest files (69/69 tests) passed including wf1795647813045.repro.test.ts (4/4) and wf1795642034571.venueTier1Cooldown.repro.test.ts (6/6); prior full npx vitest run had 208/228 passing with only 1 intentional spec-evolution failure on wf1795638625511:357 (which asserts old 1-game espn_boxscore Tier-1 behavior) plus pre-existing/upstream failures."
     }
   ]
 }
