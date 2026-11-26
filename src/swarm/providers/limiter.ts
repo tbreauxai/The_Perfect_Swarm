@@ -157,11 +157,13 @@ export function isGeminiProjectWideFailure(err: unknown): boolean {
     msg.includes("RATE_LIMIT") ||
     /resource_exhausted|quota\s+exceeded|rate\s+limit/i.test(msg);
   if (is429) {
+    if (isFreeTierZeroLimitError(msg)) {
+      return false;
+    }
     if (
       isExplicitDailyRpdError(msg) ||
       /\blimit\s*:\s*0\b/i.test(msg) ||
       /quota_limit_value["']?\s*[:=]\s*["']?0\b/i.test(msg) ||
-      /free_tier_requests.*limit\s*:\s*0/i.test(msg) ||
       /project.*quota.*exhausted/i.test(msg)
     ) {
       return true;
@@ -171,6 +173,11 @@ export function isGeminiProjectWideFailure(err: unknown): boolean {
   }
 
   return false;
+}
+
+export function isFreeTierZeroLimitError(message: string): boolean {
+  const msg = message || "";
+  return /free_tier/i.test(msg) && /\blimit\s*:\s*0\b/i.test(msg);
 }
 
 export function classifyProviderError(
@@ -384,6 +391,13 @@ export class ProviderLimiter {
     } else if (kind === "model_dead") {
       if (model)
         this.deadModels.set(`${provider}::${model}`, t + DEAD_MODEL_MS);
+    } else if (provider === "gemini" && isFreeTierZeroLimitError(message)) {
+      if (model) {
+        this.modelCooldowns.set(`${provider}::${model}`, {
+          until: nextUtcMidnight(t),
+          reason: `[COOLDOWN_SKIP] free_tier limit: 0 on ${model}`,
+        });
+      }
     } else if (provider === "gemini" && isGeminiProjectWideFailure(message)) {
       // S3.1: Project-wide / auth / 400 / daily-quota Gemini failure opens provider-level cooldown
       // immediately so remaining Gemini siblings are skipped in 1 hop.

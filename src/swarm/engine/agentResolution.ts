@@ -1,6 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 import { Agent } from '../agent.ts';
-import { DEFAULT_PROVIDER_MODELS, remapDeprecatedGeminiModel } from '../server/modelsProvider.ts';
+import { DEFAULT_PROVIDER_MODELS, remapDeprecatedGeminiModel, isModelDead } from '../server/modelsProvider.ts';
+import { globalProviderLimiter } from '../providers/limiter.ts';
 import type { ProviderCredential, Provider, AgentConfig } from '../types.ts';
 import type { SwarmEngineSettings } from '../types.ts';
 import type { AgentVariantConfig, AgentExperiment } from '../experiment.ts';
@@ -153,12 +154,27 @@ export function resolveSwarmAgents(
         if (finalAKey || isMock) {
             const aModel = normalizeModelForProvider(ac.provider, ac.model || (ac as any).modelName);
             const explicitFallbacks = normalizeFallbackList((ac as any).fallbackProviders || (ac as any).fallbacks);
-            const aFallbacks = mergeFallbacks(explicitFallbacks, availableFallbacks).filter(f => f.provider !== ac.provider);
+            const isQuantA1 = ac.id === 'a1' || /\bquant\b/i.test(ac.role || '');
+            const a1GeminiSiblings: ProviderCredential[] =
+                isQuantA1 && ac.provider === 'gemini'
+                    ? (['gemini-4-hydrogen', 'gemini-3.8-flash', 'gemini-3.5-flash-lite'] as const)
+                        .filter((m) => m !== aModel && globalProviderLimiter.isAvailable('gemini', m) && !isModelDead('gemini', m))
+                        .map((m) => ({
+                            provider: 'gemini' as Provider,
+                            modelName: m,
+                            apiKey: finalAKey,
+                            aiClient: aClient
+                        }))
+                    : [];
+            const nonSameProviderFallbacks = mergeFallbacks(explicitFallbacks, availableFallbacks).filter(f => f.provider !== ac.provider);
+            const aFallbacks = a1GeminiSiblings.length > 0
+                ? mergeFallbacks(explicitFallbacks.filter(f => f.provider === 'gemini'), a1GeminiSiblings, nonSameProviderFallbacks)
+                : nonSameProviderFallbacks;
             const analyst = new Agent(ac.role || 'Analyst', aModel, ac.provider, finalAKey, aClient, aFallbacks);
             analyst.id = ac.id || ac.role;
             analyst.maxTokens = ac.maxTokens;
             analyst.disableFallback = !!(settings?.disableFallback || (ac as any).disableFallback || (ac as any).strictProvider);
-            if (explicitFallbacks.length > 0) {
+            if (explicitFallbacks.length > 0 || a1GeminiSiblings.length > 0) {
                 analyst.preserveFallbackOrder = true;
             }
             analysts.push(analyst);

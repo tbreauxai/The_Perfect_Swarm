@@ -42,3 +42,10 @@
 {"ts":"2026-11-25T17:53:40-06:00","session":"wf-1795647813045","event":"goal_completed","goalId":"G2","nextGoal":"G3","evidence":"Implemented picks=<N> reconciliation in syncCompilerProseWithFinalPicks in src/swarm/tools/compilerProseSync.ts."}
 
 {"ts":"2026-11-25T17:57:00-06:00","session":"wf-1795647813045","event":"goal_completed","goalId":"G3","evidence":"npx tsc --noEmit exited 0; 6 targeted Vitest files (69/69 tests) passed after final edit. Local-only on fix/swarm-final-polish."}
+
+{"ts":"2026-11-25T19:22:30-06:00","session":"wf-1795652004895","event":"initialized","branch":"fix/swarm-wf-1795652004895","activeGoal":"G1"}
+
+{"ts":"2026-11-25T19:23:45-06:00","session":"wf-1795652004895","event":"goal_completed","goalId":"G1","nextGoal":"G2","evidence":"Added GENERIC_PILLAR_FRAMEWORK_REGEX and leg-targeted model_signal/injury seat-clause isolation in src/swarm/tools/claimGrounding.ts."}
+{"ts":"2026-11-25T19:23:45-06:00","session":"wf-1795652004895","event":"goal_completed","goalId":"G2","nextGoal":"G3","evidence":"Wired Gemini 4/3.6+ thinking/sampling hygiene, 15s proposer timeout, a1 sibling order, and 0ms free_tier limit: 0 per-model skip across gemini.ts, limiter.ts, agent.ts, agentResolution.ts, analystExecution.ts."}
+
+{"ts":"2026-11-25T19:26:30-06:00","session":"wf-1795652004895","event":"goal_completed","goalId":"G3","evidence":"npx tsc --noEmit exited 0; 9 targeted Vitest files (90/90 tests) passed including wf1795652004895.repro.test.ts (4/4). Local-only on fix/swarm-wf-1795652004895."}

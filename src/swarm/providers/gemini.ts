@@ -14,6 +14,11 @@ export function isGemini4Model(modelName: string): boolean {
     return /^gemini-4(?:[-.]|$)/i.test(norm);
 }
 
+export function isGemini36PlusOr4Model(modelName: string): boolean {
+    const norm = String(modelName || '').replace(/^models\//i, '').trim().toLowerCase();
+    return /^gemini-(?:3\.(?:[6-9]|\d{2,})|4)(?:[-.]|$)/i.test(norm);
+}
+
 const VALID_THINKING_LEVELS: Record<string, ThinkingLevel> = {
     minimal: ThinkingLevel.MINIMAL,
     low: ThinkingLevel.LOW,
@@ -94,8 +99,8 @@ export function buildGeminiRequestConfig(
         delete reqConfig.max_output_tokens;
         delete reqConfig.max_completion_tokens;
 
-        // Gemini 4 rejects deprecated sampling params (temperature, topP, topK, candidateCount)
-        if (isGemini4Model(effectiveModelName)) {
+        // Gemini 3.6+ and Gemini 4 reject/ignore legacy sampling params (temperature, topP, topK, candidateCount)
+        if (isGemini36PlusOr4Model(effectiveModelName)) {
             delete reqConfig.temperature;
             delete reqConfig.topP;
             delete reqConfig.topK;
@@ -110,8 +115,8 @@ export function buildGeminiRequestConfig(
             if (resolvedLevel === ThinkingLevel.MINIMAL && isGemini4Model(effectiveModelName)) {
                 resolvedLevel = ThinkingLevel.LOW;
             }
-        } else if (reqConfig.responseMimeType === 'application/json') {
-            // Fast JSON compilation on Gemini 3.x / 4.x
+        } else if (reqConfig.responseMimeType === 'application/json' || isGemini36PlusOr4Model(effectiveModelName)) {
+            // Fast low-thinking default on Gemini 3.6+ / Gemini 4 and JSON compilation
             resolvedLevel = ThinkingLevel.LOW;
         }
 
