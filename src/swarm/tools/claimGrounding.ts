@@ -1811,6 +1811,9 @@ const BLANKET_MULTI_LEG_SUBJECT_REGEX =
 const BLANKET_TWO_PILLAR_CLAIM_REGEX =
   /\b(?:(?:>=?|at\s+least\s+)?(?:2|two)\s*(?:-|\s+)?pillars?|(?:all\s+)?(?:3|three)\s*(?:-|\s+)?pillars?|satisf(?:y|ies|ying)\s+[^.;\n]{0,50}\bpillars?)\b/i;
 
+const GENERIC_PILLAR_FRAMEWORK_REGEX =
+  /\b(?:at\s+least\s+(?:2|two)\s+of\s+(?:the\s+)?(?:3|three)\s+pillars?|form\s*\/\s*diff\s+edge,?\s+(?:and\s+)?steam\s+or\s+model[_\s-]?signal|clean\s*\/\s*asymmetric\s+health|based\s+on\s+form,\s*health,?\s+and\s+steam|3-pillar\s+(?:framework|criteria|filter|rubric|threshold)|three-pillar\s+(?:framework|criteria|filter|rubric|threshold))\b/i;
+
 const HEALTH_BALANCED_ACK_REGEX =
   /\b(?:no\s+(?:health|injury)\s+(?:advantage|edge)|without\s+(?:a|an)\s+(?:health|injury)\s+(?:advantage|edge)|not\s+(?:a|an)\s+(?:health|injury)\s+(?:advantage|edge)|neither\s+team\s+(?:is\s+healthier|has\s+an?\s+(?:injury|health)\s+(?:advantage|edge))|symmetric|evenly\s+(?:matched|depleted)|equally\s+(?:depleted|banged\s+up|short-?handed)|offsetting\s+injuries|both\s+(?:teams|[A-Za-z .'-]{2,35}\s+and\s+[A-Za-z .'-]{2,35})\s+(?:have|are\s+(?:missing|dealing\s+with|down|without)|miss(?:ing)?))\b/i;
 
@@ -2570,6 +2573,7 @@ export function auditCriticPremiseContradictions(
         };
 
         for (const subClause of injurySubClauses) {
+          if (GENERIC_PILLAR_FRAMEWORK_REGEX.test(subClause)) continue;
           if (HEALTH_ADVANTAGE_CLAIM_REGEX.test(subClause) && !HEALTH_BALANCED_ACK_REGEX.test(subClause)) {
             const msg = `symmetric_injury_misread: Pick "${pickDisplay}" claims an injury/health advantage when Health Balance is ${injBal.healthBalance} (${injBal.homeTeam || 'Home'} ${injBal.homeOut} OUT/${injBal.homeQ} Q vs ${injBal.awayTeam || 'Away'} ${injBal.awayOut} OUT/${injBal.awayQ} Q).`;
             flagInjuryMisread(msg, subClause);
@@ -2617,7 +2621,7 @@ export function auditCriticPremiseContradictions(
           };
 
           for (const sc of seatClauses) {
-            if (HEALTH_BALANCED_ACK_REGEX.test(sc)) continue;
+            if (HEALTH_BALANCED_ACK_REGEX.test(sc) || GENERIC_PILLAR_FRAMEWORK_REGEX.test(sc)) continue;
             const isBlanket = BLANKET_MULTI_LEG_SUBJECT_REGEX.test(sc);
             const targetsLeg = clauseTargetsThisLeg(sc);
             if (!isBlanket && !targetsLeg) continue;
@@ -2651,6 +2655,7 @@ export function auditCriticPremiseContradictions(
 
         const dirMatch = clause.match(MODEL_SIGNAL_EXPLICIT_DIR_REGEX);
         const mentionsModelSignal = MODEL_SIGNAL_SUPPORT_REGEX.test(clause);
+        if (GENERIC_PILLAR_FRAMEWORK_REGEX.test(clause) && !dirMatch) return false;
         if (!dirMatch && !mentionsModelSignal) return false;
 
         const explicitDir = dirMatch
@@ -2722,9 +2727,8 @@ export function auditCriticPremiseContradictions(
           return false;
         };
         for (const sc of seatClauses) {
-          const isBlanket = BLANKET_MULTI_LEG_SUBJECT_REGEX.test(sc);
-          const targetsLeg = clauseTargetsLegForSignal(sc);
-          if (!isBlanket && !targetsLeg) continue;
+          if (GENERIC_PILLAR_FRAMEWORK_REGEX.test(sc)) continue;
+          if (!clauseTargetsLegForSignal(sc)) continue;
           if (checkModelSignalClause(sc, 'seat analysis')) {
             break;
           }

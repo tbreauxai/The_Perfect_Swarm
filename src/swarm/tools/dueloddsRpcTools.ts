@@ -1469,8 +1469,20 @@ function classifyPlayerInjuryImpact(
       ((inlineMpg === 0 && (inlineToi === null || inlineToi === 0)) ||
         (inlineToi === 0 && (inlineMpg === null || inlineMpg === 0))))
   );
-  if (isZeroMinOrToiOnly || (!logStats && !hasInlineStat)) {
+  if (isZeroMinOrToiOnly) {
     if (teamIndex.canProveUnloggedDepth) {
+      return { tier: 3, weight: 0.5, usedWeightedScoring: true, roleLabel: 'depth' };
+    }
+    return { tier: null, weight: 1.0, usedWeightedScoring: false, roleLabel: 'unlogged' };
+  }
+  if (!logStats && !hasInlineStat) {
+    if (
+      !teamIndex.hasDatedLogs &&
+      !teamIndex.hasSeasonStats &&
+      !teamIndex.hasDepthChart &&
+      !teamIndex.hasRosterMeta &&
+      teamIndex.loggedPlayerCount >= 2
+    ) {
       return { tier: 3, weight: 0.5, usedWeightedScoring: true, roleLabel: 'depth' };
     }
     return { tier: null, weight: 1.0, usedWeightedScoring: false, roleLabel: 'unlogged' };

@@ -530,14 +530,34 @@ export class Agent {
                                     const isQuantNvidiaTarget =
                                         currentTarget.provider === 'nvidia' &&
                                         (isQuantRole || /nemotron.*ultra|550b/i.test(targetModel));
-                                    const targetTimeoutMs = isQuantNvidiaTarget ? Math.min(timeoutMs, 15000) : timeoutMs;
+                                    const isProposerGeminiTarget =
+                                        currentTarget.provider === 'gemini' &&
+                                        (this.id === 'a1' || this.id === 'a2' || /\b(?:quant|market)\s*proposer\b|\bquant\b|\bmarket\s*analyst\b/i.test(this.role || ''));
+                                    const targetTimeoutMs = (isQuantNvidiaTarget || isProposerGeminiTarget) ? Math.min(timeoutMs, 15000) : timeoutMs;
+                                    const geminiCallConfig = (() => {
+                                        if (currentTarget.provider !== 'gemini') return effectiveRuntimeConfig;
+                                        const hasExplicitLevel = Boolean(
+                                            (effectiveRuntimeConfig as any)?.thinkingLevel ||
+                                            (effectiveRuntimeConfig as any)?.thinking_level ||
+                                            (effectiveRuntimeConfig as any)?.thinkingConfig?.thinkingLevel ||
+                                            (effectiveRuntimeConfig as any)?.thinkingConfig?.thinking_level
+                                        );
+                                        if (hasExplicitLevel) return effectiveRuntimeConfig;
+                                        if (isQuantRole && String(targetModel || '').toLowerCase().includes('gemini-3.5-flash-lite')) {
+                                            return { ...effectiveRuntimeConfig, thinkingLevel: 'medium' };
+                                        }
+                                        if (roleNorm.includes('manager') || isCriticRole || roleNorm.includes('verifier')) {
+                                            return { ...effectiveRuntimeConfig, thinkingLevel: 'low' };
+                                        }
+                                        return effectiveRuntimeConfig;
+                                    })();
                                     const out = await adapter.call({
                                         modelName: targetModel,
                                         prompt,
                                         systemInstruction: this.systemInstruction,
                                         apiKey: currentTarget.apiKey,
                                         aiClient: currentTarget.aiClient || this.aiClient,
-                                        config: effectiveRuntimeConfig,
+                                        config: geminiCallConfig,
                                         timeoutMs: targetTimeoutMs,
                                         role: this.role,
                                         onHeaders: (headers) => {

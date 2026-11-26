@@ -1078,6 +1078,8 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                         : (rawOutput && typeof rawOutput === 'object' ? JSON.stringify(rawOutput) : '');
                 const rawSnippet = redactErrorSnippet(rawSnippetSource || '[empty output]', 120);
                 const fastJsonBackups: Array<{ provider: Provider; modelName: string }> = [
+                    { provider: 'gemini', modelName: 'gemini-4-hydrogen' },
+                    { provider: 'gemini', modelName: 'gemini-3.8-flash' },
                     { provider: 'gemini', modelName: 'gemini-3.5-flash-lite' },
                     { provider: 'cloudflare', modelName: '@cf/meta/llama-3.3-70b-instruct-fp8-fast' },
                     { provider: 'groq', modelName: 'openai/gpt-oss-120b' },
