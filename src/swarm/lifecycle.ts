@@ -751,43 +751,8 @@ export class AnalysisLifecycle {
                     : secondaryText)
                 : '';
 
-            const limitedReportSample = [evidenceSection, limitedSecondary].filter(Boolean).join('\n\n');
-            const verifyPrompt = `${promptHeader}${proposalSection}\n\n${limitedReportSample}${trailer}`;
-            recordRunDebugSeat((context as any)?.id, 'verifier', {
-                role: this.critic.role,
-                provider: String((this.critic as any).provider || 'unknown'),
-                model: this.critic.modelName,
-                promptChars: verifyPrompt.length,
-                limitChars: CAP,
-                toolResultsSent: evidenceSection
-            });
-            if (verifyPrompt.length > CAP) {
-                throw new Error(`Verification prompt exceeded budget cap (${verifyPrompt.length} > ${CAP}).`);
-            }
-
-            context.addEvent({
-                agentRole: 'verifier',
-                action: `Verifying proposal from attempt ${attempt}`,
-                modelName: this.critic.modelName,
-                prompt: `verifyPromptChars=${verifyPrompt.length}, evidenceChars=${evidenceSection.length}`
-            });
-
-            const verificationRaw = await this.critic.run(verifyPrompt, context, {
-                responseMimeType: 'application/json',
-                bypassCache: true,
-                timeoutMs: 45000,
-                agentRoleOverride: 'verifier'
-            });
-            
-            let verification: VerificationResult = guardVerificationResult(verificationRaw);
-            recordRunDebugSeat((context as any)?.id, 'verifier', {
-                outputDigest: formatRunDebugOutputDigest(verificationRaw),
-                verdict: { pass: Boolean(verification.pass), flags: [] }
-            });
-            if (verification.parseFailed) {
-                console.warn(`[Critic] unparsed verification output (attempt ${attempt}): ${redactForLog(String(verificationRaw)).slice(0, 300)}`);
-            }
-
+            // S1: Pure deterministic TypeScript verification (0 LLM calls, local/deterministic-verifier).
+            const verifierStartMs = Date.now();
             const boardSourceForEarlyAudit = (rawData as any)?.fullBoard || rawData || '';
             const proposedLegsThisAttempt = extractProposedPickSummaries(
                 currentProposal,
@@ -796,59 +761,78 @@ export class AnalysisLifecycle {
             );
             if (proposedLegsThisAttempt.length > 0) {
                 anyAttemptHadProposedPicks = true;
-            } else if (
-                missingPicksAudit.pass &&
-                !verification.pass &&
-                /\b(?:no\s+(?:specific\s+)?picks|picks\s+array\s+is\s+empty|no\s+legs\s+to\s+audit|fails?\s+to\s+include\s+(?:any\s+)?(?:specific\s+)?picks|required\s+pick\s+objects\s+were\s+not\s+provided|no\s+picks\s+to\s+evaluate)\b/i.test(verification.feedback || '')
+            }
+
+            let verification: VerificationResult = {
+                pass: true,
+                feedback: 'Deterministic verification passed.',
+                parseFailed: false
+            };
+
+            const isMorningJudgeProposal = Boolean(
+                currentProposal &&
+                typeof currentProposal === 'object' &&
+                ('winProbHome' in currentProposal || 'win_prob_home' in currentProposal)
+            );
+            if (!currentProposal || typeof currentProposal !== 'object' || Array.isArray(currentProposal)) {
+                verification = {
+                    pass: false,
+                    feedback: 'Schema violation: top-level proposal must be a valid JSON object.',
+                    parseFailed: true
+                };
+            } else if (!isMorningJudgeProposal && !('summary' in currentProposal || 'picks' in currentProposal)) {
+                const missingKeys = ['summary', 'picks', 'scorecards', 'components', 'criticApproved', 'wageringPass']
+                    .filter((k) => !(k in currentProposal));
+                if (missingKeys.length >= 4) {
+                    verification = {
+                        pass: false,
+                        feedback: `Schema violation: missing required top-level keys (${missingKeys.join(', ')}).`,
+                        parseFailed: false
+                    };
+                }
+            }
+            if (
+                verification.pass &&
+                currentProposal &&
+                typeof currentProposal === 'object' &&
+                Array.isArray(currentProposal.picks) &&
+                currentProposal.picks.length > 0 &&
+                currentProposal.wageringPass === true
             ) {
                 verification = {
-                    ...verification,
-                    pass: true,
-                    feedback: 'Verified valid no-bet / pass recommendation (empty picks).'
+                    pass: false,
+                    feedback: 'Schema violation: picks[] is non-empty while wageringPass is true. Set wageringPass: false when recommending picks.',
+                    parseFailed: false
                 };
             }
 
-            // CRITIC AUDIT: "No picks to evaluate" is invalid when picks are non-empty.
-            // Re-prompt the Verification Critic once on the same attempt with the explicit pick list.
-            if (proposedLegsThisAttempt.length > 0 && isNoPicksToEvaluateText(verification.feedback)) {
-                const repromptDirective = buildCriticAuditReprompt(proposedLegsThisAttempt, 'lifecycle');
-                const evHead = evidenceSection ? `\n\n${evidenceSection}` : '';
-                const maxEvForReprompt = Math.max(0, CAP - repromptDirective.length - trailer.length - 40);
-                const clippedEv = evHead && maxEvForReprompt > 60 ? evHead.slice(0, maxEvForReprompt) : '';
-                const repromptVerify = `${repromptDirective}${clippedEv}${trailer}`.slice(0, CAP);
-                try {
-                    const initialFb = verification.feedback;
-                    const repromptRaw = await this.critic.run(repromptVerify, context, {
-                        responseMimeType: 'application/json',
-                        bypassCache: true,
-                        timeoutMs: 45000,
-                        agentRoleOverride: 'verifier'
-                    });
-                    verification = guardVerificationResult(repromptRaw);
-                    context.addEvent({
-                        agentRole: 'verifier',
-                        action: 'Re-prompted Verification Critic (Invalid "No picks to evaluate")',
-                        modelName: this.critic.modelName,
-                        prompt: `attempt=${attempt}, proposedLegs=${proposedLegsThisAttempt.length}`,
-                        output: {
-                            initialFeedback: initialFb,
-                            revisedPass: verification.pass,
-                            revisedFeedback: verification.feedback
-                        }
-                    });
-                } catch {
-                    // Fall through to audit coverage check below
-                }
-            }
-
-            const llmAuditCoverage = evaluateCriticAuditCoverage({
-                proposedLegs: proposedLegsThisAttempt,
-                criticResponseText: verification.feedback || '',
-                criticParseFailed: verification.parseFailed,
-                criticPass: verification.pass
+            const verifierDurationMs = Math.max(0, Date.now() - verifierStartMs);
+            recordRunDebugSeat((context as any)?.id, 'verifier', {
+                role: 'verifier',
+                provider: 'local',
+                model: 'deterministic-verifier',
+                promptChars: 0,
+                limitChars: CAP,
+                toolResultsSent: '',
+                outputDigest: formatRunDebugOutputDigest(verification),
+                verdict: { pass: Boolean(verification.pass), flags: [] }
             });
-            lastAttemptCriticAuditFailed = llmAuditCoverage.criticSkippedAudit;
-            lastAttemptUnauditedLegs = llmAuditCoverage.unauditedLegs;
+            context.addEvent({
+                agentRole: 'verifier',
+                action: 'Started execution',
+                modelName: 'local / deterministic-verifier',
+                prompt: ''
+            });
+            context.addEvent({
+                agentRole: 'verifier',
+                action: 'Completed execution',
+                modelName: 'local / deterministic-verifier',
+                prompt: '',
+                durationMs: verifierDurationMs
+            });
+
+            lastAttemptCriticAuditFailed = false;
+            lastAttemptUnauditedLegs = [];
 
             // Deterministic Critic Check: A claim that cites no field in the game slate or tool results,
             // or attributes an injury to the wrong team (INJURY ATTRIBUTION RULE), is a veto.
@@ -1268,16 +1252,7 @@ export class AnalysisLifecycle {
                         }
                     }
                 }
-                if (llmAuditCoverage.criticSkippedAudit) {
-                    verification.pass = false;
-                    const auditFailMsg = llmAuditCoverage.auditNote || 'Veto (CRITIC AUDIT): Critic did not evaluate proposed picks.';
-                    const existingNonSkip = verification.feedback && !isNoPicksToEvaluateText(verification.feedback)
-                        ? verification.feedback
-                        : '';
-                    verification.feedback = existingNonSkip
-                        ? `${existingNonSkip} ${auditFailMsg}`.trim()
-                        : auditFailMsg;
-                } else if (proposedLegsThisAttempt.length > 0 && isNoPicksToEvaluateText(verification.feedback)) {
+                if (proposedLegsThisAttempt.length > 0 && isNoPicksToEvaluateText(verification.feedback)) {
                     verification.feedback = verification.pass
                         ? 'Verified proposed picks against tool evidence and slate rows.'
                         : 'Veto (CRITIC AUDIT): Proposed picks failed verification.';
@@ -1290,8 +1265,7 @@ export class AnalysisLifecycle {
                         !injuryVetoTriggered &&
                         !groundingVetoTriggered &&
                         !pullVetoTriggered &&
-                        !hasPermanentMarketVeto &&
-                        !llmAuditCoverage.criticSkippedAudit;
+                        !hasPermanentMarketVeto;
 
                     const isRepairableProseOnlyFeedback =
                         attempt < this.maxRetries &&
@@ -1299,7 +1273,6 @@ export class AnalysisLifecycle {
                         !groundingVetoTriggered &&
                         !pullVetoTriggered &&
                         !hasPermanentMarketVeto &&
-                        !llmAuditCoverage.criticSkippedAudit &&
                         (isMissingPicksOnlyFeedback ||
                             /\b(?:spread(?:\s+(?:value|sign|side))?|venue|role)\s+mismatch\b|described\s+as\s+(?:home|away|road)/i.test(verification.feedback) ||
                             isRepairableRowSignFlip) &&
@@ -1332,8 +1305,7 @@ export class AnalysisLifecycle {
                         ...(injuryVetoTriggered ? ['injury_misattribution'] : []),
                         ...(marketVetoTriggered ? (marketRowAudit.flags || ['market_row_mismatch']) : []),
                         ...(groundingVetoTriggered ? (groundingAudit.flags || ['ungrounded_claim']) : []),
-                        ...(pullVetoTriggered ? (pullAudit.flags || ['pull_before_pass']) : []),
-                        ...(llmAuditCoverage.criticSkippedAudit ? ['critic_did_not_audit'] : [])
+                        ...(pullVetoTriggered ? (pullAudit.flags || ['pull_before_pass']) : [])
                     ])
                 );
                 recordRunDebugSeat((context as any)?.id, 'verifier', {
@@ -1352,9 +1324,9 @@ export class AnalysisLifecycle {
             if (verification.pass) {
                 const computedRating = AnalysisLifecycle.computeReinforcementScore(true, attempt, this.maxRetries);
                 context.addEvent({
-                    agentRole: this.critic.role,
+                    agentRole: 'verifier',
                     action: `Verification PASSED on attempt ${attempt} (RLAIF Rating: ${(computedRating * 100).toFixed(0)}%).`,
-                    modelName: this.critic.modelName,
+                    modelName: 'local / deterministic-verifier',
                     prompt: "[Internal Verification Result]",
                     output: { attempts: attempt, computedRating, feedback: verification.feedback }
                 });
@@ -1377,9 +1349,9 @@ export class AnalysisLifecycle {
             } else {
                 feedback = verification.feedback || "Proposal failed verification without specific feedback.";
                 context.addEvent({
-                    agentRole: this.critic.role,
+                    agentRole: 'verifier',
                     action: `Verification FAILED on attempt ${attempt}. Feedback: ${feedback}`,
-                    modelName: this.critic.modelName,
+                    modelName: 'local / deterministic-verifier',
                     prompt: "[Internal Verification Result]"
                 });
             }

@@ -135,11 +135,15 @@ export function resolveSwarmAgents(
         managerConfig.model || (managerConfig as any).modelName
     );
     const explicitManagerFallbacks = normalizeFallbackList((managerConfig as any).fallbackProviders || (managerConfig as any).fallbacks);
+    const isHydrogenModel = (model?: string) => /gemini-4-hydrogen/i.test(String(model || ''));
     const managerFallbacks = mergeFallbacks(
         explicitManagerFallbacks,
         buildManagerChain(defaultAi, { provider: managerConfig.provider, model: managerModel }),
         availableFallbacks
-    ).filter(f => !(f.provider === managerConfig.provider && (f.modelName || '') === managerModel));
+    ).filter(f =>
+        !isHydrogenModel(f.modelName) &&
+        !(f.provider === managerConfig.provider && (f.modelName || '') === managerModel)
+    );
     const managerAgent = new Agent('Manager Node', managerModel, managerConfig.provider, finalMKey, mClient, managerFallbacks);
     managerAgent.preserveFallbackOrder = true;
     managerAgent.id = managerConfig.id || managerConfig.role || 'manager';
@@ -191,14 +195,16 @@ export function resolveSwarmAgents(
         if (finalCKey || isCriticMock) {
             const cModel = normalizeModelForProvider(dedicatedCriticConfig.provider, dedicatedCriticConfig.model || (dedicatedCriticConfig as any).modelName);
             const explicitCriticFallbacks = normalizeFallbackList((dedicatedCriticConfig as any).fallbackProviders || (dedicatedCriticConfig as any).fallbacks);
-            const cFallbacks = mergeFallbacks(explicitCriticFallbacks, availableFallbacks).filter(f => f.provider !== dedicatedCriticConfig.provider);
+            const cFallbacks = mergeFallbacks(
+                explicitCriticFallbacks,
+                buildManagerChain(defaultAi, { provider: dedicatedCriticConfig.provider, model: cModel }),
+                availableFallbacks
+            ).filter(f => f.provider !== dedicatedCriticConfig.provider && !isHydrogenModel(f.modelName));
             dedicatedCriticAgent = new Agent(dedicatedCriticConfig.role || 'Verification Critic', cModel, dedicatedCriticConfig.provider, finalCKey, cClient, cFallbacks);
             dedicatedCriticAgent.id = dedicatedCriticConfig.id || dedicatedCriticConfig.role || 'critic';
             dedicatedCriticAgent.maxTokens = dedicatedCriticConfig.maxTokens;
             dedicatedCriticAgent.disableFallback = !!(dedicatedCriticConfig as any).strictProvider;
-            if (explicitCriticFallbacks.length > 0) {
-                dedicatedCriticAgent.preserveFallbackOrder = true;
-            }
+            dedicatedCriticAgent.preserveFallbackOrder = true;
         }
     }
 

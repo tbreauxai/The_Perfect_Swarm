@@ -422,6 +422,18 @@ export class ProviderLimiter {
     this.state(provider).consecutiveFailures = 0;
   }
 
+  /** Opens a per-model cooldown immediately (e.g., 10-minute cooldown on [TIMEOUT]). */
+  openModelCooldown(provider: string, model: string, durationMs: number, reason: string): void {
+    const p = String(provider || "").toLowerCase();
+    const m = String(model || "").trim();
+    if (!p || !m) return;
+    const t = this.now();
+    const key = `${p}::${m}`;
+    const existing = this.modelCooldowns.get(key);
+    const until = Math.max(existing?.until ?? 0, t + Math.max(1000, durationMs));
+    this.modelCooldowns.set(key, { until, reason });
+  }
+
   /** Opens a provider-level cooldown immediately (e.g., Gemini 400/401/403/project-wide 429). */
   openProviderCooldown(provider: string, durationMs: number, reason: string): void {
     if (!this.isManaged(provider)) return;

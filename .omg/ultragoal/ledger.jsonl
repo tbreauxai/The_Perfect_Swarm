@@ -1,5 +1,6 @@
-{"ts":"2026-11-26T22:17:00Z","goal":"session","event":"init","branch":"fix/swarm-wf-1795730839067"}
-{"ts":"2026-11-26T22:17:00Z","goal":"G1","to":"in-progress"}
-{"ts":"2026-11-26T22:23:35Z","goal":"G1","to":"completed","evidence":"tsc --noEmit exit 0; S1 regression test passed"}
-{"ts":"2026-11-26T22:23:35Z","goal":"G2","to":"completed","evidence":"S2 disclaimer & affirmative tests + sibling grounding suites passed"}
-{"ts":"2026-11-26T22:23:35Z","goal":"G3","to":"completed","evidence":"S3 verifier seat separation & failover diagnostics suites passed (37/37 across 5 files)"}
+{"ts":"2026-11-26T23:26:30Z","goal":"session","event":"init","branch":"feat/deterministic-verifier-and-failover-hygiene"}
+{"ts":"2026-11-26T23:26:30Z","goal":"G1","to":"in-progress"}
+{"ts":"2026-11-26T23:33:20Z","goal":"G1","to":"completed","evidence":"0 this.critic.run calls; deterministic verifier S1 tests passed"}
+{"ts":"2026-11-26T23:33:20Z","goal":"G2","to":"completed","evidence":"18s timeout/10m cooldown & non-Google failover S2 tests passed"}
+{"ts":"2026-11-26T23:33:20Z","goal":"G3","to":"completed","evidence":"partial-veto survival, pipe isolation, and distinct-game event_id cap passed"}
+{"ts":"2026-11-26T23:33:20Z","goal":"G4","to":"completed","evidence":"/models/live filters, tsc --noEmit (0), and 33/33 targeted vitest tests passed"}

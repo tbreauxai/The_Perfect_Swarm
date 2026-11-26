@@ -619,13 +619,26 @@ export class Agent {
                                 currentTarget.provider,
                                 async () => {
                                     let capturedHeaders: any = null;
+                                    const isNonGoogleFastTimeoutProvider =
+                                        currentTarget.provider === 'nvidia' ||
+                                        currentTarget.provider === 'cloudflare' ||
+                                        currentTarget.provider === 'groq' ||
+                                        currentTarget.provider === 'openrouter';
+                                    const isA1HydrogenTarget =
+                                        isQuantRole &&
+                                        currentTarget.provider === 'gemini' &&
+                                        /gemini-4-hydrogen/i.test(targetModel);
                                     const isQuantNvidiaTarget =
                                         currentTarget.provider === 'nvidia' &&
                                         (isQuantRole || /nemotron.*ultra|550b/i.test(targetModel));
                                     const isProposerGeminiTarget =
                                         currentTarget.provider === 'gemini' &&
                                         (this.id === 'a1' || this.id === 'a2' || /\b(?:quant|market)\s*proposer\b|\bquant\b|\bmarket\s*analyst\b/i.test(this.role || ''));
-                                    const targetTimeoutMs = (isQuantNvidiaTarget || isProposerGeminiTarget) ? Math.min(timeoutMs, 15000) : timeoutMs;
+                                    const targetTimeoutMs = isA1HydrogenTarget
+                                        ? Math.min(timeoutMs, 20000)
+                                        : (isNonGoogleFastTimeoutProvider
+                                            ? Math.min(isQuantNvidiaTarget ? Math.min(timeoutMs, 15000) : timeoutMs, 18000)
+                                            : (isProposerGeminiTarget ? Math.min(timeoutMs, 15000) : timeoutMs));
                                     const geminiCallConfig = (() => {
                                         if (currentTarget.provider !== 'gemini') return effectiveRuntimeConfig;
                                         const hasExplicitLevel = Boolean(
@@ -893,6 +906,18 @@ export class Agent {
                         errLower.includes('fetch failed');
 
                     const billingErrorInfo = isBillingOrAuthError(err);
+                    const isTimeout =
+                        errLower.includes('timeout') ||
+                        errLower.includes('timed out') ||
+                        err?.name === 'AbortError';
+                    if (isTimeout) {
+                        globalProviderLimiter.openModelCooldown(
+                            String(currentTarget.provider),
+                            targetModel,
+                            10 * 60 * 1000,
+                            `[COOLDOWN_SKIP] timeout after ${attemptDurationMs}ms on ${targetModel}`
+                        );
+                    }
                     const isFatal =
                         billingErrorInfo.match ||
                         httpStatus === 400 ||
@@ -936,12 +961,12 @@ export class Agent {
 
                     const hasNextProvider = targetIdx < targetChain.length - 1;
 
-                    if ((isFatal || isLimiterSkip) && !hasNextProvider) {
-                        break; // Fatal error (like model not found / 401 / 402 / 403) or limiter skip: retrying the same target cannot help
+                    if ((isFatal || isLimiterSkip || isTimeout) && !hasNextProvider) {
+                        break; // Fatal error, limiter skip, or timeout: zero retry on same target
                     }
 
                     // If eligible for failover and a backup provider is ready, failover immediately without waiting
-                    if ((isFailoverEligible || isFatal || isTransientRateLimitOrSkip || attempt === maxRetries) && hasNextProvider) {
+                    if ((isFailoverEligible || isFatal || isTimeout || isTransientRateLimitOrSkip || attempt === maxRetries) && hasNextProvider) {
                         let realFallback: typeof currentTarget | undefined;
                         let realFallbackIdx = -1;
                         for (let j = targetIdx + 1; j < targetChain.length; j++) {

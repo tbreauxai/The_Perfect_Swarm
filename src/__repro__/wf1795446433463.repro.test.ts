@@ -123,7 +123,7 @@ describe('wf-1795446433463 fixes (S1, S2, S3)', () => {
             picks: [
               { row: 'R36', side: 'Los Angeles Lakers -13.5', reason: '119.8 PF/G and home_advantage health edge.' },
               { row: 'R32', side: 'Houston Rockets -12.5', reason: '117.4 PF/G and home_advantage health edge.' },
-              { row: 'R13', side: 'Minnesota Timberwolves -12.5', reason: '114.8 PF/G edge.' },
+              { row: 'R13', side: 'Minnesota Timberwolves -12.5', reason: '115 PPG edge.' },
             ],
             components: [
               {

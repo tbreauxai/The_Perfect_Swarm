@@ -2625,7 +2625,7 @@ export function auditCriticPremiseContradictions(
         // or targeted health claims mentioning this pick, even when pk.reason is non-empty.
         if (!flaggedInjuryMisreadForLeg && combinedSeatContext) {
           const seatClauses = combinedSeatContext
-            .split(/(?<=[.!?])\s+|\n+|;\s+/)
+            .split(/(?<=[.!?])\s+|\n+|;\s+|\s*\|\s*/)
             .map(c => c.trim())
             .filter(Boolean);
 
@@ -3774,6 +3774,51 @@ export interface IntraSeatDuplicateLegsResult {
   flags: string[];
   violations: IntraSeatDuplicateLegViolation[];
   feedback?: string;
+}
+
+/**
+ * Enforces the hard distinct-game constraint: never keep two legs from the same
+ * `event_id` (or opposing sides of the same matchup), and cap parlay legs at the
+ * number of distinct qualifying games on the slate (or 1 if only 1 game qualifies).
+ */
+export function dedupePicksByDistinctEventId<T = any>(
+  picks: T[],
+  headers: GameHeader[] = [],
+  slateText: string = '',
+  maxLegs?: number
+): T[] {
+  if (!Array.isArray(picks) || picks.length === 0) return [];
+  const rowMap = extractRowOptions(slateText ? [slateText] : [], headers);
+  const distinctHeaderEvents = new Set(headers.map(h => h?.eventId).filter(Boolean));
+  const sorted = [...picks].sort((a: any, b: any) => {
+    const ca = typeof a?.confidence === 'number' && Number.isFinite(a.confidence) ? a.confidence : 0;
+    const cb = typeof b?.confidence === 'number' && Number.isFinite(b.confidence) ? b.confidence : 0;
+    return cb - ca;
+  });
+
+  const seenEventIds = new Set<string>();
+  const kept: T[] = [];
+  for (const pk of sorted) {
+    if (!pk || typeof pk !== 'object') continue;
+    const rowIdMatch = typeof (pk as any).row === 'string' ? (pk as any).row.trim().toUpperCase().match(/^R\d+$/) : null;
+    const rowId = rowIdMatch ? rowIdMatch[0] : undefined;
+    const evId =
+      getEventIdForPick(pk, headers) ||
+      (rowId ? rowMap.get(rowId)?.eventId : undefined) ||
+      String((pk as any).event_id || (pk as any).eventId || (pk as any).game_id || '').trim() ||
+      undefined;
+    if (evId) {
+      if (seenEventIds.has(evId)) continue;
+      seenEventIds.add(evId);
+    }
+    kept.push(pk);
+  }
+
+  const distinctSlateCap = distinctHeaderEvents.size > 0 ? distinctHeaderEvents.size : kept.length;
+  const effectiveCap = typeof maxLegs === 'number' && maxLegs > 0
+    ? Math.min(maxLegs, distinctSlateCap)
+    : distinctSlateCap;
+  return kept.slice(0, Math.max(1, effectiveCap));
 }
 
 /**

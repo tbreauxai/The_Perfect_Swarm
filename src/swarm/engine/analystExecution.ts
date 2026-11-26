@@ -690,10 +690,16 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
 
         const chunkLabel = chunks.length > 1 ? `\nChunk ${chunkIdx + 1}/${chunks.length}` : '';
         const contractPrompt = (!isCritic && contractBlock) ? `\n\nOutput & Slate Contract:\n${contractBlock}` : '';
+        const distinctSlateGames = parsedHeaders.length;
+        const distinctGameHardRule =
+            ` Hard distinct-game rule: NEVER select two legs from the same event_id (or opposing sides of the same matchup).` +
+            (distinctSlateGames > 0
+                ? ` Only ${distinctSlateGames} distinct game(s) exist on this slate; cap parlay legs at ${distinctSlateGames} (or 1 single leg if only 1 game qualifies).`
+                : ' If fewer than N distinct games exist on the slate, cap parlay legs at the number of distinct games (or a single if only 1 game qualifies).');
         const roleEmphasisLine = isBettingSeat
-            ? (isQuantSeatName(seat) || /quant/i.test(analyst.role)
+            ? ((isQuantSeatName(seat) || /quant/i.test(analyst.role)
                 ? '\n\nRole Emphasis (Quant Proposer): Lead with season/L5 form, splits, net margin, and asymmetric roster health; confirm with market steam.'
-                : '\n\nRole Emphasis (Market Proposer): Lead with directional steam and line movement value; confirm with form and roster health.')
+                : '\n\nRole Emphasis (Market Proposer): Lead with directional steam and line movement value; confirm with form and roster health.') + distinctGameHardRule)
             : '';
         const slateSection = (hasAuditContext && parsedHeaders.length === 0)
             ? '\n\nNo picks were proposed. Confirm pass/no-picks by emitting only verdict JSON {"criticApproved":true,"wageringPass":true,"pass":true,"verdict":"No picks proposed","flags":[],"scorecards":[{"verdict":"approve","notes":"No picks proposed."}]}.'
@@ -1085,13 +1091,14 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                         ? rawOutput
                         : (rawOutput && typeof rawOutput === 'object' ? JSON.stringify(rawOutput) : '');
                 const rawSnippet = redactErrorSnippet(rawSnippetSource || '[empty output]', 120);
+                const isQuantA1Seat = seat.id === 'a1' || /\bquant\b/i.test(seat.role || '');
                 const fastJsonBackups: Array<{ provider: Provider; modelName: string }> = [
-                    { provider: 'gemini', modelName: 'gemini-4-hydrogen' },
-                    { provider: 'gemini', modelName: 'gemini-3.8-flash' },
-                    { provider: 'gemini', modelName: 'gemini-3.5-flash-lite' },
+                    ...(isQuantA1Seat ? [{ provider: 'gemini' as Provider, modelName: 'gemini-4-hydrogen' }] : []),
                     { provider: 'cloudflare', modelName: '@cf/meta/llama-3.3-70b-instruct-fp8-fast' },
-                    { provider: 'groq', modelName: 'openai/gpt-oss-120b' },
-                    { provider: 'groq', modelName: 'llama-3.3-70b-versatile' }
+                    { provider: 'groq', modelName: 'qwen/qwen3.8-27b' },
+                    { provider: 'groq', modelName: 'openai/gpt-oss-20b' },
+                    { provider: 'nvidia', modelName: 'nvidia/nemotron-3.5-lightning-30b-a3b' },
+                    { provider: 'gemini', modelName: 'gemini-3.5-flash-lite' }
                 ];
                 let failoverTarget: { provider: Provider; modelName: string; key: string; client?: any } | null = null;
                 for (const cand of fastJsonBackups) {
@@ -1773,6 +1780,28 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                 if ((resData as any).pass === false) {
                     if (stage2VetoedLegs.length > 0) {
                         (resData as any).vetoedLegs = stage2VetoedLegs;
+                        const vetoedRowIds = Array.from(
+                            new Set(
+                                stage2VetoedLegs
+                                    .map((vl: any) => String(vl?.rowId || '').trim().toUpperCase())
+                                    .filter(Boolean)
+                            )
+                        );
+                        const proposedPool = Array.isArray(proposedAuditContext?.proposedPicks)
+                            ? proposedAuditContext.proposedPicks
+                            : [];
+                        const approvedRowIds = Array.from(
+                            new Set(
+                                proposedPool
+                                    .map((pk: any) => String(pk?.row || '').trim().toUpperCase())
+                                    .filter((r: string) => Boolean(r) && !vetoedRowIds.includes(r))
+                            )
+                        );
+                        (resData as any).vetoedRowIds = vetoedRowIds;
+                        (resData as any).approvedRowIds = approvedRowIds;
+                        if (approvedRowIds.length > 0 && !llmAuditCoverage.criticSkippedAudit) {
+                            (resData as any).criticApproved = true;
+                        }
                     }
                     if (stage2VetoedClaims.length > 0) {
                         (resData as any).vetoedClaims = stage2VetoedClaims;
