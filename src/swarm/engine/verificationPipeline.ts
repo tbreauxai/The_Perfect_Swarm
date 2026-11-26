@@ -20,6 +20,7 @@ import {
     auditCriticPremiseContradictions,
     dedupeVetoMessages,
     ensureRiskCriticVetoScorecard,
+    extractVetoedLegTargets,
     mergeVetoedClaims,
     mergeVetoedLegTargets,
     normalizePassIfAllLegsVetoed,
@@ -365,16 +366,27 @@ function spanMatchesPickInfo(
     return false;
 }
 
-function pickMatchesVetoedTarget(
+export function pickMatchesVetoedTarget(
     pk: any,
     target: VetoedLegTarget,
     rowMap: Map<string, { rowId: string; eventId?: string; text: string }>
 ): boolean {
     const info = buildPickIdentifierInfo(pk, rowMap);
-    if (target.rowId && info.rowId && target.rowId.toUpperCase() === info.rowId.toUpperCase()) {
-        return true;
+    if (target.rowId && info.rowId) {
+        if (target.rowId.toUpperCase() === info.rowId.toUpperCase()) {
+            return true;
+        }
+        if (!target.teamAliases || target.teamAliases.length === 0) {
+            return false;
+        }
     }
-    if (target.eventId && info.eventId && target.eventId === info.eventId) {
+    if (
+        target.eventId &&
+        info.eventId &&
+        target.eventId === info.eventId &&
+        !target.rowId &&
+        (!target.teamAliases || target.teamAliases.length === 0)
+    ) {
         return true;
     }
     const pickText = [info.rowId, info.label].filter(Boolean).join(' ');
@@ -879,13 +891,34 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
                 hadProposedPicks
             });
             const finalSurvivingCount = Array.isArray(finalAnalysis.picks) ? finalAnalysis.picks.length : 0;
+            const preSyncRowMap = extractRowOptions([boardSourceForSanitize], parsedHeaders);
+            const preSyncTargetedVetoLegs = mergeVetoedLegTargets(
+                combinedVetoedLegs,
+                extractVetoedLegTargets(combinedVetoTexts, parsedHeaders, preSyncRowMap)
+            );
+            const preSyncOverlapVeto =
+                preSyncTargetedVetoLegs.length > 0 &&
+                Array.isArray(finalAnalysis.picks) &&
+                finalAnalysis.picks.some((pk: any) =>
+                    preSyncTargetedVetoLegs.some((vl) => pickMatchesVetoedTarget(pk, vl, preSyncRowMap))
+                );
+            const preSyncCleanPass =
+                lifecycleResult.success === true &&
+                finalAnalysis.verified === true &&
+                finalSurvivingCount > 0 &&
+                !preSyncOverlapVeto &&
+                (
+                    (combinedVetoTexts.length === 0 && combinedVetoedLegs.length === 0 && combinedVetoedClaims.length === 0) ||
+                    (p.criticVerdictApproved !== false && combinedVetoedLegs.length === 0 && initialPickCount <= finalSurvivingCount) ||
+                    preSyncTargetedVetoLegs.length > 0
+                );
             finalAnalysis.criticApproved = resolveFinalCriticApproved(finalAnalysis, {
                 criticAuditFailed: false,
                 verificationSuccess: true,
-                verificationApproved: lifecycleResult.success === true && !hadVetoedLegs && combinedVetoTexts.length === 0,
+                verificationApproved: preSyncCleanPass,
                 criticVerdictApproved: p.criticVerdictApproved,
                 hadFullVeto: initialPickCount > 0 && hadVetoedLegs && finalSurvivingCount === 0,
-                hadDeterministicVetoes: hadVetoedLegs || combinedVetoTexts.length > 0 || combinedVetoedClaims.length > 0
+                hadDeterministicVetoes: !preSyncCleanPass && (hadVetoedLegs || combinedVetoTexts.length > 0 || combinedVetoedClaims.length > 0)
             });
         }
     }
@@ -961,23 +994,46 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
             ...(Array.isArray(p.vetoedClaims) ? p.vetoedClaims : []),
             ...(Array.isArray(lifecycleResult?.vetoedClaims) ? lifecycleResult.vetoedClaims : [])
         ];
+        const reconcileRowMap = extractRowOptions([rawInput || task || headersText], parsedHeaders);
+        const allTargetedVetoLegs = mergeVetoedLegTargets(
+            vetoLegsForSync,
+            extractVetoedLegTargets(vetoTextsForSync, parsedHeaders, reconcileRowMap)
+        );
+        const survivingOverlapVeto =
+            allTargetedVetoLegs.length > 0 &&
+            finalAnalysis.picks.some((pk: any) =>
+                allTargetedVetoLegs.some((vl) => pickMatchesVetoedTarget(pk, vl, reconcileRowMap))
+            );
+        const repairedCleanPass =
+            lifecycleResult?.success === true &&
+            finalAnalysis.verified === true &&
+            finalAnalysis.picks.length > 0 &&
+            !survivingOverlapVeto &&
+            (
+                finalDetVetoes.length === 0 ||
+                (p.criticVerdictApproved !== false && vetoLegsForSync.length === 0 && initialPicksSnapshot.length <= finalAnalysis.picks.length) ||
+                allTargetedVetoLegs.length > 0
+            );
+        const preserveCleanSubsetPicks =
+            lifecycleResult?.criticAuditFailed !== true &&
+            initialPicksSnapshot.length > finalAnalysis.picks.length &&
+            finalAnalysis.picks.length > 0 &&
+            !survivingOverlapVeto;
         reconcileFinalVerdictAndPicks(finalAnalysis, {
             criticPass1Approved: p.criticVerdictApproved,
             criticVerdictApproved: p.criticVerdictApproved,
-            deterministicVetoes: finalDetVetoes,
+            deterministicVetoes: repairedCleanPass ? [] : finalDetVetoes,
             hadDeterministicVetoes:
                 lifecycleResult?.criticAuditFailed === true ||
                 lifecycleResult?.success === false ||
                 finalAnalysis.verified === false ||
-                finalDetVetoes.length > 0 ||
+                (!repairedCleanPass && finalDetVetoes.length > 0) ||
                 (initialPicksSnapshot.length > 0 && finalAnalysis.picks.length === 0),
             hadFullVeto: initialPicksSnapshot.length > 0 && finalAnalysis.picks.length === 0,
             criticAuditFailed: lifecycleResult?.criticAuditFailed === true,
             verificationSuccess: lifecycleResult?.success !== false && finalAnalysis.verified !== false,
-            verificationApproved:
-                lifecycleResult?.success === true &&
-                finalDetVetoes.length === 0 &&
-                p.criticVerdictApproved !== false,
+            verificationApproved: repairedCleanPass,
+            preserveCleanSubsetPicks,
             vetoTexts: vetoTextsForSync,
             vetoedLegs: vetoLegsForSync,
             seatScorecards: p.seatScorecards,

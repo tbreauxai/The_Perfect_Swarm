@@ -1,6 +1,13 @@
 import { parseStandardResponse, type ProviderAdapter, type ProviderCallOptions } from './adapter.ts';
 import { parseRetryAfterHeader, parseRetryAfterMs } from '../utils/httpTimeouts.ts';
 import { isBlockedBuiltinTool } from '../tools/registry.ts';
+import { isBillingOrAuthError } from './limiter.ts';
+
+function makeHttpError(message: string, status: number): Error & { status: number } {
+    const err = new Error(message) as Error & { status: number };
+    err.status = status;
+    return err;
+}
 
 export function sanitizeOpenAiTools(tools: any[]): any[] {
     if (!Array.isArray(tools)) return [];
@@ -182,22 +189,27 @@ export async function executeOpenAiCompatibleChat(
 
     if (!response.ok) {
         if (response.status === 429) {
-            const rawHeader = response.headers?.get
-                ? (response.headers.get('retry-after') || response.headers.get('x-ratelimit-reset'))
-                : (response.headers as any)?.['retry-after'];
-            let retryMs = parseRetryAfterHeader(rawHeader);
-            if (retryMs === null && typeof (response as any).clone === 'function') {
-                const errorClone = await (response as any).clone().text().catch(() => '');
-                retryMs = parseRetryAfterMs(errorClone, 0, 100, 30000);
-            }
-            if (retryMs !== null && retryMs > 0 && retryMs <= 8000) {
-                const jitterMs = Math.floor(Math.random() * 600) + 200; // 200-800ms jitter
-                await new Promise((r) => setTimeout(r, retryMs + jitterMs));
-                try {
-                    response = await attemptFetch(activeJson);
-        if (options.onHeaders && response?.headers) options.onHeaders(response.headers);
-                } catch {
-                    // fall through to error handling below
+            const errorClone = typeof (response as any).clone === 'function'
+                ? await (response as any).clone().text().catch(() => '')
+                : '';
+            const billingCheck = isBillingOrAuthError({ status: 429, message: errorClone });
+            if (!billingCheck.match) {
+                const rawHeader = response.headers?.get
+                    ? (response.headers.get('retry-after') || response.headers.get('x-ratelimit-reset'))
+                    : (response.headers as any)?.['retry-after'];
+                let retryMs = parseRetryAfterHeader(rawHeader);
+                if (retryMs === null) {
+                    retryMs = parseRetryAfterMs(errorClone, 0, 100, 30000);
+                }
+                if (retryMs !== null && retryMs > 0 && retryMs <= 8000) {
+                    const jitterMs = Math.floor(Math.random() * 600) + 200; // 200-800ms jitter
+                    await new Promise((r) => setTimeout(r, retryMs + jitterMs));
+                    try {
+                        response = await attemptFetch(activeJson);
+                        if (options.onHeaders && response?.headers) options.onHeaders(response.headers);
+                    } catch {
+                        // fall through to error handling below
+                    }
                 }
             }
         }
@@ -215,23 +227,23 @@ export async function executeOpenAiCompatibleChat(
 
         if (response.status === 429) {
             if (config.format429Error) {
-                throw new Error(config.format429Error(response.status, errorText, retryAfter, providerLabel));
+                throw makeHttpError(config.format429Error(response.status, errorText, retryAfter, providerLabel), response.status);
             }
             const retrySuffix = retryAfter ? ` (retry-after: ${retryAfter}s)` : '';
-            throw new Error(`[RATE_LIMIT_429] ${providerLabel} rate limit / quota exceeded: ${errorText}${retrySuffix}`);
+            throw makeHttpError(`[RATE_LIMIT_429] ${providerLabel} rate limit / quota exceeded: ${errorText}${retrySuffix}`, response.status);
         }
 
         if (response.status >= 500) {
             if (config.format500Error) {
-                throw new Error(config.format500Error(response.status, errorText, providerLabel));
+                throw makeHttpError(config.format500Error(response.status, errorText, providerLabel), response.status);
             }
-            throw new Error(`[SERVER_ERROR_${response.status}] ${providerLabel} service unavailable: ${errorText}`);
+            throw makeHttpError(`[SERVER_ERROR_${response.status}] ${providerLabel} service unavailable: ${errorText}`, response.status);
         }
 
         if (config.formatGenericError) {
-            throw new Error(config.formatGenericError(response.status, errorText, providerLabel));
+            throw makeHttpError(config.formatGenericError(response.status, errorText, providerLabel), response.status);
         }
-        throw new Error(`${providerLabel} API Error (${response.status}): ${errorText}`);
+        throw makeHttpError(`${providerLabel} API Error (${response.status}): ${errorText}`, response.status);
     }
 
     const data = await response.json();

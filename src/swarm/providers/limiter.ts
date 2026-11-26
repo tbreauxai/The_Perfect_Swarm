@@ -29,6 +29,7 @@ export const BREAKER_FAILURE_THRESHOLD = 3;
 export const BREAKER_OPEN_MS = 5 * 60 * 1000;
 export const MODEL_COOLDOWN_MS = 60_000;
 export const MODEL_TIMEOUT_COOLDOWN_MS = 10 * 60 * 1000;
+export const BILLING_COOLDOWN_MS = 30 * 60 * 1000;
 export const HEAVY_SLATE_TIMEOUT_TOKENS = 6_000;
 export const DEAD_MODEL_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_STRICT_BUDGET_WAIT_MS = 65_000;
@@ -178,6 +179,84 @@ export function isGeminiProjectWideFailure(err: unknown): boolean {
 export function isFreeTierZeroLimitError(message: string): boolean {
   const msg = message || "";
   return /free_tier/i.test(msg) && /\blimit\s*:\s*0\b/i.test(msg);
+}
+
+export interface BillingOrAuthErrorInfo {
+  match: boolean;
+  status: number | null;
+  scope: "provider" | "model" | null;
+  reason: string;
+}
+
+export function isBillingOrAuthError(errOrMsg: unknown): BillingOrAuthErrorInfo {
+  if (!errOrMsg) {
+    return { match: false, status: null, scope: null, reason: "" };
+  }
+  let status: number | null = null;
+  if (typeof errOrMsg === "object") {
+    const obj = errOrMsg as Record<string, any>;
+    const raw = obj.status ?? obj.statusCode ?? obj.code ?? obj.response?.status;
+    if (typeof raw === "number" && raw >= 100 && raw <= 599) status = raw;
+    else if (typeof raw === "string" && /^\d{3}$/.test(raw.trim())) status = Number(raw.trim());
+  }
+  const msg = typeof errOrMsg === "string" ? errOrMsg : String((errOrMsg as any)?.message || errOrMsg || "");
+  if (status === null) {
+    const tagged = msg.match(/(?:AUTH_ERROR_|BILLING_ERROR_|RATE_LIMIT_|SERVER_ERROR_|BAD_REQUEST_|HTTP\s+|status[=:\s]+|API Error\s*\()([1-5]\d{2})\b/i);
+    if (tagged) status = Number(tagged[1]);
+    else {
+      const generic = msg.match(/\b(401|402|403|429)\b/);
+      if (generic) status = Number(generic[1]);
+    }
+  }
+
+  if (status === 401 || status === 402) {
+    return {
+      match: true,
+      status,
+      scope: "provider",
+      reason: status === 402 ? "HTTP 402 billing/payment required" : "HTTP 401 unauthorized/invalid API key",
+    };
+  }
+
+  if (status === 403) {
+    const isAccountWide = /billing|credit|quota|payment|plan|spend|tier|subscription|account|permission_denied|unauthenticated|api[_\s]*key|unauthorized|forbidden/i.test(msg);
+    return {
+      match: true,
+      status: 403,
+      scope: isAccountWide ? "provider" : "model",
+      reason: "HTTP 403 forbidden/auth or billing error",
+    };
+  }
+
+  const isZeroLimitOrBillingExhausted =
+    /\blimit\s*:\s*0\b/i.test(msg) ||
+    /quota_limit_value["']?\s*[:=]\s*["']?0\b/i.test(msg) ||
+    /\b(?:insufficient[_\s]+(?:balance|credits?|funds?|quota)|payment[_\s]+required|billing[_\s]+(?:not\s+enabled|disabled|required|exhausted|hard\s*limit)|credits?\s+(?:exhausted|depleted|balance\s+too\s+low)|spending[_\s]+limit|hard[_\s]+limit)\b/i.test(msg);
+
+  if (isZeroLimitOrBillingExhausted) {
+    const isFreeTierZero = isFreeTierZeroLimitError(msg);
+    return {
+      match: true,
+      status: status ?? (isZeroLimitZeroStatus(msg) ? 429 : null),
+      scope: isFreeTierZero ? "model" : "provider",
+      reason: isFreeTierZero ? "free_tier limit: 0 exhausted" : "billing/quota limit: 0 exhausted",
+    };
+  }
+
+  if (/\b(?:invalid[_\s]+api[_\s]*key|api[_\s]*key[_\s]+(?:invalid|expired|revoked)|permission_denied|unauthenticated)\b/i.test(msg)) {
+    return {
+      match: true,
+      status,
+      scope: "provider",
+      reason: "auth/invalid API key error",
+    };
+  }
+
+  return { match: false, status, scope: null, reason: "" };
+}
+
+function isZeroLimitZeroStatus(msg: string): boolean {
+  return /\b429\b|RATE_LIMIT|RESOURCE_EXHAUSTED/i.test(msg);
 }
 
 export function classifyProviderError(
@@ -381,6 +460,35 @@ export class ProviderLimiter {
         this.modelTimeoutCounts.delete(key);
       }
     }
+    const billing = isBillingOrAuthError(message);
+    if (billing.match) {
+      if (provider === "gemini" && isFreeTierZeroLimitError(message)) {
+        if (model) {
+          this.modelCooldowns.set(`${provider}::${model}`, {
+            until: nextUtcMidnight(t),
+            reason: `[COOLDOWN_SKIP] free_tier limit: 0 on ${model}`,
+          });
+        }
+        return;
+      }
+      const coolReason = `[BILLING_COOLDOWN_SKIP] ${billing.reason}`;
+      if (model) {
+        this.modelCooldowns.set(`${provider}::${model}`, {
+          until: t + BILLING_COOLDOWN_MS,
+          reason: coolReason,
+        });
+      }
+      if (this.isManaged(provider)) {
+        const s = this.state(provider);
+        if (billing.scope === "provider") {
+          s.openUntil = Math.max(s.openUntil, t + BILLING_COOLDOWN_MS);
+          s.openReason = coolReason;
+        }
+        s.consecutiveFailures = 0;
+      }
+      return;
+    }
+
     if (!this.isManaged(provider)) return;
     const s = this.state(provider);
     const kind = classifyProviderError(provider, message);
@@ -663,7 +771,10 @@ export class ProviderLimiter {
           return out;
         } catch (err: any) {
           const msg = err?.message || String(err);
+          const isNonRetryableBilling =
+            isBillingOrAuthError(err).match || isBillingOrAuthError(msg).match;
           const canRetry =
+            !isNonRetryableBilling &&
             !retried503 &&
             (provider === "gemini" ? isTransientGeminiRetryable(msg) : is503(msg));
           if (canRetry) {

@@ -31,7 +31,7 @@ import {
     buildPartialFinalAnalysis,
     type SwarmRunStatus
 } from "./partialResult.ts";
-import { runDeepAnalysisVerification } from "./verificationPipeline.ts";
+import { pickMatchesVetoedTarget, runDeepAnalysisVerification } from "./verificationPipeline.ts";
 import { runLearningPipeline } from "./learningPipeline.ts";
 import { reconcileFinalVerdictAndPicks } from "../tools/criticAudit.ts";
 import { isScorecardMode } from "./scorecard.ts";
@@ -43,7 +43,8 @@ import {
 import { parseGameHeaders, filterPicksByCoverage } from "../context/gameHeaders.ts";
 import { buildVerifierEvidence } from "./verifierEvidence.ts";
 import { collectSuccessfulEvidenceItems } from "../tools/criticEvidence.ts";
-import { dedupeVetoMessages, mergeVetoedClaims, mergeVetoedLegTargets, type VetoedLegTarget } from "../tools/claimGrounding.ts";
+import { dedupeVetoMessages, extractVetoedLegTargets, mergeVetoedClaims, mergeVetoedLegTargets, type VetoedLegTarget } from "../tools/claimGrounding.ts";
+import { extractRowOptions } from "../tools/marketRowBinding.ts";
 import { mergeToolCallTraceEntries, type ToolCallTraceEntry } from "../tools/pullBeforePass.ts";
 import { isDataRequest } from "../parser/responseGuards.ts";
 import { planTriage, type TriagePlan } from "./triagePlanner.ts";
@@ -1194,24 +1195,59 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                         ...(Array.isArray(workflowLifecycleResult?.vetoedLegs) ? workflowLifecycleResult.vetoedLegs : []),
                         ...(Array.isArray(workflowLifecycleResult?.vetoedClaims) ? workflowLifecycleResult.vetoedClaims : [])
                     ];
+                    const vetoTextsForReconcile = dedupeVetoMessages([
+                        ...stage2CriticVetoes,
+                        ...(Array.isArray(workflowLifecycleResult?.accumulatedVetoes) ? workflowLifecycleResult.accumulatedVetoes : [])
+                    ]);
+                    const vetoLegsForReconcile = mergeVetoedLegTargets(stage2VetoedLegs, workflowLifecycleResult?.vetoedLegs);
+                    const finalPicksArr = Array.isArray(finalAnalysis.picks) ? finalAnalysis.picks : [];
+                    const boardTextForReconcile = typeof data === 'string' && data.trim() ? data : task;
+                    const headersForReconcile = parseGameHeaders(boardTextForReconcile, params.eventIds);
+                    const rowMapForReconcile = extractRowOptions([boardTextForReconcile], headersForReconcile);
+                    const targetedLegsForReconcile = mergeVetoedLegTargets(
+                        vetoLegsForReconcile,
+                        extractVetoedLegTargets(vetoTextsForReconcile, headersForReconcile, rowMapForReconcile)
+                    );
+                    const survivingOverlapVeto =
+                        targetedLegsForReconcile.length > 0 &&
+                        finalPicksArr.some((pk: any) =>
+                            targetedLegsForReconcile.some((vl) => pickMatchesVetoedTarget(pk, vl, rowMapForReconcile))
+                        );
+                    const repairedCleanPass =
+                        !stage2CriticAuditFailed &&
+                        workflowLifecycleResult?.criticAuditFailed !== true &&
+                        workflowLifecycleResult?.success === true &&
+                        finalAnalysis.verified === true &&
+                        finalPicksArr.length > 0 &&
+                        !survivingOverlapVeto &&
+                        (
+                            combinedDetVetoes.length === 0 ||
+                            (stage2CriticApproved !== false && vetoLegsForReconcile.length === 0) ||
+                            targetedLegsForReconcile.length > 0
+                        );
+                    const preserveCleanSubsetPicks =
+                        !stage2CriticAuditFailed &&
+                        workflowLifecycleResult?.criticAuditFailed !== true &&
+                        Boolean(workflowLifecycleResult) &&
+                        workflowLifecycleResult?.success === false &&
+                        finalPicksArr.length > 0 &&
+                        !survivingOverlapVeto;
                     reconcileFinalVerdictAndPicks(finalAnalysis, {
                         criticPass1Approved: stage2CriticApproved,
                         criticVerdictApproved: stage2CriticApproved,
-                        deterministicVetoes: combinedDetVetoes,
+                        deterministicVetoes: repairedCleanPass ? [] : combinedDetVetoes,
                         hadDeterministicVetoes:
                             stage2CriticAuditFailed ||
                             workflowLifecycleResult?.criticAuditFailed === true ||
                             workflowLifecycleResult?.success === false ||
                             finalAnalysis.verified === false ||
-                            combinedDetVetoes.length > 0,
+                            (!repairedCleanPass && combinedDetVetoes.length > 0),
                         criticAuditFailed: stage2CriticAuditFailed || workflowLifecycleResult?.criticAuditFailed === true,
                         verificationSuccess: workflowLifecycleResult ? workflowLifecycleResult.success !== false : undefined,
-                        verificationApproved:
-                            workflowLifecycleResult?.success === true &&
-                            combinedDetVetoes.length === 0 &&
-                            stage2CriticApproved !== false,
-                        vetoTexts: stage2CriticVetoes,
-                        vetoedLegs: stage2VetoedLegs,
+                        verificationApproved: repairedCleanPass,
+                        preserveCleanSubsetPicks,
+                        vetoTexts: vetoTextsForReconcile,
+                        vetoedLegs: vetoLegsForReconcile,
                         seatScorecards: stageSeatScorecards
                     });
                 }

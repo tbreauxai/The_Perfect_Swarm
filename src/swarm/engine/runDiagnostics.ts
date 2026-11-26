@@ -154,7 +154,7 @@ export function buildCompactRunDiagnostics(params: {
                 ? estimateTokens(ev.prompt)
                 : 0;
             const isParseFailedErr =
-                typeof ev.error === 'string' && /parse_failed|unparsed_json|unparsed output/i.test(ev.error);
+                typeof ev.error === 'string' && /parse_failed|unparsed_json|unparsed output|max_tokens/i.test(ev.error);
 
             const executedEndpoint = formatEndpoint(provider, model);
             const configuredEndpoint = configuredEndpointBySeat.get(seat);
@@ -246,7 +246,13 @@ export function buildCompactRunDiagnostics(params: {
             const parsedFrom = fromProvider
                 ? { provider: fromProvider, model: fromModel }
                 : parseProviderAndModel(ev.modelName);
+            const isBillingCooldownSkip =
+                rawReason === '[BILLING_COOLDOWN_SKIP]' ||
+                rawReason.includes('[BILLING_COOLDOWN_SKIP]') ||
+                snippetStr.includes('[BILLING_COOLDOWN_SKIP]') ||
+                promptStr.includes('[BILLING_COOLDOWN_SKIP]');
             const isCooldownSkip =
+                isBillingCooldownSkip ||
                 rawReason === '[COOLDOWN_SKIP]' ||
                 rawReason.includes('[COOLDOWN_SKIP]') ||
                 snippetStr.includes('[COOLDOWN_SKIP]') ||
@@ -256,9 +262,11 @@ export function buildCompactRunDiagnostics(params: {
             const status = typeof rawStatus === 'number' && Number.isFinite(rawStatus)
                 ? rawStatus
                 : extractHttpStatus(rawErr);
-            const reasonCode = isCooldownSkip
-                ? '[COOLDOWN_SKIP]'
-                : (/^(?:LIMITER_SKIP|dead_model|unparsed_json|[a-z0-9_:-]{3,40})$/i.test(rawReason) ? rawReason : undefined);
+            const reasonCode = isBillingCooldownSkip
+                ? '[BILLING_COOLDOWN_SKIP]'
+                : (isCooldownSkip
+                    ? '[COOLDOWN_SKIP]'
+                    : (/^(?:LIMITER_SKIP|dead_model|unparsed_json|max_tokens|[a-z0-9_:-]{3,40})$/i.test(rawReason) ? rawReason : undefined));
             const skipDurationMs = typeof fo?.durationMs === 'number' && Number.isFinite(fo.durationMs)
                 ? Math.max(0, Math.round(fo.durationMs))
                 : (typeof ev.durationMs === 'number' && Number.isFinite(ev.durationMs) ? Math.max(0, Math.round(ev.durationMs)) : 0);
@@ -285,7 +293,7 @@ export function buildCompactRunDiagnostics(params: {
                     from: fromEp,
                     to: toEp,
                     status,
-                    reason: '[COOLDOWN_SKIP]',
+                    reason: reasonCode || '[COOLDOWN_SKIP]',
                     error: errorText,
                     durationMs: skipDurationMs
                 });
@@ -328,10 +336,12 @@ export function buildCompactRunDiagnostics(params: {
             const rawReason = typeof fo?.reason === 'string' ? fo.reason.trim() : '';
             const isExplicitReasonCode =
                 rawReason === 'unparsed_json' ||
+                rawReason === 'max_tokens' ||
                 rawReason === '[COOLDOWN_SKIP]' ||
+                rawReason === '[BILLING_COOLDOWN_SKIP]' ||
                 /^[a-z0-9_:-]{3,40}$/i.test(rawReason);
             const rawErr = fo?.errorSnippet || ev.error || rawReason || '';
-            const error = redactErrorSnippet(rawErr, isExplicitReasonCode && rawReason === 'unparsed_json' ? 120 : 160);
+            const error = redactErrorSnippet(rawErr, isExplicitReasonCode && (rawReason === 'unparsed_json' || rawReason === 'max_tokens') ? 120 : 160);
             const durationMs = typeof fo?.durationMs === 'number' && Number.isFinite(fo.durationMs)
                 ? Math.max(0, Math.round(fo.durationMs))
                 : (typeof ev.durationMs === 'number' && Number.isFinite(ev.durationMs) ? Math.max(0, Math.round(ev.durationMs)) : 0);

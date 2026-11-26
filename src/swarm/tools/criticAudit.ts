@@ -629,9 +629,16 @@ export function resolveFinalCriticApproved(
   }
 
   // Genuine Pass 1 Risk Critic veto sticks unless Pass 2 verification explicitly approved
-  // a clean repaired proposal without deterministic vetoes.
+  // a clean repaired proposal without deterministic vetoes covering any surviving picks.
   if (options?.criticVerdictApproved === false && options?.verificationApproved !== true) {
     return false;
+  }
+  if (
+    options?.verificationApproved === true &&
+    options?.hadDeterministicVetoes !== true &&
+    survivingPicks > 0
+  ) {
+    return true;
   }
 
   if (Array.isArray(finalAnalysis?.scorecards) && finalAnalysis.scorecards.length > 0) {
@@ -704,6 +711,7 @@ export interface ReconcileFinalVerdictOptions {
   vetoedLegs?: VetoedLegTarget[];
   seatScorecards?: any[];
   initialPicks?: any[];
+  preserveCleanSubsetPicks?: boolean;
 }
 
 /**
@@ -750,7 +758,6 @@ export function reconcileFinalVerdictAndPicks<T extends Record<string, any>>(
   if (authoritativelyApproved) {
     rep.criticApproved = true;
     rep.wageringPass = false;
-    if (rep.pass === true) rep.pass = false;
     if (Array.isArray(rep.scorecards)) {
       rep.scorecards = rep.scorecards.map((sc: any) => {
         if (!isRiskCriticScorecard(sc)) return sc;
@@ -778,6 +785,12 @@ export function reconcileFinalVerdictAndPicks<T extends Record<string, any>>(
   rep.criticApproved = resolvedApproved;
 
   if (!resolvedApproved) {
+    if (options?.preserveCleanSubsetPicks === true && currentPicksCount > 0) {
+      rep.criticApproved = false;
+      rep.wageringPass = true;
+      return finalAnalysis;
+    }
+
     const initialCount = Math.max(
       options?.initialPicks?.length ?? 0,
       currentPicksCount,

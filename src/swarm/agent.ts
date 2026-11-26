@@ -2,7 +2,7 @@ import type { GoogleGenAI } from '@google/genai';
 import type { Provider, AgentRunConfig, ProviderCredential } from './types.ts';
 import { SwarmContext } from './context.ts';
 import { ProviderRegistry } from './providers/registry.ts';
-import { sanitizeModelOutput } from './providers/adapter.ts';
+import { sanitizeModelOutput, extractLargestValidJson } from './providers/adapter.ts';
 import { recordRunDebugFailover } from './engine/runDebugRecord.ts';
 import { seatBudget } from './context/promptBudget.ts';
 import { SwarmTracer } from './profiler.ts';
@@ -20,13 +20,16 @@ import {
     UNSATISFIABLE_BUDGET_WAIT_MS,
     MODEL_COOLDOWN_MS,
     BREAKER_OPEN_MS,
+    BILLING_COOLDOWN_MS,
+    isBillingOrAuthError,
     isGeminiProjectWideFailure
 } from './providers/limiter.ts';
+import { isGemini3Or4Model } from './providers/gemini.ts';
 import { parseRetryAfterMs } from './utils/httpTimeouts.ts';
 import { isModelDead, DEFAULT_PROVIDER_MODELS } from './server/modelsProvider.ts';
 import { groqPromptCharCap } from './providers/groq.ts';
 import { globalPayloadCache, PayloadCache } from './cache.ts';
-import { parseJsonSafe, guardManagerResponse, guardAnalystResponse } from './parser.ts';
+import { parseJsonSafe, parseJsonSafeWithStatus, guardManagerResponse, guardAnalystResponse } from './parser.ts';
 import { ManagerResponseSchema, AnalystResponseSchema } from './schemas.ts';
 import { isBlockedBuiltinTool } from './tools/registry.ts';
 
@@ -266,7 +269,10 @@ export class Agent {
         const timeoutMs = isQuantRole ? Math.min(rawTimeoutMs, 30000) : rawTimeoutMs; // Fresh budget per target in targetChain (NVIDIA a1 further capped to 15s below)
 
         const lb = (config?.loadBalancer as AdaptiveLoadBalancer) || this.loadBalancer || globalLoadBalancer;
-        const candidateFallbacks = config?.fallbackProviders || this.fallbacks;
+        const candidateFallbacks =
+            Array.isArray(config?.fallbackProviders) && config.fallbackProviders.length > 0
+                ? config.fallbackProviders
+                : this.fallbacks;
         const sortedFallbacks = candidateFallbacks.length > 1 && !this.preserveFallbackOrder
             ? [...candidateFallbacks].sort((a, b) => lb.calculateScore(b.provider) - lb.calculateScore(a.provider))
             : candidateFallbacks;
@@ -380,7 +386,8 @@ export class Agent {
                     if (skipReason.startsWith('skipped_tpm_wait:')) {
                         console.warn(`[${this.role}][${currentTarget.provider}/${preCheck.targetModel}] ${skipReason}`);
                     }
-                    const isCooldownSkip = skipReason.includes('[COOLDOWN_SKIP]');
+                    const isBillingCooldownSkip = skipReason.includes('[BILLING_COOLDOWN_SKIP]');
+                    const isCooldownSkip = !isBillingCooldownSkip && skipReason.includes('[COOLDOWN_SKIP]');
                     let nextHealthyFallback: ProviderCredential | undefined;
                     let nextHealthyFallbackModel = '';
                     for (let j = targetIdx + 1; j < targetChain.length; j++) {
@@ -405,7 +412,9 @@ export class Agent {
                     lastFailedModel = preCheck.targetModel;
                     lastError = new Error(skipReason);
                     const redactedSkipReason = redactErrorSnippet(skipReason);
-                    const resolvedReason = isCooldownSkip ? '[COOLDOWN_SKIP]' : skipReason;
+                    const resolvedReason = isBillingCooldownSkip
+                        ? '[BILLING_COOLDOWN_SKIP]'
+                        : (isCooldownSkip ? '[COOLDOWN_SKIP]' : skipReason);
                     context.addEvent({
                         agentRole: this.role,
                         action: 'Provider Skipped',
@@ -516,15 +525,19 @@ export class Agent {
                     const isNvidiaReasoningTarget =
                         currentTarget.provider === 'nvidia' &&
                         /nemotron|deepseek-r1|qwq/i.test(targetModel);
+                    const isGeminiThinkingTarget =
+                        currentTarget.provider === 'gemini' &&
+                        isGemini3Or4Model(targetModel) &&
+                        roleLower !== 'catalog-probe';
                     const defaultRoleTokens = roleLower.includes('grader') ? 60
                         : roleLower.includes('prompt generator') ? 300
                         : roleLower.includes('manager') ? 2000
-                        : isNvidiaReasoningTarget ? 4096
+                        : (isNvidiaReasoningTarget || isGeminiThinkingTarget) ? 4096
                         : isQuantRole ? 1800
                         : 1500;
 
                     const requestedTokens = config?.maxTokens ?? this.maxTokens ?? defaultRoleTokens;
-                    const effectiveMaxTokens = isNvidiaReasoningTarget
+                    const effectiveMaxTokens = (isNvidiaReasoningTarget || isGeminiThinkingTarget)
                         ? Math.max(requestedTokens, 4096)
                         : (isQuantRole ? Math.min(requestedTokens, 1800) : requestedTokens);
                     const effectiveConfig: AgentRunConfig = {
@@ -670,12 +683,12 @@ export class Agent {
                         if (textOutput.includes('```tool_call') || textOutput.includes('[TOOL_CALL') || textOutput.includes('[TOOL_EXECUTION')) {
                             parsedOutput = textOutput;
                         } else {
-                            const candidate = parseJsonSafe(textOutput);
+                            const { data: candidate, repaired: parseRepaired } = parseJsonSafeWithStatus(textOutput);
                             const hasParsedKeys = candidate && typeof candidate === 'object' && (
                                 Array.isArray(candidate) ? candidate.length > 0 : Object.keys(candidate).length > 0
                             );
-                            // S2: Treat unparsed/truncated non-JSON output on proposer seats (a1/a2) as parse_failed
-                            // and trigger failover instead of returning status: "ok" with "[Quant Proposer] unparsed output".
+                            // S2/S3: Treat unparsed/truncated non-JSON output on proposer seats (a1/a2) as parse_failed
+                            // and trigger failover/retry instead of returning status: "ok" with truncated prose & picks: [].
                             const isProposerSeat =
                                 this.id === 'a1' ||
                                 this.id === 'a2' ||
@@ -683,11 +696,26 @@ export class Agent {
                             const hasNativeToolCallInText =
                                 typeof textOutput === 'string' &&
                                 /"tool"\s*:|"tool_calls"\s*:|get_(?:matchup|injury|market|environment|player_prop|historical)/i.test(textOutput);
+                            const rawTrimmedForTrunc = typeof textOutput === 'string' ? textOutput.trim() : '';
+                            const hasTruncatedJson =
+                                Boolean(rawTrimmedForTrunc) &&
+                                (rawTrimmedForTrunc.startsWith('{') || rawTrimmedForTrunc.startsWith('[')) &&
+                                extractLargestValidJson(rawTrimmedForTrunc) === null;
+                            const missingProposerFieldsAfterRepair =
+                                parseRepaired &&
+                                !Array.isArray((candidate as any)?.scorecards) &&
+                                (
+                                    (hasTruncatedJson && (!Array.isArray((candidate as any)?.picks) || (candidate as any).picks.length === 0)) ||
+                                    (
+                                        !Array.isArray((candidate as any)?.picks) &&
+                                        (!Array.isArray((candidate as any)?.insights) || (candidate as any).insights.length === 0)
+                                    )
+                                );
                             if (
-                                !hasParsedKeys &&
+                                (!hasParsedKeys || missingProposerFieldsAfterRepair) &&
                                 isProposerSeat &&
                                 !hasNativeToolCallInText &&
-                                targetIdx < targetChain.length - 1
+                                (targetIdx < targetChain.length - 1 || attempt < maxRetries)
                             ) {
                                 const rawSnippet = redactErrorSnippet(textOutput || 'empty response', 120);
                                 const parseErr: any = new Error(`[PARSE_FAILED:unparsed_json] ${rawSnippet}`);
@@ -774,7 +802,7 @@ export class Agent {
                         continue;
                     }
 
-                    const isParseFailure = Boolean(err?.parseFailed) || errMsg.includes('[PARSE_FAILED:unparsed_json]');
+                    const isParseFailure = Boolean(err?.parseFailed) || /\[PARSE_FAILED:(?:unparsed_json|max_tokens)\]/i.test(errMsg);
                     const httpStatus = isParseFailure ? null : extractHttpStatus(err);
                     const errorSnippet = isParseFailure
                         ? redactErrorSnippet(err?.rawSnippet || errMsg.replace(/^\[PARSE_FAILED:[^\]]+\]\s*/i, ''), 120)
@@ -863,7 +891,9 @@ export class Agent {
                         errLower.includes('econnreset') ||
                         errLower.includes('fetch failed');
 
+                    const billingErrorInfo = isBillingOrAuthError(err);
                     const isFatal =
+                        billingErrorInfo.match ||
                         httpStatus === 400 ||
                         httpStatus === 401 ||
                         httpStatus === 402 ||
@@ -882,21 +912,31 @@ export class Agent {
                         errLower.includes('does not exist') ||
                         errLower.includes('unsupported model');
 
+                    if (billingErrorInfo.match && !(currentTarget.provider === 'gemini' && /free_tier/i.test(errMsg) && /\blimit\s*:\s*0\b/i.test(errMsg))) {
+                        globalProviderLimiter.recordFailure(
+                            String(currentTarget.provider),
+                            targetModel,
+                            errMsg,
+                            true
+                        );
+                    }
+
                     const skipGeminiSiblings =
                         currentTarget.provider === 'gemini' && isGeminiProjectWideFailure(err);
                     if (skipGeminiSiblings) {
-                        const cooldownMs = (httpStatus === 401 || httpStatus === 403) ? BREAKER_OPEN_MS : MODEL_COOLDOWN_MS;
+                        const cooldownMs = (httpStatus === 401 || httpStatus === 402 || httpStatus === 403) ? BILLING_COOLDOWN_MS : MODEL_COOLDOWN_MS;
+                        const reasonPrefix = (httpStatus === 401 || httpStatus === 402 || httpStatus === 403) ? '[BILLING_COOLDOWN_SKIP] ' : '';
                         globalProviderLimiter.openProviderCooldown(
                             'gemini',
                             cooldownMs,
-                            `gemini project-wide error (${httpStatus ?? 'unknown'}): ${errorSnippet}`
+                            `${reasonPrefix}gemini project-wide error (${httpStatus ?? 'unknown'}): ${errorSnippet}`
                         );
                     }
 
                     const hasNextProvider = targetIdx < targetChain.length - 1;
 
                     if ((isFatal || isLimiterSkip) && !hasNextProvider) {
-                        break; // Fatal error (like model not found) or limiter skip: retrying the same target cannot help
+                        break; // Fatal error (like model not found / 401 / 402 / 403) or limiter skip: retrying the same target cannot help
                     }
 
                     // If eligible for failover and a backup provider is ready, failover immediately without waiting

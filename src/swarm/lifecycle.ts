@@ -979,11 +979,32 @@ export class AnalysisLifecycle {
                     }
                 }
 
+                const marketAuditFlags = Array.isArray(marketRowAudit.flags) ? marketRowAudit.flags : [];
+                const isRepairableRowSignFlip =
+                    marketAuditFlags.includes('spread_side_mismatch') &&
+                    !marketAuditFlags.includes('spread_value_mismatch') &&
+                    !marketAuditFlags.includes('price_band_misread') &&
+                    !marketAuditFlags.some(f => f.startsWith('missing_'));
+                const hasPermanentMarketVeto =
+                    marketVetoTriggered &&
+                    marketAuditFlags.some(
+                        f =>
+                            (f === 'row_side_mismatch' && !isRepairableRowSignFlip) ||
+                            f === 'price_band_misread' ||
+                            f.startsWith('missing_')
+                    );
+                const isRepairableMarketProseMismatch =
+                    marketVetoTriggered &&
+                    !hasPermanentMarketVeto;
+
                 // Merge structured veto targets from deterministic audits immediately into the cumulative ledger
+                // (do NOT poison vetoedLegs on Attempt 1 for repairable spread/venue prose mismatches).
                 accumulatedVetoedLegs = mergeVetoedLegTargets(
                     accumulatedVetoedLegs,
                     effectiveInjuryVetoedLegs,
-                    marketVetoTriggered ? marketRowAudit.vetoedLegs : undefined,
+                    marketVetoTriggered && (!isRepairableMarketProseMismatch || attempt >= this.maxRetries)
+                        ? marketRowAudit.vetoedLegs
+                        : undefined,
                     groundingVetoTriggered ? groundingAudit.vetoedLegs : undefined
                 );
                 accumulatedVetoedClaims = mergeVetoedClaims(
@@ -1239,17 +1260,31 @@ export class AnalysisLifecycle {
                 }
 
                 if (!verification.pass && verification.feedback) {
-                    if (!accumulatedVetoTexts.includes(verification.feedback)) {
-                        accumulatedVetoTexts.push(verification.feedback);
+                    const isRepairableProseOnlyFeedback =
+                        attempt < this.maxRetries &&
+                        !injuryVetoTriggered &&
+                        !groundingVetoTriggered &&
+                        !pullVetoTriggered &&
+                        !hasPermanentMarketVeto &&
+                        !llmAuditCoverage.criticSkippedAudit &&
+                        (/\b(?:spread(?:\s+(?:value|sign|side))?|venue|role)\s+mismatch\b|described\s+as\s+(?:home|away|road)/i.test(verification.feedback) ||
+                            isRepairableRowSignFlip) &&
+                        !/\b(?:contra_steam_misread|symmetric_injury_misread|sharp_contra_steam|missing_(?:moneyline|total|spread)_coverage)\b/i.test(verification.feedback) &&
+                        !(marketAuditFlags.includes('row_side_mismatch') && !isRepairableRowSignFlip);
+
+                    if (!isRepairableProseOnlyFeedback) {
+                        if (!accumulatedVetoTexts.includes(verification.feedback)) {
+                            accumulatedVetoTexts.push(verification.feedback);
+                        }
+                        accumulatedVetoedLegs = mergeVetoedLegTargets(
+                            accumulatedVetoedLegs,
+                            extractVetoedLegTargets([verification.feedback], allParsedHeaders, auditRowMap)
+                        );
+                        accumulatedVetoedClaims = mergeVetoedClaims(
+                            accumulatedVetoedClaims,
+                            extractQuotedVetoedClaims([verification.feedback])
+                        );
                     }
-                    accumulatedVetoedLegs = mergeVetoedLegTargets(
-                        accumulatedVetoedLegs,
-                        extractVetoedLegTargets([verification.feedback], allParsedHeaders, auditRowMap)
-                    );
-                    accumulatedVetoedClaims = mergeVetoedClaims(
-                        accumulatedVetoedClaims,
-                        extractQuotedVetoedClaims([verification.feedback])
-                    );
                 }
 
                 const verifierFlags = Array.from(

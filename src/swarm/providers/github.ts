@@ -67,15 +67,20 @@ export class GitHubAdapter implements ProviderAdapter {
 
         if (!response.ok) {
             const err = await response.text();
+            const makeErr = (msg: string) => {
+                const e: any = new Error(msg);
+                e.status = response.status;
+                return e;
+            };
             if (response.status === 429) {
                 const retryAfter = response.headers.get('retry-after');
                 const retrySuffix = retryAfter ? ` (retry-after: ${retryAfter}s)` : '';
-                throw new Error(`[RATE_LIMIT_429] GitHub Models rate limit exceeded: ${err}${retrySuffix}`);
+                throw makeErr(`[RATE_LIMIT_429] GitHub Models rate limit exceeded: ${err}${retrySuffix}`);
             }
             if (response.status >= 500) {
-                throw new Error(`[SERVER_ERROR_${response.status}] GitHub Models service error: ${err}`);
+                throw makeErr(`[SERVER_ERROR_${response.status}] GitHub Models service error: ${err}`);
             }
-            throw new Error(`GitHub API Error: ${response.status} - ${err}`);
+            throw makeErr(`GitHub API Error: ${response.status} - ${err}`);
         }
 
         const data = await response.json();

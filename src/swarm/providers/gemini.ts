@@ -3,6 +3,7 @@ import { cleanToken, sanitizeModelOutput, type ProviderAdapter, type ProviderCal
 import { globalTelemetryCollector, estimateTokens } from '../telemetry.ts';
 import { parseRetryAfterMs } from '../utils/httpTimeouts.ts';
 import { remapDeprecatedGeminiModel } from '../server/modelsProvider.ts';
+import { isBillingOrAuthError, isFreeTierZeroLimitError } from './limiter.ts';
 
 export function isGemini3Or4Model(modelName: string): boolean {
     const norm = String(modelName || '').replace(/^models\//i, '').trim().toLowerCase();
@@ -54,9 +55,13 @@ export function buildGeminiRequestConfig(
     delete reqConfig.noRetry;
     delete reqConfig.toolRegistry;
 
-    reqConfig.maxOutputTokens = options.role === 'catalog-probe'
+    const baseMaxOutputTokens = options.role === 'catalog-probe'
         ? Math.max(options.config?.maxTokens || 256, 256)
         : (options.config?.maxTokens || 8192);
+    reqConfig.maxOutputTokens =
+        options.role !== 'catalog-probe' && isGemini3Or4Model(effectiveModelName)
+            ? Math.max(baseMaxOutputTokens, 4096)
+            : baseMaxOutputTokens;
     if (options.systemInstruction) {
         reqConfig.systemInstruction = options.systemInstruction;
     }
@@ -210,14 +215,23 @@ export class GeminiAdapter implements ProviderAdapter {
         } catch (error: any) {
             const errStr = String(error?.message || error || '');
             const errStatus = typeof error?.status === 'number' ? error.status : undefined;
+            const isBillingOrZeroLimit = isBillingOrAuthError(error).match || isFreeTierZeroLimitError(errStr);
+            if (isBillingOrZeroLimit && (errStatus === 401 || errStatus === 402 || errStatus === 403 || isBillingOrAuthError(error).status === 401 || isBillingOrAuthError(error).status === 402 || isBillingOrAuthError(error).status === 403)) {
+                if (errStatus && !(error instanceof Error)) {
+                    const wrapped: any = new Error(`Gemini API Error (${errStatus}): ${errStr}`);
+                    wrapped.status = errStatus;
+                    throw wrapped;
+                }
+                throw error;
+            }
             if (
                 errStatus === 429 ||
                 errStr.includes('429') ||
                 errStr.includes('RESOURCE_EXHAUSTED') ||
                 errStr.includes('quota')
             ) {
-                const retryMs = parseRetryAfterMs(error, 0, 100, 30000);
-                if (retryMs > 0 && retryMs <= 8000) {
+                const retryMs = isBillingOrZeroLimit ? 0 : parseRetryAfterMs(error, 0, 100, 30000);
+                if (!isBillingOrZeroLimit && retryMs > 0 && retryMs <= 8000) {
                     const jitterMs = Math.floor(Math.random() * 600) + 200;
                     await new Promise(r => setTimeout(r, retryMs + jitterMs));
                     try {
@@ -248,7 +262,13 @@ export class GeminiAdapter implements ProviderAdapter {
         const durationMs = Date.now() - startTime;
         globalTelemetryCollector.recordModelLatency(durationMs);
 
-        const rawText = response.text || '';
+        const rawText = typeof response?.text === 'string'
+            ? response.text
+            : (Array.isArray(response?.candidates?.[0]?.content?.parts)
+                ? response.candidates[0].content.parts.map((p: any) => (typeof p?.text === 'string' ? p.text : '')).join('')
+                : '');
+        const finishReason = String(response?.candidates?.[0]?.finishReason ?? response?.finishReason ?? '');
+        const isMaxTokens = /MAX_TOKENS/i.test(finishReason);
 
         // Record token usage
         if (response.usageMetadata) {
@@ -269,6 +289,40 @@ export class GeminiAdapter implements ProviderAdapter {
             });
         }
 
-        return sanitizeModelOutput(rawText, isJson);
+        const sanitized = sanitizeModelOutput(rawText, isJson);
+        if (isMaxTokens && options.role !== 'catalog-probe') {
+            const strippedRaw = rawText
+                .replace(/<think>[\s\S]*?<\/think>/gi, '')
+                .replace(/<thought>[\s\S]*?<\/thought>/gi, '')
+                .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '')
+                .replace(/\[THOUGHT\][\s\S]*?\[\/THOUGHT\]/gi, '')
+                .replace(/```(?:json|javascript|js|jsonc)?/gi, '')
+                .trim();
+            let rawIsCompleteJson = false;
+            if (strippedRaw) {
+                try {
+                    JSON.parse(strippedRaw);
+                    rawIsCompleteJson = true;
+                } catch {
+                    rawIsCompleteJson = false;
+                }
+            }
+            const needsCompleteJson =
+                isJson ||
+                strippedRaw.startsWith('{') ||
+                strippedRaw.startsWith('[') ||
+                /quant|market|proposer|manager|critic|verifier|analyst/i.test(options.role || '');
+            if (!sanitized.trim() || (needsCompleteJson && !rawIsCompleteJson)) {
+                const rawSnippet = (sanitized || strippedRaw || '[MAX_TOKENS]').replace(/\s+/g, ' ').slice(0, 120);
+                const truncErr: any = new Error(`[PARSE_FAILED:max_tokens] Gemini output truncated at ${finishReason}: ${rawSnippet}`);
+                truncErr.parseFailed = true;
+                truncErr.reason = 'max_tokens';
+                truncErr.finishReason = finishReason;
+                truncErr.rawSnippet = rawSnippet;
+                throw truncErr;
+            }
+        }
+
+        return sanitized;
     }
 }

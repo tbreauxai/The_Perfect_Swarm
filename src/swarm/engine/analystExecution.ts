@@ -4,7 +4,7 @@ import type { SwarmContext } from '../context.ts';
 import type { Provider, SwarmEngineSettings } from '../types.ts';
 import type { AgentVariantConfig } from '../experiment.ts';
 import { ToolRegistry } from '../tools/index.ts';
-import { PROVIDER_LIMITS, estimateTokens } from '../providers/limiter.ts';
+import { PROVIDER_LIMITS, estimateTokens, globalProviderLimiter } from '../providers/limiter.ts';
 import { TokenEstimator } from '../compression/tokenEstimator.ts';
 import { resolveProvider } from './utils.ts';
 import { isModelDead } from '../server/modelsProvider.ts';
@@ -24,6 +24,7 @@ import {
 } from '../hierarchy.ts';
 import { globalPromptCompressor } from '../compression.ts';
 import { guardAnalystResponse } from '../parser.ts';
+import { extractLargestValidJson } from '../providers/adapter.ts';
 import { SwarmTracer } from '../profiler.ts';
 import {
     ANALYST_SYSTEM_INSTRUCTION,
@@ -1067,9 +1068,16 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                 seat === 'a2' ||
                 /quant|market|proposer/i.test(analyst.role || '')
             );
+            const rawOutputStr = typeof rawOutput === 'string' ? rawOutput.trim() : '';
+            const truncatedJsonPayload =
+                Boolean(rawOutputStr) &&
+                (rawOutputStr.startsWith('{') || rawOutputStr.startsWith('[')) &&
+                extractLargestValidJson(rawOutputStr) === null;
             const rawOutputPlaceholder =
                 Boolean((resData as any)?._placeholder) ||
-                /unparsed output/i.test(String((resData as any)?.summary || ''));
+                Boolean((resData as any)?.parseFailed) ||
+                /unparsed output/i.test(String((resData as any)?.summary || '')) ||
+                (truncatedJsonPayload && !Array.isArray((resData as any)?.scorecards));
             const proposerPickCount = Array.isArray((resData as any)?.picks) ? (resData as any).picks.length : 0;
             if (isProposerSeat && !scorecardReport && rawOutputPlaceholder && proposerPickCount === 0) {
                 const rawSnippetSource =
@@ -1094,6 +1102,7 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                         continue;
                     }
                     if (isModelDead(cand.provider, cand.modelName)) continue;
+                    if (!globalProviderLimiter.isAvailable(cand.provider, cand.modelName)) continue;
                     const resolved = resolveProvider(cand.provider, settings || {});
                     if (resolved.key || resolved.client) {
                         failoverTarget = {
@@ -1103,6 +1112,29 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                             client: resolved.client
                         };
                         break;
+                    }
+                }
+                if (!failoverTarget && typeof (analyst as any).getFallbacks === 'function') {
+                    for (const fb of (analyst as any).getFallbacks() || []) {
+                        const fbProv = String(fb.provider || '').toLowerCase();
+                        const fbModel = String(fb.modelName || '');
+                        if (
+                            fbProv === String(analyst.provider).toLowerCase() &&
+                            fbModel.toLowerCase() === String(analyst.modelName || '').toLowerCase()
+                        ) {
+                            continue;
+                        }
+                        if (fbModel && isModelDead(fbProv, fbModel)) continue;
+                        if (!globalProviderLimiter.isAvailable(fbProv, fbModel || undefined)) continue;
+                        if (fb.apiKey || fb.aiClient) {
+                            failoverTarget = {
+                                provider: fb.provider,
+                                modelName: fbModel,
+                                key: fb.apiKey || '',
+                                client: fb.aiClient
+                            };
+                            break;
+                        }
                     }
                 }
 

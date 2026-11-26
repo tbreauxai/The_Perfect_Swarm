@@ -383,6 +383,7 @@ function stripNonSpreadParentheses(text: string): string {
     const trimmed = String(inner || '').trim();
     if (!trimmed) return ' '.repeat(full.length);
     if (/^R\d+$/i.test(trimmed)) return ' '.repeat(full.length);
+    if (/^\d{1,2}-\d{1,2}(?:-\d{1,2})?$/.test(trimmed)) return ' '.repeat(full.length);
     if (/\b(?:ml|moneyline|money\s*line|h2h|o\/u|over|under|total)\b/i.test(trimmed)) return ' '.repeat(full.length);
     if (/^[+-]\d{3,}(?:\.\d+)?$/.test(trimmed)) return ' '.repeat(full.length);
     return full;
@@ -589,7 +590,7 @@ export function checkRowSideBinding(
       valid: false,
       isSignFlipOnly,
       isValueMismatch: !isSignFlipOnly,
-      reason: `Row ${rowId} is "${rowBody}" (${formatSigned(rowSpread)}), does not match "${sideLabel}" (${formatSigned(pickSpread)}).`
+      reason: `Row ${rowId} is "${rowBody}" (${formatSigned(rowSpread)}), does not match picked line (${formatSigned(pickSpread)}).`
     };
   }
 
@@ -1338,8 +1339,8 @@ interface SpreadSideViolation {
   wrongNumberEnd?: number;
 }
 
-const DIRECT_STAT_PREFIX_RX = /\b(?:net\s*rating|nrtg|ortg|drtg|point\s*diff(?:erential)?|goal\s*diff(?:erential)?|run\s*diff(?:erential)?|diff(?:erential)?|xgf|xg|ppg|gpg|era|pace|delta|roi|ev|kelly|(?:moved|move|steam(?:ed)?|swing)\s+(?:by|of)|margin\s+of|edge\s+of)\s*[:=of\s]*$/i;
-const DIRECT_STAT_SUFFIX_RX = /^\s*(?:%|(?:spread|line|total|pts?|points?)\s+(?:move|delta|swing|diff|margin|shift)\b|(?:(?:l\d+|last\s*\d+)\s+)?(?:net\s*)?margin\b|units?\b|u\b|net\s*rating\b|nrtg\b|ortg\b|drtg\b|diff(?:erential)?\b|delta\b|swing\b|ppg\b|gpg\b|goals?\b|runs?\b|yards?\b|era\b|roi\b|ev\b)/i;
+const DIRECT_STAT_PREFIX_RX = /\b(?:(?:opponent(?:'s|s')?|opp\.?|team(?:'s|s')?|home|away|road|season|on-?court|l\d+|last\s*\d+)\s+)*(?:net\s*(?:rating|margin|efficiency)|nrtg|ortg|drtg|scoring\s*(?:margin|diff(?:erential)?)|point\s*(?:margin|diff(?:erential)?)|goal\s*(?:margin|diff(?:erential)?)|run\s*(?:margin|diff(?:erential)?)|avg\.?\s*margin|average\s*margin|margin(?:\s+of\s+victory)?|diff(?:erential)?|xgf|xg|ppg|oppg|gpg|era|pace|delta|roi|ev|kelly|(?:moved|move|steam(?:ed)?|swing)\s+(?:by|of)|margin\s+of|edge\s+of|ats\s+record|record)\s*[:=of\s]*$/i;
+const DIRECT_STAT_SUFFIX_RX = /^\s*(?:%|(?:spread|line|total|pts?|points?)\s+(?:move|delta|swing|diff|margin|shift)\b|(?:(?:opponent(?:'s|s')?|opp\.?|team(?:'s|s')?|home|away|road|season|avg\.?|average|scoring|point|goal|run|on-?court|l\d+|last\s*\d+)\s+)*(?:(?:net\s*)?margin(?:\s+of\s+victory)?|net\s*rating|nrtg|ortg|drtg|diff(?:erential)?|efficiency)\b|units?\b|u\b|odds\b|juic(?:e|ed)\b|vig\b|ats\b|record\b|delta\b|swing\b|ppg\b|oppg\b|gpg\b|goals?\b|runs?\b|yards?\b|era\b|roi\b|ev\b)/i;
 
 function collectPickedEventIds(
   proposal: any,
@@ -1417,29 +1418,122 @@ function collectPickedEventIds(
   return out;
 }
 
+function collectPickedTeamCanonicals(
+  proposal: any,
+  headers: GameHeader[],
+  rowMap: Map<string, RowOptionEntry>,
+  spreadMap: Map<string, AuthoritativeTeamSpread>
+): Set<string> {
+  const out = new Set<string>();
+  if (!proposal || typeof proposal !== 'object') return out;
+  if (Array.isArray(proposal.picks) && proposal.picks.length === 0) return out;
+
+  const rawPicks: any[] = Array.isArray(proposal.picks)
+    ? proposal.picks
+    : (proposal.scorecard && typeof proposal.scorecard === 'object' && (proposal.scorecard.pick || proposal.scorecard.side || proposal.scorecard.selection || proposal.scorecard.row)
+      ? [proposal.scorecard]
+      : []);
+
+  for (const pk of rawPicks) {
+    if (!pk) continue;
+    let rowId: string | undefined;
+    let sideText = '';
+    let eventId: string | undefined;
+    if (typeof pk === 'string') {
+      const m = pk.match(/\b(R\d+)\b/i);
+      rowId = m ? m[1].toUpperCase() : undefined;
+      sideText = pk.trim();
+    } else if (typeof pk === 'object') {
+      const rawRow = pk.row || pk.id;
+      if (typeof rawRow === 'string' && /^R\d+$/i.test(rawRow.trim())) {
+        rowId = rawRow.trim().toUpperCase();
+      }
+      sideText = extractStructuredPickSideText(pk);
+      if (!rowId && sideText) {
+        const m = sideText.match(/\b(R\d+)\b/i);
+        if (m) rowId = m[1].toUpperCase();
+      }
+      const evCand = pk.event_id || pk.eventId || pk.game_id;
+      if (typeof evCand === 'string' && evCand.trim() && evCand.trim() !== 'unknown-game') {
+        eventId = evCand.trim();
+      }
+    }
+    const rowEntry = rowId ? rowMap.get(rowId) : undefined;
+    if (!eventId && rowEntry?.eventId) {
+      eventId = rowEntry.eventId;
+    }
+    const lookupText = sideText || rowEntry?.text || '';
+    if (!lookupText) continue;
+
+    let matched = false;
+    for (const hit of findTeamHitsInClause(lookupText, spreadMap)) {
+      if (!eventId || !hit.entry.eventId || hit.entry.eventId === eventId) {
+        out.add(hit.entry.canonical);
+        matched = true;
+      }
+    }
+    if (!matched) {
+      const hdr = eventId ? headers.find(h => h.eventId === eventId) : undefined;
+      const contextTeams = hdr ? [hdr.away, hdr.home] : (rowEntry?.away && rowEntry?.home ? [rowEntry.away, rowEntry.home] : undefined);
+      const resolved = resolveTeamFromText(lookupText, hdr?.sport || rowEntry?.sport, contextTeams);
+      if (resolved) {
+        for (const entry of spreadMap.values()) {
+          if (entry.canonical === resolved.canonical || entry.teamName.toLowerCase() === resolved.name.toLowerCase()) {
+            out.add(entry.canonical);
+          }
+        }
+      }
+    }
+  }
+  return out;
+}
+
 function findVenueMismatchInText(
   text: string,
   spreadMap: Map<string, AuthoritativeTeamSpread>,
-  allowedVenueEventIds?: Set<string>
+  allowedVenueEventIds?: Set<string>,
+  pickedTeamCanonicals?: Set<string>
 ): SpreadSideViolation | null {
   if (!text || !text.trim() || spreadMap.size === 0) return null;
   if (allowedVenueEventIds !== undefined && allowedVenueEventIds.size === 0) return null;
 
   const cleaned = text.replace(/\b(?:conditional_)?(?:home|away)_advantage\b/gi, ' ');
-  const subClauses = cleaned
-    .split(/[.;,!?]|\s+(?:vs\.?|versus|over|against|while|whereas|although|though|but|and)\s+|\s+at\s+(?!home\b)|\s+@\s+/i)
-    .map(s => s.trim())
-    .filter(Boolean);
+  const splitParts = cleaned.split(
+    /([.;,!?]|\s+(?:vs\.?|versus|over|against|while|whereas|although|though|but|and)\s+|\s+at\s+(?!home\b)|\s+@\s+)/i
+  );
+  const subClauseEntries: Array<{ sub: string; prevDelim: string }> = [];
+  let lastDelim = '';
+  for (let pIdx = 0; pIdx < splitParts.length; pIdx++) {
+    const part = splitParts[pIdx];
+    if (pIdx % 2 === 1) {
+      lastDelim = part || '';
+    } else if (part && part.trim()) {
+      subClauseEntries.push({ sub: part.trim(), prevDelim: lastDelim });
+    }
+  }
 
-  for (const sub of subClauses) {
+  for (const { sub, prevDelim } of subClauseEntries) {
     const subHits = findTeamHitsInClause(sub, spreadMap);
     if (subHits.length === 0) continue;
+
+    const precededByOpponentPreposition =
+      Boolean(prevDelim.trim()) &&
+      /\b(?:vs\.?|versus|over|against|at)\b|@/i.test(prevDelim);
 
     for (let i = 0; i < subHits.length; i++) {
       const hit = subHits[i];
       const entry = hit.entry;
       if (allowedVenueEventIds !== undefined && (!entry.eventId || !allowedVenueEventIds.has(entry.eventId))) {
         continue;
+      }
+      const isPickedTeam = !pickedTeamCanonicals || pickedTeamCanonicals.size === 0 || pickedTeamCanonicals.has(entry.canonical);
+      if (!isPickedTeam) {
+        if (precededByOpponentPreposition || subHits.length > 1) continue;
+        const beforeHitFull = sub.slice(0, hit.start).trim();
+        const isStandaloneSubjectPrefix =
+          beforeHitFull === '' ||
+          /^(?:the\s+)?(?:(?:home|away|road)\s+team\s+)?$/i.test(beforeHitFull);
+        if (!isStandaloneSubjectPrefix) continue;
       }
 
       const prefix = sub.slice(i > 0 ? subHits[i - 1].end : 0, hit.start);
@@ -1481,7 +1575,7 @@ function findVenueMismatchInText(
 function findSpreadSideViolationInClause(
   clause: string,
   spreadMap: Map<string, AuthoritativeTeamSpread>,
-  options?: { allowedVenueEventIds?: Set<string> }
+  options?: { allowedVenueEventIds?: Set<string>; pickedTeamCanonicals?: Set<string> }
 ): SpreadSideViolation | null {
   if (!clause || !clause.trim() || spreadMap.size === 0) return null;
   const teamHits = findTeamHitsInClause(clause, spreadMap);
@@ -1499,10 +1593,11 @@ function findSpreadSideViolationInClause(
     // Sports spreads/pucklines/runlines only come in whole or half-point (.0 / .5) increments, never e.g. -0.9 or +1.1 net ratings
     if (Math.round(Math.abs(val) * 2) !== Math.abs(val) * 2) continue;
 
-    // Skip ML odds explicitly labeled (e.g. ML -11), W-L record parentheticals ("3-7 (-0.9)"), or corrective negations
-    const prefix = clause.slice(Math.max(0, numOffset - 22), numOffset);
-    const suffix = clause.slice(numOffset + numStr.length, Math.min(clause.length, numOffset + numStr.length + 22));
+    // Skip ML odds explicitly labeled (e.g. ML -11), Row-IDs, W-L record parentheticals ("3-7 (-0.9)"), or corrective negations
+    const prefix = clause.slice(Math.max(0, numOffset - 42), numOffset);
+    const suffix = clause.slice(numOffset + numStr.length, Math.min(clause.length, numOffset + numStr.length + 42));
     if (/\b(?:ml|moneyline|h2h|o\/u|over|under|total)\s*$/i.test(prefix)) continue;
+    if (/\bR\d+\s*$/i.test(prefix) || /^\s*R\d+\b/i.test(suffix)) continue;
     if (/\b\d{1,2}-\d{1,2}(?:-\d{1,2})?\s*[,(\s]*$/i.test(prefix)) continue;
     if (/\b(?:not|never|instead of|rather than|isn't|aren't|wasn't|weren't|vs\.?|versus)\s*(?:a|an|the|listed as)?\s*$/i.test(prefix)) continue;
 
@@ -1527,7 +1622,7 @@ function findSpreadSideViolationInClause(
         wrongNumberRaw: numStr,
         wrongNumberStart: numOffset,
         wrongNumberEnd: numOffset + numStr.length,
-        reason: `${entry.teamName} spread sign mismatch: cited ${numStr}, but ${entry.teamName} is ${formatSigned(entry.spread)} (${entry.role}).`
+        reason: `Spread sign mismatch for "${entry.teamName}" (authoritative line ${formatSigned(entry.spread)}, ${entry.role}): cited ${numStr}.`
       };
     }
     // Reject spread value/magnitude mismatch (e.g. Lobos -8.5 when tool/row spread is -7.5)
@@ -1546,7 +1641,7 @@ function findSpreadSideViolationInClause(
         wrongNumberRaw: numStr,
         wrongNumberStart: numOffset,
         wrongNumberEnd: numOffset + numStr.length,
-        reason: `${entry.teamName} spread mismatch: cited ${numStr}, but authoritative tool/row spread is ${formatSigned(entry.spread)}.`
+        reason: `Spread mismatch for "${entry.teamName}" (authoritative line ${formatSigned(entry.spread)}): cited ${numStr}.`
       };
     }
   }
@@ -1609,7 +1704,7 @@ function findSpreadSideViolationInClause(
     }
   }
 
-  return findVenueMismatchInText(clause, spreadMap, options?.allowedVenueEventIds);
+  return findVenueMismatchInText(clause, spreadMap, options?.allowedVenueEventIds, options?.pickedTeamCanonicals);
 }
 
 function splitClausesPreservingDelimiters(text: string): string[] {
@@ -1941,6 +2036,7 @@ export function auditMarketCoverageAndRowBinding(
   const authoritativeSpreads = extractAuthoritativeTeamSpreads(headers, rowMap, toolEvidenceText, toolRecords, boardText);
   const picks = extractProposalPicks(proposal, headers, rowMap);
   const pickedEventIds = collectPickedEventIds(proposal, headers, rowMap, authoritativeSpreads);
+  const pickedTeamCanonicals = collectPickedTeamCanonicals(proposal, headers, rowMap, authoritativeSpreads);
   const flags: string[] = [];
 
   for (const item of picks) {
@@ -1953,6 +2049,7 @@ export function auditMarketCoverageAndRowBinding(
       const check = checkPickRowSideBinding(pkObj, rowMap);
       if (!check.valid) {
         flags.push('row_side_mismatch');
+        if (check.isSignFlipOnly) flags.push('spread_side_mismatch');
         if (check.isValueMismatch) flags.push('spread_value_mismatch');
         const msg = `Veto: Row side mismatch — ${check.reason}`;
         const contextTeams = [rowEntry.away, rowEntry.home].filter((t): t is string => Boolean(t));
@@ -1977,7 +2074,7 @@ export function auditMarketCoverageAndRowBinding(
 
     // 1b. Spread side, sign & value check for rowless or role-contradicted picks
     if (authoritativeSpreads.size > 0) {
-      const pickViolation = findSpreadSideViolationInClause(item.sideText, authoritativeSpreads, { allowedVenueEventIds: pickedEventIds });
+      const pickViolation = findSpreadSideViolationInClause(item.sideText, authoritativeSpreads, { allowedVenueEventIds: pickedEventIds, pickedTeamCanonicals });
       if (pickViolation) {
         const flagName = pickViolation.kind === 'value_mismatch' ? 'spread_value_mismatch' : 'spread_side_mismatch';
         flags.push(flagName);
@@ -1995,7 +2092,7 @@ export function auditMarketCoverageAndRowBinding(
         };
       }
       if (typeof item.pick === 'object' && item.pick && typeof item.pick.reason === 'string') {
-        const reasonViolation = findSpreadSideViolationInClause(item.pick.reason, authoritativeSpreads, { allowedVenueEventIds: pickedEventIds });
+        const reasonViolation = findSpreadSideViolationInClause(item.pick.reason, authoritativeSpreads, { allowedVenueEventIds: pickedEventIds, pickedTeamCanonicals });
         if (reasonViolation) {
           const flagName = reasonViolation.kind === 'value_mismatch' ? 'spread_value_mismatch' : 'spread_side_mismatch';
           flags.push(flagName);
@@ -2157,7 +2254,7 @@ export function auditMarketCoverageAndRowBinding(
 
     for (const txt of proseTexts) {
       for (const clause of splitClausesPreservingDelimiters(txt)) {
-        const violation = findSpreadSideViolationInClause(clause, authoritativeSpreads, { allowedVenueEventIds: pickedEventIds });
+        const violation = findSpreadSideViolationInClause(clause, authoritativeSpreads, { allowedVenueEventIds: pickedEventIds, pickedTeamCanonicals });
         if (violation) {
           const flagName = violation.kind === 'value_mismatch' ? 'spread_value_mismatch' : 'spread_side_mismatch';
           flags.push(flagName);
