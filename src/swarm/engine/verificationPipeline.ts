@@ -34,7 +34,15 @@ import {
     type ToolCallTraceEntry
 } from '../tools/pullBeforePass.ts';
 import { CRITIC_EVIDENCE_RULE } from '../tools/criticEvidence.ts';
-import { CRITIC_AUDIT_RULE, enforceCriticAuditOnFinalAnalysis, reconcileFinalVerdictAndPicks, resolveFinalCriticApproved } from '../tools/criticAudit.ts';
+import {
+    CRITIC_AUDIT_RULE,
+    enforceCriticAuditOnFinalAnalysis,
+    hydrateMissingPicksFromSpecialists,
+    isMissingPicksSchemaViolationFeedback,
+    reconcileFinalVerdictAndPicks,
+    resolveFinalCriticApproved,
+    stripContradictoryWagerProseOnPass
+} from '../tools/criticAudit.ts';
 import { syncCompilerProseWithFinalPicks } from '../tools/compilerProseSync.ts';
 import type { ToolEvidenceItem } from './seatToolLoop.ts';
 import type { ToolRegistry } from '../tools/registry.ts';
@@ -284,6 +292,7 @@ export interface VerificationPipelineParams {
     toolOptions?: { env?: Record<string, string | undefined>; fetchFn?: typeof fetch; qdrantClient?: any };
     activeEventIds?: string[];
     seatScorecards?: any[];
+    specialistPicks?: any[];
 }
 
 export interface VerificationPipelineResult {
@@ -292,7 +301,7 @@ export interface VerificationPipelineResult {
 }
 
 const CONTRADICTORY_RECOMMENDATION_PROSE_REGEX =
-    /\b(?:proceed\s+with\s+(?:a\s+)?(?:\d+|two|three|four|five)\s*-?\s*leg|recommend(?:ed|ing|s)?\s+(?:a\s+)?(?:\d+|two|three|four|five)\s*-?\s*leg|risk\s+critic\s+approved\s+(?:all|every|both|the))\b/i;
+    /\b(?:construct\s+(?:a\s+)?(?:(?:\d+|two|three|four|five)-?leg\s+)?parlay|build\s+(?:a\s+)?(?:(?:\d+|two|three|four|five)-?leg\s+)?parlay|place\s+(?:a|the)\s+(?:(?:\d+|two|three|four|five)-?leg\s+)?(?:parlay|bet|wager)|proceed\s+with\s+(?:a\s+)?(?:\d+|two|three|four|five)\s*-?\s*leg|recommend(?:ed|ing|s)?\s+(?:a\s+)?(?:\d+|two|three|four|five)\s*-?\s*leg|risk\s+critic\s+approved\s+(?:all|every|both|the))\b/i;
 
 const FEEDBACK_REJECTION_CUE_REGEX =
     /\b(?:reject(?:ed|s|ing)?|veto(?:ed|s|ing)?|fail(?:ed|s|ing)?|invalid|disqualif(?:y|ied|ies)|contradict(?:s|ed|ing)?|ungrounded|misread|disadvantaged|away_advantage|home_advantage|symmetric|uncertain_questionable|remove|drop|strip|exclude|cannot\s+recommend|do\s+not\s+recommend|out\b)\b/i;
@@ -725,6 +734,7 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
             });
         }
 
+        let hydratedMissingPicksRecovery = false;
         const survivingPickCount = Array.isArray(finalAnalysis.picks) ? finalAnalysis.picks.length : 0;
         const hadVetoedLegs = combinedVetoedLegs.length > 0 || initialPickCount > survivingPickCount;
         const criticAuditFailed = lifecycleResult?.criticAuditFailed === true;
@@ -750,72 +760,36 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
             });
             finalAnalysis.criticApproved = false;
         } else if (lifecycleResult.success === false) {
-            const verificationReasons = dedupeVetoMessages([
-                ...combinedVetoTexts,
-                ...(typeof lifecycleResult?.criticFeedback === 'string' && lifecycleResult.criticFeedback.trim()
-                    ? [lifecycleResult.criticFeedback.trim()]
-                    : [])
-            ]);
-            finalAnalysis.verified = false;
-            finalAnalysis.verification = {
-                success: false,
-                attempts: lifecycleResult.attempts,
-                rating: lifecycleResult.computedRating,
-                ...(verificationReasons.length > 0 ? { reasons: verificationReasons } : {})
-            };
-
-            // S2 (1): Surgical Leg-Prune Rescue before giving up when only specific leg(s) failed verification
-            // and >= 1 clean leg survives all deterministic checks.
-            const rowMapForRescue = extractRowOptions([boardSourceForSanitize], parsedHeaders);
-            const feedbackRejectedLegs = extractRejectedLegTargetsFromFeedback(
-                verificationReasons.join(' '),
-                initialPicksSnapshot,
-                parsedHeaders,
-                boardSourceForSanitize
-            );
-            const rescueRejectedTargets = mergeVetoedLegTargets(combinedVetoedLegs, feedbackRejectedLegs);
-
             const lastAttemptFeedback = typeof lifecycleResult?.criticFeedback === 'string'
                 ? lifecycleResult.criticFeedback.trim()
                 : '';
-            const lastAttemptRejectedTargets = extractRejectedLegTargetsFromFeedback(
-                lastAttemptFeedback,
-                initialPicksSnapshot,
-                parsedHeaders,
-                boardSourceForSanitize
-            );
-            const canAttemptSubsetRescue =
+
+            // S1.3: Deterministic fallback hydration when Manager still omits picks[] on final attempt
+            // while criticApproved === true and Pass 1 specialists supplied matching structured picks.
+            const nonSchemaVetoTexts = combinedVetoTexts.filter(t => !isMissingPicksSchemaViolationFeedback(t));
+            const canAttemptHydrationRecovery =
+                (!Array.isArray(finalAnalysis.picks) || finalAnalysis.picks.length === 0) &&
                 p.criticVerdictApproved !== false &&
-                initialPickCount >= 2 &&
-                lastAttemptRejectedTargets.length >= 1 &&
-                lastAttemptRejectedTargets.length < initialPickCount;
+                nonSchemaVetoTexts.length === 0 &&
+                combinedVetoedLegs.length === 0 &&
+                combinedVetoedClaims.length === 0 &&
+                (isMissingPicksSchemaViolationFeedback(lastAttemptFeedback) ||
+                    p.criticVerdictApproved === true ||
+                    finalAnalysis.criticApproved === true);
 
-            let rescued = false;
-            if (
-                canAttemptSubsetRescue &&
-                Array.isArray(finalAnalysis.picks) &&
-                finalAnalysis.picks.length > 0 &&
-                (rescueRejectedTargets.length > 0 || initialPickCount > finalAnalysis.picks.length)
-            ) {
-                const prunedPicks = rescueRejectedTargets.length > 0
-                    ? finalAnalysis.picks.filter(
-                        (pk: any) => !rescueRejectedTargets.some(target => pickMatchesVetoedTarget(pk, target, rowMapForRescue))
-                    )
-                    : [...finalAnalysis.picks];
-
-                if (prunedPicks.length >= 1 && prunedPicks.length < initialPickCount) {
-                    const candidate = JSON.parse(JSON.stringify(finalAnalysis));
-                    candidate.picks = prunedPicks;
-                    syncCompilerProseWithFinalPicks(candidate, {
-                        initialPicks: initialPicksSnapshot,
-                        headers: parsedHeaders,
-                        slateText: boardSourceForSanitize,
-                        ...(rescueRejectedTargets.length > 0 ? { vetoedLegs: rescueRejectedTargets } : {}),
-                        ...(verificationReasons.length > 0 ? { vetoTexts: verificationReasons } : {}),
-                        ...(p.seatScorecards && p.seatScorecards.length > 0 ? { seatScorecards: p.seatScorecards } : {})
-                    });
+            if (canAttemptHydrationRecovery) {
+                const candidate = JSON.parse(JSON.stringify(finalAnalysis));
+                const hydration = hydrateMissingPicksFromSpecialists(candidate, {
+                    specialistPicks: p.specialistPicks,
+                    compiledReportsText: effectiveCompiledReports,
+                    headers: parsedHeaders,
+                    slateText: boardSourceForSanitize,
+                    vetoedLegs: combinedVetoedLegs,
+                    coveredEventIds: p.coveredEventIds,
+                    criticVerdictApproved: p.criticVerdictApproved
+                });
+                if (hydration.hydrated && Array.isArray(candidate.picks) && candidate.picks.length > 0) {
                     sanitizeCompilerProposalOddsAndSummary(candidate);
-
                     const injuryOk = combinedVerifiedToolResults
                         ? auditInjuryAttribution(candidate, combinedVerifiedToolResults, headersText || rawInput || task).pass
                         : true;
@@ -840,33 +814,137 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
                         boardSourceForSanitize,
                         { headers: parsedHeaders }
                     ).pass;
-
-                    if (injuryOk && marketOk && groundingOk && premiseOk && Array.isArray(candidate.picks) && candidate.picks.length >= 1) {
+                    if (injuryOk && marketOk && groundingOk && premiseOk && Array.isArray(candidate.picks) && candidate.picks.length > 0) {
                         Object.assign(finalAnalysis, candidate);
-                        rescued = true;
+                        hydratedMissingPicksRecovery = true;
+                        finalAnalysis.verified = true;
+                        finalAnalysis.verification = {
+                            success: true,
+                            attempts: lifecycleResult.attempts,
+                            rating: lifecycleResult.computedRating,
+                            hydratedFromSpecialists: true
+                        };
+                        finalAnalysis.criticApproved = true;
+                        finalAnalysis.wageringPass = false;
+                        finalAnalysis.pass = false;
                     }
                 }
             }
 
-            if (!rescued) {
-                // S2 (2): Consistent pass fallback — zero contradictory recommendations, explicit
-                // criticApproved: false, wageringPass: true, preserved scorecards with Risk Critic veto.
-                normalizeRepairedFallbackOutput(finalAnalysis, {
-                    reasons: verificationReasons,
-                    vetoedLegs: rescueRejectedTargets,
-                    seatScorecards: p.seatScorecards,
-                    initialPicks: initialPicksSnapshot,
-                    headers: parsedHeaders,
-                    slateText: boardSourceForSanitize,
-                    markUnverified: true
+            if (!hydratedMissingPicksRecovery) {
+                const verificationReasons = dedupeVetoMessages([
+                    ...combinedVetoTexts,
+                    ...(lastAttemptFeedback ? [lastAttemptFeedback] : [])
+                ]);
+                finalAnalysis.verified = false;
+                finalAnalysis.verification = {
+                    success: false,
+                    attempts: lifecycleResult.attempts,
+                    rating: lifecycleResult.computedRating,
+                    ...(verificationReasons.length > 0 ? { reasons: verificationReasons } : {})
+                };
+
+                // S2 (1): Surgical Leg-Prune Rescue before giving up when only specific leg(s) failed verification
+                // and >= 1 clean leg survives all deterministic checks.
+                const rowMapForRescue = extractRowOptions([boardSourceForSanitize], parsedHeaders);
+                const feedbackRejectedLegs = extractRejectedLegTargetsFromFeedback(
+                    verificationReasons.join(' '),
+                    initialPicksSnapshot,
+                    parsedHeaders,
+                    boardSourceForSanitize
+                );
+                const rescueRejectedTargets = mergeVetoedLegTargets(combinedVetoedLegs, feedbackRejectedLegs);
+
+                const lastAttemptRejectedTargets = extractRejectedLegTargetsFromFeedback(
+                    lastAttemptFeedback,
+                    initialPicksSnapshot,
+                    parsedHeaders,
+                    boardSourceForSanitize
+                );
+                const canAttemptSubsetRescue =
+                    p.criticVerdictApproved !== false &&
+                    initialPickCount >= 2 &&
+                    lastAttemptRejectedTargets.length >= 1 &&
+                    lastAttemptRejectedTargets.length < initialPickCount;
+
+                let rescued = false;
+                if (
+                    canAttemptSubsetRescue &&
+                    Array.isArray(finalAnalysis.picks) &&
+                    finalAnalysis.picks.length > 0 &&
+                    (rescueRejectedTargets.length > 0 || initialPickCount > finalAnalysis.picks.length)
+                ) {
+                    const prunedPicks = rescueRejectedTargets.length > 0
+                        ? finalAnalysis.picks.filter(
+                            (pk: any) => !rescueRejectedTargets.some(target => pickMatchesVetoedTarget(pk, target, rowMapForRescue))
+                        )
+                        : [...finalAnalysis.picks];
+
+                    if (prunedPicks.length >= 1 && prunedPicks.length < initialPickCount) {
+                        const candidate = JSON.parse(JSON.stringify(finalAnalysis));
+                        candidate.picks = prunedPicks;
+                        syncCompilerProseWithFinalPicks(candidate, {
+                            initialPicks: initialPicksSnapshot,
+                            headers: parsedHeaders,
+                            slateText: boardSourceForSanitize,
+                            ...(rescueRejectedTargets.length > 0 ? { vetoedLegs: rescueRejectedTargets } : {}),
+                            ...(verificationReasons.length > 0 ? { vetoTexts: verificationReasons } : {}),
+                            ...(p.seatScorecards && p.seatScorecards.length > 0 ? { seatScorecards: p.seatScorecards } : {})
+                        });
+                        sanitizeCompilerProposalOddsAndSummary(candidate);
+
+                        const injuryOk = combinedVerifiedToolResults
+                            ? auditInjuryAttribution(candidate, combinedVerifiedToolResults, headersText || rawInput || task).pass
+                            : true;
+                        const marketOk = (combinedVerifiedToolResults || combinedMarketToolRecords.length > 0)
+                            ? auditMarketCoverageAndRowBinding(
+                                candidate,
+                                combinedVerifiedToolResults,
+                                boardSourceForSanitize,
+                                parsedHeaders,
+                                combinedMarketToolRecords
+                            ).pass
+                            : true;
+                        const groundingOk = auditClaimGrounding(
+                            candidate,
+                            combinedVerifiedToolResults,
+                            boardSourceForSanitize,
+                            { headers: parsedHeaders }
+                        ).pass;
+                        const premiseOk = auditCriticPremiseContradictions(
+                            candidate,
+                            combinedVerifiedToolResults,
+                            boardSourceForSanitize,
+                            { headers: parsedHeaders }
+                        ).pass;
+
+                        if (injuryOk && marketOk && groundingOk && premiseOk && Array.isArray(candidate.picks) && candidate.picks.length >= 1) {
+                            Object.assign(finalAnalysis, candidate);
+                            rescued = true;
+                        }
+                    }
+                }
+
+                if (!rescued) {
+                    // S2 (2): Consistent pass fallback — zero contradictory recommendations, explicit
+                    // criticApproved: false, wageringPass: true, preserved scorecards with Risk Critic veto.
+                    normalizeRepairedFallbackOutput(finalAnalysis, {
+                        reasons: verificationReasons,
+                        vetoedLegs: rescueRejectedTargets,
+                        seatScorecards: p.seatScorecards,
+                        initialPicks: initialPicksSnapshot,
+                        headers: parsedHeaders,
+                        slateText: boardSourceForSanitize,
+                        markUnverified: true
+                    });
+                }
+                enforceCriticAuditOnFinalAnalysis(finalAnalysis, {
+                    criticAuditFailed: false,
+                    unauditedLegs,
+                    hadProposedPicks
                 });
+                finalAnalysis.criticApproved = false;
             }
-            enforceCriticAuditOnFinalAnalysis(finalAnalysis, {
-                criticAuditFailed: false,
-                unauditedLegs,
-                hadProposedPicks
-            });
-            finalAnalysis.criticApproved = false;
         } else {
             finalAnalysis.verified = true;
             finalAnalysis.verification = {
@@ -934,7 +1012,43 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
         }
     }
 
-    if (finalAnalysis && typeof finalAnalysis === 'object' && Array.isArray(finalAnalysis.picks)) {
+    const effectiveFinalPicksMissing = !Array.isArray(finalAnalysis?.picks) || finalAnalysis.picks.length === 0;
+    if (
+        finalAnalysis &&
+        typeof finalAnalysis === 'object' &&
+        effectiveFinalPicksMissing &&
+        !('winProbHome' in finalAnalysis || 'win_prob_home' in finalAnalysis) &&
+        p.criticVerdictApproved !== false &&
+        lifecycleResult?.criticAuditFailed !== true
+    ) {
+        const slateForHydrate = rawInput || task || headersText;
+        const earlyCombinedVetoes = dedupeVetoMessages([
+            ...(Array.isArray(p.criticVetoes) ? p.criticVetoes : []),
+            ...(Array.isArray(lifecycleResult?.accumulatedVetoes) ? lifecycleResult.accumulatedVetoes : [])
+        ]).filter(t => !isMissingPicksSchemaViolationFeedback(t));
+        const earlyVetoedLegs = mergeVetoedLegTargets(p.vetoedLegs, lifecycleResult?.vetoedLegs);
+        if (earlyCombinedVetoes.length === 0 && earlyVetoedLegs.length === 0 && lifecycleResult?.success !== false) {
+            const lateHydration = hydrateMissingPicksFromSpecialists(finalAnalysis, {
+                specialistPicks: p.specialistPicks,
+                compiledReportsText: effectiveCompiledReports,
+                headers: parsedHeaders,
+                slateText: slateForHydrate,
+                vetoedLegs: earlyVetoedLegs,
+                coveredEventIds: p.coveredEventIds,
+                criticVerdictApproved: p.criticVerdictApproved
+            });
+            if (lateHydration.hydrated) {
+                finalAnalysis.wageringPass = false;
+                finalAnalysis.pass = false;
+                finalAnalysis.criticApproved = true;
+            }
+        }
+    }
+
+    if (finalAnalysis && typeof finalAnalysis === 'object') {
+        if (!Array.isArray(finalAnalysis.picks)) {
+            finalAnalysis.picks = [];
+        }
         const vetoTextsForSync = dedupeVetoMessages([
             ...(Array.isArray(p.criticVetoes) ? p.criticVetoes : []),
             ...(Array.isArray(lifecycleResult?.accumulatedVetoes) ? lifecycleResult.accumulatedVetoes : []),
@@ -988,8 +1102,14 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
         }
         sanitizeCompilerProposalOddsAndSummary(finalAnalysis);
 
+        const isHydratedPassRecovery = Boolean(
+            finalAnalysis.verification?.hydratedFromSpecialists === true &&
+            finalAnalysis.picks.length > 0 &&
+            finalAnalysis.verified === true
+        );
+        const nonSchemaVetoTextsForSync = vetoTextsForSync.filter(t => !isMissingPicksSchemaViolationFeedback(t));
         const finalDetVetoes = [
-            ...vetoTextsForSync,
+            ...(isHydratedPassRecovery ? nonSchemaVetoTextsForSync : vetoTextsForSync),
             ...vetoLegsForSync,
             ...(Array.isArray(p.vetoedClaims) ? p.vetoedClaims : []),
             ...(Array.isArray(lifecycleResult?.vetoedClaims) ? lifecycleResult.vetoedClaims : [])
@@ -997,7 +1117,7 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
         const reconcileRowMap = extractRowOptions([rawInput || task || headersText], parsedHeaders);
         const allTargetedVetoLegs = mergeVetoedLegTargets(
             vetoLegsForSync,
-            extractVetoedLegTargets(vetoTextsForSync, parsedHeaders, reconcileRowMap)
+            extractVetoedLegTargets(nonSchemaVetoTextsForSync, parsedHeaders, reconcileRowMap)
         );
         const survivingOverlapVeto =
             allTargetedVetoLegs.length > 0 &&
@@ -1005,7 +1125,7 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
                 allTargetedVetoLegs.some((vl) => pickMatchesVetoedTarget(pk, vl, reconcileRowMap))
             );
         const repairedCleanPass =
-            lifecycleResult?.success === true &&
+            (lifecycleResult?.success === true || isHydratedPassRecovery) &&
             finalAnalysis.verified === true &&
             finalAnalysis.picks.length > 0 &&
             !survivingOverlapVeto &&
@@ -1025,20 +1145,23 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
             deterministicVetoes: repairedCleanPass ? [] : finalDetVetoes,
             hadDeterministicVetoes:
                 lifecycleResult?.criticAuditFailed === true ||
-                lifecycleResult?.success === false ||
+                (!isHydratedPassRecovery && lifecycleResult?.success === false) ||
                 finalAnalysis.verified === false ||
                 (!repairedCleanPass && finalDetVetoes.length > 0) ||
                 (initialPicksSnapshot.length > 0 && finalAnalysis.picks.length === 0),
             hadFullVeto: initialPicksSnapshot.length > 0 && finalAnalysis.picks.length === 0,
             criticAuditFailed: lifecycleResult?.criticAuditFailed === true,
-            verificationSuccess: lifecycleResult?.success !== false && finalAnalysis.verified !== false,
+            verificationSuccess: (lifecycleResult?.success !== false || isHydratedPassRecovery) && finalAnalysis.verified !== false,
             verificationApproved: repairedCleanPass,
             preserveCleanSubsetPicks,
-            vetoTexts: vetoTextsForSync,
+            vetoTexts: isHydratedPassRecovery ? nonSchemaVetoTextsForSync : vetoTextsForSync,
             vetoedLegs: vetoLegsForSync,
             seatScorecards: p.seatScorecards,
             initialPicks: initialPicksSnapshot
         });
+        if (finalAnalysis.picks.length === 0 && finalAnalysis.wageringPass === true) {
+            stripContradictoryWagerProseOnPass(finalAnalysis);
+        }
     }
 
     recordRunDebugSeat((context as any)?.id, 'manager', {

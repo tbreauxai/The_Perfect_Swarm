@@ -33,7 +33,7 @@ import {
 } from "./partialResult.ts";
 import { pickMatchesVetoedTarget, runDeepAnalysisVerification } from "./verificationPipeline.ts";
 import { runLearningPipeline } from "./learningPipeline.ts";
-import { reconcileFinalVerdictAndPicks } from "../tools/criticAudit.ts";
+import { reconcileFinalVerdictAndPicks, stripContradictoryWagerProseOnPass } from "../tools/criticAudit.ts";
 import { isScorecardMode } from "./scorecard.ts";
 import { buildBlackboard } from "./blackboard.ts";
 import {
@@ -736,6 +736,24 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                     Boolean((r as any)?.scorecard?.pick) ||
                     (Array.isArray((r as any)?.scorecards) && (r as any).scorecards.some((s: any) => s?.pick || (Array.isArray(s?.picks) && s.picks.length > 0)))
                 );
+                const stageSpecialistPicks: any[] = [];
+                for (const r of nonCriticReports as any[]) {
+                    if (!r || typeof r !== 'object' || r._placeholder === true) continue;
+                    const cands: any[] = [];
+                    if (Array.isArray(r.picks)) cands.push(...r.picks);
+                    if (r.scorecard?.pick) cands.push(r.scorecard.pick);
+                    if (Array.isArray(r.scorecards)) {
+                        for (const sc of r.scorecards) {
+                            if (sc?.pick) cands.push(sc.pick);
+                            if (Array.isArray(sc?.picks)) cands.push(...sc.picks);
+                        }
+                    }
+                    for (const pk of cands) {
+                        if (!pk || typeof pk !== 'object') continue;
+                        if (pk.vetoed === true || /^veto/i.test(String(pk.verdict || pk.status || ''))) continue;
+                        stageSpecialistPicks.push(pk);
+                    }
+                }
                 stage2CriticApproved = stage2CriticAuditFailed ? false : undefined;
                 for (const cr of criticReports) {
                     const auditMeta = (cr as any)?.criticAudit;
@@ -962,6 +980,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                 ...(stage2VetoedLegs.length > 0 ? { vetoedLegs: stage2VetoedLegs } : {}),
                                 ...(stage2VetoedClaims.length > 0 ? { vetoedClaims: stage2VetoedClaims } : {}),
                                 ...(stageSeatScorecards.length > 0 ? { seatScorecards: stageSeatScorecards } : {}),
+                                ...(stageSpecialistPicks.length > 0 ? { specialistPicks: stageSpecialistPicks } : {}),
                                 ...(stage1HadProposedPicks ? { hadProposedPicks: true } : {}),
                                 ...(typeof stage2CriticApproved === 'boolean' ? { criticVerdictApproved: stage2CriticApproved } : {}),
                                 ...(verifierToolResults ? { toolResults: verifierToolResults } : {}),
@@ -996,6 +1015,8 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                     ...(stage2VetoedLegs.length > 0 ? { vetoedLegs: stage2VetoedLegs } : {}),
                                     ...(stage2VetoedClaims.length > 0 ? { vetoedClaims: stage2VetoedClaims } : {}),
                                     ...(stageSeatScorecards.length > 0 ? { seatScorecards: stageSeatScorecards } : {}),
+                                    ...(stageSpecialistPicks.length > 0 ? { specialistPicks: stageSpecialistPicks } : {}),
+                                    ...(synthesisResult.effectiveCompiledReports ? { compiledReportsText: synthesisResult.effectiveCompiledReports } : {}),
                                     ...(stage2CriticAuditFailed ? { criticAuditFailed: true } : {}),
                                     ...(stage2UnauditedLegs.length > 0 ? { unauditedLegs: stage2UnauditedLegs } : {}),
                                     ...(stage1HadProposedPicks ? { hadProposedPicks: true } : {}),
@@ -1020,6 +1041,7 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                                 finalAnalysis.reason = 'no picks with specialist coverage';
                                 finalAnalysis.criticApproved = false;
                                 finalAnalysis.wageringPass = true;
+                                stripContradictoryWagerProseOnPass(finalAnalysis);
                             }
                         }
                     } catch (managerErr: any) {

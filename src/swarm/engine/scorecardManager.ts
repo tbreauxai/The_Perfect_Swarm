@@ -118,6 +118,12 @@ export async function executeScorecardSynthesis(p: {
     prompt: `Manager prompt: ${managerPrompt.length} chars, ${blackboard.scorecards.length} scorecard(s), ${blackboard.citedRows.length} cited row(s), critic: ${blackboard.critic ? "yes" : "no"}`,
     durationMs: 0,
   });
+  const specialistPicks = blackboard.scorecards.flatMap((sc: any) =>
+    sc && !sc.unstructured && Array.isArray(sc.picks) ? sc.picks : []
+  );
+  const criticVerdictApproved = blackboard.critic && !(blackboard.critic as any).unstructured
+    ? Boolean((blackboard.critic as any).approve_all || ((blackboard.critic as any).verdict !== 'veto'))
+    : undefined;
   const result = await executeManagerSynthesis(
     managerAgent,
     managerPrompt,
@@ -126,6 +132,11 @@ export async function executeScorecardSynthesis(p: {
     bypassCache,
     settings,
     blackboard.coveredEventIds,
+    {
+      ...(blackboard.board ? { rawBoard: blackboard.board } : {}),
+      ...(specialistPicks.length > 0 ? { specialistPicks } : {}),
+      ...(typeof criticVerdictApproved === 'boolean' ? { criticVerdictApproved } : {}),
+    },
   );
 
   if (blackboard.coveredEventIds && Array.isArray(result?.picks)) {

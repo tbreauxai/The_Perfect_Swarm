@@ -2,7 +2,7 @@ import type { GoogleGenAI } from '@google/genai';
 import type { Provider, AgentRunConfig, ProviderCredential } from './types.js';
 import { SwarmContext } from './context.js';
 import { ProviderRegistry } from './providers/registry.js';
-import { sanitizeModelOutput } from './providers/adapter.js';
+import { sanitizeModelOutput, extractLargestValidJson } from './providers/adapter.js';
 import { recordRunDebugFailover } from './engine/runDebugRecord.js';
 import { seatBudget } from './context/promptBudget.js';
 import { SwarmTracer } from './profiler.js';
@@ -20,13 +20,16 @@ import {
     UNSATISFIABLE_BUDGET_WAIT_MS,
     MODEL_COOLDOWN_MS,
     BREAKER_OPEN_MS,
+    BILLING_COOLDOWN_MS,
+    isBillingOrAuthError,
     isGeminiProjectWideFailure
 } from './providers/limiter.js';
+import { isGemini3Or4Model } from './providers/gemini.js';
 import { parseRetryAfterMs } from './utils/httpTimeouts.js';
 import { isModelDead, DEFAULT_PROVIDER_MODELS } from './server/modelsProvider.js';
 import { groqPromptCharCap } from './providers/groq.js';
 import { globalPayloadCache, PayloadCache } from './cache.js';
-import { parseJsonSafe, guardManagerResponse, guardAnalystResponse } from './parser.js';
+import { parseJsonSafe, parseJsonSafeWithStatus, guardManagerResponse, guardAnalystResponse } from './parser.js';
 import { ManagerResponseSchema, AnalystResponseSchema } from './schemas.js';
 import { isBlockedBuiltinTool } from './tools/registry.js';
 
@@ -266,7 +269,10 @@ export class Agent {
         const timeoutMs = isQuantRole ? Math.min(rawTimeoutMs, 30000) : rawTimeoutMs; // Fresh budget per target in targetChain (NVIDIA a1 further capped to 15s below)
 
         const lb = (config?.loadBalancer as AdaptiveLoadBalancer) || this.loadBalancer || globalLoadBalancer;
-        const candidateFallbacks = config?.fallbackProviders || this.fallbacks;
+        const candidateFallbacks =
+            Array.isArray(config?.fallbackProviders) && config.fallbackProviders.length > 0
+                ? config.fallbackProviders
+                : this.fallbacks;
         const sortedFallbacks = candidateFallbacks.length > 1 && !this.preserveFallbackOrder
             ? [...candidateFallbacks].sort((a, b) => lb.calculateScore(b.provider) - lb.calculateScore(a.provider))
             : candidateFallbacks;
@@ -297,6 +303,52 @@ export class Agent {
                 lastFailedProvider = String(currentTarget.provider);
                 lastFailedModel = targetModel;
                 lastError = new Error(`model marked dead by catalog probe`);
+                let deadFallback: ProviderCredential | undefined;
+                let deadFallbackModel = '';
+                for (let j = targetIdx + 1; j < targetChain.length; j++) {
+                    const cand = targetChain[j];
+                    const candModel = resolveTargetModelName(cand, String(this.provider), this.modelName);
+                    if (isModelDead(String(cand.provider), candModel)) continue;
+                    if (!globalProviderLimiter.getSkipReason(String(cand.provider), candModel)) {
+                        deadFallback = cand;
+                        deadFallbackModel = candModel;
+                        break;
+                    }
+                }
+                if (deadFallback) {
+                    recordRunDebugFailover(
+                        (context as any)?.id,
+                        this.role,
+                        String(deadFallback.provider),
+                        seatBudget(String(deadFallback.provider)).maxPromptChars
+                    );
+                }
+                context.addEvent({
+                    agentRole: this.role,
+                    action: 'Provider Skipped',
+                    modelName: `${currentTarget.provider}/${targetModel}`,
+                    prompt: `Skipped provider target: model marked dead by catalog probe`,
+                    durationMs: 0,
+                    failover: {
+                        fromProvider: String(currentTarget.provider),
+                        fromModel: targetModel,
+                        ...(deadFallback ? { toProvider: String(deadFallback.provider), toModel: deadFallbackModel } : {}),
+                        status: null,
+                        reason: 'dead_model',
+                        errorSnippet: 'model marked dead by catalog probe',
+                        durationMs: 0
+                    },
+                    output: {
+                        provider: currentTarget.provider,
+                        model: targetModel,
+                        fromProvider: String(currentTarget.provider),
+                        fromModel: targetModel,
+                        ...(deadFallback ? { toProvider: String(deadFallback.provider), toModel: deadFallbackModel } : {}),
+                        reason: 'model marked dead by catalog probe',
+                        errorSnippet: 'model marked dead by catalog probe',
+                        durationMs: 0
+                    }
+                });
                 continue;
             }
             // Don't call a provider the limiter already knows will refuse. A circuit,
@@ -334,20 +386,59 @@ export class Agent {
                     if (skipReason.startsWith('skipped_tpm_wait:')) {
                         console.warn(`[${this.role}][${currentTarget.provider}/${preCheck.targetModel}] ${skipReason}`);
                     }
+                    const isBillingCooldownSkip = skipReason.includes('[BILLING_COOLDOWN_SKIP]');
+                    const isCooldownSkip = !isBillingCooldownSkip && skipReason.includes('[COOLDOWN_SKIP]');
+                    let nextHealthyFallback: ProviderCredential | undefined;
+                    let nextHealthyFallbackModel = '';
+                    for (let j = targetIdx + 1; j < targetChain.length; j++) {
+                        const cand = targetChain[j];
+                        const candModel = resolveTargetModelName(cand, String(this.provider), this.modelName);
+                        if (isModelDead(String(cand.provider), candModel)) continue;
+                        if (!globalProviderLimiter.getSkipReason(String(cand.provider), candModel)) {
+                            nextHealthyFallback = cand;
+                            nextHealthyFallbackModel = candModel;
+                            break;
+                        }
+                    }
+                    if (nextHealthyFallback) {
+                        recordRunDebugFailover(
+                            (context as any)?.id,
+                            this.role,
+                            String(nextHealthyFallback.provider),
+                            seatBudget(String(nextHealthyFallback.provider)).maxPromptChars
+                        );
+                    }
                     lastFailedProvider = String(currentTarget.provider);
                     lastFailedModel = preCheck.targetModel;
                     lastError = new Error(skipReason);
+                    const redactedSkipReason = redactErrorSnippet(skipReason);
+                    const resolvedReason = isBillingCooldownSkip
+                        ? '[BILLING_COOLDOWN_SKIP]'
+                        : (isCooldownSkip ? '[COOLDOWN_SKIP]' : skipReason);
                     context.addEvent({
                         agentRole: this.role,
                         action: 'Provider Skipped',
                         modelName: `${currentTarget.provider}/${preCheck.targetModel}`,
                         prompt: `Skipped provider target: ${skipReason}`,
+                        durationMs: 0,
+                        failover: {
+                            fromProvider: String(currentTarget.provider),
+                            fromModel: preCheck.targetModel,
+                            ...(nextHealthyFallback ? { toProvider: String(nextHealthyFallback.provider), toModel: nextHealthyFallbackModel } : {}),
+                            status: null,
+                            reason: resolvedReason,
+                            errorSnippet: redactedSkipReason,
+                            durationMs: 0
+                        },
                         output: {
                             provider: currentTarget.provider,
                             model: preCheck.targetModel,
                             fromProvider: String(currentTarget.provider),
                             fromModel: preCheck.targetModel,
-                            reason: skipReason,
+                            ...(nextHealthyFallback ? { toProvider: String(nextHealthyFallback.provider), toModel: nextHealthyFallbackModel } : {}),
+                            reason: resolvedReason,
+                            errorSnippet: redactedSkipReason,
+                            durationMs: 0,
                             ...(skipReason.startsWith('skipped_tpm_wait:')
                                 ? { skipped_tpm_wait: Math.ceil(preCheck.estimatedWaitMs) }
                                 : {})
@@ -365,6 +456,27 @@ export class Agent {
                 }
                 if (!globalTokenBudgetManager.canAllocate(currentTarget.provider, preCheck.estimatedTokens, preCheck.targetModel)) {
                     const reason = `token budget remaining ${globalTokenBudgetManager.getRemainingBudget(currentTarget.provider, preCheck.targetModel)} < ${preCheck.estimatedTokens}; shifting seat`;
+                    let budgetFallback: ProviderCredential | undefined;
+                    let budgetFallbackModel = '';
+                    for (let j = targetIdx + 1; j < targetChain.length; j++) {
+                        const cand = targetChain[j];
+                        const candModel = resolveTargetModelName(cand, String(this.provider), this.modelName);
+                        if (isModelDead(String(cand.provider), candModel)) continue;
+                        if (!globalProviderLimiter.getSkipReason(String(cand.provider), candModel)) {
+                            budgetFallback = cand;
+                            budgetFallbackModel = candModel;
+                            break;
+                        }
+                    }
+                    if (budgetFallback) {
+                        recordRunDebugFailover(
+                            (context as any)?.id,
+                            this.role,
+                            String(budgetFallback.provider),
+                            seatBudget(String(budgetFallback.provider)).maxPromptChars
+                        );
+                    }
+                    const redactedBudgetReason = redactErrorSnippet(reason);
                     lastFailedProvider = String(currentTarget.provider);
                     lastFailedModel = preCheck.targetModel;
                     lastError = new Error(reason);
@@ -373,12 +485,25 @@ export class Agent {
                         action: 'Provider Skipped',
                         modelName: `${currentTarget.provider}/${preCheck.targetModel}`,
                         prompt: `Skipped provider target: ${reason}`,
+                        durationMs: Math.max(0, Math.round(waitMs || 0)),
+                        failover: {
+                            fromProvider: String(currentTarget.provider),
+                            fromModel: preCheck.targetModel,
+                            ...(budgetFallback ? { toProvider: String(budgetFallback.provider), toModel: budgetFallbackModel } : {}),
+                            status: null,
+                            reason: 'LIMITER_SKIP',
+                            errorSnippet: redactedBudgetReason,
+                            durationMs: Math.max(0, Math.round(waitMs || 0))
+                        },
                         output: {
                             provider: currentTarget.provider,
                             model: preCheck.targetModel,
                             fromProvider: String(currentTarget.provider),
                             fromModel: preCheck.targetModel,
-                            reason
+                            ...(budgetFallback ? { toProvider: String(budgetFallback.provider), toModel: budgetFallbackModel } : {}),
+                            reason,
+                            errorSnippet: redactedBudgetReason,
+                            durationMs: Math.max(0, Math.round(waitMs || 0))
                         }
                     });
                     continue;
@@ -400,15 +525,19 @@ export class Agent {
                     const isNvidiaReasoningTarget =
                         currentTarget.provider === 'nvidia' &&
                         /nemotron|deepseek-r1|qwq/i.test(targetModel);
+                    const isGeminiThinkingTarget =
+                        currentTarget.provider === 'gemini' &&
+                        isGemini3Or4Model(targetModel) &&
+                        roleLower !== 'catalog-probe';
                     const defaultRoleTokens = roleLower.includes('grader') ? 60
                         : roleLower.includes('prompt generator') ? 300
                         : roleLower.includes('manager') ? 2000
-                        : isNvidiaReasoningTarget ? 4096
+                        : (isNvidiaReasoningTarget || isGeminiThinkingTarget) ? 4096
                         : isQuantRole ? 1800
                         : 1500;
 
                     const requestedTokens = config?.maxTokens ?? this.maxTokens ?? defaultRoleTokens;
-                    const effectiveMaxTokens = isNvidiaReasoningTarget
+                    const effectiveMaxTokens = (isNvidiaReasoningTarget || isGeminiThinkingTarget)
                         ? Math.max(requestedTokens, 4096)
                         : (isQuantRole ? Math.min(requestedTokens, 1800) : requestedTokens);
                     const effectiveConfig: AgentRunConfig = {
@@ -492,14 +621,34 @@ export class Agent {
                                     const isQuantNvidiaTarget =
                                         currentTarget.provider === 'nvidia' &&
                                         (isQuantRole || /nemotron.*ultra|550b/i.test(targetModel));
-                                    const targetTimeoutMs = isQuantNvidiaTarget ? Math.min(timeoutMs, 15000) : timeoutMs;
+                                    const isProposerGeminiTarget =
+                                        currentTarget.provider === 'gemini' &&
+                                        (this.id === 'a1' || this.id === 'a2' || /\b(?:quant|market)\s*proposer\b|\bquant\b|\bmarket\s*analyst\b/i.test(this.role || ''));
+                                    const targetTimeoutMs = (isQuantNvidiaTarget || isProposerGeminiTarget) ? Math.min(timeoutMs, 15000) : timeoutMs;
+                                    const geminiCallConfig = (() => {
+                                        if (currentTarget.provider !== 'gemini') return effectiveRuntimeConfig;
+                                        const hasExplicitLevel = Boolean(
+                                            (effectiveRuntimeConfig as any)?.thinkingLevel ||
+                                            (effectiveRuntimeConfig as any)?.thinking_level ||
+                                            (effectiveRuntimeConfig as any)?.thinkingConfig?.thinkingLevel ||
+                                            (effectiveRuntimeConfig as any)?.thinkingConfig?.thinking_level
+                                        );
+                                        if (hasExplicitLevel) return effectiveRuntimeConfig;
+                                        if (isQuantRole && String(targetModel || '').toLowerCase().includes('gemini-3.5-flash-lite')) {
+                                            return { ...effectiveRuntimeConfig, thinkingLevel: 'medium' };
+                                        }
+                                        if (roleNorm.includes('manager') || isCriticRole || roleNorm.includes('verifier')) {
+                                            return { ...effectiveRuntimeConfig, thinkingLevel: 'low' };
+                                        }
+                                        return effectiveRuntimeConfig;
+                                    })();
                                     const out = await adapter.call({
                                         modelName: targetModel,
                                         prompt,
                                         systemInstruction: this.systemInstruction,
                                         apiKey: currentTarget.apiKey,
                                         aiClient: currentTarget.aiClient || this.aiClient,
-                                        config: effectiveRuntimeConfig,
+                                        config: geminiCallConfig,
                                         timeoutMs: targetTimeoutMs,
                                         role: this.role,
                                         onHeaders: (headers) => {
@@ -534,12 +683,12 @@ export class Agent {
                         if (textOutput.includes('```tool_call') || textOutput.includes('[TOOL_CALL') || textOutput.includes('[TOOL_EXECUTION')) {
                             parsedOutput = textOutput;
                         } else {
-                            const candidate = parseJsonSafe(textOutput);
+                            const { data: candidate, repaired: parseRepaired } = parseJsonSafeWithStatus(textOutput);
                             const hasParsedKeys = candidate && typeof candidate === 'object' && (
                                 Array.isArray(candidate) ? candidate.length > 0 : Object.keys(candidate).length > 0
                             );
-                            // S2: Treat unparsed/truncated non-JSON output on proposer seats (a1/a2) as parse_failed
-                            // and trigger failover instead of returning status: "ok" with "[Quant Proposer] unparsed output".
+                            // S2/S3: Treat unparsed/truncated non-JSON output on proposer seats (a1/a2) as parse_failed
+                            // and trigger failover/retry instead of returning status: "ok" with truncated prose & picks: [].
                             const isProposerSeat =
                                 this.id === 'a1' ||
                                 this.id === 'a2' ||
@@ -547,11 +696,26 @@ export class Agent {
                             const hasNativeToolCallInText =
                                 typeof textOutput === 'string' &&
                                 /"tool"\s*:|"tool_calls"\s*:|get_(?:matchup|injury|market|environment|player_prop|historical)/i.test(textOutput);
+                            const rawTrimmedForTrunc = typeof textOutput === 'string' ? textOutput.trim() : '';
+                            const hasTruncatedJson =
+                                Boolean(rawTrimmedForTrunc) &&
+                                (rawTrimmedForTrunc.startsWith('{') || rawTrimmedForTrunc.startsWith('[')) &&
+                                extractLargestValidJson(rawTrimmedForTrunc) === null;
+                            const missingProposerFieldsAfterRepair =
+                                parseRepaired &&
+                                !Array.isArray((candidate as any)?.scorecards) &&
+                                (
+                                    (hasTruncatedJson && (!Array.isArray((candidate as any)?.picks) || (candidate as any).picks.length === 0)) ||
+                                    (
+                                        !Array.isArray((candidate as any)?.picks) &&
+                                        (!Array.isArray((candidate as any)?.insights) || (candidate as any).insights.length === 0)
+                                    )
+                                );
                             if (
-                                !hasParsedKeys &&
+                                (!hasParsedKeys || missingProposerFieldsAfterRepair) &&
                                 isProposerSeat &&
                                 !hasNativeToolCallInText &&
-                                targetIdx < targetChain.length - 1
+                                (targetIdx < targetChain.length - 1 || attempt < maxRetries)
                             ) {
                                 const rawSnippet = redactErrorSnippet(textOutput || 'empty response', 120);
                                 const parseErr: any = new Error(`[PARSE_FAILED:unparsed_json] ${rawSnippet}`);
@@ -638,7 +802,7 @@ export class Agent {
                         continue;
                     }
 
-                    const isParseFailure = Boolean(err?.parseFailed) || errMsg.includes('[PARSE_FAILED:unparsed_json]');
+                    const isParseFailure = Boolean(err?.parseFailed) || /\[PARSE_FAILED:(?:unparsed_json|max_tokens)\]/i.test(errMsg);
                     const httpStatus = isParseFailure ? null : extractHttpStatus(err);
                     const errorSnippet = isParseFailure
                         ? redactErrorSnippet(err?.rawSnippet || errMsg.replace(/^\[PARSE_FAILED:[^\]]+\]\s*/i, ''), 120)
@@ -676,6 +840,7 @@ export class Agent {
 
                     const isLimiterSkip = errMsg.includes('[LIMITER_SKIP]');
                     const isRateLimit429 =
+                        httpStatus === 429 ||
                         errMsg.includes('429') ||
                         errMsg.includes('RATE_LIMIT') ||
                         errLower.includes('rate limit') ||
@@ -699,11 +864,12 @@ export class Agent {
                     const isQuotaExhausted =
                         errMsg.includes('RESOURCE_EXHAUSTED') ||
                         errLower.includes('quota') ||
-                        (errMsg.includes('429') && errLower.includes('quota'));
+                        ((httpStatus === 429 || errMsg.includes('429')) && errLower.includes('quota'));
 
-                    const isFailoverEligible = 
+                    const isFailoverEligible =
                         isTransientRateLimitOrSkip ||
                         isParseFailure ||
+                        (httpStatus !== null && httpStatus >= 500) ||
                         errMsg.includes('EMPTY_COMPLETION') ||
                         errMsg.includes('503') ||
                         errMsg.includes('502') ||
@@ -721,10 +887,19 @@ export class Agent {
                         errLower.includes('high traffic') ||
                         errLower.includes('overloaded') ||
                         errLower.includes('unavailable') ||
-                        errLower.includes('capacity');
+                        errLower.includes('capacity') ||
+                        errLower.includes('econnreset') ||
+                        errLower.includes('fetch failed');
 
-                    const isFatal = 
-                        errMsg.includes('404') || 
+                    const billingErrorInfo = isBillingOrAuthError(err);
+                    const isFatal =
+                        billingErrorInfo.match ||
+                        httpStatus === 400 ||
+                        httpStatus === 401 ||
+                        httpStatus === 402 ||
+                        httpStatus === 403 ||
+                        httpStatus === 404 ||
+                        errMsg.includes('404') ||
                         errMsg.includes('NOT_FOUND') ||
                         errMsg.includes('400') ||
                         errMsg.includes('401') ||
@@ -737,25 +912,35 @@ export class Agent {
                         errLower.includes('does not exist') ||
                         errLower.includes('unsupported model');
 
+                    if (billingErrorInfo.match && !(currentTarget.provider === 'gemini' && /free_tier/i.test(errMsg) && /\blimit\s*:\s*0\b/i.test(errMsg))) {
+                        globalProviderLimiter.recordFailure(
+                            String(currentTarget.provider),
+                            targetModel,
+                            errMsg,
+                            true
+                        );
+                    }
+
                     const skipGeminiSiblings =
                         currentTarget.provider === 'gemini' && isGeminiProjectWideFailure(err);
                     if (skipGeminiSiblings) {
-                        const cooldownMs = (httpStatus === 401 || httpStatus === 403) ? BREAKER_OPEN_MS : MODEL_COOLDOWN_MS;
+                        const cooldownMs = (httpStatus === 401 || httpStatus === 402 || httpStatus === 403) ? BILLING_COOLDOWN_MS : MODEL_COOLDOWN_MS;
+                        const reasonPrefix = (httpStatus === 401 || httpStatus === 402 || httpStatus === 403) ? '[BILLING_COOLDOWN_SKIP] ' : '';
                         globalProviderLimiter.openProviderCooldown(
                             'gemini',
                             cooldownMs,
-                            `gemini project-wide error (${httpStatus ?? 'unknown'}): ${errorSnippet}`
+                            `${reasonPrefix}gemini project-wide error (${httpStatus ?? 'unknown'}): ${errorSnippet}`
                         );
                     }
 
                     const hasNextProvider = targetIdx < targetChain.length - 1;
 
                     if ((isFatal || isLimiterSkip) && !hasNextProvider) {
-                        break; // Fatal error (like model not found) or limiter skip: retrying the same target cannot help
+                        break; // Fatal error (like model not found / 401 / 402 / 403) or limiter skip: retrying the same target cannot help
                     }
 
                     // If eligible for failover and a backup provider is ready, failover immediately without waiting
-                    if ((isFailoverEligible || isFatal || isTransientRateLimitOrSkip) && hasNextProvider) {
+                    if ((isFailoverEligible || isFatal || isTransientRateLimitOrSkip || attempt === maxRetries) && hasNextProvider) {
                         let realFallback: typeof currentTarget | undefined;
                         let realFallbackIdx = -1;
                         for (let j = targetIdx + 1; j < targetChain.length; j++) {

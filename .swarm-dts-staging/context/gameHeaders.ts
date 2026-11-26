@@ -172,6 +172,7 @@ export function parseGameHeaders(data: unknown, fallbackEventIds?: string[]): Ga
           let away = 'Away';
           let home = 'Home';
           let commence: string | undefined = undefined;
+          let modelSignal: string | undefined = undefined;
           const options: GameHeaderOption[] = [];
           let foundMatchup = false;
 
@@ -181,6 +182,8 @@ export function parseGameHeaders(data: unknown, fallbackEventIds?: string[]): Ga
               if (explicitSport && !/^unknown$/i.test(explicitSport)) {
                 sport = explicitSport;
               }
+            } else if (p.startsWith('model_signal=')) {
+              modelSignal = p.replace('model_signal=', '').trim();
             } else if (/^[a-z][a-z0-9_]+$/i.test(p) && !/^unknown$/i.test(p) && !p.includes('@') && !/^options:/i.test(p)) {
               sport = p.toLowerCase();
             } else if (p.startsWith('commence=')) {
@@ -200,7 +203,7 @@ export function parseGameHeaders(data: unknown, fallbackEventIds?: string[]): Ga
           }
 
           if (foundMatchup) {
-            headers.push({ eventId, sport, away, home, commence, options });
+            headers.push({ eventId, sport, away, home, commence, ...(modelSignal ? { modelSignal } : {}), options });
           }
         }
       }
@@ -290,42 +293,147 @@ export function renderHeaders(headers: GameHeader[], maxChars: number = 1600): s
   return lines.join('\n');
 }
 
+function escapeHeaderRx(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function hasWordMatch(haystack: string, needle: string): boolean {
+  const n = needle.trim();
+  if (!n) return false;
+  return new RegExp(`(?:^|[^a-z0-9])${escapeHeaderRx(n)}(?:$|[^a-z0-9])`, 'i').test(haystack);
+}
+
+function extractTeamMascotToken(teamName: string): string {
+  const clean = teamName.replace(/\([^)]*\)/g, ' ').replace(/\s+/g, ' ').trim();
+  const words = clean.split(' ').filter(Boolean);
+  if (words.length < 2) return '';
+  const last = words[words.length - 1];
+  if (words.length >= 3 && /^(sox|jackets|wings|leafs|knights|blazers|heat|jazz|magic|wild|heat|stars|blues|bruins|kings|rams|jets|nets|mets|cubs)$/i.test(last)) {
+    const prev = words[words.length - 2];
+    if (/^(red|white|blue|maple|golden|trail)$/i.test(prev)) {
+      return `${prev} ${last}`;
+    }
+  }
+  return last.length >= 4 ? last : '';
+}
+
+function extractTeamCityPrefix(teamName: string): string {
+  const clean = teamName.replace(/\([^)]*\)/g, ' ').replace(/\s+/g, ' ').trim();
+  const words = clean.split(' ').filter(Boolean);
+  if (words.length < 2) return '';
+  return words.slice(0, words.length - 1).join(' ');
+}
+
+function scoreHeaderMatch(text: string, h: GameHeader, allHeaders: GameHeader[]): number {
+  if (!text || !h) return 0;
+  if (h.eventId && hasWordMatch(text, h.eventId)) return 100;
+
+  const away = (h.away || '').trim();
+  const home = (h.home || '').trim();
+  if (away && home) {
+    const matchupRx = new RegExp(
+      `(?:^|[^a-z0-9])${escapeHeaderRx(away)}\\s*(?:@|at|vs\\.?)\\s*${escapeHeaderRx(home)}(?:$|[^a-z0-9])`,
+      'i'
+    );
+    if (matchupRx.test(text)) return 90;
+  }
+
+  let best = 0;
+  for (const team of [away, home]) {
+    if (!team || /^(away|home|unknown|tbd)$/i.test(team)) continue;
+    const isShortAbbr = team.length <= 4 && !team.includes(' ');
+    if (!isShortAbbr && hasWordMatch(text, team)) {
+      // Full team name match (e.g. "Minnesota Wild" vs "Minnesota Timberwolves")
+      best = Math.max(best, 80 + Math.min(15, team.length));
+      continue;
+    }
+
+    const mascot = extractTeamMascotToken(team);
+    if (mascot && hasWordMatch(text, mascot)) {
+      const mascotCount = allHeaders.filter(other => {
+        const oa = extractTeamMascotToken(other.away || '');
+        const oh = extractTeamMascotToken(other.home || '');
+        return oa.toLowerCase() === mascot.toLowerCase() || oh.toLowerCase() === mascot.toLowerCase();
+      }).length;
+      const city = extractTeamCityPrefix(team);
+      if (mascotCount === 1) {
+        best = Math.max(best, 60);
+      } else if (city && hasWordMatch(text, city)) {
+        best = Math.max(best, 70);
+      } else {
+        best = Math.max(best, 35);
+      }
+      continue;
+    }
+
+    if (isShortAbbr && hasWordMatch(text, team)) {
+      // Short abbreviation match ONLY with word boundary and lower priority than full-name/mascot
+      const abbrCount = allHeaders.filter(other =>
+        (other.away || '').trim().toUpperCase() === team.toUpperCase() ||
+        (other.home || '').trim().toUpperCase() === team.toUpperCase()
+      ).length;
+      best = Math.max(best, abbrCount === 1 ? 30 : 12);
+    }
+  }
+
+  return best;
+}
+
 /**
  * Maps a pick object (or string) to its corresponding event ID using parsed game headers.
+ * S1: Validates cited row first and scores full team name / unique mascot strictly above
+ * shared city prefixes or cross-sport abbreviations.
  */
 export function getEventIdForPick(pick: any, headers: GameHeader[]): string | undefined {
   if (!pick) return undefined;
   if (typeof pick === 'string') {
-    const clean = pick.toUpperCase();
-    for (const h of headers) {
-      if (h.eventId && clean.includes(h.eventId.toUpperCase())) return h.eventId;
-      if (h.away && h.home && clean.includes(`${h.away.toUpperCase()}@${h.home.toUpperCase()}`)) return h.eventId;
-      if (h.away && clean.includes(h.away.toUpperCase())) return h.eventId;
-      if (h.home && clean.includes(h.home.toUpperCase())) return h.eventId;
+    const rowMatch = pick.match(/\b(R\d+)\b/i);
+    if (rowMatch) {
+      const rid = rowMatch[1].toUpperCase();
+      const rowHeader = headers.find(h => (h.options || []).some(o => Boolean(o.id) && o.id.toUpperCase() === rid));
+      if (rowHeader) return rowHeader.eventId;
     }
-    return undefined;
+    let bestHeader: GameHeader | undefined;
+    let bestScore = 0;
+    for (const h of headers) {
+      const score = scoreHeaderMatch(pick, h, headers);
+      if (score > bestScore) {
+        bestScore = score;
+        bestHeader = h;
+      }
+    }
+    return bestScore > 0 ? bestHeader?.eventId : undefined;
+  }
+
+  const rowIdRaw = pick.row || pick.id;
+  const rowId = typeof rowIdRaw === 'string' && /^R\d+$/i.test(rowIdRaw.trim()) ? rowIdRaw.trim().toUpperCase() : undefined;
+  const rowHeader = rowId
+    ? headers.find(h => (h.options || []).some(o => Boolean(o.id) && o.id.toUpperCase() === rowId))
+    : undefined;
+
+  const pickText = `${pick.side || ''} ${pick.pick || ''} ${pick.match || ''} ${pick.game || ''} ${pick.team || ''} ${pick.description || ''} ${pick.selection || ''} ${pick.note || ''} ${pick.claim || ''}`.trim();
+
+  // If pick cites a valid row and its side matches that row's header, bind to the row's event first
+  if (rowHeader && pickText && scoreHeaderMatch(pickText, rowHeader, headers) >= 60) {
+    return rowHeader.eventId;
   }
 
   if (pick.event_id) return String(pick.event_id);
   if (pick.eventId) return String(pick.eventId);
 
-  const rowId = pick.row || pick.id;
-  if (typeof rowId === 'string' && rowId.trim()) {
-    const matchingHeader = headers.find(h => (h.options || []).some(o => Boolean(o.id) && o.id === rowId));
-    if (matchingHeader) return matchingHeader.eventId;
-  }
+  if (rowHeader) return rowHeader.eventId;
 
-  const pickText = `${pick.match || ''} ${pick.game || ''} ${pick.team || ''} ${pick.description || ''} ${pick.selection || ''} ${pick.note || ''} ${pick.claim || ''}`.toUpperCase();
-  for (const h of headers) {
-    if (h.eventId && pickText.includes(h.eventId.toUpperCase())) {
-      return h.eventId;
+  if (pickText) {
+    let bestHeader: GameHeader | undefined;
+    let bestScore = 0;
+    for (const h of headers) {
+      const score = scoreHeaderMatch(pickText, h, headers);
+      if (score > bestScore) {
+        bestScore = score;
+        bestHeader = h;
+      }
     }
-    if (h.away && h.home && pickText.includes(`${h.away.toUpperCase()}@${h.home.toUpperCase()}`)) {
-      return h.eventId;
-    }
-    if (h.away && h.home && (pickText.includes(h.away.toUpperCase()) || pickText.includes(h.home.toUpperCase()))) {
-      return h.eventId;
-    }
+    if (bestScore > 0 && bestHeader) return bestHeader.eventId;
   }
 
   return undefined;

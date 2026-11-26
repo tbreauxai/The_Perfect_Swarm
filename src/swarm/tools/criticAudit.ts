@@ -1,4 +1,4 @@
-import { parseGameHeaders, type GameHeader } from '../context/gameHeaders.ts';
+import { filterPicksByCoverage, parseGameHeaders, type GameHeader } from '../context/gameHeaders.ts';
 import {
   extractRowOptions,
   resolveTeamFromText,
@@ -834,6 +834,7 @@ export function reconcileFinalVerdictAndPicks<T extends Record<string, any>>(
     rep.wageringPass = true;
     rep.pass = true;
     if (!rep.status) rep.status = 'no_play';
+    stripContradictoryWagerProseOnPass(finalAnalysis);
     return finalAnalysis;
   }
 
@@ -851,6 +852,398 @@ export function reconcileFinalVerdictAndPicks<T extends Record<string, any>>(
         wageringPass: false
       };
     });
+  }
+  if (rep.wageringPass === true && survivingCount === 0) {
+    stripContradictoryWagerProseOnPass(finalAnalysis);
+  }
+
+  return finalAnalysis;
+}
+
+export interface MissingPicksSchemaAuditResult {
+  pass: boolean;
+  citedRows: string[];
+  fromDataTable: string[];
+  fromProse: boolean;
+  feedback?: string;
+}
+
+const SLATE_OVERVIEW_TABLE_TITLE_REGEX = /\b(?:slate\s+overview|full\s+slate|odds\s+board|available\s+board|scoreboard)\b/i;
+const ROW_PASS_OR_VETO_STATUS_REGEX = /^(?:veto(?:ed)?|pass(?:ed)?|no[\s_-]*bet|no[\s_-]*play|skip(?:ped)?|reject(?:ed)?)$/i;
+const WAGER_RECOMMENDATION_PROSE_REGEX =
+  /\b(?:construct\s+(?:a|the)?[^.\n]{0,40}\bparlay|build\s+(?:a|the)?[^.\n]{0,40}\bparlay|place\s+(?:a|the)\s+(?:[^.\n]{0,25})?(?:parlay|bet|wager|play)|proceed\s+with\s+(?:a|the|selected|this)?[^.\n]{0,30}\b(?:parlay|bet|wager|legs?|plays?|picks?)|proceed\s+with\b|selected\s+legs?\b|recommended\s+(?:legs?|picks?|bets?|wagers?|plays?|parlay)\b|lock\s+in\b|risk\s+critic\s+approved\s+(?:all|every|both|the))\b/i;
+const EXPLICIT_PASS_PROSE_REGEX =
+  /\b(?:bottom-?line\s+call:\s*(?:pass|no[\s_-]*bet|no[\s_-]*play)|no[\s_-]*bet\s+recommendation|pass(?:ing)?\s+on\s+(?:this\s+|all\s+)?slate|do\s+not\s+(?:place|bet|wager)|cannot\s+construct\s+(?:a\s+)?(?:valid\s+)?parlay|no\s+playable\s+(?:legs?|wagers?|bets?)|no\s+qualified\s+wagers?|no\s+bets?\s+recommended)\b/i;
+const RECOMMENDATION_TABLE_TITLE_OR_COL_REGEX = /\b(?:recommend|bet|pick|parlay|play|selection|card|leg)\b/i;
+
+function collectRowIdsFromString(text: string, validRowMap: Map<string, RowOptionEntry>): string[] {
+  const found: string[] = [];
+  if (!text) return found;
+  const rx = /\b(R\d+)\b/gi;
+  let m: RegExpExecArray | null;
+  while ((m = rx.exec(text)) !== null) {
+    const rid = m[1].toUpperCase();
+    if ((validRowMap.size === 0 || validRowMap.has(rid)) && !found.includes(rid)) {
+      found.push(rid);
+    }
+  }
+  return found;
+}
+
+/**
+ * Deterministic schema guard (S1.2):
+ * Detects missing or empty top-level `picks[]` when `summary`/`analysis` or a `DataTable`
+ * recommends placing wagers or cites valid board `R#` rows.
+ */
+export function auditMissingPicksSchemaViolation(
+  proposal: any,
+  headers?: GameHeader[],
+  slateText?: unknown
+): MissingPicksSchemaAuditResult {
+  if (!proposal || typeof proposal !== 'object' || Array.isArray(proposal)) {
+    return { pass: true, citedRows: [], fromDataTable: [], fromProse: false };
+  }
+  if ('winProbHome' in proposal || 'win_prob_home' in proposal) {
+    return { pass: true, citedRows: [], fromDataTable: [], fromProse: false };
+  }
+  if (Array.isArray(proposal.picks) && proposal.picks.length > 0) {
+    return { pass: true, citedRows: [], fromDataTable: [], fromProse: false };
+  }
+
+  const slateStr = typeof slateText === 'string'
+    ? slateText
+    : (slateText && typeof slateText === 'object' && typeof (slateText as any).fullBoard === 'string'
+        ? (slateText as any).fullBoard
+        : '');
+  const effHeaders = headers && headers.length > 0 ? headers : (slateStr ? parseGameHeaders(slateStr) : []);
+  const rowMap = extractRowOptions(slateStr ? [slateStr] : [], effHeaders);
+
+  const fromDataTable: string[] = [];
+  if (Array.isArray(proposal.components)) {
+    for (const comp of proposal.components) {
+      if (!comp || typeof comp !== 'object' || comp.type !== 'DataTable' || !comp.props) continue;
+      const title = String(comp.props.title || '');
+      if (SLATE_OVERVIEW_TABLE_TITLE_REGEX.test(title)) continue;
+      const rows = Array.isArray(comp.props.rows) ? comp.props.rows : [];
+      for (const row of rows) {
+        if (!row || typeof row !== 'object') continue;
+        const rowStatus = String(row.status ?? row.verdict ?? row.action ?? row.recommendation ?? '').trim();
+        if (rowStatus && ROW_PASS_OR_VETO_STATUS_REGEX.test(rowStatus)) continue;
+        const prioritizedValues = [
+          row.row,
+          row.Row,
+          row.id,
+          row.ID,
+          row.rowId,
+          ...Object.values(row)
+        ]
+          .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+          .join(' ');
+        for (const rid of collectRowIdsFromString(prioritizedValues, rowMap)) {
+          if (!fromDataTable.includes(rid)) fromDataTable.push(rid);
+        }
+      }
+    }
+  }
+
+  const proseParts = [proposal.summary, proposal.analysis]
+    .filter((s): s is string => typeof s === 'string' && s.trim().length > 0);
+  const proseText = proseParts.join('\n');
+  const fromProse = Boolean(
+    proseText &&
+    WAGER_RECOMMENDATION_PROSE_REGEX.test(proseText) &&
+    !EXPLICIT_PASS_PROSE_REGEX.test(proseText)
+  );
+
+  const proseRows = fromProse ? collectRowIdsFromString(proseText, rowMap) : [];
+  const citedRows: string[] = [];
+  for (const rid of [...fromDataTable, ...proseRows]) {
+    if (!citedRows.includes(rid)) citedRows.push(rid);
+  }
+
+  if (fromDataTable.length > 0 || fromProse) {
+    const rowLabel = citedRows.length > 0 ? `[${citedRows.join(', ')}]` : 'selected legs';
+    return {
+      pass: false,
+      citedRows,
+      fromDataTable,
+      fromProse,
+      feedback: `Schema violation: top-level 'picks' array is missing or empty while summary/analysis/DataTable recommend ${rowLabel}. Populate top-level 'picks' with exact pick objects for those rows and set wageringPass: false.`
+    };
+  }
+
+  return { pass: true, citedRows: [], fromDataTable: [], fromProse: false };
+}
+
+export function isMissingPicksSchemaViolationFeedback(text: unknown): boolean {
+  return typeof text === 'string' && /Schema violation:\s*top-level 'picks' array is missing or empty/i.test(text);
+}
+
+function getStructuredPickRowId(pk: any): string | undefined {
+  if (!pk || typeof pk !== 'object') {
+    if (typeof pk === 'string') {
+      const m = pk.match(/\b(R\d+)\b/i);
+      return m ? m[1].toUpperCase() : undefined;
+    }
+    return undefined;
+  }
+  for (const raw of [pk.row, pk.Row, pk.rowId, pk.id]) {
+    if (typeof raw === 'string') {
+      const m = raw.trim().match(/\b(R\d+)\b/i);
+      if (m) return m[1].toUpperCase();
+    }
+  }
+  const sideText = [pk.side, pk.pick, pk.selection, pk.team]
+    .filter((v): v is string => typeof v === 'string')
+    .join(' ');
+  const m = sideText.match(/\b(R\d+)\b/i);
+  return m ? m[1].toUpperCase() : undefined;
+}
+
+function isCleanSpecialistPickCandidate(pk: any): boolean {
+  if (!pk || typeof pk !== 'object' || Array.isArray(pk)) return false;
+  if (pk.vetoed === true || /^veto/i.test(String(pk.verdict || pk.status || '').trim())) return false;
+  return Boolean(getStructuredPickRowId(pk));
+}
+
+function parseNonCriticPicksFromCompiledText(compiledReportsText?: string): any[] {
+  if (!compiledReportsText || typeof compiledReportsText !== 'string') return [];
+  const extracted: any[] = [];
+  // Match seat blocks like `[QuantSpecialist Report]:\n{...}` or raw JSON blocks
+  const seatBlockRx = /(?:^|\n)\[([^\]]+?)\]:\s*\n([^\n]*(?:\n(?!\[[^\]]+?\]:)[^\n]*)*)/g;
+  let match: RegExpExecArray | null;
+  let matchedAnyBlock = false;
+  while ((match = seatBlockRx.exec(compiledReportsText)) !== null) {
+    matchedAnyBlock = true;
+    const seatHeader = match[1] || '';
+    if (/risk\s*critic|\bcritic\b/i.test(seatHeader)) continue;
+    const body = (match[2] || '').trim();
+    if (!body) continue;
+    try {
+      const parsed = JSON.parse(body);
+      const seatRole = String(parsed?.role || parsed?.seat || seatHeader);
+      if (/risk\s*critic|\bcritic\b/i.test(seatRole)) continue;
+      if (Array.isArray(parsed?.picks)) {
+        for (const pk of parsed.picks) {
+          if (isCleanSpecialistPickCandidate(pk)) extracted.push(pk);
+        }
+      }
+    } catch {
+      // Fallback: extract embedded `"picks":[...]` array if truncated after picks
+      const picksMatch = /"picks"\s*:\s*(\[[\s\S]*?\])(?=\s*[,}])/i.exec(body);
+      if (picksMatch) {
+        try {
+          const arr = JSON.parse(picksMatch[1]);
+          if (Array.isArray(arr)) {
+            for (const pk of arr) {
+              if (isCleanSpecialistPickCandidate(pk)) extracted.push(pk);
+            }
+          }
+        } catch {
+          // ignore unparseable fragment
+        }
+      }
+    }
+  }
+
+  if (!matchedAnyBlock) {
+    const picksMatch = /"picks"\s*:\s*(\[[\s\S]*?\])(?=\s*[,}])/i.exec(compiledReportsText);
+    if (picksMatch) {
+      try {
+        const arr = JSON.parse(picksMatch[1]);
+        if (Array.isArray(arr)) {
+          for (const pk of arr) {
+            if (isCleanSpecialistPickCandidate(pk)) extracted.push(pk);
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+  return extracted;
+}
+
+/**
+ * Collects unique non-vetoed Pass 1 specialist pick objects from explicit `specialistPicks`
+ * and/or serialized `compiledReportsText`.
+ */
+export function extractSpecialistPicksFromSources(
+  explicitPicks?: any[],
+  compiledReportsText?: string
+): any[] {
+  const combined = [
+    ...(Array.isArray(explicitPicks) ? explicitPicks : []),
+    ...parseNonCriticPicksFromCompiledText(compiledReportsText)
+  ];
+  const deduped: any[] = [];
+  const seenRowIds = new Set<string>();
+  for (const pk of combined) {
+    if (!isCleanSpecialistPickCandidate(pk)) continue;
+    const rowId = getStructuredPickRowId(pk);
+    if (!rowId || seenRowIds.has(rowId)) continue;
+    seenRowIds.add(rowId);
+    deduped.push(pk);
+  }
+  return deduped;
+}
+
+/**
+ * Deterministic fallback hydration (S1.3):
+ * When Manager still omits/empties `picks[]` on final output despite Critic approval,
+ * cites valid non-vetoed board `R#` rows across `DataTable`/`summary`/`analysis`,
+ * and matching Pass 1 specialist pick objects exist for those exact rows, hydrates
+ * `finalAnalysis.picks` and sets `wageringPass: false`.
+ */
+export function hydrateMissingPicksFromSpecialists<T extends Record<string, any>>(
+  finalAnalysis: T,
+  options: {
+    specialistPicks?: any[];
+    compiledReportsText?: string;
+    headers?: GameHeader[];
+    slateText?: string;
+    vetoedLegs?: VetoedLegTarget[];
+    coveredEventIds?: string[];
+    criticVerdictApproved?: boolean;
+  }
+): { hydrated: boolean; hydratedPicks: any[]; citedRows: string[] } {
+  if (!finalAnalysis || typeof finalAnalysis !== 'object' || Array.isArray(finalAnalysis)) {
+    return { hydrated: false, hydratedPicks: [], citedRows: [] };
+  }
+  const rep = finalAnalysis as Record<string, any>;
+  if ('winProbHome' in rep || 'win_prob_home' in rep) {
+    return { hydrated: false, hydratedPicks: [], citedRows: [] };
+  }
+  if (Array.isArray(rep.picks) && rep.picks.length > 0) {
+    return { hydrated: false, hydratedPicks: [], citedRows: [] };
+  }
+  if (options.criticVerdictApproved === false) {
+    return { hydrated: false, hydratedPicks: [], citedRows: [] };
+  }
+  const criticApprovedRun = options.criticVerdictApproved === true || rep.criticApproved === true;
+  if (!criticApprovedRun) {
+    return { hydrated: false, hydratedPicks: [], citedRows: [] };
+  }
+
+  const headers = options.headers && options.headers.length > 0
+    ? options.headers
+    : (options.slateText ? parseGameHeaders(options.slateText) : []);
+  const schemaCheck = auditMissingPicksSchemaViolation(rep, headers, options.slateText);
+  if (schemaCheck.pass || schemaCheck.citedRows.length === 0) {
+    return { hydrated: false, hydratedPicks: [], citedRows: [] };
+  }
+
+  const vetoedRows = new Set(
+    (options.vetoedLegs || [])
+      .map(vl => (vl?.rowId ? vl.rowId.toUpperCase() : ''))
+      .filter(Boolean)
+  );
+  const targetRows = schemaCheck.citedRows.filter(rid => !vetoedRows.has(rid));
+  if (targetRows.length === 0 || targetRows.length !== schemaCheck.citedRows.length) {
+    return { hydrated: false, hydratedPicks: [], citedRows: [] };
+  }
+
+  const specialistPool = extractSpecialistPicksFromSources(
+    options.specialistPicks,
+    options.compiledReportsText
+  );
+  if (specialistPool.length === 0) {
+    return { hydrated: false, hydratedPicks: [], citedRows: [] };
+  }
+
+  const poolByRow = new Map<string, any>();
+  for (const pk of specialistPool) {
+    const rid = getStructuredPickRowId(pk);
+    if (rid && !poolByRow.has(rid)) {
+      poolByRow.set(rid, pk);
+    }
+  }
+
+  const matched: any[] = [];
+  for (const rid of targetRows) {
+    const found = poolByRow.get(rid);
+    if (!found) {
+      return { hydrated: false, hydratedPicks: [], citedRows: targetRows };
+    }
+    matched.push({ ...JSON.parse(JSON.stringify(found)), row: rid });
+  }
+
+  const coveredPicks = options.coveredEventIds && options.coveredEventIds.length > 0
+    ? filterPicksByCoverage(matched, options.coveredEventIds, headers)
+    : matched;
+  if (coveredPicks.length === 0 || coveredPicks.length !== targetRows.length) {
+    return { hydrated: false, hydratedPicks: [], citedRows: targetRows };
+  }
+
+  rep.picks = coveredPicks;
+  rep.wageringPass = false;
+  rep.pass = false;
+  rep.criticApproved = true;
+  if (rep.status === 'no_play') {
+    delete rep.status;
+  }
+
+  return { hydrated: true, hydratedPicks: coveredPicks, citedRows: targetRows };
+}
+
+/**
+ * Ensures `wageringPass: true` with empty `picks: []` never coexists with contradictory
+ * "construct/place a parlay" prose or recommendation DataTables.
+ */
+export function stripContradictoryWagerProseOnPass<T extends Record<string, any>>(finalAnalysis: T): T {
+  if (!finalAnalysis || typeof finalAnalysis !== 'object' || Array.isArray(finalAnalysis)) {
+    return finalAnalysis;
+  }
+  const rep = finalAnalysis as Record<string, any>;
+  if ('winProbHome' in rep || 'win_prob_home' in rep) {
+    return finalAnalysis;
+  }
+  if (!Array.isArray(rep.picks) || rep.picks.length > 0 || rep.wageringPass !== true) {
+    return finalAnalysis;
+  }
+
+  if (Array.isArray(rep.components)) {
+    rep.components = rep.components.filter((comp: any) => {
+      if (!comp || typeof comp !== 'object') return false;
+      if (comp.type !== 'DataTable' || !comp.props) return true;
+      const title = String(comp.props.title || '');
+      if (SLATE_OVERVIEW_TABLE_TITLE_REGEX.test(title)) return true;
+      if (RECOMMENDATION_TABLE_TITLE_OR_COL_REGEX.test(title)) return false;
+      const cols = Array.isArray(comp.props.columns) ? comp.props.columns : [];
+      if (cols.some((c: any) => /^(?:pick|leg|selection|bet|side|parlay)$/i.test(String(c?.key || c?.header || '')))) {
+        return false;
+      }
+      const rows = Array.isArray(comp.props.rows) ? comp.props.rows : [];
+      const hasActiveRowRefs = rows.some((row: any) => {
+        if (!row || typeof row !== 'object') return false;
+        const st = String(row.status ?? row.verdict ?? row.action ?? '').trim();
+        if (st && ROW_PASS_OR_VETO_STATUS_REGEX.test(st)) return false;
+        return /\bR\d+\b/i.test(Object.values(row).map(v => String(v ?? '')).join(' '));
+      });
+      return !hasActiveRowRefs;
+    });
+  }
+
+  const hasContradictoryText = (txt: unknown): boolean =>
+    typeof txt === 'string' &&
+    WAGER_RECOMMENDATION_PROSE_REGEX.test(txt) &&
+    !EXPLICIT_PASS_PROSE_REGEX.test(txt);
+
+  if (hasContradictoryText(rep.summary) || hasContradictoryText(rep.analysis)) {
+    const rawReason = typeof rep.reason === 'string' && rep.reason.trim() && !hasContradictoryText(rep.reason)
+      ? rep.reason.trim()
+      : '';
+    const passMsg = rawReason
+      ? (/^pass\b/i.test(rawReason) ? rawReason : `Pass: ${rawReason}`)
+      : 'Pass: No qualified wagers approved on this slate; no bets recommended.';
+    rep.summary = passMsg;
+    rep.analysis = passMsg;
+    rep.reason = passMsg;
+    if (!rep.ui_title || /\bparlay\b|\bpicks?\b|\blegs?\b/i.test(String(rep.ui_title))) {
+      rep.ui_title = 'Pass';
+    }
+    rep.pass = true;
+    if (!rep.status) rep.status = 'no_play';
   }
 
   return finalAnalysis;

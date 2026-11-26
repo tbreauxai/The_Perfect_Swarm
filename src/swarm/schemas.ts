@@ -57,6 +57,14 @@ export function normalizeInsightType(val: unknown): 'success' | 'warning' | 'inf
 export const ManagerResponseSchema = z.object({
   ui_title: z.string().describe("Dashboard Title"),
   summary: z.string().optional().describe("Executive synthesis, 4-8 dense sentences: the bottom-line call, where analysts disagreed and whose view won with the deciding evidence, key numbers cited, and what would change the call. No generic filler."),
+  analysis: z.string().optional().describe("Detailed analytical synthesis aligned with summary and picks"),
+  picks: z.array(z.union([z.record(z.string(), z.any()), z.string()])).optional().describe("Top-level recommended wager picks: [{ row, side, confidence, reasons, reason, reasonSource }]. NEVER put picks only in components/DataTable—top-level 'picks' MUST contain every recommended wager; leave [] ONLY when intentionally passing with wageringPass: true."),
+  wageringPass: z.boolean().optional().describe("Set false whenever picks is non-empty; set true ONLY when intentionally passing with picks: []"),
+  criticApproved: z.boolean().optional().describe("Whether the Risk Critic approved the recommended picks"),
+  pass: z.boolean().optional(),
+  status: z.string().optional(),
+  reason: z.string().optional(),
+  scorecards: z.array(z.record(z.string(), z.any())).optional().describe("Per-seat scorecards with flat { seat, verdict, notes } fields"),
   metadata: z.record(z.string(), z.any()).optional().describe("Contextual synthesis metadata including reasoningTraces"),
   components: z.array(
     z.discriminatedUnion("type", [

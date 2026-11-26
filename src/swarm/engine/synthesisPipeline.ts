@@ -35,7 +35,13 @@ import {
     sanitizePullBeforePassClaims,
     type ToolCallTraceEntry
 } from '../tools/pullBeforePass.ts';
-import { enforceCriticAuditOnFinalAnalysis, reconcileFinalVerdictAndPicks, resolveFinalCriticApproved } from '../tools/criticAudit.ts';
+import {
+    enforceCriticAuditOnFinalAnalysis,
+    hydrateMissingPicksFromSpecialists,
+    reconcileFinalVerdictAndPicks,
+    resolveFinalCriticApproved,
+    stripContradictoryWagerProseOnPass
+} from '../tools/criticAudit.ts';
 import { syncCompilerProseWithFinalPicks } from '../tools/compilerProseSync.ts';
 
 export const MANAGER_MAX_PROMPT_CHARS = 9000;
@@ -821,6 +827,8 @@ export async function executeManagerSynthesis(
         agreementLevel?: 'strong' | 'moderate' | 'divergent';
         activeEventIds?: string[];
         seatScorecards?: any[];
+        specialistPicks?: any[];
+        compiledReportsText?: string;
     }
 ): Promise<any> {
     const baseManagerInstruction = (settings as any)?.managerInstruction
@@ -987,6 +995,41 @@ export async function executeManagerSynthesis(
         }
     }
 
+    if (
+        finalResult &&
+        typeof finalResult === 'object' &&
+        !isMorningJudge &&
+        !('winProbHome' in finalResult || 'win_prob_home' in finalResult)
+    ) {
+        const missingPicksBeforeHydrate = !Array.isArray(finalResult.picks) || finalResult.picks.length === 0;
+        const earlyVetoes = [
+            ...(groundingContext?.criticVetoes || []),
+            ...mergeVetoedLegTargets(groundingContext?.vetoedLegs),
+            ...mergeVetoedClaims(groundingContext?.vetoedClaims)
+        ];
+        if (
+            missingPicksBeforeHydrate &&
+            groundingContext?.criticVerdictApproved !== false &&
+            groundingContext?.criticAuditFailed !== true &&
+            earlyVetoes.length === 0
+        ) {
+            const hydrateBoard = groundingContext?.rawBoard || safeDynamicPrompt;
+            const hydrateHeaders = parseGameHeaders(hydrateBoard);
+            hydrateMissingPicksFromSpecialists(finalResult, {
+                specialistPicks: groundingContext?.specialistPicks,
+                compiledReportsText: groundingContext?.compiledReportsText || safeDynamicPrompt,
+                headers: hydrateHeaders,
+                slateText: hydrateBoard,
+                vetoedLegs: groundingContext?.vetoedLegs,
+                coveredEventIds,
+                criticVerdictApproved: groundingContext?.criticVerdictApproved
+            });
+        }
+        if (!Array.isArray(finalResult.picks)) {
+            finalResult.picks = [];
+        }
+    }
+
     if (finalResult && typeof finalResult === 'object' && Array.isArray(finalResult.picks)) {
         const syncBoardSource = groundingContext?.rawBoard || safeDynamicPrompt;
         const syncVetoedLegs = mergeVetoedLegTargets(groundingContext?.vetoedLegs);
@@ -1030,6 +1073,9 @@ export async function executeManagerSynthesis(
             seatScorecards: groundingContext?.seatScorecards,
             initialPicks: initialPicksSnapshot
         });
+        if (finalResult.picks.length === 0 && finalResult.wageringPass === true) {
+            stripContradictoryWagerProseOnPass(finalResult);
+        }
     }
 
     if (groundingContext?.agreementLevel) {

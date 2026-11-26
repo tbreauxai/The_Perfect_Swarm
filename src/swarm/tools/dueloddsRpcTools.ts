@@ -3662,12 +3662,21 @@ export const getMarketMovementTool: SwarmTool = {
       return 'unknown';
     };
     const sportKey = inferSportKey();
-    // P0-3: NBA/NFL spread steam threshold is 1.0 pt (or >= 0.5 key-number move in NFL/NHL/MLB).
+    const explicitNonNeutralSteam =
+      typeof (d.steam_direction || d.steam_dir) === 'string' &&
+      String(d.steam_direction || d.steam_dir).trim() !== '' &&
+      !/^neutral$/i.test(String(d.steam_direction || d.steam_dir).trim())
+        ? String(d.steam_direction || d.steam_dir).trim()
+        : null;
+    // Spread steam threshold is 1.0 pt across NCAAF/NCAAB/NFL/NBA/NHL/MLB (and unknown sports without an explicit backend direction; or >= 0.5 key-number move in NFL/NHL/MLB).
     const spreadThreshold = (
       sportKey === 'basketball_nba' ||
+      sportKey === 'basketball_ncaab' ||
       sportKey === 'americanfootball_nfl' ||
+      sportKey === 'americanfootball_ncaaf' ||
       sportKey === 'icehockey_nhl' ||
-      sportKey === 'baseball_mlb'
+      sportKey === 'baseball_mlb' ||
+      !explicitNonNeutralSteam
     )
       ? 1.0
       : 1.5;
@@ -3829,13 +3838,6 @@ export const getMarketMovementTool: SwarmTool = {
       orderedSteam = totalSteamText;
       activeSteamKind = 'total';
     }
-
-    const explicitNonNeutralSteam =
-      typeof (d.steam_direction || d.steam_dir) === 'string' &&
-      String(d.steam_direction || d.steam_dir).trim() !== '' &&
-      !/^neutral$/i.test(String(d.steam_direction || d.steam_dir).trim())
-        ? String(d.steam_direction || d.steam_dir).trim()
-        : null;
 
     const steamMag = d.steam_magnitude ?? (typeof delta === 'number' ? Math.abs(delta) : 'N/A');
     const steamDisplay = orderedSteam

@@ -43,9 +43,11 @@ import {
 } from './tools/pullBeforePass.ts';
 import {
     CRITIC_AUDIT_RULE,
+    auditMissingPicksSchemaViolation,
     buildCriticAuditReprompt,
     evaluateCriticAuditCoverage,
     extractProposedPickSummaries,
+    isMissingPicksSchemaViolationFeedback,
     isNoPicksToEvaluateText
 } from './tools/criticAudit.ts';
 import type { ToolRegistry } from './tools/registry.ts';
@@ -375,12 +377,19 @@ export class AnalysisLifecycle {
                 prePassedDataKeys.add(normalizeToolKey(item.tool, item.eventId));
             }
 
-            const hasEmptyPicks = Boolean(
+            const preAuditBoard = (rawData as any)?.fullBoard || rawData || '';
+            const missingPicksAudit = auditMissingPicksSchemaViolation(
+                currentProposal,
+                allParsedHeaders,
+                preAuditBoard
+            );
+            const hasRawEmptyPicks = Boolean(
                 currentProposal &&
                 typeof currentProposal === 'object' &&
                 Array.isArray((currentProposal as any).picks) &&
                 (currentProposal as any).picks.length === 0
             );
+            const hasEmptyPicks = hasRawEmptyPicks && missingPicksAudit.pass;
             const selectedGameIds = hasEmptyPicks
                 ? []
                 : resolveSelectedGameIds([currentProposal], allParsedHeaders);
@@ -787,6 +796,7 @@ export class AnalysisLifecycle {
             if (proposedLegsThisAttempt.length > 0) {
                 anyAttemptHadProposedPicks = true;
             } else if (
+                missingPicksAudit.pass &&
                 !verification.pass &&
                 /\b(?:no\s+(?:specific\s+)?picks|picks\s+array\s+is\s+empty|no\s+legs\s+to\s+audit|fails?\s+to\s+include\s+(?:any\s+)?(?:specific\s+)?picks|required\s+pick\s+objects\s+were\s+not\s+provided|no\s+picks\s+to\s+evaluate)\b/i.test(verification.feedback || '')
             ) {
@@ -875,6 +885,14 @@ export class AnalysisLifecycle {
                     : (rawData?.rawBoard || rawData?.dataSample || JSON.stringify(rawData || ''));
 
                 const zeroPickCorrections: string[] = [];
+                let missingPicksVetoTriggered = false;
+                if (!missingPicksAudit.pass) {
+                    missingPicksVetoTriggered = true;
+                    verification.pass = false;
+                    verification.parseFailed = false;
+                    verification.feedback = missingPicksAudit.feedback ||
+                        "Schema violation: top-level 'picks' array is missing or empty while summary/analysis/DataTable recommend wagers. Populate top-level 'picks' with exact pick objects for those rows and set wageringPass: false.";
+                }
                 const injuryEvidence = `${combinedToolSummary}\n${analystReports}`;
                 const injurySlate = slateHeaders || fallbackBoardText;
                 const injuryAudit = auditInjuryAttribution(
@@ -961,7 +979,9 @@ export class AnalysisLifecycle {
                         verification.pass = false;
                         const gMsg = groundingAudit.feedback || 'Veto (GROUNDING): Ungrounded claim or vetoed leg rewrite.';
                         const mergedFeedback = dedupeVetoMessages(
-                            (!injuryVetoTriggered && !marketVetoTriggered) ? [gMsg] : [verification.feedback, gMsg]
+                            (!injuryVetoTriggered && !marketVetoTriggered && !missingPicksVetoTriggered)
+                                ? [gMsg]
+                                : [verification.feedback, gMsg]
                         );
                         verification.feedback = mergedFeedback.join(' ') || gMsg;
                     }
@@ -1138,11 +1158,12 @@ export class AnalysisLifecycle {
                     const pullNote = newlyPulledCount > 0
                         ? ' Missing tools were just pulled; use the [Fresh Tool Evidence Pulled Before Retry] above.'
                         : '';
-                    const allPriorPassed = !injuryVetoTriggered && !marketVetoTriggered && !groundingVetoTriggered;
+                    const allPriorPassed = !injuryVetoTriggered && !marketVetoTriggered && !groundingVetoTriggered && !missingPicksVetoTriggered;
                     verification.feedback = allPriorPassed
                         ? `${pMsg}${pullNote}`
                         : [verification.feedback, `${pMsg}${pullNote}`].filter(Boolean).join(' ');
                 } else if (
+                    !missingPicksVetoTriggered &&
                     !injuryVetoTriggered &&
                     !marketVetoTriggered &&
                     !groundingVetoTriggered &&
@@ -1168,6 +1189,7 @@ export class AnalysisLifecycle {
                     });
                 } else if (
                     !verification.pass &&
+                    !missingPicksVetoTriggered &&
                     !injuryVetoTriggered &&
                     !marketVetoTriggered &&
                     !groundingVetoTriggered &&
@@ -1260,6 +1282,15 @@ export class AnalysisLifecycle {
                 }
 
                 if (!verification.pass && verification.feedback) {
+                    const isMissingPicksOnlyFeedback =
+                        missingPicksVetoTriggered &&
+                        isMissingPicksSchemaViolationFeedback(verification.feedback) &&
+                        !injuryVetoTriggered &&
+                        !groundingVetoTriggered &&
+                        !pullVetoTriggered &&
+                        !hasPermanentMarketVeto &&
+                        !llmAuditCoverage.criticSkippedAudit;
+
                     const isRepairableProseOnlyFeedback =
                         attempt < this.maxRetries &&
                         !injuryVetoTriggered &&
@@ -1267,28 +1298,35 @@ export class AnalysisLifecycle {
                         !pullVetoTriggered &&
                         !hasPermanentMarketVeto &&
                         !llmAuditCoverage.criticSkippedAudit &&
-                        (/\b(?:spread(?:\s+(?:value|sign|side))?|venue|role)\s+mismatch\b|described\s+as\s+(?:home|away|road)/i.test(verification.feedback) ||
+                        (isMissingPicksOnlyFeedback ||
+                            /\b(?:spread(?:\s+(?:value|sign|side))?|venue|role)\s+mismatch\b|described\s+as\s+(?:home|away|road)/i.test(verification.feedback) ||
                             isRepairableRowSignFlip) &&
                         !/\b(?:contra_steam_misread|symmetric_injury_misread|sharp_contra_steam|missing_(?:moneyline|total|spread)_coverage)\b/i.test(verification.feedback) &&
                         !(marketAuditFlags.includes('row_side_mismatch') && !isRepairableRowSignFlip);
 
-                    if (!isRepairableProseOnlyFeedback) {
+                    if (!isRepairableProseOnlyFeedback && !isMissingPicksOnlyFeedback) {
+                        const nonSchemaFeedback = verification.feedback
+                            .replace(/Schema violation:\s*top-level 'picks' array is missing or empty[\s\S]*?(?:set wageringPass:\s*false\.|$)/gi, '')
+                            .trim();
                         if (!accumulatedVetoTexts.includes(verification.feedback)) {
                             accumulatedVetoTexts.push(verification.feedback);
                         }
-                        accumulatedVetoedLegs = mergeVetoedLegTargets(
-                            accumulatedVetoedLegs,
-                            extractVetoedLegTargets([verification.feedback], allParsedHeaders, auditRowMap)
-                        );
-                        accumulatedVetoedClaims = mergeVetoedClaims(
-                            accumulatedVetoedClaims,
-                            extractQuotedVetoedClaims([verification.feedback])
-                        );
+                        if (nonSchemaFeedback) {
+                            accumulatedVetoedLegs = mergeVetoedLegTargets(
+                                accumulatedVetoedLegs,
+                                extractVetoedLegTargets([nonSchemaFeedback], allParsedHeaders, auditRowMap)
+                            );
+                            accumulatedVetoedClaims = mergeVetoedClaims(
+                                accumulatedVetoedClaims,
+                                extractQuotedVetoedClaims([nonSchemaFeedback])
+                            );
+                        }
                     }
                 }
 
                 const verifierFlags = Array.from(
                     new Set<string>([
+                        ...(missingPicksVetoTriggered ? ['missing_picks_array'] : []),
                         ...(injuryVetoTriggered ? ['injury_misattribution'] : []),
                         ...(marketVetoTriggered ? (marketRowAudit.flags || ['market_row_mismatch']) : []),
                         ...(groundingVetoTriggered ? (groundingAudit.flags || ['ungrounded_claim']) : []),

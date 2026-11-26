@@ -312,12 +312,13 @@ export function normalizeScorecardEntry(sc: any): any {
 
     const hasFlatApproveVeto = sc.approve !== undefined || sc.veto !== undefined;
     const rawVerdict = canonicalizeScorecardVerdict(sc.verdict);
+    const hasFlatScorecardNote = sc.scorecard !== undefined;
 
-    if (!rawVerdict && (hasFlatApproveVeto || typeof sc.criticApproved === 'boolean' || typeof sc.pass === 'boolean' || typeof sc.seat === 'string' || typeof sc.role === 'string')) {
-        const { approve: _a, veto: _v, ...rest } = sc;
+    if (!rawVerdict && (hasFlatApproveVeto || hasFlatScorecardNote || typeof sc.criticApproved === 'boolean' || typeof sc.pass === 'boolean' || typeof sc.seat === 'string' || typeof sc.role === 'string')) {
+        const { approve: _a, veto: _v, scorecard: _scFlat, ...rest } = sc;
         const approveStr = joinScorecardValue(sc.approve);
         const vetoStr = joinScorecardValue(sc.veto);
-        const explicitNotes = joinScorecardValue(sc.notes ?? sc.note ?? sc.summary ?? sc.reason);
+        const explicitNotes = joinScorecardValue(sc.notes ?? sc.note ?? sc.summary ?? sc.reason ?? sc.scorecard);
 
         let verdict: string;
         if (approveStr && vetoStr) {
@@ -346,12 +347,13 @@ export function normalizeScorecardEntry(sc: any): any {
         };
     }
 
-    if (rawVerdict && rawVerdict !== sc.verdict) {
-        const notes = joinScorecardValue(sc.notes ?? sc.note ?? sc.summary ?? sc.reason);
+    if (hasFlatScorecardNote || (rawVerdict && rawVerdict !== sc.verdict)) {
+        const { scorecard: flatScorecardVal, ...rest } = sc;
+        const notes = joinScorecardValue(sc.notes ?? sc.note ?? sc.summary ?? sc.reason ?? flatScorecardVal);
         return {
-            ...sc,
-            verdict: rawVerdict,
-            ...(notes || sc.notes !== undefined ? { notes: sc.notes !== undefined ? sc.notes : notes } : {})
+            ...rest,
+            ...(rawVerdict ? { verdict: rawVerdict } : {}),
+            ...(notes || sc.notes !== undefined ? { notes: sc.notes !== undefined && sc.notes !== '' ? sc.notes : notes } : {})
         };
     }
 
