@@ -766,7 +766,7 @@ export class AnalysisLifecycle {
             }
 
             context.addEvent({
-                agentRole: this.critic.role,
+                agentRole: 'verifier',
                 action: `Verifying proposal from attempt ${attempt}`,
                 modelName: this.critic.modelName,
                 prompt: `verifyPromptChars=${verifyPrompt.length}, evidenceChars=${evidenceSection.length}`
@@ -775,7 +775,8 @@ export class AnalysisLifecycle {
             const verificationRaw = await this.critic.run(verifyPrompt, context, {
                 responseMimeType: 'application/json',
                 bypassCache: true,
-                timeoutMs: 45000
+                timeoutMs: 45000,
+                agentRoleOverride: 'verifier'
             });
             
             let verification: VerificationResult = guardVerificationResult(verificationRaw);
@@ -820,11 +821,12 @@ export class AnalysisLifecycle {
                     const repromptRaw = await this.critic.run(repromptVerify, context, {
                         responseMimeType: 'application/json',
                         bypassCache: true,
-                        timeoutMs: 45000
+                        timeoutMs: 45000,
+                        agentRoleOverride: 'verifier'
                     });
                     verification = guardVerificationResult(repromptRaw);
                     context.addEvent({
-                        agentRole: this.critic.role,
+                        agentRole: 'verifier',
                         action: 'Re-prompted Verification Critic (Invalid "No picks to evaluate")',
                         modelName: this.critic.modelName,
                         prompt: `attempt=${attempt}, proposedLegs=${proposedLegsThisAttempt.length}`,

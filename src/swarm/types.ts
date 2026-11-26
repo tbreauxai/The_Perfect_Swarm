@@ -198,6 +198,8 @@ export interface AgentRunConfig {
     tools?: NativeToolDefinition[];
     /** Optional tool choice override. Defaults to 'auto' when tools are provided. */
     toolChoice?: NativeToolChoice;
+    /** Optional seat/role override for diagnostic event logging (e.g. 'verifier'). */
+    agentRoleOverride?: string;
     [key: string]: any;
 }
 

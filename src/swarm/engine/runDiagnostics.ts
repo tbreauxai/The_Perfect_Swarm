@@ -400,21 +400,13 @@ export function buildCompactRunDiagnostics(params: {
         }
     }
 
-    // Final safeguard: ensure every seatTimings entry with status === 'failover' (or shifted from
-    // configured endpoint) has a corresponding record in failovers[].
+    // Final safeguard: ensure every seatTimings entry with status === 'failover'
+    // has a corresponding record in failovers[] (never synthesize when status === 'ok').
     const coveredSeats = new Set<string>(failovers.map(f => f.seat));
     for (const st of seatTimings) {
         const executedEp = formatEndpoint(st.provider, st.model);
         const configuredEp = configuredEndpointBySeat.get(st.seat);
-        const needsFailoverRecord =
-            st.status === 'failover' ||
-            (st.status === 'ok' &&
-                Boolean(configuredEp) &&
-                configuredEp !== 'unknown' &&
-                configuredEp !== 'unknown/unknown' &&
-                executedEp !== 'unknown' &&
-                executedEp !== 'unknown/unknown' &&
-                configuredEp !== executedEp);
+        const needsFailoverRecord = st.status === 'failover';
         if (needsFailoverRecord && !coveredSeats.has(st.seat)) {
             const pendingList = pendingFailuresBySeat.get(st.seat) || [];
             const firstFailure = pendingList[0];

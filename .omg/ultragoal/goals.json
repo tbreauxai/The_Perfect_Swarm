@@ -1,27 +1,27 @@
 {
-  "session": "fix-swarm-cortex-learning-loop",
-  "branch": "fix/swarm-cortex-learning-loop",
+  "session": "fix-swarm-wf-1795730839067",
+  "branch": "fix/swarm-wf-1795730839067",
   "goals": [
     {
       "id": "G1",
-      "description": "Implement S1: migrate GeminiEmbeddingProvider & MemoryCortex defaults to gemini-embedding-2 (768 dims, no taskType), remap retired models & legacy v2/v3 collections to pwa_swarm_dev_cortex_v4, and tag payloads with embedModel.",
+      "description": "S1: Match valid split/overall/L5/W-L numeric records (e.g. 4-1 Home, W-L 4-1, Season 9-1, L5 5-0, slate splits) in record/form grounding checks without requiring literal '4-1 form' phrasing, while still flagging fabricated records.",
       "status": "completed",
-      "verificationCriteria": "Incoming text-embedding-004 remaps to gemini-embedding-2, sends outputDimensionality: 768 without taskType/task_type, and falls back to gemini-embedding-001 only on 404/503.",
-      "evidence": "npx tsc --noEmit exited 0; cortexLearningLoop.test.ts S1 tests & embeddingFallback.test.ts passed; rg audit confirmed zero active callers of text-embedding-004 or taskType on gemini-embedding-2."
+      "verificationCriteria": "wf-1795730839067 fixture passes with 0 Ungrounded record/form claim vetoes; fabricated '7-0 form' still vetoes.",
+      "evidence": "npx tsc --noEmit exited 0; wf1795730839067.groundingAndVerifierSeat.repro.test.ts S1 test passed."
     },
     {
       "id": "G2",
-      "description": "Implement S2: multi-sport domains[] Qdrant filtering with strict appId isolation, CLV + outcome contrastive retrieval (up to 3 wins & 3 losses deduplicated by lessonId/eventId), and idempotent POST /api/cortex/ingest.",
+      "description": "S2: Make symmetric_injury_misread (and audit sibling grounding regexes contra_steam_misread / model_signal_misread) negation- and disclaimer-aware so explicit disclaimers like 'Health Balance is uncertain_questionable for Buffalo, treating as disqualifying for roster health edge.' do not trigger false vetoes while genuine affirmative claims still veto.",
       "status": "completed",
-      "verificationCriteria": "Multi-sport domains=['nfl','nhl'] matches both sports under appId='duelodds'; POST /api/cortex/ingest upserts structured lessons idempotently by lessonId.",
-      "evidence": "cortexLearningLoop.test.ts S2 tests, qdrantStorage.test.ts (13/13), and inMemoryStorage.test.ts (9/9) passed."
+      "verificationCriteria": "wf-1795730839067 disclaimer produces 0 symmetric_injury_misread vetoes; affirmative health advantage claim on symmetric game still vetoes.",
+      "evidence": "wf1795730839067.groundingAndVerifierSeat.repro.test.ts S2, wf1795446433463.repro.test.ts, wf1795367633040.p0_2.repro.test.ts, and swarmPart7_8.repro.test.ts all passed."
     },
     {
       "id": "G3",
-      "description": "Implement S3: truthful cortexSummary telemetry (Error on embed/Qdrant failure, Empty/Success with collectionPointCount, embedModel, appliedDomains, topRawScore), run repo grep audit, tsc, and targeted Vitest.",
+      "description": "S3: Separate 'verifier' seat ID from 'critic' (and audit all failover-synthesis callers) so diagnostics.failovers[] stops emitting phantom failovers when Pass 1 critic and Verification verifier run different configured models with status 'ok'.",
       "status": "completed",
-      "verificationCriteria": "Mocked 404 from embedContent produces cortexSummary.status === 'Error' with embedError; zero hidden callers use text-embedding-004 or taskType on gemini-embedding-2; tsc and targeted Vitest pass.",
-      "evidence": "cortexLearningLoop.test.ts S3 tests passed (46/46 total across 7 Vitest files); npx tsc --noEmit exited 0."
+      "verificationCriteria": "Pass 1 critic (groq/openai/gpt-oss-120b, status 'ok') + verifier (gemini/gemini-3.5-flash-lite, status 'ok') produces diagnostics.failovers === []. tsc and targeted vitest pass.",
+      "evidence": "wf1795730839067.groundingAndVerifierSeat.repro.test.ts S3 & wf1795711383683.criticVerdictFailoverSport.repro.test.ts passed (37/37 across 5 files)."
     }
   ]
 }

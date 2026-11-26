@@ -204,32 +204,32 @@ function extractRecordsFromSegment(seg: string): Set<string> {
   const norm = normalizeText(seg);
 
   const prefixRx =
-    /\b(?:W-L|L\d{1,2}|last[\s_]?\d{1,2}|record|ATS|SU|home|away|road|overall|form|season)\b["']?\s*[:="']?\s*(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?\b/gi;
+    /\b(?:(?:home|away|road|season|overall|last[\s_]?\d{1,2}|l\d{1,2})[\s_]+)?(?:W-L|L\d{1,2}|last[\s_]?\d{1,2}|record|ATS|SU|home|away|road|overall|form|season)\b["']?\s*[:="']?\s*(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?\b/gi;
   let m: RegExpExecArray | null;
   while ((m = prefixRx.exec(norm)) !== null) {
     addGroundedRecordValue(records, m[1], m[2], m[3]);
   }
 
   const suffixRx =
-    /\b(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?\s*(?:L\d{1,2}|W-L|ATS|SU|record|last\s+\d+|home|away|road|overall|season)\b/gi;
+    /\b(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?\s*(?:L\d{1,2}|W-L|ATS|SU|record|last\s+\d+|home|away|road|overall|form|season)\b/gi;
   while ((m = suffixRx.exec(norm)) !== null) {
     addGroundedRecordValue(records, m[1], m[2], m[3]);
   }
 
   const jsonWinsFirstRx =
-    /"wins"\s*:\s*(\d{1,3})[^}]{0,80}?"losses"\s*:\s*(\d{1,3})(?:[^}]{0,50}?"(?:otl|ties|ot_losses)"\s*:\s*(\d{1,3}))?/gi;
+    /"(?:season_|last\d{1,2}_|home_|away_|road_)?wins"\s*:\s*(\d{1,3})[^}]{0,80}?"(?:season_|last\d{1,2}_|home_|away_|road_)?losses"\s*:\s*(\d{1,3})(?:[^}]{0,50}?"(?:otl|ties|ot_losses)"\s*:\s*(\d{1,3}))?/gi;
   while ((m = jsonWinsFirstRx.exec(norm)) !== null) {
     addGroundedRecordValue(records, m[1], m[2], m[3]);
   }
 
   const jsonLossesFirstRx =
-    /"losses"\s*:\s*(\d{1,3})[^}]{0,80}?"wins"\s*:\s*(\d{1,3})/gi;
+    /"(?:season_|last\d{1,2}_|home_|away_|road_)?losses"\s*:\s*(\d{1,3})[^}]{0,80}?"(?:season_|last\d{1,2}_|home_|away_|road_)?wins"\s*:\s*(\d{1,3})/gi;
   while ((m = jsonLossesFirstRx.exec(norm)) !== null) {
     addGroundedRecordValue(records, m[2], m[1]);
   }
 
   const jsonRecordStrRx =
-    /"(?:l\d{1,2}|last_?\d{1,2}|record|wl|w_l)"\s*:\s*"(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?"/gi;
+    /"(?:l\d{1,2}|last_?\d{1,2}|(?:home_|away_|road_|season_|overall_)?record|wl|w_l|form)"\s*:\s*"(\d{1,3})\s*-\s*(\d{1,3})(?:\s*-\s*(\d{1,3}))?"/gi;
   while ((m = jsonRecordStrRx.exec(norm)) !== null) {
     addGroundedRecordValue(records, m[1], m[2], m[3]);
   }
@@ -400,6 +400,37 @@ function extractGroundedRecords(
   }
 
   return { allRecords, recordsByTeamKey, recordsByEventId, unscopedRecords };
+}
+
+function extractGroundedRecordsWithSlate(
+  successfulEvidence: string,
+  slateText: string,
+  candidates: TeamDescriptor[],
+  headers: GameHeader[] = []
+): GroundedRecordSet {
+  const groundedRecords = extractGroundedRecords(successfulEvidence, candidates, headers);
+  if (typeof slateText === 'string' && slateText.trim().length > 0) {
+    const slateRecords = extractGroundedRecords(slateText, candidates, headers);
+    for (const r of slateRecords.allRecords) groundedRecords.allRecords.add(r);
+    for (const [k, recs] of slateRecords.recordsByTeamKey.entries()) {
+      let set = groundedRecords.recordsByTeamKey.get(k);
+      if (!set) {
+        set = new Set<string>();
+        groundedRecords.recordsByTeamKey.set(k, set);
+      }
+      for (const r of recs) set.add(r);
+    }
+    for (const [ev, recs] of slateRecords.recordsByEventId.entries()) {
+      let set = groundedRecords.recordsByEventId.get(ev);
+      if (!set) {
+        set = new Set<string>();
+        groundedRecords.recordsByEventId.set(ev, set);
+      }
+      for (const r of recs) set.add(r);
+    }
+    for (const r of slateRecords.unscopedRecords) groundedRecords.unscopedRecords.add(r);
+  }
+  return groundedRecords;
 }
 
 function findTargetTeamsForSpan(
@@ -1473,27 +1504,7 @@ export function auditClaimGrounding(
   const outInjuries = allInjuries.filter(inj => /^(?:OUT|IR|INJURED\s+RESERVE|SUSPENDED)$/i.test(inj.status));
   const candidates = buildTeamDescriptors(headers, outInjuries, hasSportsSignal);
   // P0-1: Build record corpus from authoritative Hop-1 curatedDossier/tool summaries unioned with COMPACT SLATE.
-  const groundedRecords = extractGroundedRecords(successfulEvidence, candidates, headers);
-  if (typeof slateText === 'string' && slateText.trim().length > 0) {
-    const slateRecords = extractGroundedRecords(slateText, candidates, headers);
-    for (const r of slateRecords.allRecords) groundedRecords.allRecords.add(r);
-    for (const [k, recs] of slateRecords.recordsByTeamKey.entries()) {
-      let set = groundedRecords.recordsByTeamKey.get(k);
-      if (!set) {
-        set = new Set<string>();
-        groundedRecords.recordsByTeamKey.set(k, set);
-      }
-      for (const r of recs) set.add(r);
-    }
-    for (const [ev, recs] of slateRecords.recordsByEventId.entries()) {
-      let set = groundedRecords.recordsByEventId.get(ev);
-      if (!set) {
-        set = new Set<string>();
-        groundedRecords.recordsByEventId.set(ev, set);
-      }
-      for (const r of recs) set.add(r);
-    }
-  }
+  const groundedRecords = extractGroundedRecordsWithSlate(successfulEvidence, slateText, candidates, headers);
   const injuryCoverage = collectSuccessfulInjuryCoverage(successfulEvidence, candidates);
   const vetoedTargets = mergeVetoedLegTargets(
     options?.vetoedLegs,
@@ -1797,13 +1808,16 @@ const STEAM_TOPIC_REGEX =
   /\b(?:steam|line\s+move(?:ment)?|market\s+(?:steam|move(?:ment)?|money|action)|sharp\s+(?:money|steam|action)|RLM)\b/i;
 
 const CONTRA_STEAM_CONTRARIAN_REGEX =
-  /\b(?:despite|fading|fade|contrarian|counter-?steam|negative\s+steam|opposing\s+steam|(?:moves?|moving|moved|steamed|going|betting|is)\s+against|against\s+(?:the\s+)?(?:market\s+)?(?:steam|line\s+move(?:ment)?|sharp\s+(?:money|action|steam)))\b/i;
+  /\b(?:despite|fading|fade|contrarian|counter-?steam|negative\s+steam|opposing\s+steam|(?:moves?|moving|moved|steamed|going|betting|is)\s+against|against\s+(?:the\s+)?(?:market\s+)?(?:steam|line\s+move(?:ment)?|sharp\s+(?:money|action|steam))|(?:no|without|not\s+(?:backed|supported)\s+by|disqualif\w*\s+(?:for\s+)?)\s+(?:favorable\s+)?(?:market\s+)?steam)\b/i;
 
 const FAVORABLE_STEAM_CLAIM_REGEX =
   /\b(?:favorable\s+(?:market\s+)?steam|(?:market\s+|sharp\s+)?steam\s+(?:is\s+|has\s+been\s+)?(?:moves?|moving|moved|backs?|backing|supports?|supporting|favors?|favoring|on|for|behind|toward|towards)\b|(?:sharp|market)\s+(?:money|action|movement|line\s+move(?:ment)?)\s+(?:is\s+)?(?:moves?|moving|moved|backs?|backing|supports?|supporting|favors?|favoring|toward|towards|on)\b|backing\s+(?:heavy\s+)?(?:market\s+)?steam|following\s+(?:the\s+)?steam|aligned\s+with\s+(?:the\s+)?(?:market\s+)?steam|steam\s+(?:confirmation|support|play)|line\s+move(?:ment)?\s+(?:favors?|supports?|backs?|moves?\s+toward))\b/i;
 
 const HEALTH_ADVANTAGE_CLAIM_REGEX =
-  /\b(?:health\s+(?:advantage|edge)|injury\s+(?:advantage|edge)|asymmetric\s+(?:roster\s+)?(?:health|injur(?:y|ies))|clean(?:\s*\/\s*asymmetric)?\s+(?:roster\s+)?health|opponent\s+injury\s+(?:edge|advantage|asymmetry)|pillar\s*3(?:\s*\([^)]*health[^)]*\))?|healthier\s+(?:side|team|roster|squad)|cleaner\s+injury\s+report|relatively\s+healthy|availability\s+(?:advantage|edge)|roster\s+(?:health\s+)?(?:advantage|edge)|fewer\s+injuries)\b/i;
+  /\b(?:health\s+(?:advantage|edge)|injury\s+(?:advantage|edge)|(?:health|injury)\s+balance\s+(?:favors?|supports?|backs?)|asymmetric\s+(?:roster\s+)?(?:health|injur(?:y|ies))|clean(?:\s*\/\s*asymmetric)?\s+(?:roster\s+)?health|opponent\s+injury\s+(?:edge|advantage|asymmetry)|pillar\s*3(?:\s*\([^)]*health[^)]*\))?|healthier\s+(?:side|team|roster|squad)|cleaner\s+injury\s+report|relatively\s+healthy|availability\s+(?:advantage|edge)|roster\s+(?:health\s+)?(?:advantage|edge)|fewer\s+injuries)\b/i;
+
+const HEALTH_CLAIM_NEGATION_OR_DISCLAIMER_REGEX =
+  /\b(?:no|not|without|lacks?|neither|disqualif\w*|cannot\s+claim|does\s+not\s+(?:hold|have|provide|offer|grant)|do\s+not|uncertain_questionable|symmetric|neutral|caution|risk|flag|caveat|voids?|negat\w*|ruled\s+out\s+as)\b/i;
 
 const BLANKET_MULTI_LEG_SUBJECT_REGEX =
   /\b(?:each\s+(?:leg|pick|play|selection|game|side)|all\s+(?:(?:two|three|four|five|\d+)\s+)?(?:legs?|picks?|plays?|selections?|sides?)|every\s+(?:leg|pick|play|selection|side)|both\s+(?:legs?|picks?|plays?|selections?|sides?)|(?:the\s+)?(?:2|3|4)-leg\s+parlay|parlay\s+legs?)\b/i;
@@ -2292,7 +2306,7 @@ export function parseCompactSlateModelSignals(
 }
 
 const MODEL_SIGNAL_NEGATED_REGEX =
-  /\b(?:no|without|lacks?|missing|absent|not\s+supported\s+by|against|contrary\s+to|despite|ignoring|no\s+active)\s+(?:a\s+|any\s+|explicit\s+|clear\s+|directional\s+)?(?:model[_\s-]?signal|lean[_\s-]?(?:home|away))\b|\bmodel[_\s-]?signal\s*(?:=|is|:)?\s*(?:none|neutral|n\/a|absent|missing|omitted|untagged)\b|\b(?:neutral|absent|missing|omitted)\s+model[_\s-]?signal\b/i;
+  /\b(?:no|without|lacks?|missing|absent|not\s+supported\s+by|against|contrary\s+to|despite|ignoring|no\s+active|disqualif\w*(?:\s+for)?|cannot\s+claim|does\s+not\s+(?:hold|have|provide|offer|grant)|negat\w*|ruled\s+out\s+as)\s+(?:a\s+|any\s+|explicit\s+|clear\s+|directional\s+)?(?:model[_\s-]?signal|lean[_\s-]?(?:home|away))\b|\bmodel[_\s-]?signal\s*(?:=|is|:)?\s*(?:none|neutral|n\/a|absent|missing|omitted|untagged)\b|\b(?:neutral|absent|missing|omitted)\s+model[_\s-]?signal\b/i;
 
 const MODEL_SIGNAL_EXPLICIT_DIR_REGEX = /\b(lean[_\s-]?home|lean[_\s-]?away)\b/i;
 
@@ -2574,7 +2588,10 @@ export function auditCriticPremiseContradictions(
 
         for (const subClause of injurySubClauses) {
           if (GENERIC_PILLAR_FRAMEWORK_REGEX.test(subClause)) continue;
-          if (HEALTH_ADVANTAGE_CLAIM_REGEX.test(subClause) && !HEALTH_BALANCED_ACK_REGEX.test(subClause)) {
+          const hasBalancedOrDisclaimer =
+            HEALTH_BALANCED_ACK_REGEX.test(subClause) ||
+            HEALTH_CLAIM_NEGATION_OR_DISCLAIMER_REGEX.test(subClause);
+          if (HEALTH_ADVANTAGE_CLAIM_REGEX.test(subClause) && !hasBalancedOrDisclaimer) {
             const msg = `symmetric_injury_misread: Pick "${pickDisplay}" claims an injury/health advantage when Health Balance is ${injBal.healthBalance} (${injBal.homeTeam || 'Home'} ${injBal.homeOut} OUT/${injBal.homeQ} Q vs ${injBal.awayTeam || 'Away'} ${injBal.awayOut} OUT/${injBal.awayQ} Q).`;
             flagInjuryMisread(msg, subClause);
             continue;
@@ -2584,7 +2601,7 @@ export function auditCriticPremiseContradictions(
             !hasFavorableDirectionalSteam &&
             BLANKET_TWO_PILLAR_CLAIM_REGEX.test(subClause) &&
             !/\bmodel[_\s-]?signal\b/i.test(subClause) &&
-            !HEALTH_BALANCED_ACK_REGEX.test(subClause)
+            !hasBalancedOrDisclaimer
           ) {
             const msg = `symmetric_injury_misread: Pick "${pickDisplay}" claims 2-pillar support without favorable directional steam when Health Balance is ${injBal.healthBalance} (${injBal.homeTeam || 'Home'} ${injBal.homeOut} OUT/${injBal.homeQ} Q vs ${injBal.awayTeam || 'Away'} ${injBal.awayOut} OUT/${injBal.awayQ} Q).`;
             flagInjuryMisread(msg, subClause);
@@ -2592,7 +2609,7 @@ export function auditCriticPremiseContradictions(
           }
 
           if ((isSymmetric && pickedOut >= 2 && oppOut > 0) || isDisadvantaged) {
-            if (!wholeTextHasBalancedAck && !HEALTH_BALANCED_ACK_REGEX.test(subClause) && DEPLETION_MENTION_REGEX.test(subClause)) {
+            if (!wholeTextHasBalancedAck && !hasBalancedOrDisclaimer && DEPLETION_MENTION_REGEX.test(subClause)) {
               const clauseMentions = findTeamMentionsInText(subClause, pool).map(m => m.team);
               const mentionsOpp = oppDesc ? clauseMentions.some(t => t.key === oppDesc.key) : false;
               const mentionsPicked = pickedDesc ? clauseMentions.some(t => t.key === pickedDesc.key) : false;
@@ -2621,7 +2638,11 @@ export function auditCriticPremiseContradictions(
           };
 
           for (const sc of seatClauses) {
-            if (HEALTH_BALANCED_ACK_REGEX.test(sc) || GENERIC_PILLAR_FRAMEWORK_REGEX.test(sc)) continue;
+            if (
+              HEALTH_BALANCED_ACK_REGEX.test(sc) ||
+              HEALTH_CLAIM_NEGATION_OR_DISCLAIMER_REGEX.test(sc) ||
+              GENERIC_PILLAR_FRAMEWORK_REGEX.test(sc)
+            ) continue;
             const isBlanket = BLANKET_MULTI_LEG_SUBJECT_REGEX.test(sc);
             const targetsLeg = clauseTargetsThisLeg(sc);
             if (!isBlanket && !targetsLeg) continue;
@@ -2875,7 +2896,7 @@ export function sanitizeUngroundedClaims<T extends Record<string, any>>(
   const allInjuries = extractAuthoritativeInjuries(successfulEvidence, slateText);
   const outInjuries = allInjuries.filter(inj => /^(?:OUT|IR|INJURED\s+RESERVE|SUSPENDED)$/i.test(inj.status));
   const candidates = buildTeamDescriptors(headers, outInjuries, hasSportsSignal);
-  const groundedRecords = extractGroundedRecords(successfulEvidence, candidates, headers);
+  const groundedRecords = extractGroundedRecordsWithSlate(successfulEvidence, slateText, candidates, headers);
   const injuryCoverage = collectSuccessfulInjuryCoverage(successfulEvidence, candidates);
 
   let vetoedTargets = mergeVetoedLegTargets(

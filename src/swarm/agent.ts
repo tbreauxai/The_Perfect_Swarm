@@ -262,6 +262,7 @@ export class Agent {
 
     async run(prompt: string, context: SwarmContext, config?: AgentRunConfig): Promise<any> {
         const startTime = Date.now();
+        const eventRole = config?.agentRoleOverride || this.role;
         const roleNorm = this.role.toLowerCase();
         const isCriticRole = roleNorm.includes('critic') || roleNorm.includes('risk');
         const isQuantRole = roleNorm.includes('quant') || this.id === 'a1';
@@ -283,7 +284,7 @@ export class Agent {
         ];
 
         context.addEvent({
-            agentRole: this.role,
+            agentRole: eventRole,
             action: 'Started execution',
             modelName: `${this.provider} / ${this.modelName}`,
             prompt
@@ -324,7 +325,7 @@ export class Agent {
                     );
                 }
                 context.addEvent({
-                    agentRole: this.role,
+                    agentRole: eventRole,
                     action: 'Provider Skipped',
                     modelName: `${currentTarget.provider}/${targetModel}`,
                     prompt: `Skipped provider target: model marked dead by catalog probe`,
@@ -416,7 +417,7 @@ export class Agent {
                         ? '[BILLING_COOLDOWN_SKIP]'
                         : (isCooldownSkip ? '[COOLDOWN_SKIP]' : skipReason);
                     context.addEvent({
-                        agentRole: this.role,
+                        agentRole: eventRole,
                         action: 'Provider Skipped',
                         modelName: `${currentTarget.provider}/${preCheck.targetModel}`,
                         prompt: `Skipped provider target: ${skipReason}`,
@@ -481,7 +482,7 @@ export class Agent {
                     lastFailedModel = preCheck.targetModel;
                     lastError = new Error(reason);
                     context.addEvent({
-                        agentRole: this.role,
+                        agentRole: eventRole,
                         action: 'Provider Skipped',
                         modelName: `${currentTarget.provider}/${preCheck.targetModel}`,
                         prompt: `Skipped provider target: ${reason}`,
@@ -590,7 +591,7 @@ export class Agent {
                         textOutput = cachedText;
                         
                         const cacheHitEvent = {
-                            agentRole: this.role,
+                            agentRole: eventRole,
                             action: 'Cache Hit',
                             modelName: `${currentTarget.provider} / ${currentTarget.modelName || this.modelName}`,
                             prompt: `[CACHE HIT] ${prompt.substring(0, 100)}...`
@@ -759,7 +760,7 @@ export class Agent {
                                     
                                     // Tracing the validation error
                                     const valErrorEvent = {
-                                        agentRole: this.role,
+                                        agentRole: eventRole,
                                         action: 'Schema Validation Failed',
                                         modelName: `${currentTarget.provider} / ${currentTarget.modelName || this.modelName}`,
                                         prompt,
@@ -777,7 +778,7 @@ export class Agent {
                     }
 
                     const eventBase = {
-                        agentRole: this.role,
+                        agentRole: eventRole,
                         action: isFallback ? `Completed execution via failover (${currentTarget.provider})` : 'Completed execution',
                         modelName: `${currentTarget.provider} / ${currentTarget.modelName || this.modelName}`,
                         prompt,
@@ -812,7 +813,7 @@ export class Agent {
                         : errorSnippet;
                     const attemptDurationMs = Math.max(0, Date.now() - attemptStartTime);
                     const errorEvent = {
-                        agentRole: this.role,
+                        agentRole: eventRole,
                         action: `Provider Failover Triggered`,
                         modelName: `${currentTarget.provider} / ${targetModel}`,
                         prompt,
@@ -975,7 +976,7 @@ export class Agent {
                                 seatBudget(String(realFallback.provider)).maxPromptChars
                             );
                             context.addEvent({
-                                agentRole: this.role,
+                                agentRole: eventRole,
                                 action: 'Provider Failover Triggered',
                                 modelName: `${currentTarget.provider} -> ${realFallback.provider}`,
                                 prompt: `Cascading to backup provider due to error: ${errorSnippet}`,
@@ -1034,7 +1035,7 @@ export class Agent {
 
         const durationMs = Date.now() - startTime;
         const errorEvent = {
-            agentRole: this.role,
+            agentRole: eventRole,
             action: 'Failed execution',
             modelName: `${lastFailedProvider} / ${lastFailedModel}`,
             prompt,
