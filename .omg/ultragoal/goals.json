@@ -1,27 +1,27 @@
 {
-  "session": "feat-swarm-live-models",
-  "branch": "feat/swarm-live-models",
+  "session": "fix-swarm-cortex-learning-loop",
+  "branch": "fix/swarm-cortex-learning-loop",
   "goals": [
     {
       "id": "G1",
-      "description": "Implement per-provider live model discovery with 6h in-memory cache and secret redaction in src/swarm/server/liveModels.ts.",
+      "description": "Implement S1: migrate GeminiEmbeddingProvider & MemoryCortex defaults to gemini-embedding-2 (768 dims, no taskType), remap retired models & legacy v2/v3 collections to pwa_swarm_dev_cortex_v4, and tag payloads with embedModel.",
       "status": "completed",
-      "verificationCriteria": "Gemini intersects /v1beta/models with pricing.md.txt Free of charge; NVIDIA filters embed/rerank/OCR and falls back to models.dev; Groq/Mistral/OpenRouter/Cloudflare return filtered free/text models without leaking keys.",
-      "evidence": "Implemented discoverLiveModels, parseGeminiPricingMdFreeModels, redactSecretValues, and 6h cache in src/swarm/server/liveModels.ts."
+      "verificationCriteria": "Incoming text-embedding-004 remaps to gemini-embedding-2, sends outputDimensionality: 768 without taskType/task_type, and falls back to gemini-embedding-001 only on 404/503.",
+      "evidence": "npx tsc --noEmit exited 0; cortexLearningLoop.test.ts S1 tests & embeddingFallback.test.ts passed; rg audit confirmed zero active callers of text-embedding-004 or taskType on gemini-embedding-2."
     },
     {
       "id": "G2",
-      "description": "Mount GET /api/swarm/models/live and GET /api/models/live behind existing /api/* auth middleware in src/swarm/server/routes/models.ts.",
+      "description": "Implement S2: multi-sport domains[] Qdrant filtering with strict appId isolation, CLV + outcome contrastive retrieval (up to 3 wins & 3 losses deduplicated by lessonId/eventId), and idempotent POST /api/cortex/ingest.",
       "status": "completed",
-      "verificationCriteria": "Routes accept ?provider=, ?refresh=true, ?probe=true, use process.env keys, and pass appAuth middleware.",
-      "evidence": "Mounted GET /api/swarm/models/live and GET /api/models/live in src/swarm/server/routes/models.ts and exported from src/swarm/server/index.ts."
+      "verificationCriteria": "Multi-sport domains=['nfl','nhl'] matches both sports under appId='duelodds'; POST /api/cortex/ingest upserts structured lessons idempotently by lessonId.",
+      "evidence": "cortexLearningLoop.test.ts S2 tests, qdrantStorage.test.ts (13/13), and inMemoryStorage.test.ts (9/9) passed."
     },
     {
       "id": "G3",
-      "description": "Add unit & route tests in src/swarm/server/liveModels.test.ts and run npx tsc --noEmit and npx vitest run.",
+      "description": "Implement S3: truthful cortexSummary telemetry (Error on embed/Qdrant failure, Empty/Success with collectionPointCount, embedModel, appliedDomains, topRawScore), run repo grep audit, tsc, and targeted Vitest.",
       "status": "completed",
-      "verificationCriteria": "Gemini, NVIDIA, OpenRouter, caching, refresh, and auth route tests pass; npx tsc --noEmit exits 0.",
-      "evidence": "Added src/swarm/server/liveModels.test.ts (4/4); npx tsc --noEmit exited 0; 4 server Vitest files (27/27 tests) passed."
+      "verificationCriteria": "Mocked 404 from embedContent produces cortexSummary.status === 'Error' with embedError; zero hidden callers use text-embedding-004 or taskType on gemini-embedding-2; tsc and targeted Vitest pass.",
+      "evidence": "cortexLearningLoop.test.ts S3 tests passed (46/46 total across 7 Vitest files); npx tsc --noEmit exited 0."
     }
   ]
 }

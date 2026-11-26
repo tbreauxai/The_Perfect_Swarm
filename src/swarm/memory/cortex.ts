@@ -4,7 +4,12 @@ import { type VectorIndexMetrics } from '../vectorIndex.ts';
 import { SemanticCacheInterceptor, type SemanticCacheStats } from '../semanticCacheInterceptor.ts';
 import { ActionPlanCacheInterceptor, type ActionPlanCacheStats, type ActionPlan, type ActionPlanInput, type ActionPlanCacheLookupResult } from '../actionPlanCache.ts';
 import { SparseTokenizer } from './tokenizer.ts';
-import { GeminiEmbeddingProvider, DeterministicLocalEmbeddingProvider } from './embeddings.ts';
+import {
+    GeminiEmbeddingProvider,
+    DeterministicLocalEmbeddingProvider,
+    DEFAULT_GEMINI_EMBEDDING_MODEL,
+    resolveGeminiEmbeddingModel
+} from './embeddings.ts';
 import { collectCortexDiagnostics } from './diagnostics.ts';
 import { globalTelemetryCollector } from '../telemetry.ts';
 import { InMemoryStorageAdapter } from './storage/inMemoryStorage.ts';
@@ -62,6 +67,9 @@ export class MemoryCortex {
     private autoSave: boolean = true;
     private semanticCache: SemanticCacheInterceptor;
     private actionPlanCache: ActionPlanCacheInterceptor;
+    private lastEmbedError: string | null = null;
+    private lastQdrantError: string | null = null;
+    private lastTopRawScore: number | null = null;
 
     static clearFallbackStore(collectionName: string = DEFAULT_CORTEX_COLLECTION): void {
         InMemoryStorageAdapter.clearGlobalStore(resolveCortexCollectionName(collectionName));
@@ -97,7 +105,10 @@ export class MemoryCortex {
         if (config.embeddingProvider) {
             this.embeddingProvider = config.embeddingProvider;
         } else if (config.aiClient) {
-            this.embeddingProvider = new GeminiEmbeddingProvider(config.aiClient, config.embeddingModel || 'text-embedding-005');
+            this.embeddingProvider = new GeminiEmbeddingProvider(
+                config.aiClient,
+                resolveGeminiEmbeddingModel(config.embeddingModel)
+            );
         } else {
             this.embeddingProvider = new DeterministicLocalEmbeddingProvider();
         }
@@ -176,11 +187,58 @@ export class MemoryCortex {
         return this.inMemoryStorage.getIndexMetrics();
     }
 
+    getEmbedModel(): string {
+        if (typeof (this.embeddingProvider as any)?.getActiveModel === 'function') {
+            return (this.embeddingProvider as any).getActiveModel();
+        }
+        if (this.embeddingProvider instanceof DeterministicLocalEmbeddingProvider) {
+            return 'deterministic-local-768';
+        }
+        return DEFAULT_GEMINI_EMBEDDING_MODEL;
+    }
+
+    resetTelemetryState(): void {
+        this.lastEmbedError = null;
+        this.lastQdrantError = null;
+        this.lastTopRawScore = null;
+    }
+
+    getTelemetryState(): {
+        collectionName: string;
+        embedModel: string;
+        embedError: string | null;
+        qdrantError: string | null;
+        topRawScore: number | null;
+    } {
+        const providerErr = typeof (this.embeddingProvider as any)?.getLastError === 'function'
+            ? (this.embeddingProvider as any).getLastError()
+            : null;
+        return {
+            collectionName: this.collectionName,
+            embedModel: this.getEmbedModel(),
+            embedError: this.lastEmbedError || providerErr || null,
+            qdrantError: this.lastQdrantError || this.qdrantStorage?.getLastError?.() || null,
+            topRawScore: this.lastTopRawScore
+        };
+    }
+
+    async getCollectionPointCount(appId?: string): Promise<number> {
+        if (this.qdrantStorage && this.qdrantStorage.isAvailable) {
+            const remoteCount = await this.qdrantStorage.getCollectionPointCount(appId);
+            if (typeof remoteCount === 'number') return remoteCount;
+        }
+        return this.fallbackStore.length;
+    }
+
     private async safeEmbed(text: string): Promise<number[]> {
         try {
-            return await this.embeddingProvider.embed(text);
+            const vec = await this.embeddingProvider.embed(text);
+            this.lastEmbedError = null;
+            return vec;
         } catch (err: any) {
-            console.warn(`[MemoryCortex] Primary embedding provider failed (${err.message || String(err)}). Using DeterministicLocalEmbeddingProvider fallback for this request only.`);
+            const msg = String(err?.message || err || '');
+            this.lastEmbedError = msg;
+            console.warn(`[MemoryCortex] Primary embedding provider failed (${msg}). Using DeterministicLocalEmbeddingProvider fallback for this request only.`);
             const fallbackEmbedder = new DeterministicLocalEmbeddingProvider();
             return await fallbackEmbedder.embed(text);
         }
@@ -231,7 +289,8 @@ export class MemoryCortex {
             appId,
             domain,
             memoryType,
-            entityIds
+            entityIds,
+            embedModel: this.getEmbedModel()
         };
 
         const denseVector = await this.safeEmbed(sanitized.content);
@@ -306,7 +365,8 @@ export class MemoryCortex {
                         appId,
                         domain,
                         memoryType,
-                        entityIds
+                        entityIds,
+                        embedModel: this.getEmbedModel()
                     }
                 };
             })
@@ -391,6 +451,7 @@ export class MemoryCortex {
             verified: true,
             timestamp: now,
             lastSeen: now,
+            embedModel: this.getEmbedModel(),
             ...payload
         };
 
@@ -435,6 +496,104 @@ export class MemoryCortex {
         }
 
         return storedId;
+    }
+
+    async ingestLessons(
+        lessons: Array<Record<string, any>>,
+        defaultAppId?: string
+    ): Promise<{ ingested: number; ids: string[]; collectionName: string; embedModel: string }> {
+        if (!Array.isArray(lessons) || lessons.length === 0) {
+            return {
+                ingested: 0,
+                ids: [],
+                collectionName: this.collectionName,
+                embedModel: this.getEmbedModel()
+            };
+        }
+
+        const appNs = defaultAppId || this.defaultAppId;
+        await this.initialize(appNs, { createIfMissing: true });
+        const now = new Date().toISOString();
+        const embedModel = this.getEmbedModel();
+        const ids: string[] = [];
+
+        for (let i = 0; i < lessons.length; i++) {
+            const raw = lessons[i];
+            if (!raw || typeof raw !== 'object') continue;
+            const lessonId = String(raw.lessonId || raw.lesson_id || raw.id || `lesson-${i}-${raw.eventId || raw.sport || 'general'}`).trim();
+            const deterministicId = toValidQdrantId(lessonId);
+            const content = String(raw.content || raw.reason || raw.rule || raw.summary || JSON.stringify(raw)).trim();
+            if (!content) continue;
+
+            const originApp = String(raw.originApp || raw.appId || raw.app_id || appNs).trim();
+            const sportVal = typeof raw.sport === 'string' ? raw.sport : (typeof raw.sportKey === 'string' ? raw.sportKey : undefined);
+            const domain = normalizeDomain(raw.domain || sportVal || 'general', content);
+            const clvVal = typeof raw.clv === 'number'
+                ? raw.clv
+                : (typeof raw.closingLineValue === 'number' ? raw.closingLineValue : undefined);
+            const rawOutcome = typeof raw.outcome === 'string' ? raw.outcome.trim().toLowerCase() : undefined;
+            const normalizedOutcome: 'win' | 'loss' | 'push' | undefined = rawOutcome === 'won' || rawOutcome === 'win'
+                ? 'win'
+                : (rawOutcome === 'lost' || rawOutcome === 'loss'
+                    ? 'loss'
+                    : (rawOutcome === 'push' ? 'push' : undefined));
+            const entityIds = extractEntityIds(content, Array.isArray(raw.entityIds) ? raw.entityIds : undefined);
+
+            const denseVector = await this.safeEmbed(content);
+            const sparseVector = SparseTokenizer.encode(content);
+            const payload: StoredMemoryPoint['payload'] = {
+                frequency: 1,
+                qualityRating: typeof raw.qualityRating === 'number'
+                    ? raw.qualityRating
+                    : (normalizedOutcome === 'win' || (clvVal !== undefined && clvVal > 0) ? 0.9 : (normalizedOutcome === 'loss' ? 0.2 : 0.6)),
+                verified: true,
+                timestamp: raw.timestamp || raw.gradedAt || raw.date || now,
+                lastSeen: now,
+                ...raw,
+                lessonId,
+                ...(sportVal ? { sport: sportVal } : {}),
+                ...(raw.market ? { market: raw.market } : {}),
+                ...(Array.isArray(raw.pillars) ? { pillars: raw.pillars } : {}),
+                ...(typeof raw.vetoFlag === 'boolean' ? { vetoFlag: raw.vetoFlag } : {}),
+                ...(clvVal !== undefined ? { clv: clvVal, closingLineValue: clvVal } : {}),
+                ...(normalizedOutcome ? { outcome: normalizedOutcome } : {}),
+                content,
+                originApp,
+                appId: originApp,
+                domain,
+                memoryType: normalizeMemoryType(raw.memoryType || 'graded_lesson', raw),
+                entityIds,
+                embedModel
+            };
+
+            const point: StoredMemoryPoint = {
+                id: deterministicId,
+                denseVector,
+                sparseVector,
+                payload
+            };
+
+            let storedId: string | null = null;
+            if (this.qdrantStorage && this.qdrantStorage.isAvailable) {
+                storedId = await this.qdrantStorage.store(point, false);
+            }
+            if (!storedId) {
+                storedId = await this.inMemoryStorage.store(point, false);
+            }
+            if (storedId) ids.push(storedId);
+        }
+
+        if (ids.length > 0) {
+            this.semanticCache.clear();
+            await this.savePersistFileIfConfigured();
+        }
+
+        return {
+            ingested: ids.length,
+            ids,
+            collectionName: this.collectionName,
+            embedModel
+        };
     }
 
     async deletePoint(id: string): Promise<boolean> {
@@ -533,8 +692,15 @@ export class MemoryCortex {
             candidates = await this.qdrantStorage.search(queryDense, effectiveQueryOptions, querySparse);
         }
 
-        if (candidates.length === 0) {
-            candidates = await this.inMemoryStorage.search(queryDense, effectiveQueryOptions, querySparse);
+        if (candidates.length > 0) {
+            const rawTop = candidates.reduce((best, c) => {
+                const s = typeof c?.vectorScore === 'number' ? c.vectorScore : (typeof c?.score === 'number' ? c.score : 0);
+                return s > best ? s : best;
+            }, 0);
+            this.lastTopRawScore = this.lastTopRawScore === null ? rawTop : Math.max(this.lastTopRawScore, rawTop);
+        }
+        if (this.qdrantStorage?.getLastError?.()) {
+            this.lastQdrantError = this.qdrantStorage.getLastError();
         }
 
         const rankedResults = this.rrfRanker.rankAndFilter(
@@ -577,10 +743,10 @@ export class MemoryCortex {
     ): Promise<{ wins: any[]; losses: any[]; formattedBlock: string }> {
         const readerApp = options?.appId || options?.originApp || this.defaultAppId;
         await this.initialize(readerApp, { createIfMissing: false });
-        const limit = options?.limit || 2;
+        const limit = options?.limit ?? 3;
         const candidates = await this.retrieve(task, {
             ...options,
-            limit: Math.max(limit * 4, 8)
+            limit: Math.max(limit * 4, 12)
         }).catch(() => []);
 
         const fallbackCandidates: any[] = [];
@@ -601,7 +767,7 @@ export class MemoryCortex {
 
         const mergedMap = new Map<string, any>();
         for (const c of [...candidates, ...fallbackCandidates]) {
-            const key = String(c.workflowId || c.id || c.content || Math.random());
+            const key = String(c.lessonId || c.eventId || c.workflowId || c.id || c.content || Math.random());
             if (!mergedMap.has(key)) {
                 mergedMap.set(key, c);
             }
@@ -610,10 +776,22 @@ export class MemoryCortex {
         const all = Array.from(mergedMap.values());
         const wins = all
             .filter(m => isGradedWagerWin(m))
+            .sort((a, b) => {
+                const scoreA = (typeof a.clv === 'number' ? a.clv : (typeof a.closingLineValue === 'number' ? a.closingLineValue : 0)) * 2 + (a.qualityRating ?? 0.5);
+                const scoreB = (typeof b.clv === 'number' ? b.clv : (typeof b.closingLineValue === 'number' ? b.closingLineValue : 0)) * 2 + (b.qualityRating ?? 0.5);
+                return scoreB - scoreA;
+            })
             .slice(0, limit);
 
         const losses = all
             .filter(m => isGradedWagerLoss(m))
+            .sort((a, b) => {
+                const vetoDiff = (b.vetoFlag ? 1 : 0) - (a.vetoFlag ? 1 : 0);
+                if (vetoDiff !== 0) return vetoDiff;
+                const clvA = typeof a.clv === 'number' ? a.clv : (typeof a.closingLineValue === 'number' ? a.closingLineValue : 0);
+                const clvB = typeof b.clv === 'number' ? b.clv : (typeof b.closingLineValue === 'number' ? b.closingLineValue : 0);
+                return clvA - clvB;
+            })
             .slice(0, limit);
 
         const formattedBlock = this.consolidator.formatContrastivePostMortems(wins, losses);

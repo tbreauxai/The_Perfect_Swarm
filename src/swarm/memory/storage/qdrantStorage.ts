@@ -77,7 +77,12 @@ const REQUIRED_INDEXES: Array<{ field: string; schema: 'keyword' | 'float' | 'in
     { field: 'feedbackProcessed', schema: 'bool' },
     { field: 'rule_type', schema: 'keyword' },
     { field: 'sport', schema: 'keyword' },
-    { field: 'market_type', schema: 'keyword' }
+    { field: 'market', schema: 'keyword' },
+    { field: 'market_type', schema: 'keyword' },
+    { field: 'clv', schema: 'float' },
+    { field: 'vetoFlag', schema: 'bool' },
+    { field: 'lessonId', schema: 'keyword' },
+    { field: 'embedModel', schema: 'keyword' }
 ];
 
 export class QdrantStorageAdapter implements StorageBackend {
@@ -89,6 +94,36 @@ export class QdrantStorageAdapter implements StorageBackend {
     private timeoutMs: number;
     private initializedCollections: Set<string> = new Set();
     private available: boolean = false;
+    private lastError: string | null = null;
+    private collectionCountCache = new Map<string, { count: number; at: number }>();
+
+    getLastError(): string | null {
+        return this.lastError;
+    }
+
+    async getCollectionPointCount(appId?: string): Promise<number | null> {
+        if (!this.client || !this.available) return null;
+        const targetCollection = this.getTargetCollection(appId);
+        const cached = this.collectionCountCache.get(targetCollection);
+        if (cached && Date.now() - cached.at < 30_000) {
+            return cached.count;
+        }
+        try {
+            if (typeof this.client.getCollection === 'function') {
+                const info: any = await this.withTimeout(this.client.getCollection(targetCollection), 3000);
+                const count = typeof info?.points_count === 'number'
+                    ? info.points_count
+                    : (typeof info?.vectors_count === 'number' ? info.vectors_count : null);
+                if (count !== null) {
+                    this.collectionCountCache.set(targetCollection, { count, at: Date.now() });
+                    return count;
+                }
+            }
+        } catch {
+            // Fall through to null if collection info unavailable
+        }
+        return null;
+    }
 
     constructor(config: QdrantStorageConfig = {}) {
         this.config = config;
@@ -242,7 +277,9 @@ export class QdrantStorageAdapter implements StorageBackend {
             this.initializedCollections.add(targetCollection);
             return true;
         } catch (err: any) {
-            console.warn(`[QdrantStorageAdapter] Initialization failed for ${targetCollection}: ${formatQdrantError(err)}`);
+            const formatted = formatQdrantError(err);
+            this.lastError = formatted;
+            console.warn(`[QdrantStorageAdapter] Initialization failed for ${targetCollection}: ${formatted}`);
             this.available = false;
             return false;
         }
@@ -434,6 +471,7 @@ export class QdrantStorageAdapter implements StorageBackend {
                 options.publicOnly === true ||
                 options.asOf !== undefined ||
                 options.sport !== undefined ||
+                (Array.isArray(options.domains) && options.domains.length > 0) ||
                 (Array.isArray(options.entityIds) && options.entityIds.length > 0) ||
                 (Array.isArray(options.eventIds) && options.eventIds.length > 0);
             if (strictAppFilter && readerApp) {
@@ -588,7 +626,9 @@ export class QdrantStorageAdapter implements StorageBackend {
                 this.initializedCollections.delete(targetCollection);
                 return [];
             }
-            console.warn(`[QdrantStorageAdapter] Search error: ${formatQdrantError(err)}`);
+            const formatted = formatQdrantError(err);
+            this.lastError = formatted;
+            console.warn(`[QdrantStorageAdapter] Search error: ${formatted}`);
             return [];
         }
     }

@@ -79,6 +79,31 @@ export function registerModelsRoutes(app: Hono, ctx: ServerRouteContext): void {
         });
     });
 
+    const handleCortexIngest = async (c: any) => {
+        try {
+            const cortex = defaultCortex;
+            if (!cortex) {
+                return c.json({ error: 'Cortex not initialized' }, 503);
+            }
+            const body = await c.req.json().catch(() => ({}));
+            const rawLessons = Array.isArray(body?.lessons)
+                ? body.lessons
+                : (Array.isArray(body?.items) ? body.items : []);
+            if (rawLessons.length === 0) {
+                return c.json({ error: 'Request body must include non-empty lessons[] array' }, 400);
+            }
+            const callerAppId = (c as any).get?.('callerAppId') as string | undefined;
+            const appId = callerAppId || (typeof body?.appId === 'string' ? body.appId.trim() : undefined);
+            const result = await cortex.ingestLessons(rawLessons, appId);
+            return c.json({ ok: true, ...result });
+        } catch (err: any) {
+            return handleServerError('Cortex Ingest', err, c);
+        }
+    };
+
+    app.post('/api/cortex/ingest', handleCortexIngest);
+    app.post('/api/swarm/cortex/ingest', handleCortexIngest);
+
     app.get('/api/swarm/cortex/diagnostics', async (c) => {
         try {
             const appId = c.req.query('appId');
