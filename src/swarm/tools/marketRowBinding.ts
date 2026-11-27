@@ -1340,7 +1340,7 @@ interface SpreadSideViolation {
 }
 
 const DIRECT_STAT_PREFIX_RX = /\b(?:(?:opponent(?:'s|s')?|opp\.?|team(?:'s|s')?|home|away|road|season|on-?court|l\d+|last\s*\d+)\s+)*(?:net\s*(?:rating|margin|efficiency)|nrtg|ortg|drtg|scoring\s*(?:margin|diff(?:erential)?)|point\s*(?:margin|diff(?:erential)?)|goal\s*(?:margin|diff(?:erential)?)|run\s*(?:margin|diff(?:erential)?)|avg\.?\s*margin|average\s*margin|margin(?:\s+of\s+victory)?|diff(?:erential)?|xgf|xg|ppg|oppg|gpg|era|pace|delta|roi|ev|kelly|(?:moved|move|steam(?:ed)?|swing)\s+(?:by|of)|margin\s+of|edge\s+of|ats\s+record|record)\s*[:=of\s]*$/i;
-const DIRECT_STAT_SUFFIX_RX = /^\s*(?:%|(?:spread|line|total|pts?|points?)\s+(?:move|delta|swing|diff|margin|shift)\b|(?:(?:opponent(?:'s|s')?|opp\.?|team(?:'s|s')?|home|away|road|season|avg\.?|average|scoring|point|goal|run|on-?court|l\d+|last\s*\d+)\s+)*(?:(?:net\s*)?margin(?:\s+of\s+victory)?|net\s*rating|nrtg|ortg|drtg|diff(?:erential)?|efficiency)\b|units?\b|u\b|odds\b|juic(?:e|ed)\b|vig\b|ats\b|record\b|delta\b|swing\b|ppg\b|oppg\b|gpg\b|goals?\b|runs?\b|yards?\b|era\b|roi\b|ev\b)/i;
+const DIRECT_STAT_SUFFIX_RX = /^\s*(?:%|pts?\b|points?\b|pp\b|steam\b|move\b|delta\b|(?:spread|line|total|pts?|points?)\s+(?:move|delta|swing|diff|margin|shift)\b|(?:(?:opponent(?:'s|s')?|opp\.?|team(?:'s|s')?|home|away|road|season|avg\.?|average|scoring|point|goal|run|on-?court|l\d+|last\s*\d+)\s+)*(?:(?:net\s*)?margin(?:\s+of\s+victory)?|net\s*rating|nrtg|ortg|drtg|diff(?:erential)?|efficiency)\b|units?\b|u\b|odds\b|juic(?:e|ed)\b|vig\b|ats\b|record\b|swing\b|ppg\b|oppg\b|gpg\b|goals?\b|runs?\b|yards?\b|era\b|roi\b|ev\b)/i;
 
 function collectPickedEventIds(
   proposal: any,

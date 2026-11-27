@@ -347,7 +347,8 @@ export class AnalysisLifecycle {
             const proposalRaw = await this.proposer.run(executePrompt, context, {
                 responseMimeType: 'application/json',
                 bypassCache: attempt > 1,
-                groqMode: 'chat'
+                groqMode: 'chat',
+                reasoning_effort: 'low'
             });
             
             currentProposal = parseJsonSafe(proposalRaw, { rawText: proposalRaw, error: "Failed to parse JSON" });
