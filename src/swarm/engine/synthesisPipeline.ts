@@ -45,8 +45,9 @@ import {
     stripContradictoryWagerProseOnPass
 } from '../tools/criticAudit.ts';
 import { syncCompilerProseWithFinalPicks } from '../tools/compilerProseSync.ts';
+import { buildScopedUnifiedDossier } from './unifiedDossier.ts';
 
-export const MANAGER_MAX_PROMPT_CHARS = 9000;
+export const MANAGER_MAX_PROMPT_CHARS = 32000;
 
 export interface SynthesisPipelineParams {
     task: string;
@@ -448,7 +449,8 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
             ? parsedHeaders.filter(h => proposedEventIds.has(h.eventId))
             : parsedHeaders;
         const effectiveHeaders = scopedHeaders.length > 0 ? scopedHeaders : parsedHeaders;
-        const renderedHeadersText = renderHeaders(effectiveHeaders, 1600);
+        const slateHeaderBudget = Math.min(8000, Math.max(4800, effectiveHeaders.length * 420));
+        const renderedHeadersText = renderHeaders(effectiveHeaders, slateHeaderBudget);
         const headersLength = renderedHeadersText.length;
         const { userTask: cappedTask, contractBlock } = partitionTaskAndContract(
             task,
@@ -502,7 +504,9 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
             : '';
 
         const pBudget = seatBudget(managerAgent.provider);
-        const promptCap = Math.min(maxChars, pBudget.maxPromptChars, MANAGER_MAX_PROMPT_CHARS);
+        const isGroqManager = String(managerAgent.provider || '').toLowerCase().trim() === 'groq';
+        const providerBudgetChars = isGroqManager ? GROQ_CHAT_PROMPT_CHARS : Math.max(pBudget.maxPromptChars, 24000);
+        const promptCap = Math.min(maxChars, providerBudgetChars, MANAGER_MAX_PROMPT_CHARS);
         const seatCount = Math.max(1, analysts.length);
         const perReportCap = Math.max(
             200,
@@ -586,7 +590,16 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
         const unionEvidence = typeof p.verifierEvidence === 'string' && p.verifierEvidence.trim()
             ? p.verifierEvidence.trim()
             : '';
-        const rawToolEvidence = unionEvidence || analysts.map((a, i) => {
+        const unifiedEntries = Array.isArray((params as any)?.unifiedDossier?.entries)
+            ? (params as any).unifiedDossier.entries
+            : undefined;
+        const scopedUnifiedDossierText = unifiedEntries && hasScopedGames
+            ? buildScopedUnifiedDossier(unifiedEntries, Array.from(proposedEventIds), 20000).text
+            : '';
+        const rawCuratedDossier = typeof (params as any)?.curatedDossier === 'string' && (params as any).curatedDossier.trim()
+            ? (params as any).curatedDossier.trim()
+            : '';
+        const analystToolEvidence = analysts.map((a, i) => {
             const reports = allAnalystReports[i];
             if (!reports || reports.length === 0) return null;
             const evStr = reports
@@ -596,6 +609,9 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
             if (!evStr) return null;
             return `[${a.role}]:\n${evStr}`;
         }).filter(Boolean).join('\n\n');
+        const rawToolEvidence = [unionEvidence || analystToolEvidence, scopedUnifiedDossierText || rawCuratedDossier]
+            .filter(Boolean)
+            .join('\n\n');
 
         // Deduplicate evidence blocks and scope strictly to proposedEventIds when picks were proposed.
         const allKnownEventIds = new Set(parsedHeaders.map(h => h.eventId.toLowerCase()));
@@ -679,17 +695,20 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
                 .map(b => b.trim())
                 .filter(Boolean);
             const keptBlocks: string[] = [];
+            const totalBlocks = blocks.length;
+            const perBlockFloor = totalBlocks > 0 ? Math.max(180, Math.floor((availableForBody - trimMarker.length - totalBlocks * 2) / totalBlocks)) : availableForBody;
             let usedLen = 0;
             for (const blk of blocks) {
                 const sepLen = keptBlocks.length > 0 ? 2 : 0;
                 if (usedLen + sepLen + blk.length + trimMarker.length <= availableForBody) {
                     keptBlocks.push(blk);
                     usedLen += sepLen + blk.length;
-                } else if (keptBlocks.length > 0) {
-                    break;
-                } else if (availableForBody > 120) {
-                    keptBlocks.push(blk.slice(0, Math.max(0, availableForBody - trimMarker.length - 3)) + '...');
-                    break;
+                } else if (availableForBody - usedLen - sepLen - trimMarker.length >= 120) {
+                    const remainingBudget = Math.min(perBlockFloor, availableForBody - usedLen - sepLen - trimMarker.length);
+                    if (remainingBudget >= 80) {
+                        keptBlocks.push(blk.slice(0, Math.max(0, remainingBudget - 3)) + '...');
+                        usedLen += sepLen + remainingBudget;
+                    }
                 }
             }
             if (keptBlocks.length > 0) {

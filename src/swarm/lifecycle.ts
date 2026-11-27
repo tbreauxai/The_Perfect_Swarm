@@ -1028,14 +1028,28 @@ export class AnalysisLifecycle {
                     verification.feedback = (!missingPicksVetoTriggered && !injuryVetoTriggered)
                         ? lockMsg
                         : dedupeVetoMessages([verification.feedback, lockMsg]).join(' ') || lockMsg;
-                } else if (hadProposerRowLockRetry && hasEmptyPicks && proposerRowLockAudit.unvetoedRows.length > 0 && initialCriticVetoes.length === 0) {
-                    proposerRowLockVetoTriggered = true;
-                    verification.pass = false;
-                    const allowedStr = proposerRowLockAudit.unvetoedRows.join(', ');
-                    const noPassMsg = `Correction (PROPOSER ROW LOCK): Empty picks / pass is not in ALLOWED_PROPOSER_ROWS ([${allowedStr}]). Do NOT pass or set criticApproved=false when valid unvetoed rows exist; re-select your picks strictly from ALLOWED_PROPOSER_ROWS.`;
-                    verification.feedback = (!missingPicksVetoTriggered && !injuryVetoTriggered)
-                        ? noPassMsg
-                        : dedupeVetoMessages([verification.feedback, noPassMsg]).join(' ') || noPassMsg;
+                } else if (hasEmptyPicks && proposerRowLockAudit.unvetoedRows.length > 0 && initialCriticVetoes.length === 0) {
+                    const distinctApprovedEventIds = new Set(
+                        proposerRowLockAudit.unvetoedRows
+                            .map((r) => initRowMap.get(String(r).toUpperCase())?.eventId || String(r).toUpperCase())
+                            .filter(Boolean)
+                    );
+                    const criticPoolApproved = (rawData as any)?.criticVerdictApproved !== false;
+                    const allowParlayActive =
+                        (rawData as any)?.allowParlay === true ||
+                        (rawData as any)?.riskProfile === 'optimal' ||
+                        /\b(?:parlay|optimal)\b/i.test(proposerPrompt);
+                    if ((criticPoolApproved && distinctApprovedEventIds.size >= 2 && allowParlayActive) || hadProposerRowLockRetry) {
+                        proposerRowLockVetoTriggered = true;
+                        verification.pass = false;
+                        const allowedStr = proposerRowLockAudit.unvetoedRows.join(', ');
+                        const noPassMsg = distinctApprovedEventIds.size >= 2
+                            ? `Correction (PROPOSER ROW LOCK): Risk Critic approved [${allowedStr}] across ${distinctApprovedEventIds.size} distinct games. Do NOT return picks: [] or wageringPass: true claiming missing data; compile the top 2-3 distinct-game legs strictly from ALLOWED_PROPOSER_ROWS ([${allowedStr}]) with wageringPass: false.`
+                            : `Correction (PROPOSER ROW LOCK): Empty picks / pass is not in ALLOWED_PROPOSER_ROWS ([${allowedStr}]). Do NOT pass or set criticApproved=false when valid unvetoed rows exist; re-select your picks strictly from ALLOWED_PROPOSER_ROWS.`;
+                        verification.feedback = (!missingPicksVetoTriggered && !injuryVetoTriggered)
+                            ? noPassMsg
+                            : dedupeVetoMessages([verification.feedback, noPassMsg]).join(' ') || noPassMsg;
+                    }
                 }
 
                 const marketRowAudit = auditMarketCoverageAndRowBinding(

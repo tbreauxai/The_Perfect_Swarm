@@ -653,6 +653,10 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
             ...(p.vetoedLegs && p.vetoedLegs.length > 0 ? { vetoedLegs: p.vetoedLegs } : {}),
             ...(p.vetoedClaims && p.vetoedClaims.length > 0 ? { vetoedClaims: p.vetoedClaims } : {}),
             ...(Array.isArray(p.specialistPicks) && p.specialistPicks.length > 0 ? { specialistPicks: p.specialistPicks } : {}),
+            ...(typeof p.criticVerdictApproved === 'boolean' ? { criticVerdictApproved: p.criticVerdictApproved } : {}),
+            ...(typeof ((settings as any)?.allowParlay ?? (p as any)?.params?.allowParlay) === 'boolean'
+                ? { allowParlay: Boolean((settings as any)?.allowParlay ?? (p as any)?.params?.allowParlay) }
+                : {}),
             ...((p as any).appComputedCounts ? { appComputedCounts: (p as any).appComputedCounts } : {})
         },
         context,
