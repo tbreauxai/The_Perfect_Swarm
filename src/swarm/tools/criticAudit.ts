@@ -1249,3 +1249,113 @@ export function stripContradictoryWagerProseOnPass<T extends Record<string, any>
   return finalAnalysis;
 }
 
+const DETERMINISTIC_VETO_FLAG_REGEX =
+  /^(?:injury_misattribution|row_side_mismatch|spread_side_mismatch|spread_value_mismatch|missing_market_coverage|ungrounded_claim|contra_steam_misread|sharp_contra_steam|symmetric_injury_misread|model_signal_misread|duplicate_leg|critic_did_not_audit|pull_before_pass)$/i;
+
+const NO_FATAL_CONTRADICTION_REGEX = /\bno\s+fatal\b/i;
+
+export interface UncitedBlanketVetoResult {
+  isUncitedBlanketVeto: boolean;
+  reason?: 'contradictory_no_fatal_with_zero_vetoed_legs' | 'uncited_blanket_veto_zero_legs';
+}
+
+/**
+ * Detects invalid Risk Critic blanket vetoes when zero deterministic verifiers failed:
+ * 1) Critic emits `"No fatal ..."` while returning `pass: false` / `verdict: "veto"` and `vetoedLegs.length === 0`.
+ * 2) Critic returns `verdict: "veto"` / `pass: false` / `criticApproved: false` with `vetoedLegs.length === 0`,
+ *    `vetoedClaims.length === 0`, zero cited `R#` row IDs, and zero deterministic veto flags.
+ */
+export function detectUncitedBlanketCriticVeto(options: {
+  report: Record<string, any>;
+  vetoedLegs?: VetoedLegTarget[];
+  vetoedClaims?: string[];
+  hasDeterministicFailures?: boolean;
+  criticSkippedAudit?: boolean;
+}): UncitedBlanketVetoResult {
+  const { report, vetoedLegs, vetoedClaims, hasDeterministicFailures, criticSkippedAudit } = options;
+  if (!report || typeof report !== 'object') {
+    return { isUncitedBlanketVeto: false };
+  }
+  if (hasDeterministicFailures || criticSkippedAudit) {
+    return { isUncitedBlanketVeto: false };
+  }
+
+  const verdictStr = typeof report.verdict === 'string' ? report.verdict.trim() : '';
+  const explicitVetoVerdict = /^(?:veto|vetoed|reject|rejected|fail|failed)$/i.test(verdictStr);
+  const scorecardVetoNotes: string[] = [];
+  let hasCitedScorecardVeto = false;
+  if (Array.isArray(report.scorecards)) {
+    for (const sc of report.scorecards) {
+      if (!sc || typeof sc !== 'object') continue;
+      const scVerdict = String(sc.verdict || '').trim();
+      const scNotes = String(sc.notes || sc.note || sc.reason || '').trim();
+      if (scNotes) scorecardVetoNotes.push(scNotes);
+      if (SCORECARD_VETO_VERDICT_REGEX.test(scVerdict) || sc.criticApproved === false) {
+        if (/\bR\d+\b/i.test(scNotes)) {
+          hasCitedScorecardVeto = true;
+        }
+      }
+    }
+  }
+
+  const indicatesVeto =
+    report.pass === false ||
+    report.criticApproved === false ||
+    explicitVetoVerdict ||
+    (Array.isArray(report.scorecards) &&
+      report.scorecards.some(
+        (sc: any) =>
+          sc &&
+          typeof sc === 'object' &&
+          (SCORECARD_VETO_VERDICT_REGEX.test(String(sc.verdict || '').trim()) || sc.criticApproved === false)
+      ));
+
+  if (!indicatesVeto) {
+    return { isUncitedBlanketVeto: false };
+  }
+
+  const explicitReportVetoedLegs = Array.isArray(report.vetoedLegs)
+    ? report.vetoedLegs.filter((x: any) => Boolean(x && (typeof x !== 'string' || x.trim())))
+    : [];
+  const totalVetoedLegs = (Array.isArray(vetoedLegs) ? vetoedLegs.length : 0) + explicitReportVetoedLegs.length;
+  const totalVetoedClaims = Array.isArray(vetoedClaims) ? vetoedClaims.length : 0;
+
+  if (totalVetoedLegs > 0 || totalVetoedClaims > 0 || hasCitedScorecardVeto) {
+    return { isUncitedBlanketVeto: false };
+  }
+
+  const combinedText = [
+    verdictStr,
+    typeof report.feedback === 'string' ? report.feedback.trim() : '',
+    typeof report.summary === 'string' ? report.summary.trim() : '',
+    typeof report.analysis === 'string' ? report.analysis.trim() : '',
+    typeof report.reason === 'string' ? report.reason.trim() : '',
+    ...scorecardVetoNotes
+  ]
+    .filter(Boolean)
+    .join(' ');
+
+  if (NO_FATAL_CONTRADICTION_REGEX.test(combinedText)) {
+    return {
+      isUncitedBlanketVeto: true,
+      reason: 'contradictory_no_fatal_with_zero_vetoed_legs'
+    };
+  }
+
+  const flags = Array.isArray(report.flags) ? report.flags.map((f: any) => String(f || '').trim()).filter(Boolean) : [];
+  const hasDeterministicFlag = flags.some(f => DETERMINISTIC_VETO_FLAG_REGEX.test(f));
+  if (hasDeterministicFlag) {
+    return { isUncitedBlanketVeto: false };
+  }
+
+  const hasCitedRowId = /\bR\d+\b/i.test(combinedText);
+  if (!hasCitedRowId) {
+    return {
+      isUncitedBlanketVeto: true,
+      reason: 'uncited_blanket_veto_zero_legs'
+    };
+  }
+
+  return { isUncitedBlanketVeto: false };
+}
+

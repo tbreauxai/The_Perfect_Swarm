@@ -155,30 +155,36 @@ export class InMemoryStorageAdapter implements StorageBackend {
 
         const readerApp = options.appId || options.originApp;
         const requestedDomain = options.domain ? normalizeDomain(options.domain) : undefined;
+        const isSportsReaderDomain = Boolean(
+            requestedDomain && ['nfl', 'nba', 'mlb', 'nhl', 'ncaaf', 'ncaab', 'wnba', 'multi-sport', 'multi', 'parlay'].includes(requestedDomain)
+        );
         const requestedDomains =
             Array.isArray(options.domains) && options.domains.length > 0
                 ? new Set([
                       ...options.domains.map((d) => normalizeDomain(d)),
                       'multi',
                       'multi-sport',
+                      'parlay',
                       'odds',
                       'general'
                   ])
-                : (requestedDomain && (options as any).allowParlay === true
-                    ? new Set([requestedDomain, 'multi', 'multi-sport', 'odds', 'general'])
+                : (requestedDomain && ((options as any).allowParlay === true || isSportsReaderDomain)
+                    ? new Set([requestedDomain, 'multi', 'multi-sport', 'parlay', 'odds', 'general'])
                     : null);
 
         const filterPredicate = (pt: StoredMemoryPoint) => {
             if (!matchesScopedMemoryFilter(pt.payload, options)) return false;
             if (options.includeShared === false && readerApp) {
-                const itemApp = pt.payload.originApp || pt.payload.appId;
+                const itemApp = pt.payload.originApp || pt.payload.appId || pt.payload.app_id;
                 if (itemApp !== readerApp) return false;
             }
+            const rawPtDomain = pt.payload.domain || pt.payload.sport || pt.payload.sportKey || pt.payload.sport_key;
             if (requestedDomains) {
-                const itemDomain = normalizeDomain(pt.payload.domain);
-                if (!requestedDomains.has(itemDomain)) return false;
+                const itemDomain = normalizeDomain(rawPtDomain);
+                const itemSportNorm = pt.payload.sport ? normalizeDomain(pt.payload.sport) : itemDomain;
+                if (!requestedDomains.has(itemDomain) && !requestedDomains.has(itemSportNorm)) return false;
             } else if (requestedDomain && requestedDomain !== 'multi-sport' && requestedDomain !== 'multi') {
-                const itemDomain = normalizeDomain(pt.payload.domain);
+                const itemDomain = normalizeDomain(rawPtDomain);
                 if (itemDomain !== requestedDomain) return false;
             }
             if (options.agentRole && pt.payload.agentRole !== options.agentRole) return false;

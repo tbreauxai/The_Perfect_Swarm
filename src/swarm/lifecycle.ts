@@ -28,6 +28,7 @@ import {
     sanitizeRowMismatchedPicks,
     auditMarketCoverageAndRowBinding,
     extractRowOptions,
+    isFalseMissingMarketCritique,
     isFalseMissingMoneylineCritique,
     scrubFalseMissingMarketClause,
     type MarketToolRecord
@@ -45,6 +46,7 @@ import {
     CRITIC_AUDIT_RULE,
     auditMissingPicksSchemaViolation,
     buildCriticAuditReprompt,
+    detectUncitedBlanketCriticVeto,
     evaluateCriticAuditCoverage,
     extractProposedPickSummaries,
     isMissingPicksSchemaViolationFeedback,
@@ -1154,24 +1156,34 @@ export class AnalysisLifecycle {
                     !marketVetoTriggered &&
                     !groundingVetoTriggered &&
                     !pullVetoTriggered &&
-                    isFalseMissingMoneylineCritique(
-                        verification.feedback,
-                        currentProposal,
-                        combinedToolSummary,
-                        boardSourceForAudit,
-                        allParsedHeaders,
-                        pulledMarketRecords
+                    (
+                        isFalseMissingMoneylineCritique(
+                            verification.feedback,
+                            currentProposal,
+                            combinedToolSummary,
+                            boardSourceForAudit,
+                            allParsedHeaders,
+                            pulledMarketRecords
+                        ) ||
+                        isFalseMissingMarketCritique(
+                            verification.feedback,
+                            currentProposal,
+                            combinedToolSummary,
+                            boardSourceForAudit,
+                            allParsedHeaders,
+                            pulledMarketRecords
+                        )
                     )
                 ) {
                     const scrubbed = scrubFalseMissingMarketClause(verification.feedback || '');
                     const prevFb = verification.feedback || '';
                     verification.pass = true;
-                    verification.feedback = scrubbed || 'Verified: moneyline covered by ml_home/ml_away in market tool result.';
+                    verification.feedback = scrubbed || 'Verified: market coverage confirmed by market tool result.';
                     recordRunDebugEdit((context as any)?.id, 'verifier', {
-                        check: 'isFalseMissingMoneylineCritique',
+                        check: 'isFalseMissingMarketCritique',
                         before: prevFb,
                         after: verification.feedback,
-                        reason: 'Moneyline covered by ml_home/ml_away in market tool result'
+                        reason: 'Market covered by tool result (Steam: neutral / single_book are valid movement results)'
                     });
                 } else if (
                     !verification.pass &&
@@ -1202,6 +1214,38 @@ export class AnalysisLifecycle {
                         prompt: `attempt=${attempt}`,
                         output: { dismissedFeedback: originalFeedback }
                     });
+                } else if (
+                    !verification.pass &&
+                    !missingPicksVetoTriggered &&
+                    !injuryVetoTriggered &&
+                    !marketVetoTriggered &&
+                    !groundingVetoTriggered &&
+                    !pullVetoTriggered
+                ) {
+                    const blanketCheck = detectUncitedBlanketCriticVeto({
+                        report: { pass: verification.pass, feedback: verification.feedback },
+                        vetoedLegs: accumulatedVetoedLegs,
+                        vetoedClaims: accumulatedVetoedClaims,
+                        hasDeterministicFailures:
+                            Boolean(verification.parseFailed) ||
+                            /^Schema violation:/i.test(String(verification.feedback || ''))
+                    });
+                    if (blanketCheck.isUncitedBlanketVeto) {
+                        const prevFb = verification.feedback || '';
+                        console.warn(
+                            `[LifecycleVerifier] Ignoring uncited blanket veto (${blanketCheck.reason}) with 0 cited legs and 0 deterministic failures: ${prevFb.slice(0, 220)}`
+                        );
+                        verification.pass = true;
+                        verification.feedback = /\bno\s+fatal\b/i.test(prevFb)
+                            ? prevFb
+                            : 'Verified: no cited leg violations or deterministic failures found.';
+                        recordRunDebugEdit((context as any)?.id, 'verifier', {
+                            check: 'detectUncitedBlanketCriticVeto',
+                            before: prevFb,
+                            after: verification.feedback,
+                            reason: blanketCheck.reason || 'uncited_blanket_veto_zero_legs'
+                        });
+                    }
                 }
 
                 if (hasEmptyPicks && zeroPickCorrections.length > 0 && typeof currentProposal === 'object') {

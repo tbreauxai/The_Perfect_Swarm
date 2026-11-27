@@ -1,18 +1,14 @@
-Fix two deterministic bugs exposed by workflow `wf-1795791265871`:
+Fix two remaining issues exposed by workflow `wf-1795793610622`:
 
-1. **Scope `symmetric_injury_misread` per-pick instead of whole-analysis (Verifier / Risk Critic grounding check):**
-   - Locate where `symmetric_injury_misread` emits `"is covered by seat analysis health-advantage claim"`.
-   - When checking a specific pick in a multi-leg parlay, check ONLY that pick's own `reason` / `reasons` fields (or the specific sentence/clause naming that pick's team/rowId)—NOT the entire multi-leg `analysis` paragraph, which legitimately mentions `"asymmetric health advantage"` for a *different* leg (e.g., Florida Panthers ML) while explicitly stating the other legs have symmetric health.
-   - Also ignore negated/explicitly symmetric statements (e.g., `"Health balances are symmetric for..."`).
+1. **Prevent Blanket / Uncited Risk Critic Vetoes:**
+   - In the Risk Critic prompt/contract:
+     - Explicitly clarify that `Steam: neutral (0 pts)` and `Divergence: single_book` are valid market movement results — NEVER treat them as "missing market data".
+     - Require that any `verdict: "veto"` MUST cite specific `row` ID(s) and the exact contradictory tool field for each vetoed leg. A veto with zero cited legs/violations is invalid; if one proposer's legs have an issue and the other proposer's legs are clean, approve the clean legs instead of issuing a blanket slate veto.
+   - In the Critic post-processor / compiler handoff: if the Critic outputs `"No fatal ..."` or returns `verdict: "veto"` with zero specific leg vetoes (`vetoedLegs.length === 0`) and no deterministic verifier failures, log a warning and do not let an uncited blanket veto nuke grounded proposer picks.
 
-2. **Include `"multi"` in `HybridCortex` `appliedDomains`:**
-   - When querying Qdrant (`pwa_swarm_dev_cortex_v4`), append `"multi"` to `appliedDomains` whenever `allowParlay` is true or `domains.length > 1` (or `domain === "multi-sport"`), so multi-sport/parlay lessons are retrieved instead of returning `recordsFound: 0`.
+2. **Diagnose & Fix `HybridCortex` `recordsFound: 0` on `pwa_swarm_dev_cortex_v4`:**
+   - Inspect `HybridCortex` query construction, Qdrant `filter` payload keys, and `score_threshold` / `scoreThreshold`.
+   - Compare the live filter keys against the exact payload schema written by the `cortex_lessons_backfill` script (`appId`, `domain`, etc.).
+   - When the user prompt is generic (e.g., `"what's the best 3 leg parlay to place today?"`), enrich the Cortex search query with the active `domains` (e.g., `ncaaf nhl parlay spread moneyline`) so dense/sparse retrieval matches stored lessons instead of falling below the score threshold.
 
-3. **Check `manager` provider routing:**
-   - Inspect why `manager` attempted `cloudflare/@cf/meta/llama-3.3-70b-instruct-fp8-fast` first when `settings.agents` specified `groq / openai/gpt-oss-120b`. Report if a hardcoded override or fallback order is ignoring the configured `manager` provider.
-
-Add unit tests for:
-- A 3-leg parlay where leg 3 claims `"asymmetric health advantage"` and legs 1–2 claim `"form + steam"` with symmetric health -> must NOT trigger `symmetric_injury_misread` on legs 1–2.
-- `appliedDomains` including `"multi"` on multi-sport / parlay queries.
-
-Run typecheck and vitest, then summarize the diff.
+Add unit tests for both fixes, run typecheck and vitest, and report the exact root cause of `recordsFound: 0` along with the diff.

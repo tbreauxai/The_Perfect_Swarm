@@ -141,11 +141,13 @@ export function matchesScopedMemoryFilter(
         options.sport !== undefined ||
         reqEvents.length > 0;
 
-    // 2. Enforce appId / originApp binding when strict scope is active
+    // 2. Enforce appId / originApp / app_id binding when strict scope is active
     const readerApp = options.appId || options.originApp;
     if (strictScopeActive && readerApp) {
         const itemApp = payload.originApp || payload.appId || payload.app_id;
-        if (!itemApp || String(itemApp).trim() !== readerApp.trim()) {
+        const itemAppNorm = String(itemApp || '').trim().toLowerCase();
+        const isSharedGlobal = options.includeShared !== false && (itemAppNorm === 'global' || itemAppNorm === 'shared');
+        if (!itemApp || (!isSharedGlobal && itemAppNorm !== readerApp.trim().toLowerCase())) {
             return false;
         }
     }
@@ -162,14 +164,50 @@ export function matchesScopedMemoryFilter(
 
     // 4. Enforce sport filter
     if (options.sport !== undefined && options.sport.trim() !== '') {
-        const itemSport = payload.sport || payload.sportKey || payload.sport_key;
-        if (
-            !itemSport ||
-            normalizeMemorySportToken(itemSport) !== normalizeMemorySportToken(options.sport)
-        ) {
+        const itemSport = payload.sport || payload.sportKey || payload.sport_key || payload.domain;
+        const normReqSport = normalizeMemorySportToken(options.sport);
+        const normItemSport = normalizeMemorySportToken(itemSport);
+        const isGenericBettingLesson = normItemSport === 'multi' || normItemSport === 'multi-sport' || normItemSport === 'parlay' || normItemSport === 'general' || normItemSport === 'odds';
+        if (!itemSport || (!isGenericBettingLesson && normItemSport !== normReqSport)) {
             return false;
         }
     }
+
+    const isEventLockedSnapshot = Boolean(
+        payload.snapshotHash ||
+        payload.snapshot_hash ||
+        payload.isSnapshot === true ||
+        payload.eventScoped === true ||
+        payload.memoryType === 'game_snapshot'
+    );
+    const isReusableLesson = Boolean(
+        !isEventLockedSnapshot && (
+            payload.memoryType === 'graded_lesson' ||
+            payload.memoryType === 'golden_exemplar' ||
+            payload.memoryType === 'reflexion_rule' ||
+            payload.memoryType === 'fact' ||
+            payload.memoryType === 'judgment' ||
+            payload.memory_type === 'graded_lesson' ||
+            payload.memory_type === 'golden_exemplar' ||
+            payload.memory_type === 'reflexion_rule' ||
+            payload.memory_type === 'fact' ||
+            payload.memory_type === 'judgment' ||
+            payload.type === 'graded_lesson' ||
+            payload.lessonId ||
+            payload.lesson_id ||
+            payload.betId ||
+            payload.bet_id ||
+            payload.category === 'betting_lesson' ||
+            payload.outcome !== undefined ||
+            payload.gradedAt !== undefined ||
+            payload.graded_at !== undefined ||
+            payload.rule !== undefined ||
+            payload.rule_type !== undefined ||
+            payload.clv !== undefined ||
+            payload.closingLineValue !== undefined ||
+            payload.closing_line_value !== undefined
+        )
+    );
 
     // 5. Enforce entityIds / eventIds filter
     if (reqEntities.length > 0 || reqEvents.length > 0) {
@@ -203,17 +241,17 @@ export function matchesScopedMemoryFilter(
             if (ptEntities.size > 0) {
                 const entityHit = reqEntities.some((e) => ptEntities.has(e));
                 if (!entityHit) return false;
-            } else if (ptEvents.size > 0) {
+            } else if (ptEvents.size > 0 && !isReusableLesson) {
                 const eventHit = reqEvents.some((ev) => ptEvents.has(ev));
                 if (!eventHit) return false;
-            } else {
+            } else if (!isReusableLesson) {
                 return false;
             }
         } else if (reqEntities.length > 0) {
             if (ptEntities.size === 0) return false;
             const entityHit = reqEntities.some((e) => ptEntities.has(e));
             if (!entityHit) return false;
-        } else if (reqEvents.length > 0) {
+        } else if (reqEvents.length > 0 && !isReusableLesson) {
             if (ptEvents.size === 0) return false;
             const eventHit = reqEvents.some((ev) => ptEvents.has(ev));
             if (!eventHit) return false;

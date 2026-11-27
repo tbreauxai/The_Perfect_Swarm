@@ -64,12 +64,18 @@ describe('QdrantStorageAdapter', () => {
                 entityIds: { data_type: 'keyword' },
                 workflowId: { data_type: 'keyword' },
                 appId: { data_type: 'keyword' },
+                app_id: { data_type: 'keyword' },
+                visibility: { data_type: 'keyword' },
                 targetApps: { data_type: 'keyword' },
                 agentRole: { data_type: 'keyword' },
                 qualityRating: { data_type: 'float' },
                 verified: { data_type: 'bool' },
                 rule_type: { data_type: 'keyword' },
                 sport: { data_type: 'keyword' },
+                sportKey: { data_type: 'keyword' },
+                sport_key: { data_type: 'keyword' },
+                eventId: { data_type: 'keyword' },
+                eventIds: { data_type: 'keyword' },
                 market_type: { data_type: 'keyword' },
                 clv: { data_type: 'float' },
                 market: { data_type: 'keyword' },
@@ -221,13 +227,14 @@ describe('QdrantStorageAdapter', () => {
         expect(points.length).toBe(3);
         expect(mockClient.scroll).toHaveBeenCalledTimes(2);
 
-        // Verify DuelOdds safeguard: filter includes appId and originApp disjunction
+        // Verify DuelOdds safeguard: filter includes appId, app_id, and originApp disjunction
         expect(mockClient.scroll).toHaveBeenCalledWith('test_cortex', expect.objectContaining({
             filter: {
                 must: [
                     {
                         should: [
                             { key: 'appId', match: { value: 'duelodds' } },
+                            { key: 'app_id', match: { value: 'duelodds' } },
                             { key: 'originApp', match: { value: 'duelodds' } }
                         ]
                     }

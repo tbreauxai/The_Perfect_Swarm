@@ -2282,10 +2282,13 @@ export function auditMarketCoverageAndRowBinding(
 const FALSE_MISSING_ML_REGEX =
   /only shows a spread|spread[- ]only|missing (?:a )?(?:moneyline|\bml\b)|no (?:moneyline|\bml\b) (?:market|odds|coverage|data|available)|(?:moneyline|\bml\b)[^.]{0,40}(?:not (?:present|found|covered|available|supported|returned)|missing|uncovered|unavailable)|lack(?:s|ing)?(?:\s+of)?(?:\s+verified)?\s+market\s+data|no\s+market\s+(?:data|pricing)/i;
 
+const FALSE_MISSING_MARKET_DATA_REGEX =
+  /only shows a spread|spread[- ]only|missing (?:a )?(?:moneyline|\bml\b)|no (?:moneyline|\bml\b) (?:market|odds|coverage|data|available)|(?:moneyline|\bml\b)[^.]{0,40}(?:not (?:present|found|covered|available|supported|returned)|missing|uncovered|unavailable)|lack(?:s|ing)?(?:\s+of)?(?:\s+(?:verified|complete|live))?\s*market\s+(?:data|movement|pricing)|(?:missing|no|incomplete|insufficient|unavailable)\s+market\s+(?:data|movement|odds|pricing|coverage)|(?:unable|cannot|can't|failed)\s+(?:to\s+)?verify\s+(?:moneyline|\bml\b|spread|total|market)\s+(?:movement|data|odds|coverage|pricing)|(?:steam:\s*neutral|divergence:\s*single_book)[^.]{0,60}(?:missing|insufficient|no\s+market|lack|uncovered|single[- ]book)/i;
+
 export function scrubFalseMissingMarketClause(text: string): string {
   if (!text) return '';
   const sentences = text.split(/(?<=[.!?])\s+|\n+/);
-  const kept = sentences.filter(s => s.trim() && !FALSE_MISSING_ML_REGEX.test(s));
+  const kept = sentences.filter(s => s.trim() && !FALSE_MISSING_MARKET_DATA_REGEX.test(s));
   return kept.join(' ').replace(/\s{2,}/g, ' ').trim();
 }
 
@@ -2325,6 +2328,54 @@ export function isFalseMissingMoneylineCritique(
     if (!p.eventId) return false;
     const cov = coverageByGame.get(p.eventId);
     return Boolean(cov && cov.hasMoneyline);
+  });
+}
+
+/**
+ * Detects false-negative Critic vetoes claiming "missing market data" / "no market movement"
+ * because get_market_movement returned `Steam: neutral (0 pts)` or `Divergence: single_book`.
+ */
+export function isFalseMissingMarketCritique(
+  feedback: string,
+  proposal: any,
+  toolEvidenceText: string,
+  boardSource: unknown,
+  headersInput?: GameHeader[],
+  toolRecords?: MarketToolRecord[]
+): boolean {
+  if (isFalseMissingMoneylineCritique(feedback, proposal, toolEvidenceText, boardSource, headersInput, toolRecords)) {
+    return true;
+  }
+  if (!feedback || !proposal || typeof proposal !== 'object') return false;
+  const fLower = feedback.toLowerCase();
+  const claimsMissingMarket =
+    FALSE_MISSING_MARKET_DATA_REGEX.test(fLower) ||
+    ((/steam:\s*neutral|single_book/i.test(fLower)) && /\b(?:missing|no\s+(?:valid|real|verified)?\s*market|insufficient|incomplete|unavailable|unable\s+to\s+verify|cannot\s+verify|unverified|no\s+confirmation|lack(?:s|ing)?)\b/i.test(fLower));
+  if (!claimsMissingMarket) return false;
+
+  if (
+    /\b(?:injur|scratch|rule violation|wrong team|misattribut|row.{0,20}mismatch|spread.{0,20}(?:mismatch|sign|flip)|favorite.{0,20}underdog|underdog.{0,20}favorite|opposite side|does not match|away.{0,15}home|fabricat|ungrounded|grounding|relatively healthy|goals allowed|single bet|contra_steam_misread|symmetric_injury_misread|model_signal_misread)\b/i.test(
+      fLower
+    )
+  ) {
+    return false;
+  }
+
+  const headers = headersInput && headersInput.length > 0 ? headersInput : parseGameHeaders(boardSource);
+  const rowMap = extractRowOptions([boardSource], headers);
+  const boardText = extractBoardText(boardSource);
+  const coverageByGame = extractMarketCoverageByGame(toolEvidenceText, boardText, headers, toolRecords);
+  const picks = extractProposalPicks(proposal, headers, rowMap);
+  if (picks.length === 0) return false;
+
+  return picks.every(p => {
+    if (!p.eventId) return false;
+    const cov = coverageByGame.get(p.eventId);
+    if (!cov) return false;
+    if (isMoneylineText(p.sideText, p.marketField)) return cov.hasMoneyline;
+    if (extractOverUnder(p.sideText) !== null || /\btotal|over\/under\b/i.test(p.marketField || '')) return cov.hasTotal;
+    if (extractSpreadNumber(p.sideText) !== null || /\bspread|puckline\b/i.test(p.marketField || '')) return cov.hasSpread;
+    return cov.hasMoneyline || cov.hasSpread || cov.hasTotal;
   });
 }
 

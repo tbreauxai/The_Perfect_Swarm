@@ -33,7 +33,7 @@ import {
 } from "./partialResult.ts";
 import { pickMatchesVetoedTarget, runDeepAnalysisVerification } from "./verificationPipeline.ts";
 import { runLearningPipeline } from "./learningPipeline.ts";
-import { reconcileFinalVerdictAndPicks, stripContradictoryWagerProseOnPass } from "../tools/criticAudit.ts";
+import { detectUncitedBlanketCriticVeto, reconcileFinalVerdictAndPicks, stripContradictoryWagerProseOnPass } from "../tools/criticAudit.ts";
 import { isScorecardMode } from "./scorecard.ts";
 import { buildBlackboard } from "./blackboard.ts";
 import {
@@ -772,6 +772,36 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                             stage2AuditNote = auditMeta.auditNote.trim();
                         }
                     }
+                    const crVetoedLegs = Array.isArray((cr as any).vetoedLegs) ? (cr as any).vetoedLegs : [];
+                    const crVetoedClaims = Array.isArray((cr as any).vetoedClaims) ? (cr as any).vetoedClaims : [];
+                    const blanketCheck = detectUncitedBlanketCriticVeto({
+                        report: cr as Record<string, any>,
+                        vetoedLegs: crVetoedLegs,
+                        vetoedClaims: crVetoedClaims,
+                        hasDeterministicFailures: stage2CriticAuditFailed || crVetoedLegs.length > 0 || crVetoedClaims.length > 0,
+                        criticSkippedAudit: Boolean(auditMeta?.criticSkippedAudit)
+                    });
+                    if (blanketCheck.isUncitedBlanketVeto && stage1HadProposedPicks) {
+                        const rawVerdictText = String((cr as any).verdict || (cr as any).summary || (cr as any).analysis || '').trim();
+                        console.warn(
+                            `[CompilerHandoff] Ignoring uncited blanket Critic veto (${blanketCheck.reason}) with 0 cited legs: ${rawVerdictText.slice(0, 220)}`
+                        );
+                        context.addEvent({
+                            agentRole: 'Compiler Handoff',
+                            action: 'Ignored Uncited Blanket Critic Veto',
+                            modelName: 'DeterministicGuard',
+                            prompt: `reason=${blanketCheck.reason}`,
+                            output: { rawVerdictText, vetoedLegs: 0 }
+                        });
+                        (cr as any).pass = true;
+                        (cr as any).criticApproved = true;
+                        (cr as any).wageringPass = false;
+                        (cr as any).verdict = 'approve';
+                        if (stage2CriticApproved === undefined) {
+                            stage2CriticApproved = true;
+                        }
+                        continue;
+                    }
                     const verdictStr = typeof (cr as any).verdict === 'string' ? (cr as any).verdict.trim() : '';
                     const explicitVetoVerdict = /^(?:veto|vetoed|reject|rejected|fail|failed)$/i.test(verdictStr);
                     const explicitApproveVerdict = /^(?:approve|approved|pass|passed|accept|accepted)$/i.test(verdictStr);
@@ -831,20 +861,37 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 const paramCriticRes = (params as any)?.criticResult || (params as any)?.criticFeedback || (settings as any)?.criticResult;
                 if (paramCriticRes) {
                     if (typeof paramCriticRes === 'string' && paramCriticRes.trim()) {
-                        const dedupedParam = dedupeVetoMessages([paramCriticRes.trim()]);
-                        stage2CriticVetoes.push(...(dedupedParam.length > 0 ? dedupedParam : [paramCriticRes.trim()]));
-                    } else if (typeof paramCriticRes === 'object' && paramCriticRes.pass === false) {
-                        const dedupedParts = dedupeVetoMessages([
-                            typeof paramCriticRes.feedback === 'string' ? paramCriticRes.feedback : '',
-                            typeof paramCriticRes.verdict === 'string' ? paramCriticRes.verdict : '',
-                            typeof paramCriticRes.summary === 'string' ? paramCriticRes.summary : ''
-                        ]);
-                        if (dedupedParts.length > 0) stage2CriticVetoes.push(...dedupedParts);
-                        if (Array.isArray(paramCriticRes.vetoedLegs)) {
-                            stage2VetoedLegs = mergeVetoedLegTargets(stage2VetoedLegs, paramCriticRes.vetoedLegs);
+                        const trimmedParam = paramCriticRes.trim();
+                        if (stage1HadProposedPicks && /\bno\s+fatal\b/i.test(trimmedParam) && !/\bR\d+\b/i.test(trimmedParam)) {
+                            console.warn(`[CompilerHandoff] Ignoring contradictory "No fatal..." paramCriticRes: ${trimmedParam.slice(0, 180)}`);
+                        } else {
+                            const dedupedParam = dedupeVetoMessages([trimmedParam]);
+                            stage2CriticVetoes.push(...(dedupedParam.length > 0 ? dedupedParam : [trimmedParam]));
                         }
-                        if (Array.isArray(paramCriticRes.vetoedClaims)) {
-                            stage2VetoedClaims = mergeVetoedClaims(stage2VetoedClaims, paramCriticRes.vetoedClaims);
+                    } else if (typeof paramCriticRes === 'object' && paramCriticRes.pass === false) {
+                        const paramVetoedLegs = Array.isArray(paramCriticRes.vetoedLegs) ? paramCriticRes.vetoedLegs : [];
+                        const paramVetoedClaims = Array.isArray(paramCriticRes.vetoedClaims) ? paramCriticRes.vetoedClaims : [];
+                        const paramBlanket = detectUncitedBlanketCriticVeto({
+                            report: paramCriticRes,
+                            vetoedLegs: paramVetoedLegs,
+                            vetoedClaims: paramVetoedClaims,
+                            hasDeterministicFailures: paramVetoedLegs.length > 0 || paramVetoedClaims.length > 0
+                        });
+                        if (paramBlanket.isUncitedBlanketVeto && stage1HadProposedPicks) {
+                            console.warn(`[CompilerHandoff] Ignoring uncited blanket paramCriticRes veto (${paramBlanket.reason})`);
+                        } else {
+                            const dedupedParts = dedupeVetoMessages([
+                                typeof paramCriticRes.feedback === 'string' ? paramCriticRes.feedback : '',
+                                typeof paramCriticRes.verdict === 'string' ? paramCriticRes.verdict : '',
+                                typeof paramCriticRes.summary === 'string' ? paramCriticRes.summary : ''
+                            ]);
+                            if (dedupedParts.length > 0) stage2CriticVetoes.push(...dedupedParts);
+                            if (Array.isArray(paramCriticRes.vetoedLegs)) {
+                                stage2VetoedLegs = mergeVetoedLegTargets(stage2VetoedLegs, paramCriticRes.vetoedLegs);
+                            }
+                            if (Array.isArray(paramCriticRes.vetoedClaims)) {
+                                stage2VetoedClaims = mergeVetoedClaims(stage2VetoedClaims, paramCriticRes.vetoedClaims);
+                            }
                         }
                     }
                 }

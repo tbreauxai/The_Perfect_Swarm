@@ -427,6 +427,10 @@ export class MemoryCortex {
         const content = payload.reason || payload.rule || JSON.stringify(payload);
         const validId = toValidQdrantId(lessonId);
 
+        const normalizedLessonDomain = normalizeDomain(
+            payload.domain || payload.sportKey || payload.sport_key || payload.sport || 'general',
+            content
+        );
         const pointPayload = {
             id: validId,
             lessonId,
@@ -442,6 +446,7 @@ export class MemoryCortex {
             app_id: originApp,
             appId: originApp,
             originApp,
+            domain: normalizedLessonDomain,
             memoryType,
             memory_type: memoryType,
             closingLineValue: payload.closingLineValue,
@@ -690,6 +695,9 @@ export class MemoryCortex {
 
         if (this.qdrantStorage && this.qdrantStorage.isAvailable) {
             candidates = await this.qdrantStorage.search(queryDense, effectiveQueryOptions, querySparse);
+        }
+        if ((!this.qdrantStorage || !this.qdrantStorage.isAvailable) && this.inMemoryStorage.size > 0) {
+            candidates = await this.inMemoryStorage.search(queryDense, effectiveQueryOptions, querySparse);
         }
 
         if (candidates.length > 0) {

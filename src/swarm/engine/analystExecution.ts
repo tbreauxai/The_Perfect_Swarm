@@ -63,6 +63,7 @@ import {
 } from '../tools/claimGrounding.ts';
 import {
     auditMarketCoverageAndRowBinding,
+    isFalseMissingMarketCritique,
     isFalseMissingMoneylineCritique,
     scrubFalseMissingMarketClause,
     sanitizeRowMismatchedPicks,
@@ -82,6 +83,7 @@ import {
 } from '../tools/criticEvidence.ts';
 import {
     buildCriticAuditReprompt,
+    detectUncitedBlanketCriticVeto,
     evaluateCriticAuditCoverage,
     extractProposedPickSummaries,
     isNoPicksToEvaluateText,
@@ -1043,8 +1045,8 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                             ? (emptyCriticAudit
                                 ? 'No picks were proposed. Confirm pass/no-picks by emitting only verdict JSON {"criticApproved":true,"wageringPass":true,"pass":true,"verdict":"No picks proposed","flags":[],"scorecards":[{"verdict":"approve","notes":"No picks proposed."}]}. Do not call any tools.'
                                 : (stage1ProposedLegs.length > 0
-                                    ? `Audit all ${stage1ProposedLegs.length} proposed leg(s) against dossier/tool evidence ("No picks to evaluate" is invalid). Emit only verdict JSON {"criticApproved":boolean,"wageringPass":boolean,"pass":boolean,"verdict":string,"flags":string[]}.`
-                                    : 'Review proposed picks and emit only verdict JSON {"criticApproved":boolean,"wageringPass":boolean,"pass":boolean,"verdict":string,"flags":string[]}, adding no picks. Only set "pass":false for fatal injury or rule violation.'))
+                                    ? `Audit all ${stage1ProposedLegs.length} proposed leg(s) against dossier/tool evidence ("No picks to evaluate" is invalid). Any "veto" MUST cite R# row ID(s) + exact tool field; never veto for Steam: neutral (0 pts) or Divergence: single_book. Emit only verdict JSON {"criticApproved":boolean,"wageringPass":boolean,"pass":boolean,"verdict":string,"flags":string[]}.`
+                                    : 'Review proposed picks and emit only verdict JSON {"criticApproved":boolean,"wageringPass":boolean,"pass":boolean,"verdict":string,"flags":string[]}, adding no picks. Only set "pass":false for fatal injury or cited rule violation with R# row ID + tool field.'))
                             : 'Provide your specialist analysis now in JSON format.',
                         gameId: allGameIds[0] || parsedHeaders[0]?.eventId,
                         gameIds: allGameIds,
@@ -1711,20 +1713,32 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                     injuryAuditPassed &&
                     marketRowAudit.pass &&
                     groundingAuditPassed &&
-                    isFalseMissingMoneylineCritique(
-                        String((resData as any).verdict || (resData as any).summary || (resData as any).analysis || ''),
-                        auditTargetProposal,
-                        marketEvidenceText,
-                        fullRawSource || renderedHeadersText,
-                        mergedHeadersForRowCheck,
-                        marketToolRecords
+                    (
+                        isFalseMissingMoneylineCritique(
+                            String((resData as any).verdict || (resData as any).summary || (resData as any).analysis || ''),
+                            auditTargetProposal,
+                            marketEvidenceText,
+                            fullRawSource || renderedHeadersText,
+                            mergedHeadersForRowCheck,
+                            marketToolRecords
+                        ) ||
+                        isFalseMissingMarketCritique(
+                            String((resData as any).verdict || (resData as any).summary || (resData as any).analysis || ''),
+                            auditTargetProposal,
+                            marketEvidenceText,
+                            fullRawSource || renderedHeadersText,
+                            mergedHeadersForRowCheck,
+                            marketToolRecords
+                        )
                     )
                 ) {
-                    const fallbackMsg = 'Verified: moneyline covered by ml_home/ml_away in market tool result.';
+                    const fallbackMsg = 'Verified: market coverage confirmed by market tool result (Steam: neutral / single_book are valid movement results).';
                     const scrubbedVerdict = scrubFalseMissingMarketClause(String((resData as any).verdict || ''));
                     const scrubbedSummary = scrubFalseMissingMarketClause(String((resData as any).summary || ''));
                     const scrubbedAnalysis = scrubFalseMissingMarketClause(String((resData as any).analysis || ''));
                     (resData as any).pass = true;
+                    (resData as any).criticApproved = true;
+                    (resData as any).wageringPass = false;
                     (resData as any).verdict = scrubbedVerdict || fallbackMsg;
                     (resData as any).summary = scrubbedSummary || scrubbedVerdict || fallbackMsg;
                     (resData as any).analysis = scrubbedAnalysis || scrubbedSummary || fallbackMsg;
@@ -1775,6 +1789,61 @@ export function createAnalystExecutor(config: AnalystExecutorConfig) {
                     }
                 } else if (proposedLegsForAudit.length > 0) {
                     scrubNoPicksToEvaluateText(resData as any);
+                }
+
+                const hasDeterministicCriticFailure =
+                    !injuryAuditPassed ||
+                    !marketRowAudit.pass ||
+                    !groundingAuditPassed ||
+                    !duplicateLegAudit.pass ||
+                    !pullAudit.pass ||
+                    llmAuditCoverage.criticSkippedAudit;
+                const blanketVetoCheck = detectUncitedBlanketCriticVeto({
+                    report: resData as Record<string, any>,
+                    vetoedLegs: stage2VetoedLegs,
+                    vetoedClaims: stage2VetoedClaims,
+                    hasDeterministicFailures: hasDeterministicCriticFailure,
+                    criticSkippedAudit: llmAuditCoverage.criticSkippedAudit
+                });
+                if (blanketVetoCheck.isUncitedBlanketVeto) {
+                    const priorVerdict = String(
+                        (resData as any).verdict || (resData as any).summary || (resData as any).analysis || ''
+                    ).trim();
+                    console.warn(
+                        `[RiskCritic] Ignoring uncited blanket veto (${blanketVetoCheck.reason}) with 0 cited legs and 0 deterministic failures: ${priorVerdict.slice(0, 220)}`
+                    );
+                    recordRunDebugEdit((context as any)?.id, seat, {
+                        check: 'detectUncitedBlanketCriticVeto',
+                        before: priorVerdict,
+                        after: 'approve',
+                        reason: blanketVetoCheck.reason || 'uncited_blanket_veto_zero_legs'
+                    });
+                    context.addEvent({
+                        agentRole: analyst.role,
+                        action: 'Ignored Uncited Blanket Critic Veto',
+                        modelName: analyst.modelName,
+                        prompt: `reason=${blanketVetoCheck.reason}`,
+                        output: { priorVerdict, vetoedLegs: 0, deterministicFailures: 0 }
+                    });
+                    const safeSummary = /\bno\s+fatal\b/i.test(priorVerdict)
+                        ? priorVerdict
+                        : 'Verified: no cited leg violations or deterministic failures found.';
+                    (resData as any).pass = true;
+                    (resData as any).criticApproved = true;
+                    (resData as any).wageringPass = proposedLegsForAudit.length === 0;
+                    (resData as any).verdict = 'approve';
+                    (resData as any).summary = safeSummary;
+                    (resData as any).analysis = safeSummary;
+                    (resData as any).flags = [];
+                    if (Array.isArray((resData as any).scorecards)) {
+                        (resData as any).scorecards = (resData as any).scorecards.map((sc: any) =>
+                            sc && typeof sc === 'object'
+                                ? { ...sc, verdict: 'approve', criticApproved: true, wageringPass: proposedLegsForAudit.length === 0 }
+                                : sc
+                        );
+                    }
+                    stage2VetoedLegs = [];
+                    stage2VetoedClaims = [];
                 }
 
                 if ((resData as any).pass === false) {

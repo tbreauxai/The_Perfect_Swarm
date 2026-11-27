@@ -68,6 +68,8 @@ const REQUIRED_INDEXES: Array<{ field: string; schema: 'keyword' | 'float' | 'in
     { field: 'entityIds', schema: 'keyword' },
     { field: 'workflowId', schema: 'keyword' },
     { field: 'appId', schema: 'keyword' },
+    { field: 'app_id', schema: 'keyword' },
+    { field: 'visibility', schema: 'keyword' },
     { field: 'targetApps', schema: 'keyword' },
     { field: 'agentRole', schema: 'keyword' },
     { field: 'qualityRating', schema: 'float' },
@@ -77,6 +79,10 @@ const REQUIRED_INDEXES: Array<{ field: string; schema: 'keyword' | 'float' | 'in
     { field: 'feedbackProcessed', schema: 'bool' },
     { field: 'rule_type', schema: 'keyword' },
     { field: 'sport', schema: 'keyword' },
+    { field: 'sportKey', schema: 'keyword' },
+    { field: 'sport_key', schema: 'keyword' },
+    { field: 'eventId', schema: 'keyword' },
+    { field: 'eventIds', schema: 'keyword' },
     { field: 'market', schema: 'keyword' },
     { field: 'market_type', schema: 'keyword' },
     { field: 'clv', schema: 'float' },
@@ -465,6 +471,29 @@ export class QdrantStorageAdapter implements StorageBackend {
         if (!ready) return [];
 
         try {
+            const expandSportDomainValues = (rawValues: string[]): string[] => {
+                const CANONICAL_TO_ODDS_API: Record<string, string[]> = {
+                    nfl: ['nfl', 'americanfootball_nfl'],
+                    nba: ['nba', 'basketball_nba'],
+                    mlb: ['mlb', 'baseball_mlb'],
+                    nhl: ['nhl', 'icehockey_nhl'],
+                    ncaaf: ['ncaaf', 'americanfootball_ncaaf', 'college_football', 'cfb'],
+                    ncaab: ['ncaab', 'basketball_ncaab', 'cbb'],
+                    wnba: ['wnba', 'basketball_wnba']
+                };
+                const expanded = new Set<string>();
+                for (const rv of rawValues) {
+                    const lower = String(rv || '').trim().toLowerCase();
+                    if (!lower) continue;
+                    const norm = normalizeDomain(lower);
+                    expanded.add(lower);
+                    expanded.add(norm);
+                    const aliases = CANONICAL_TO_ODDS_API[norm] || [];
+                    for (const al of aliases) expanded.add(al);
+                }
+                return Array.from(expanded);
+            };
+
             const filterMust: any[] = [];
             const strictAppFilter =
                 options.includeShared === false ||
@@ -475,15 +504,35 @@ export class QdrantStorageAdapter implements StorageBackend {
                 (Array.isArray(options.entityIds) && options.entityIds.length > 0) ||
                 (Array.isArray(options.eventIds) && options.eventIds.length > 0);
             if (strictAppFilter && readerApp) {
-                filterMust.push({
-                    should: [
-                        { key: 'originApp', match: { value: readerApp } },
-                        { key: 'appId', match: { value: readerApp } }
-                    ]
-                });
+                const appShould: any[] = [
+                    { key: 'originApp', match: { value: readerApp } },
+                    { key: 'appId', match: { value: readerApp } },
+                    { key: 'app_id', match: { value: readerApp } }
+                ];
+                if (options.includeShared !== false) {
+                    appShould.push(
+                        { key: 'originApp', match: { value: 'global' } },
+                        { key: 'originApp', match: { value: 'shared' } },
+                        { key: 'appId', match: { value: 'global' } },
+                        { key: 'appId', match: { value: 'shared' } },
+                        { key: 'app_id', match: { value: 'global' } },
+                        { key: 'app_id', match: { value: 'shared' } }
+                    );
+                }
+                filterMust.push({ should: appShould });
             }
             if (options.sport) {
-                filterMust.push({ key: 'sport', match: { value: options.sport } });
+                const sportVals = Array.from(
+                    new Set([...expandSportDomainValues([options.sport]), 'multi', 'multi-sport', 'parlay', 'general'])
+                );
+                filterMust.push({
+                    should: sportVals.flatMap((sv) => [
+                        { key: 'sport', match: { value: sv } },
+                        { key: 'sportKey', match: { value: sv } },
+                        { key: 'sport_key', match: { value: sv } },
+                        { key: 'domain', match: { value: sv } }
+                    ])
+                });
             }
             if (Array.isArray(options.entityIds) && options.entityIds.length > 0) {
                 filterMust.push({
@@ -506,31 +555,51 @@ export class QdrantStorageAdapter implements StorageBackend {
             if (Array.isArray(options.domains) && options.domains.length > 0) {
                 const domainValues = Array.from(
                     new Set([
-                        ...options.domains.map((d) => normalizeDomain(d)),
+                        ...expandSportDomainValues(options.domains),
                         'multi',
                         'multi-sport',
+                        'parlay',
                         'odds',
                         'general'
                     ])
                 );
                 filterMust.push({
-                    should: domainValues.map((d) => ({
-                        key: 'domain',
-                        match: { value: d }
-                    }))
+                    should: domainValues.flatMap((d) => [
+                        { key: 'domain', match: { value: d } },
+                        { key: 'sport', match: { value: d } },
+                        { key: 'sportKey', match: { value: d } },
+                        { key: 'sport_key', match: { value: d } }
+                    ])
                 });
             } else if (options.domain && normalizeDomain(options.domain) !== 'multi-sport' && normalizeDomain(options.domain) !== 'multi') {
                 const normDom = normalizeDomain(options.domain);
-                if ((options as any).allowParlay === true) {
-                    const domainValues = Array.from(new Set([normDom, 'multi', 'multi-sport', 'odds', 'general']));
+                const isSportsDom = ['nfl', 'nba', 'mlb', 'nhl', 'ncaaf', 'ncaab', 'wnba', 'parlay'].includes(normDom);
+                if ((options as any).allowParlay === true || isSportsDom) {
+                    const domainValues = Array.from(
+                        new Set([
+                            ...expandSportDomainValues([options.domain]),
+                            'multi',
+                            'multi-sport',
+                            'parlay',
+                            'odds',
+                            'general'
+                        ])
+                    );
                     filterMust.push({
-                        should: domainValues.map((d) => ({
-                            key: 'domain',
-                            match: { value: d }
-                        }))
+                        should: domainValues.flatMap((d) => [
+                            { key: 'domain', match: { value: d } },
+                            { key: 'sport', match: { value: d } },
+                            { key: 'sportKey', match: { value: d } },
+                            { key: 'sport_key', match: { value: d } }
+                        ])
                     });
                 } else {
-                    filterMust.push({ key: 'domain', match: { value: normDom } });
+                    filterMust.push({
+                        should: [
+                            { key: 'domain', match: { value: normDom } },
+                            { key: 'sport', match: { value: normDom } }
+                        ]
+                    });
                 }
             }
             if (options.agentRole) {
@@ -694,6 +763,7 @@ export class QdrantStorageAdapter implements StorageBackend {
                 filterMust.push({
                     should: [
                         { key: 'appId', match: { value: filter.appId } },
+                        { key: 'app_id', match: { value: filter.appId } },
                         { key: 'originApp', match: { value: filter.appId } }
                     ]
                 });
@@ -701,6 +771,7 @@ export class QdrantStorageAdapter implements StorageBackend {
                 filterMust.push({
                     should: [
                         { key: 'appId', match: { value: filter.originApp } },
+                        { key: 'app_id', match: { value: filter.originApp } },
                         { key: 'originApp', match: { value: filter.originApp } }
                     ]
                 });

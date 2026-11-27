@@ -24,6 +24,9 @@ import {
     STRATEGIC_PASS_RESULT_RE,
     truncateMemorySnippet
 } from '../memory/memorySanitizer.ts';
+import { parseGameHeaders } from '../context/gameHeaders.ts';
+import { normalizeMemorySportToken } from '../memory/storage/types.ts';
+import { normalizeDomain } from '../memory/tags.ts';
 
 export const MAX_PUBLIC_LESSONS_PER_EVENT = 3;
 export const MAX_LESSON_RULE_CHARS = 160;
@@ -70,6 +73,70 @@ function formatBoundedLessonRule(item: any): string {
         .trim();
     const cleaned = truncateMemorySnippet(rawCandidate, Math.min(MAX_LESSON_RULE_CHARS, MAX_MEMORY_SNIPPET_CHARS));
     return cleaned || rawCandidate.slice(0, MAX_LESSON_RULE_CHARS);
+}
+
+const SPECIFIC_SPORT_QUERY_REGEX = /\b(?:nfl|nba|nhl|mlb|ncaaf|ncaab|wnba|football|basketball|hockey|baseball|cfb|cbb)\b/i;
+const SPECIFIC_MARKET_QUERY_REGEX = /\b(?:spread|moneyline|ml|total|over\/under|puckline|totals)\b/i;
+
+/**
+ * Enriches generic prompts (e.g. "what's the best 3 leg parlay to place today?") with active
+ * domain/sport & market keywords (e.g. "ncaaf nhl parlay spread moneyline") so dense and sparse
+ * HybridCortex retrieval matches stored domain lessons instead of falling below threshold.
+ */
+export function buildEnrichedCortexQuery(
+    task: string,
+    options: {
+        domains?: string[];
+        sport?: string;
+        allowParlay?: boolean;
+        data?: unknown;
+    }
+): string {
+    const baseTask = String(task || '').trim();
+    const domainTokens: string[] = [];
+    const seen = new Set<string>();
+    const addToken = (tok: string) => {
+        const clean = tok.trim().toLowerCase();
+        if (!clean || clean === 'multi' || clean === 'multi-sport' || clean === 'general' || seen.has(clean)) return;
+        seen.add(clean);
+        domainTokens.push(clean);
+    };
+
+    for (const d of options.domains || []) {
+        addToken(normalizeDomain(d));
+    }
+    if (options.sport) {
+        addToken(normalizeMemorySportToken(options.sport));
+    }
+    if (domainTokens.length === 0 && options.data) {
+        const parsed = parseGameHeaders(options.data);
+        for (const h of parsed) {
+            if (h.sport) addToken(normalizeDomain(h.sport));
+        }
+    }
+
+    const hasSportInQuery = SPECIFIC_SPORT_QUERY_REGEX.test(baseTask);
+    const hasMarketInQuery = SPECIFIC_MARKET_QUERY_REGEX.test(baseTask);
+    const isGeneric = !hasSportInQuery || !hasMarketInQuery;
+    if (!isGeneric && domainTokens.every(d => new RegExp(`\\b${d}\\b`, 'i').test(baseTask))) {
+        return baseTask;
+    }
+
+    const extra: string[] = [];
+    for (const d of domainTokens) {
+        if (!new RegExp(`\\b${d}\\b`, 'i').test(baseTask)) {
+            extra.push(d);
+        }
+    }
+    if ((options.allowParlay || domainTokens.length > 1) && !/\bparlay\b/i.test(baseTask)) {
+        extra.push('parlay');
+    }
+    if (!hasMarketInQuery) {
+        extra.push('spread', 'moneyline', 'total');
+    }
+
+    if (extra.length === 0) return baseTask;
+    return baseTask ? `${baseTask} ${extra.join(' ')}` : extra.join(' ');
 }
 
 async function revalidateLessonsWithSqlFacts(
@@ -162,7 +229,7 @@ export async function resolveMemoryGrounding(
         : p.eventIds || (p.eventId ? [p.eventId] : undefined);
     const inferredDomainsFromEvents = (() => {
         if (Array.isArray(p.domains) && p.domains.length > 0) {
-            return Array.from(new Set(p.domains.map((d) => String(d || '').trim().toLowerCase()).filter(Boolean)));
+            return Array.from(new Set(p.domains.map((d) => normalizeDomain(String(d || ''))).filter(Boolean)));
         }
         const evList = Array.isArray(explicitEvents) ? explicitEvents : [];
         const sports = new Set<string>();
@@ -176,7 +243,12 @@ export async function resolveMemoryGrounding(
             else if (lower.startsWith('nhl-')) sports.add('nhl');
             else if (lower.startsWith('mlb-')) sports.add('mlb');
         }
-        if (sports.size > 1) {
+        if (p.data) {
+            for (const h of parseGameHeaders(p.data)) {
+                if (h.sport) sports.add(normalizeDomain(h.sport));
+            }
+        }
+        if (sports.size > 0) {
             return Array.from(sports);
         }
         return undefined;
@@ -184,7 +256,7 @@ export async function resolveMemoryGrounding(
     const effectiveDomain =
         inferredDomainsFromEvents && inferredDomainsFromEvents.length > 1
             ? 'multi-sport'
-            : readDomain;
+            : (readDomain ? normalizeDomain(readDomain) : inferredDomainsFromEvents?.[0]);
     const isAllowParlay = Boolean(
         p.allowParlay === true ||
             (p.settings as any)?.allowParlay === true ||
@@ -204,7 +276,7 @@ export async function resolveMemoryGrounding(
             inferredDomainsFromEvents && inferredDomainsFromEvents.length > 0
                 ? [...inferredDomainsFromEvents]
                 : effectiveDomain
-                  ? [String(effectiveDomain).trim().toLowerCase()]
+                  ? [normalizeDomain(String(effectiveDomain))]
                   : [];
         if (isMultiDomainOrParlay && !base.includes('multi')) {
             base.push('multi');
@@ -333,13 +405,9 @@ export async function resolveMemoryGrounding(
                 });
 
                 const scopedDomains =
-                    inferredDomainsFromEvents && inferredDomainsFromEvents.length > 0
+                    appliedDomains.length > 0
                         ? appliedDomains
-                        : isAllowParlay &&
-                            effectiveDomain &&
-                            String(effectiveDomain).trim().toLowerCase() !== 'multi-sport'
-                          ? appliedDomains
-                          : undefined;
+                        : undefined;
 
                 const scopedQueryOpts = {
                     appId: trustedAppId,
@@ -355,6 +423,13 @@ export async function resolveMemoryGrounding(
                     snapshotHash: snapshotHashKey
                 };
 
+                const cortexSearchQuery = buildEnrichedCortexQuery(task, {
+                    domains: appliedDomains,
+                    sport: effectiveSport,
+                    allowParlay: isAllowParlay || isMultiDomainOrParlay,
+                    data: p.data
+                });
+
                 if (typeof (memoryCortex as any).resetTelemetryState === 'function') {
                     (memoryCortex as any).resetTelemetryState();
                 }
@@ -363,10 +438,10 @@ export async function resolveMemoryGrounding(
                     ? [[], '', { wins: [], losses: [], formattedBlock: '' }]
                     : await Promise.all([
                           memoryCortex
-                              .retrieve(task, scopedQueryOpts, maxLessonsCap)
+                              .retrieve(cortexSearchQuery, scopedQueryOpts, maxLessonsCap)
                               .catch(() => []),
                           memoryCortex
-                              .retrieveExemplars(task, {
+                              .retrieveExemplars(cortexSearchQuery, {
                                   ...scopedQueryOpts,
                                   limit: 2,
                                   minRating: 0.7
@@ -374,7 +449,7 @@ export async function resolveMemoryGrounding(
                               .catch(() => ''),
                           typeof (memoryCortex as any).retrieveContrastivePostMortems === 'function'
                               ? (memoryCortex as any)
-                                    .retrieveContrastivePostMortems(task, {
+                                    .retrieveContrastivePostMortems(cortexSearchQuery, {
                                         ...scopedQueryOpts,
                                         limit: 3
                                     })
@@ -549,7 +624,8 @@ export async function resolveMemoryGrounding(
                     embedModel: telemetryState.embedModel,
                     collectionPointCount,
                     appliedDomains,
-                    scoreThreshold: 0.35,
+                    searchQuery: cortexSearchQuery,
+                    scoreThreshold: null as number | null,
                     topRawScore: telemetryState.topRawScore ?? null,
                     embedError,
                     qdrantError,

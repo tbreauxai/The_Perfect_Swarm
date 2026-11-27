@@ -4,9 +4,26 @@ export type SwarmDomain = typeof VALID_DOMAINS[number];
 export const VALID_MEMORY_TYPES = ['fact', 'judgment', 'semantic_cache', 'golden_exemplar', 'reflexion_rule', 'graded_lesson'] as const;
 export type MemoryType = typeof VALID_MEMORY_TYPES[number];
 
+export const SPORT_DOMAIN_ALIASES: Record<string, string> = {
+    americanfootball_nfl: 'nfl',
+    basketball_nba: 'nba',
+    baseball_mlb: 'mlb',
+    icehockey_nhl: 'nhl',
+    americanfootball_ncaaf: 'ncaaf',
+    basketball_ncaab: 'ncaab',
+    basketball_wnba: 'wnba',
+    college_football: 'ncaaf',
+    cfb: 'ncaaf',
+    cbb: 'ncaab',
+    ncaam: 'ncaab'
+};
+
 export function normalizeDomain(domain?: string | null, fallbackText?: string): string {
     if (domain && typeof domain === 'string') {
         const d = domain.trim().toLowerCase();
+        if (SPORT_DOMAIN_ALIASES[d]) {
+            return SPORT_DOMAIN_ALIASES[d];
+        }
         if ((VALID_DOMAINS as readonly string[]).includes(d)) {
             return d;
         }
@@ -71,9 +88,10 @@ export interface NormalizedMemoryTags {
  * entityIds = []
  */
 export function normalizeMemoryPayload(payload: any, defaultAppId: string = 'default'): NormalizedMemoryTags {
-    const rawApp = payload?.originApp || payload?.appId || defaultAppId;
+    const rawApp = payload?.originApp || payload?.appId || payload?.app_id || defaultAppId;
     const originApp = String(rawApp).trim() || defaultAppId;
-    const domain = payload?.domain ? normalizeDomain(payload.domain) : 'general';
+    const rawDomainOrSport = payload?.domain || payload?.sport || payload?.sportKey || payload?.sport_key;
+    const domain = rawDomainOrSport ? normalizeDomain(rawDomainOrSport) : 'general';
     const memoryType = (payload?.memoryType && (VALID_MEMORY_TYPES as readonly string[]).includes(payload.memoryType))
         ? payload.memoryType
         : normalizeMemoryType(payload?.memoryType, payload);
@@ -113,19 +131,21 @@ export function computeBlendWeight(
     allowParlay?: boolean
 ): number {
     const isSameOriginApp = pointTags.originApp.toLowerCase() === readerApp.toLowerCase();
-    const effectiveReaderDomain = requestedDomain ? requestedDomain.toLowerCase() : 'general';
-    const pointDomain = pointTags.domain.toLowerCase();
+    const effectiveReaderDomain = requestedDomain ? normalizeDomain(requestedDomain) : 'general';
+    const pointDomain = normalizeDomain(pointTags.domain);
+    const isSportsReaderDomain = ['nfl', 'nba', 'mlb', 'nhl', 'ncaaf', 'ncaab', 'wnba', 'multi-sport', 'multi', 'parlay'].includes(effectiveReaderDomain);
     const domainSet =
         Array.isArray(requestedDomains) && requestedDomains.length > 0
             ? new Set([
-                  ...requestedDomains.map((d) => String(d || '').toLowerCase()),
+                  ...requestedDomains.map((d) => normalizeDomain(d)),
                   'multi',
                   'multi-sport',
+                  'parlay',
                   'odds',
                   'general'
               ])
-            : (allowParlay === true
-                ? new Set([effectiveReaderDomain, 'multi', 'multi-sport', 'odds', 'general'])
+            : ((allowParlay === true || isSportsReaderDomain)
+                ? new Set([effectiveReaderDomain, 'multi', 'multi-sport', 'parlay', 'odds', 'general'])
                 : null);
     const isSameDomain = domainSet
         ? domainSet.has(pointDomain)
