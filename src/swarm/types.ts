@@ -212,6 +212,7 @@ export interface ProviderCallOptions {
     config?: AgentRunConfig;
     timeoutMs?: number;
     role?: string;
+    agentId?: string;
     onHeaders?: (headers: any) => void;
 }
 

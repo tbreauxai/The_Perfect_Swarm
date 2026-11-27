@@ -209,8 +209,17 @@ function extractRawUserFromTaskText(raw: string): string {
     return s.length > 800 ? s.slice(0, 797) + '...' : s;
 }
 
+/**
+ * Replaces literal example row placeholders (e.g. `"row": "R7"`) in Pick Output Contracts
+ * with `"row": "<row_id>"` so models never copy a concrete row ID verbatim into `picks`.
+ */
+export function sanitizePickOutputContractPlaceholders(text: string): string {
+    if (!text || typeof text !== 'string') return text || '';
+    return text.replace(/"row"\s*:\s*"R7"/gi, '"row": "<row_id>"');
+}
+
 function capContractBlock(rawContract: string, maxChars: number = 4800): string {
-    const trimmed = (rawContract || '').trim();
+    const trimmed = sanitizePickOutputContractPlaceholders(rawContract || '').trim();
     if (trimmed.length <= maxChars) return trimmed;
     const withoutExamples = trimmed
         .replace(
@@ -230,7 +239,7 @@ function capContractBlock(rawContract: string, maxChars: number = 4800): string 
  * so the contract is never truncated or wrapped inside <user_task> ignore tags.
  */
 export function partitionTaskAndContract(task: string, explicitUserPrompt?: string): { userTask: string; contractBlock: string } {
-    const explicit = typeof explicitUserPrompt === 'string' ? explicitUserPrompt.trim() : '';
+    const explicit = sanitizePickOutputContractPlaceholders(typeof explicitUserPrompt === 'string' ? explicitUserPrompt : '').trim();
     if (!task) {
         return {
             userTask: explicit ? (explicit.length > 800 ? explicit.slice(0, 797) + '...' : explicit) : '',
@@ -238,27 +247,28 @@ export function partitionTaskAndContract(task: string, explicitUserPrompt?: stri
         };
     }
 
-    const match = CONTRACT_MARKER_REGEX.exec(task);
+    const sanitizedTask = sanitizePickOutputContractPlaceholders(task);
+    const match = CONTRACT_MARKER_REGEX.exec(sanitizedTask);
     if (explicit) {
         const userTask = explicit.length > 800 ? explicit.slice(0, 797) + '...' : explicit;
         let rawContract = '';
         if (match && match.index !== undefined) {
-            rawContract = task.slice(match.index).trim();
-        } else if (/^CHAT OBJECTIVE:/i.test(task.trim())) {
-            const firstNl = task.indexOf('\n');
-            rawContract = firstNl >= 0 ? task.slice(firstNl + 1).trim() : '';
+            rawContract = sanitizedTask.slice(match.index).trim();
+        } else if (/^CHAT OBJECTIVE:/i.test(sanitizedTask.trim())) {
+            const firstNl = sanitizedTask.indexOf('\n');
+            rawContract = firstNl >= 0 ? sanitizedTask.slice(firstNl + 1).trim() : '';
         }
         return { userTask, contractBlock: capContractBlock(rawContract) };
     }
 
     if (!match || match.index === undefined) {
-        const userTask = extractRawUserFromTaskText(task);
+        const userTask = sanitizePickOutputContractPlaceholders(extractRawUserFromTaskText(sanitizedTask));
         return { userTask, contractBlock: '' };
     }
-    const rawUser = task.slice(0, match.index).trim();
-    const rawContract = task.slice(match.index).trim();
+    const rawUser = sanitizedTask.slice(0, match.index).trim();
+    const rawContract = sanitizedTask.slice(match.index).trim();
     const extracted = extractRawUserFromTaskText(rawUser);
-    const userTask = extracted || extractRawUserFromTaskText(task.slice(0, 300));
+    const userTask = sanitizePickOutputContractPlaceholders(extracted || extractRawUserFromTaskText(sanitizedTask.slice(0, 300)));
     const contractBlock = capContractBlock(rawContract);
     return { userTask, contractBlock };
 }

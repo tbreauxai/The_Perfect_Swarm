@@ -27,7 +27,7 @@ import {
 import { isGemini3Or4Model } from './providers/gemini.ts';
 import { parseRetryAfterMs } from './utils/httpTimeouts.ts';
 import { isModelDead, DEFAULT_PROVIDER_MODELS } from './server/modelsProvider.ts';
-import { groqPromptCharCap } from './providers/groq.ts';
+import { groqPromptCharCap, isGroqGptOss120b, isManagerSeatRole, resolveGroqGptOss120bReasoningEffort } from './providers/groq.ts';
 import { globalPayloadCache, PayloadCache } from './cache.ts';
 import { parseJsonSafe, parseJsonSafeWithStatus, guardManagerResponse, guardAnalystResponse } from './parser.ts';
 import { ManagerResponseSchema, AnalystResponseSchema } from './schemas.ts';
@@ -642,7 +642,21 @@ export class Agent {
                                         : (isNonGoogleFastTimeoutProvider
                                             ? Math.min(isQuantNvidiaTarget ? Math.min(timeoutMs, 15000) : timeoutMs, 18000)
                                             : (isProposerGeminiTarget ? Math.min(timeoutMs, 15000) : timeoutMs));
-                                    const geminiCallConfig = (() => {
+                                    const effectiveCallConfig = (() => {
+                                        if (currentTarget.provider === 'groq' && isGroqGptOss120b(targetModel) && isManagerSeatRole(this.role, this.id)) {
+                                            const cappedEffort = resolveGroqGptOss120bReasoningEffort({
+                                                role: this.role,
+                                                agentId: this.id,
+                                                config: effectiveRuntimeConfig as Record<string, any> | undefined
+                                            });
+                                            return {
+                                                ...effectiveRuntimeConfig,
+                                                reasoning_effort: cappedEffort,
+                                                ...(effectiveRuntimeConfig?.reasoning
+                                                    ? { reasoning: { ...effectiveRuntimeConfig.reasoning, effort: cappedEffort } }
+                                                    : {})
+                                            };
+                                        }
                                         if (currentTarget.provider !== 'gemini') return effectiveRuntimeConfig;
                                         const hasExplicitLevel = Boolean(
                                             (effectiveRuntimeConfig as any)?.thinkingLevel ||
@@ -665,9 +679,10 @@ export class Agent {
                                         systemInstruction: this.systemInstruction,
                                         apiKey: currentTarget.apiKey,
                                         aiClient: currentTarget.aiClient || this.aiClient,
-                                        config: geminiCallConfig,
+                                        config: effectiveCallConfig,
                                         timeoutMs: targetTimeoutMs,
                                         role: this.role,
+                                        agentId: this.id,
                                         onHeaders: (headers) => {
                                             capturedHeaders = headers;
                                             globalTokenBudgetManager.applyProviderHeaders(currentTarget.provider, headers, targetModel);

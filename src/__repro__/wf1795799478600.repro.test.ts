@@ -346,8 +346,8 @@ describe('wf-1795799478600: Manager Groq primary routing + Proposer Row Lock + R
       expect(inventedCheck.flags).toContain('proposer_row_lock');
       expect(inventedCheck.rejectedRows).toEqual(['R30']);
       expect(inventedCheck.rejectedTargets.map(t => t.rowId)).toEqual(['R30']);
-      // Feedback must NOT list allowed rows (R88, R110, R97) so extractVetoedLegTargets never poisons them
-      expect(inventedCheck.feedback).not.toMatch(/\bR88\b|\bR110\b|\bR97\b/);
+      expect(inventedCheck.feedback).toContain('Correction (PROPOSER ROW LOCK): Pick R30 is not in ALLOWED_PROPOSER_ROWS ([R88, R110, R97]).');
+      expect(inventedCheck.feedback).toContain('Do NOT pass or set criticApproved=false when valid unvetoed rows exist; re-select your picks strictly from ALLOWED_PROPOSER_ROWS.');
 
       // Opposite-side flip R89 of Celtics/Heat game rejected when only R88 was proposed
       const oppositeSideCheck = auditProposerRowLock(
@@ -476,8 +476,8 @@ describe('wf-1795799478600: Manager Groq primary routing + Proposer Row Lock + R
       });
 
       expect(managerSpy).toHaveBeenCalledTimes(2);
-      // Retry prompt lists allowed unvetoed proposer rows for Compiler
-      expect(recordedPrompts[1]).toContain('[ALLOWED UNVETOED PROPOSER ROWS (a1/a2 ONLY)]: R88, R110, R97');
+      // Retry prompt lists ALLOWED_PROPOSER_ROWS for Compiler
+      expect(recordedPrompts[1]).toContain('ALLOWED_PROPOSER_ROWS: [R88, R110, R97]');
       expect(res.lifecycleResult.attempts).toBe(2);
       expect(res.lifecycleResult.success).toBe(true);
       expect(res.finalAnalysis.verified).toBe(true);

@@ -20,9 +20,9 @@ import { TokenEstimator } from '../compression/tokenEstimator.ts';
 import { seatBudget } from '../context/promptBudget.ts';
 import { parseGameHeaders, renderHeaders, filterPicksByCoverage } from '../context/gameHeaders.ts';
 import { formatRunDebugOutputDigest, recordRunDebugAgreement, recordRunDebugSeat, recordRunDebugDrop, recordRunDebugEdit } from './runDebugRecord.ts';
-import { partitionTaskAndContract, formatUserTaskSection } from './analystExecution.ts';
+import { partitionTaskAndContract, formatUserTaskSection, sanitizePickOutputContractPlaceholders } from './analystExecution.ts';
 import { sanitizeMisattributedPicksAndText } from '../tools/injuryAttribution.ts';
-import { sanitizeRowMismatchedPicks, auditProposerRowLock, type MarketToolRecord } from '../tools/marketRowBinding.ts';
+import { formatAllowedProposerRowsDirective, sanitizeRowMismatchedPicks, auditProposerRowLock, type MarketToolRecord } from '../tools/marketRowBinding.ts';
 import { estimateTokens } from '../providers/limiter.ts';
 import { GROQ_CHAT_PROMPT_CHARS, GROQ_CHAT_TPM_BUDGET, GROQ_CHAT_MIN_TOKENS } from '../providers/groq.ts';
 import {
@@ -417,6 +417,7 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
 
         const proposedEventIds = new Set<string>();
         const allProposedPicks: any[] = [];
+        const rawProposerPicks: any[] = [];
         allAnalystReports.forEach((seatReports, idx) => {
             const role = analysts[idx]?.role;
             const list = Array.isArray(seatReports) ? seatReports : [];
@@ -433,6 +434,7 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
                     }
                 }
                 for (const pk of candidatePicks) {
+                    rawProposerPicks.push(pk);
                     if (isVetoedPick(pk)) continue;
                     allProposedPicks.push(pk);
                     const evId = matchPickToEventId(pk);
@@ -453,6 +455,19 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
             params.userPrompt ?? params.userQuestion
         );
         const contractSection = contractBlock ? `\nOutput & Slate Contract:\n${contractBlock}` : '';
+        const normalizedVetoedLegs: VetoedLegTarget[] = vetoedLegList.map((v: any) => ({
+            ...(v && typeof v === 'object' ? v : {}),
+            ...(v?.team && !v?.teamLabel ? { teamLabel: v.team } : {}),
+            teamAliases: Array.isArray(v?.teamAliases) ? v.teamAliases : []
+        }));
+        const extraSpecialistPicks = Array.isArray((params as any)?.specialistPicks) ? (params as any).specialistPicks : [];
+        const allowedProposerRowsDirective = formatAllowedProposerRowsDirective({
+            specialistPicks: [...rawProposerPicks, ...extraSpecialistPicks],
+            vetoedLegs: normalizedVetoedLegs,
+            headers: effectiveHeaders.length > 0 ? effectiveHeaders : parsedHeaders,
+            boardSource: rawInput || task
+        });
+        const allowedProposerRowsSection = allowedProposerRowsDirective ? `${allowedProposerRowsDirective}\n\n` : '';
 
         const coveredSet = new Set<string>();
         let picksCount = 0;
@@ -493,7 +508,7 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
             200,
             Math.min(
                 1400,
-                Math.floor((promptCap - headersLength - contractSection.length - toolStatusLine.length - 1200) / seatCount)
+                Math.floor((promptCap - headersLength - contractSection.length - allowedProposerRowsSection.length - toolStatusLine.length - 1200) / seatCount)
             )
         );
 
@@ -642,7 +657,7 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
 
         const countsBlock = toolStatusLine ? `${appComputedCountsLine}\n${toolStatusLine}` : appComputedCountsLine;
         const buildBettingPrompt = (bText: string, dText: string, eText: string, reportsText: string = cappedCompiledReports, cSection: string = contractSection) =>
-            `${formatUserTaskSection(cappedTask)}${cSection}\nCite only facts present in Game Slate, Tool evidence, or seat summaries.\n${countsBlock}\n\nGame Slate:\n${renderedHeadersText}\n\n${criticSection}${bText}${consensusSection}${dText}${eText}Analyst Reports:\n${reportsText}`;
+            `${formatUserTaskSection(cappedTask)}${cSection}\nCite only facts present in Game Slate, Tool evidence, or seat summaries.\n${countsBlock}\n\nGame Slate:\n${renderedHeadersText}\n\n${allowedProposerRowsSection}${criticSection}${bText}${consensusSection}${dText}${eText}Analyst Reports:\n${reportsText}`;
 
         let candidate = buildBettingPrompt(baselinesText, digestsText, toolEvidenceSection);
         if (candidate.length > promptCap && digestsText) {
@@ -707,7 +722,29 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
             params.userPrompt ?? params.userQuestion
         );
         const contractNote = nonBetContract ? `\n\nOutput & Slate Contract:\n${nonBetContract}` : '';
-        dynamicPrompt = `${formatUserTaskSection(cleanTask)}${contractNote}\n\nHistorical Baselines:\n${historicalContext}\n\n${consensusSection}${debateSection}${clusterDigestText}Analyst Reports:\n${compiledReports}`;
+        const nonBetProposerPicks: any[] = [];
+        allAnalystReports.forEach((seatReports, idx) => {
+            const role = String(analysts[idx]?.role || '').toLowerCase();
+            if (role.includes('critic') || role.includes('risk')) return;
+            for (const r of (Array.isArray(seatReports) ? seatReports : [])) {
+                if (r && typeof r === 'object' && Array.isArray((r as any).picks)) {
+                    nonBetProposerPicks.push(...(r as any).picks);
+                }
+            }
+        });
+        if (Array.isArray((params as any)?.specialistPicks)) {
+            nonBetProposerPicks.push(...(params as any).specialistPicks);
+        }
+        const nonBetAllowedDirective = nonBetProposerPicks.length > 0
+            ? formatAllowedProposerRowsDirective({
+                specialistPicks: nonBetProposerPicks,
+                vetoedLegs: p.vetoedLegs,
+                headers: conflictHeaders,
+                boardSource: rawInputForConflict || task
+            })
+            : '';
+        const nonBetAllowedSection = nonBetAllowedDirective ? `\n\n${nonBetAllowedDirective}` : '';
+        dynamicPrompt = `${formatUserTaskSection(cleanTask)}${contractNote}${nonBetAllowedSection}\n\nHistorical Baselines:\n${historicalContext}\n\n${consensusSection}${debateSection}${clusterDigestText}Analyst Reports:\n${compiledReports}`;
     }
 
     let effectiveDynamicPrompt = dynamicPrompt;
@@ -929,7 +966,7 @@ export async function executeManagerSynthesis(
 
     const ceilingTokens = getManagerContextTokenCeiling(managerAgent.provider);
     const baseMaxChars = ceilingTokens * 4;
-    let rawDynamicPrompt = effectiveDynamicPrompt;
+    let rawDynamicPrompt = sanitizePickOutputContractPlaceholders(effectiveDynamicPrompt);
 
     if (coveredEventIds && coveredEventIds.length > 0) {
         rawDynamicPrompt += `\n\nSpecialist Coverage: Analyst tools only covered event ID(s): ${coveredEventIds.join(', ')}. Only recommend picks from covered games.`;
@@ -983,9 +1020,10 @@ export async function executeManagerSynthesis(
         });
         const criticVetoes = groundingContext?.criticVetoes || [];
         const vetoedLegs = mergeVetoedLegTargets(groundingContext?.vetoedLegs);
-        if (Array.isArray(finalResult.picks) && finalResult.picks.length > 0 && Array.isArray(groundingContext?.specialistPicks) && groundingContext.specialistPicks.length > 0) {
+        if (Array.isArray(finalResult.picks) && finalResult.picks.length > 0 && ((Array.isArray(groundingContext?.specialistPicks) && groundingContext.specialistPicks.length > 0) || Boolean(groundingContext?.compiledReportsText))) {
             const rowLockAudit = auditProposerRowLock(finalResult, {
-                specialistPicks: groundingContext.specialistPicks,
+                specialistPicks: groundingContext?.specialistPicks,
+                analystReports: groundingContext?.compiledReportsText,
                 vetoedLegs,
                 headers: parsedHeaders,
                 boardSource: slateSourceForGrounding

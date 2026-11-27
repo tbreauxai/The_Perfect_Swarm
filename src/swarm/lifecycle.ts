@@ -30,6 +30,8 @@ import {
     auditMarketCoverageAndRowBinding,
     auditProposerRowLock,
     extractUnvetoedProposerRowSet,
+    formatAllowedProposerRowsDirective,
+    isProposerRowLockFeedback,
     extractRowOptions,
     isFalseMissingMarketCritique,
     isFalseMissingMoneylineCritique,
@@ -174,6 +176,7 @@ export class AnalysisLifecycle {
         let lastAttemptCriticAuditFailed = false;
         let lastAttemptUnauditedLegs: VetoedLegTarget[] = [];
         let anyAttemptHadProposedPicks = false;
+        let hadProposerRowLockRetry = false;
         const verifiedEventIdsSet = new Set<string>(coveredEventIds || []);
         let accumulatedToolTrace: ToolCallTraceEntry[] = Array.isArray((rawData as any)?.toolCallTrace)
             ? mergeToolCallTraceEntries((rawData as any).toolCallTrace)
@@ -205,6 +208,24 @@ export class AnalysisLifecycle {
             extractQuotedVetoedClaims(initialCriticVetoes)
         );
 
+        proposerPrompt = (proposerPrompt || '').replace(/"row"\s*:\s*"R7"/gi, '"row": "<row_id>"');
+
+        const initialAllowedRowsDirective = formatAllowedProposerRowsDirective({
+            specialistPicks: (rawData as any)?.specialistPicks,
+            analystReports: (rawData as any)?.analystReports,
+            vetoedLegs: accumulatedVetoedLegs,
+            headers: initHeaders,
+            boardSource: (rawData as any)?.fullBoard || rawData
+        });
+        if (initialAllowedRowsDirective && !/\bALLOWED_PROPOSER_ROWS\s*:/i.test(proposerPrompt)) {
+            const insertMatch = /\n\n(?:Analyst Reports:|Tool evidence:|Critic Result:|Historical Baselines:)/i.exec(proposerPrompt);
+            if (insertMatch && insertMatch.index !== undefined) {
+                proposerPrompt = `${proposerPrompt.slice(0, insertMatch.index)}\n\n${initialAllowedRowsDirective}${proposerPrompt.slice(insertMatch.index)}`;
+            } else {
+                proposerPrompt = `${proposerPrompt}\n\n${initialAllowedRowsDirective}`;
+            }
+        }
+
         const effectiveCoveredEventIds: string[] | undefined =
             coveredEventIds || (Array.isArray(rawData?.coveredEventIds) ? rawData.coveredEventIds : undefined);
 
@@ -225,17 +246,15 @@ export class AnalysisLifecycle {
                 const freshBlock = freshRetryEvidenceParts.length > 0
                     ? `\n\n[Fresh Tool Evidence Pulled Before Retry]:\n${freshRetryEvidenceParts.join('\n\n').slice(0, 2000)}`
                     : '';
-                const retryRowLockInfo = extractUnvetoedProposerRowSet({
+                const retryAllowedDirective = formatAllowedProposerRowsDirective({
                     specialistPicks: (rawData as any)?.specialistPicks,
                     analystReports: (rawData as any)?.analystReports,
                     vetoedLegs: accumulatedVetoedLegs,
                     headers: initHeaders,
                     boardSource: (rawData as any)?.fullBoard || rawData
                 });
-                const allowedRowsDirective = retryRowLockInfo.proposerRows.length > 0
-                    ? (retryRowLockInfo.unvetoedRows.length > 0
-                        ? `\n\n[ALLOWED UNVETOED PROPOSER ROWS (a1/a2 ONLY)]: ${retryRowLockInfo.unvetoedRows.join(', ')}\nAssemble final "picks" strictly from these unvetoed rows. NEVER invent new rows or flip sides.`
-                        : `\n\n[ALLOWED UNVETOED PROPOSER ROWS (a1/a2 ONLY)]: NONE (all proposed rows were vetoed). Output "picks": [] with "wageringPass": true.`)
+                const allowedRowsDirective = retryAllowedDirective
+                    ? `\n\n${retryAllowedDirective}`
                     : '';
                 const vetoLines: string[] = [];
                 if (accumulatedVetoedLegs.length > 0) {
@@ -254,7 +273,7 @@ export class AnalysisLifecycle {
                 const vetoBlock = vetoLines.length > 0
                     ? `\n\n[VETOED LEGS & CLAIMS — DO NOT INCLUDE]:\n${vetoLines.join('\n')}`
                     : '';
-                const retrySuffix = `\n\n[Previous Verification Critique & Corrections Required (Attempt ${attempt - 1})]:\n${feedbackSummary}${allowedRowsDirective}${vetoBlock}${freshBlock}\n\nCRITICAL RETRY RULES:\n1. Output a clean, standalone final JSON response as if writing it for the first time. NEVER mention "a previous error", "this correction", or prior attempts in your summary or analysis.\n2. Fix any factual misstatements (such as Away vs. Home team status in "Away @ Home" headers, or references to teams not in the selected legs) so they strictly match the Game Slate headers and Analyst Reports.\n3. Do NOT flip an analyst's recommended pick side (keep the analyst's selected row/team/spread) unless the critic identified a fatal injury on that team.\n4. INJURY ATTRIBUTION RULE: Every injury citation must match the team_id or team name in the tool result or board. Never assign a player to the opposing team.\n5. MARKET AND ROW RULES: Cite the exact row ID matching the picked team, market, and line; never assign a row to the opposite team or opposite side.\n6. GROUNDING: Do not cite a score, goals-allowed, or health claim unless it is in a successful tool result. If key players on that team are OUT, do not call the team relatively healthy. Do not invent records or form. If a tool returned data, do not say fundamentals or market data are missing.\n7. PULL BEFORE PASS: Before saying a game has no fundamentals, injuries, or market data, call the tool for that game.\n8. VETO STICKS: A Critic veto removes that leg permanently. Never put a vetoed leg back into picks. If every leg is vetoed, emit "picks": [] with "wageringPass": true.\n9. SPREAD SIDE: Read the sign from the row or tool (- = favorite, + = underdog); never flip signs.\n10. ${CRITIC_AUDIT_RULE}\n11. PROPOSER ROW LOCK & REAL reasonSource: Assemble picks strictly from unvetoed a1/a2 proposer rows (never invent rows or flip sides), and set reasonSource on every pick to a real tool field/name (e.g. "matchup_fundamentals", "market_movement") or slate row ID ("R#") — NEVER "n/a", "none", or "".`;
+                const retrySuffix = `\n\n[Previous Verification Critique & Corrections Required (Attempt ${attempt - 1})]:\n${feedbackSummary}${allowedRowsDirective}${vetoBlock}${freshBlock}\n\nCRITICAL RETRY RULES:\n1. Output a clean, standalone final JSON response as if writing it for the first time. NEVER mention "a previous error", "this correction", or prior attempts in your summary or analysis.\n2. Fix any factual misstatements (such as Away vs. Home team status in "Away @ Home" headers, or references to teams not in the selected legs) so they strictly match the Game Slate headers and Analyst Reports.\n3. Do NOT flip an analyst's recommended pick side (keep the analyst's selected row/team/spread) unless the critic identified a fatal injury on that team.\n4. INJURY ATTRIBUTION RULE: Every injury citation must match the team_id or team name in the tool result or board. Never assign a player to the opposing team.\n5. MARKET AND ROW RULES: Cite the exact row ID matching the picked team, market, and line; never assign a row to the opposite team or opposite side.\n6. GROUNDING: Do not cite a score, goals-allowed, or health claim unless it is in a successful tool result. If key players on that team are OUT, do not call the team relatively healthy. Do not invent records or form. If a tool returned data, do not say fundamentals or market data are missing.\n7. PULL BEFORE PASS: Before saying a game has no fundamentals, injuries, or market data, call the tool for that game.\n8. VETO STICKS: A Critic veto removes that leg permanently. Never put a vetoed leg back into picks. If every leg is vetoed, emit "picks": [] with "wageringPass": true.\n9. SPREAD SIDE: Read the sign from the row or tool (- = favorite, + = underdog); never flip signs.\n10. ${CRITIC_AUDIT_RULE}\n11. PROPOSER ROW LOCK & REAL reasonSource: Assemble picks strictly from ALLOWED_PROPOSER_ROWS (never invent rows or flip sides, and never pass or set criticApproved=false when valid unvetoed rows exist), and set reasonSource on every pick to a real tool field/name (e.g. "matchup_fundamentals", "market_movement") or slate row ID ("<row_id>") — NEVER "n/a", "none", or "".`;
                 executePrompt = `${proposerPrompt}${retrySuffix}`;
             } else {
                 executePrompt = proposerPrompt;
@@ -275,6 +294,15 @@ export class AnalysisLifecycle {
                         const baseBudget = Math.max(300, targetPromptLen - suffix.length - 30);
                         if (baseBudget >= 300) {
                             return `${text.slice(0, baseBudget)}\n[context trimmed]${suffix}`;
+                        }
+                    }
+                    const allowedIdx = text.indexOf('\n\nALLOWED_PROPOSER_ROWS:');
+                    if (allowedIdx > 200) {
+                        const allowedEnd = text.indexOf('\n\n', allowedIdx + 2);
+                        const allowedBlock = allowedEnd >= 0 ? text.slice(allowedIdx, allowedEnd) : text.slice(allowedIdx);
+                        if (allowedBlock.length < targetPromptLen - 250) {
+                            const headBudget = Math.max(200, targetPromptLen - allowedBlock.length - 30);
+                            return `${text.slice(0, headBudget)}\n[context trimmed]${allowedBlock}`;
                         }
                     }
                     return `${text.slice(0, Math.max(200, targetPromptLen - 20))}\n[context trimmed]`;
@@ -340,12 +368,18 @@ export class AnalysisLifecycle {
                 ? (rawData as any).fullBoard
                 : (typeof rawData === 'string' ? rawData : '');
 
+            let coverageRemovedPicks: any[] = [];
             if (effectiveCoveredEventIds && currentProposal && Array.isArray(currentProposal.picks)) {
-                const originalCount = currentProposal.picks.length;
+                const originalPicksBeforeCoverage = [...currentProposal.picks];
+                const originalCount = originalPicksBeforeCoverage.length;
                 const allowedCoverageIds = verifiedEventIdsSet.size > 0
                     ? Array.from(verifiedEventIdsSet)
                     : effectiveCoveredEventIds;
                 currentProposal.picks = filterPicksByCoverage(currentProposal.picks, allowedCoverageIds, allParsedHeaders);
+                if (currentProposal.picks.length < originalCount) {
+                    const keptSet = new Set(currentProposal.picks);
+                    coverageRemovedPicks = originalPicksBeforeCoverage.filter((pk: any) => !keptSet.has(pk));
+                }
                 if (currentProposal.picks.length === 0 && originalCount > 0) {
                     currentProposal.ui_title = 'Insufficient data';
                     currentProposal.reason = 'no picks with specialist coverage';
@@ -964,7 +998,12 @@ export class AnalysisLifecycle {
                 }
 
                 const boardSourceForAudit = (rawData as any)?.fullBoard || rawData || slateHeaders || fallbackBoardText;
-                const proposerRowLockAudit = auditProposerRowLock(currentProposal, {
+                const proposalForRowLock =
+                    (!Array.isArray((currentProposal as any)?.picks) || (currentProposal as any).picks.length === 0) &&
+                    coverageRemovedPicks.length > 0
+                        ? { picks: coverageRemovedPicks }
+                        : currentProposal;
+                const proposerRowLockAudit = auditProposerRowLock(proposalForRowLock, {
                     specialistPicks: (rawData as any)?.specialistPicks,
                     analystReports: (rawData as any)?.analystReports,
                     vetoedLegs: accumulatedVetoedLegs,
@@ -972,13 +1011,31 @@ export class AnalysisLifecycle {
                     boardSource: boardSourceForAudit
                 });
                 let proposerRowLockVetoTriggered = false;
-                if (!proposerRowLockAudit.pass) {
+                if (!proposerRowLockAudit.pass && proposerRowLockAudit.unvetoedRows.length > 0) {
                     proposerRowLockVetoTriggered = true;
                     verification.pass = false;
-                    const lockMsg = proposerRowLockAudit.feedback || 'Veto (PROPOSER ROW LOCK): Manager pick is not in the unvetoed a1/a2 proposer row set.';
+                    const allowedStr = proposerRowLockAudit.unvetoedRows.join(', ');
+                    const lockMsg = proposerRowLockAudit.feedback ||
+                        `Correction (PROPOSER ROW LOCK): Pick is not in ALLOWED_PROPOSER_ROWS ([${allowedStr}]). Do NOT pass or set criticApproved=false when valid unvetoed rows exist; re-select your picks strictly from ALLOWED_PROPOSER_ROWS.`;
                     verification.feedback = (!missingPicksVetoTriggered && !injuryVetoTriggered)
                         ? lockMsg
                         : dedupeVetoMessages([verification.feedback, lockMsg]).join(' ') || lockMsg;
+                } else if (!proposerRowLockAudit.pass && coverageRemovedPicks.length === 0) {
+                    proposerRowLockVetoTriggered = true;
+                    verification.pass = false;
+                    const lockMsg = proposerRowLockAudit.feedback ||
+                        'Correction (PROPOSER ROW LOCK): All proposed a1/a2 rows were vetoed (ALLOWED_PROPOSER_ROWS: []). Output "picks": [] with "wageringPass": true.';
+                    verification.feedback = (!missingPicksVetoTriggered && !injuryVetoTriggered)
+                        ? lockMsg
+                        : dedupeVetoMessages([verification.feedback, lockMsg]).join(' ') || lockMsg;
+                } else if (hadProposerRowLockRetry && hasEmptyPicks && proposerRowLockAudit.unvetoedRows.length > 0 && initialCriticVetoes.length === 0) {
+                    proposerRowLockVetoTriggered = true;
+                    verification.pass = false;
+                    const allowedStr = proposerRowLockAudit.unvetoedRows.join(', ');
+                    const noPassMsg = `Correction (PROPOSER ROW LOCK): Empty picks / pass is not in ALLOWED_PROPOSER_ROWS ([${allowedStr}]). Do NOT pass or set criticApproved=false when valid unvetoed rows exist; re-select your picks strictly from ALLOWED_PROPOSER_ROWS.`;
+                    verification.feedback = (!missingPicksVetoTriggered && !injuryVetoTriggered)
+                        ? noPassMsg
+                        : dedupeVetoMessages([verification.feedback, noPassMsg]).join(' ') || noPassMsg;
                 }
 
                 const marketRowAudit = auditMarketCoverageAndRowBinding(
@@ -1078,12 +1135,25 @@ export class AnalysisLifecycle {
                     marketVetoTriggered &&
                     !hasPermanentMarketVeto;
 
+                const isRepairableProposerRowLock =
+                    proposerRowLockVetoTriggered &&
+                    proposerRowLockAudit.unvetoedRows.length > 0 &&
+                    !injuryVetoTriggered &&
+                    !groundingVetoTriggered &&
+                    !hasPermanentMarketVeto;
+                if (proposerRowLockVetoTriggered && proposerRowLockAudit.unvetoedRows.length > 0 && attempt < this.maxRetries) {
+                    hadProposerRowLockRetry = true;
+                }
+
                 // Merge structured veto targets from deterministic audits immediately into the cumulative ledger
-                // (do NOT poison vetoedLegs on Attempt 1 for repairable spread/venue prose mismatches or invalid_reason_source).
+                // (do NOT poison vetoedLegs on Attempt 1 for repairable spread/venue prose mismatches, invalid_reason_source,
+                // or PROPOSER ROW LOCK retries when valid unvetoed rows remain).
                 accumulatedVetoedLegs = mergeVetoedLegTargets(
                     accumulatedVetoedLegs,
                     effectiveInjuryVetoedLegs,
-                    proposerRowLockVetoTriggered ? proposerRowLockAudit.rejectedTargets : undefined,
+                    proposerRowLockVetoTriggered && (!isRepairableProposerRowLock || attempt >= this.maxRetries)
+                        ? proposerRowLockAudit.rejectedTargets
+                        : undefined,
                     marketVetoTriggered && (!isRepairableMarketProseMismatch || attempt >= this.maxRetries)
                         ? marketRowAudit.vetoedLegs
                         : undefined,
@@ -1389,6 +1459,10 @@ export class AnalysisLifecycle {
                         !pullVetoTriggered &&
                         !hasPermanentMarketVeto;
 
+                    const isRepairableProposerRowLockRetry =
+                        isRepairableProposerRowLock &&
+                        !pullVetoTriggered;
+
                     const isRepairableReasonSourceOnly =
                         attempt < this.maxRetries &&
                         marketVetoTriggered &&
@@ -1406,27 +1480,31 @@ export class AnalysisLifecycle {
                         !pullVetoTriggered &&
                         !hasPermanentMarketVeto &&
                         (isMissingPicksOnlyFeedback ||
+                            isRepairableProposerRowLockRetry ||
                             isRepairableReasonSourceOnly ||
                             /\b(?:spread(?:\s+(?:value|sign|side))?|venue|role)\s+mismatch\b|described\s+as\s+(?:home|away|road)/i.test(verification.feedback) ||
                             isRepairableRowSignFlip) &&
                         !/\b(?:contra_steam_misread|symmetric_injury_misread|sharp_contra_steam|missing_(?:moneyline|total|spread)_coverage)\b/i.test(verification.feedback) &&
                         !(marketAuditFlags.includes('row_side_mismatch') && !isRepairableRowSignFlip);
 
-                    if (!isRepairableProseOnlyFeedback && !isMissingPicksOnlyFeedback) {
+                    if (!isRepairableProseOnlyFeedback && !isMissingPicksOnlyFeedback && !isRepairableProposerRowLockRetry) {
                         const nonSchemaFeedback = verification.feedback
                             .replace(/Schema violation:\s*top-level 'picks' array is missing or empty[\s\S]*?(?:set wageringPass:\s*false\.|$)/gi, '')
                             .trim();
-                        if (!accumulatedVetoTexts.includes(verification.feedback)) {
+                        const nonLockFeedback = proposerRowLockAudit.unvetoedRows.length > 0 && isProposerRowLockFeedback(nonSchemaFeedback) && nonSchemaFeedback.split(/\n+/).every(line => isProposerRowLockFeedback(line.trim()))
+                            ? ''
+                            : nonSchemaFeedback;
+                        if (nonLockFeedback && !accumulatedVetoTexts.includes(verification.feedback)) {
                             accumulatedVetoTexts.push(verification.feedback);
                         }
-                        if (nonSchemaFeedback) {
+                        if (nonLockFeedback) {
                             accumulatedVetoedLegs = mergeVetoedLegTargets(
                                 accumulatedVetoedLegs,
-                                extractVetoedLegTargets([nonSchemaFeedback], allParsedHeaders, auditRowMap)
+                                extractVetoedLegTargets([nonLockFeedback], allParsedHeaders, auditRowMap)
                             );
                             accumulatedVetoedClaims = mergeVetoedClaims(
                                 accumulatedVetoedClaims,
-                                extractQuotedVetoedClaims([nonSchemaFeedback])
+                                extractQuotedVetoedClaims([nonLockFeedback])
                             );
                         }
                     }

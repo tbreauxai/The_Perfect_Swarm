@@ -7,7 +7,7 @@ import {
   type AuthoritativeInjury,
   type EspnTeamEntry
 } from './injuryAttribution.ts';
-import { checkPickRowSideBinding, extractRowOptions, type RowOptionEntry } from './marketRowBinding.ts';
+import { checkPickRowSideBinding, extractRowOptions, isProposerRowLockFeedback, stripAllowedProposerRowsDirective, type RowOptionEntry } from './marketRowBinding.ts';
 import { splitSentencesSafe } from '../parser/responseGuards.ts';
 
 export const GROUNDING_RULE = `GROUNDING:
@@ -1092,12 +1092,15 @@ export function extractVetoedLegTargets(
 
   for (const rawVeto of vetoTexts) {
     if (!rawVeto || typeof rawVeto !== 'string') continue;
-    const clauses = normalizeText(rawVeto).split(
+    const strippedVeto = stripAllowedProposerRowsDirective(rawVeto);
+    if (!strippedVeto) continue;
+    const clauses = normalizeText(strippedVeto).split(
       /(?<=[.!?])\s+|\n+|;\s+|,\s*(?=(?:while|whereas|but)\b)/i
     );
     for (const clause of clauses) {
       const trimmed = clause.trim();
       if (!trimmed) continue;
+      if (isProposerRowLockFeedback(trimmed)) continue;
       if (/\b(?:row|spread)\s+side\s+mismatch\b|\b(?:row|spread)_side_mismatch\b|\b(?:spread(?:\s+value|\s+sign)?|venue|role)\s+mismatch\b/i.test(trimmed)) continue;
       if (/^Veto\s*\(PULL BEFORE PASS\):/i.test(trimmed) && !/\bmust\s+be\s+removed\b/i.test(trimmed)) {
         continue;

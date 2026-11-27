@@ -2884,10 +2884,60 @@ export function extractUnvetoedProposerRowSet(options?: ProposerRowLockOptions):
 }
 
 /**
+ * Strips ALLOWED_PROPOSER_ROWS directives/lists from feedback or critique text before scanning
+ * for vetoed row IDs or team aliases so unvetoed proposer rows are never poisoned as vetoed.
+ */
+export function stripAllowedProposerRowsDirective(text: string): string {
+  if (!text || typeof text !== 'string') return '';
+  return text
+    .replace(/ALLOWED_PROPOSER_ROWS\s*\(\s*\[[^\]]*\]\s*\)/gi, 'ALLOWED_PROPOSER_ROWS')
+    .replace(/ALLOWED_PROPOSER_ROWS\s*:\s*\[[^\]]*\](?:\s*[—-]\s*[^\n]*)?/gi, 'ALLOWED_PROPOSER_ROWS')
+    .replace(/\[ALLOWED UNVETOED PROPOSER ROWS[^\]]*\]:[^\n]*/gi, '')
+    .trim();
+}
+
+export function isProposerRowLockFeedback(text?: string): boolean {
+  if (!text || typeof text !== 'string') return false;
+  return /(?:Correction|Veto)\s*\(PROPOSER ROW LOCK\):/i.test(text);
+}
+
+/**
+ * Formats the explicit `ALLOWED_PROPOSER_ROWS` directive (including team/side labels) for
+ * injection into the Manager / Compiler initial and retry prompts.
+ */
+export function formatAllowedProposerRowsDirective(options?: ProposerRowLockOptions): string {
+  const rowSetInfo = extractUnvetoedProposerRowSet(options);
+  if (rowSetInfo.proposerRows.length === 0) return '';
+
+  if (rowSetInfo.unvetoedRows.length === 0) {
+    return 'ALLOWED_PROPOSER_ROWS: [] (all a1/a2 proposed rows were vetoed). Output "picks": [] with "wageringPass": true.';
+  }
+
+  const headers = options?.headers && options.headers.length > 0
+    ? options.headers
+    : (options?.boardSource ? parseGameHeaders(options.boardSource) : []);
+  const rowMap = options?.boardSource || headers.length > 0
+    ? extractRowOptions(options?.boardSource ? [options.boardSource] : [], headers)
+    : new Map<string, RowOptionEntry>();
+
+  const labeledRows = rowSetInfo.unvetoedRows.map((r) => {
+    const rawLabel = (rowSetInfo.sideByRow.get(r) || rowMap.get(r)?.text || '')
+      .replace(new RegExp(`^${r}[:\\s|-]+`, 'i'), '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const cleanLabel = rawLabel.length > 48 ? `${rawLabel.slice(0, 45).trimEnd()}...` : rawLabel;
+    return cleanLabel ? `${r} (${cleanLabel})` : r;
+  });
+
+  const rowsList = `[${rowSetInfo.unvetoedRows.join(', ')}]`;
+  const labelsSuffix = labeledRows.some(l => l.includes('(')) ? ` — ${labeledRows.join('; ')}` : '';
+  return `ALLOWED_PROPOSER_ROWS: ${rowsList}${labelsSuffix}\nAssemble final "picks" strictly from ALLOWED_PROPOSER_ROWS. NEVER invent a new row or flip sides.`;
+}
+
+/**
  * Deterministic Proposer Row Lock:
  * When non-critic proposers (a1/a2) supplied row-bound picks, every pick emitted by Manager MUST
- * match an unvetoed proposer row ID. Never lists allowed rows inside `feedback` so downstream
- * `extractVetoedLegTargets` cannot poison valid unvetoed rows.
+ * match an unvetoed proposer row ID in ALLOWED_PROPOSER_ROWS.
  */
 export function auditProposerRowLock(
   proposal: any,
@@ -2950,8 +3000,8 @@ export function auditProposerRowLock(
       ...(rowEntry?.text ? { teamLabel: rowEntry.text } : (sideText ? { teamLabel: sideText } : {})),
       teamAliases: [],
       reason: rowId
-        ? `Pick ${rowId} was not in the unvetoed a1/a2 proposer row set.`
-        : 'Pick omitted a valid unvetoed a1/a2 proposer row ID.'
+        ? `Pick ${rowId} was not in ALLOWED_PROPOSER_ROWS.`
+        : 'Pick omitted a valid row in ALLOWED_PROPOSER_ROWS.'
     });
   }
 
@@ -2967,9 +3017,10 @@ export function auditProposerRowLock(
   }
 
   const rejectedList = Array.from(new Set(rejectedRows)).join(', ');
+  const allowedRowsStr = rowSetInfo.unvetoedRows.join(', ');
   const feedback = rowSetInfo.unvetoedRows.length === 0
-    ? `Veto (PROPOSER ROW LOCK): All proposed a1/a2 rows were vetoed, so ${rejectedList} cannot be emitted. Output "picks": [] with "wageringPass": true.`
-    : `Veto (PROPOSER ROW LOCK): Pick ${rejectedList} is not in the unvetoed a1/a2 proposer row set. Assemble final picks strictly from the unvetoed proposer rows without inventing new rows or flipping sides.`;
+    ? `Correction (PROPOSER ROW LOCK): All proposed a1/a2 rows were vetoed (ALLOWED_PROPOSER_ROWS: []), so ${rejectedList} cannot be emitted. Output "picks": [] with "wageringPass": true.`
+    : `Correction (PROPOSER ROW LOCK): Pick ${rejectedList} is not in ALLOWED_PROPOSER_ROWS ([${allowedRowsStr}]). Do NOT pass or set criticApproved=false when valid unvetoed rows exist; re-select your picks strictly from ALLOWED_PROPOSER_ROWS.`;
 
   return {
     pass: false,

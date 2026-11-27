@@ -106,7 +106,39 @@ export function computeGroqMaxTokens(options: ProviderCallOptions, estimatedProm
 export const GROQ_GPT_OSS_120B_MAX_COMPLETION_TOKENS = 1_500;
 
 export function isGroqGptOss120b(modelName?: string): boolean {
-    return String(modelName || '').trim().toLowerCase() === 'openai/gpt-oss-120b';
+    return String(modelName || '').trim().toLowerCase().replace(/^groq\//, '') === 'openai/gpt-oss-120b';
+}
+
+export function isManagerSeatRole(role?: string, agentId?: string): boolean {
+    const r = String(role || '').trim().toLowerCase();
+    const id = String(agentId || '').trim().toLowerCase();
+    return (
+        id === 'manager' ||
+        r.includes('manager') ||
+        r.includes('compiler') ||
+        r.includes('judge')
+    );
+}
+
+export function resolveGroqGptOss120bReasoningEffort(options: {
+    role?: string;
+    agentId?: string;
+    config?: Record<string, any>;
+}): 'low' | 'medium' | 'high' {
+    const explicitEffort = String(
+        options.config?.reasoning_effort ||
+        options.config?.reasoningEffort ||
+        options.config?.reasoning?.effort ||
+        ''
+    ).toLowerCase().trim();
+    if (isManagerSeatRole(options.role, options.agentId)) {
+        // Manager / GodView Compiler on Groq gpt-oss-120b: cap unset or "high" at "low"
+        // so compilation stays fast (~2-5s instead of ~55s); preserve explicit "medium" if requested.
+        return explicitEffort === 'medium' ? 'medium' : 'low';
+    }
+    return (explicitEffort === 'low' || explicitEffort === 'medium' || explicitEffort === 'high')
+        ? explicitEffort
+        : 'low';
 }
 
 export class GroqAdapter implements ProviderAdapter {
@@ -164,15 +196,11 @@ export class GroqAdapter implements ProviderAdapter {
 
         let extraBody: Record<string, any> | undefined;
         if (isGroqGptOss120b(options.modelName)) {
-            const explicitEffort = String(
-                (options.config as any)?.reasoning_effort ||
-                (options.config as any)?.reasoningEffort ||
-                options.config?.reasoning?.effort ||
-                ''
-            ).toLowerCase().trim();
-            const reasoningEffort = (explicitEffort === 'low' || explicitEffort === 'medium' || explicitEffort === 'high')
-                ? explicitEffort
-                : 'low';
+            const reasoningEffort = resolveGroqGptOss120bReasoningEffort({
+                role: options.role,
+                agentId: options.agentId,
+                config: options.config as Record<string, any> | undefined
+            });
             const cappedCompletionTokens = Math.min(maxTokens, GROQ_GPT_OSS_120B_MAX_COMPLETION_TOKENS);
             if (isJson || isCriticOrVerifier) {
                 maxTokens = cappedCompletionTokens;

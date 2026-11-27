@@ -11,7 +11,7 @@ import { getManagerContextTokenCeiling } from './synthesisPipeline.ts';
 import { formatRunDebugOutputDigest, recordRunDebugSeat } from './runDebugRecord.ts';
 import { parseGameHeaders, renderHeaders, filterPicksByCoverage, type GameHeader } from '../context/gameHeaders.ts';
 import { INJURY_ATTRIBUTION_RULE, auditInjuryAttribution, matchTeamByLabel, sanitizeMisattributedPicksAndText } from '../tools/injuryAttribution.ts';
-import { MARKET_AND_ROW_RULES, SPREAD_SIDE_RULE, auditMarketCoverageAndRowBinding, auditProposerRowLock, validatePickReasonSource, extractRowOptions, sanitizeRowMismatchedPicks, type MarketToolRecord } from '../tools/marketRowBinding.ts';
+import { MARKET_AND_ROW_RULES, SPREAD_SIDE_RULE, auditMarketCoverageAndRowBinding, auditProposerRowLock, extractUnvetoedProposerRowSet, isProposerRowLockFeedback, stripAllowedProposerRowsDirective, validatePickReasonSource, extractRowOptions, sanitizeRowMismatchedPicks, type MarketToolRecord } from '../tools/marketRowBinding.ts';
 import {
     GROUNDING_RULE,
     FORM_GROUNDING_BULLETS,
@@ -305,7 +305,7 @@ const CONTRADICTORY_RECOMMENDATION_PROSE_REGEX =
     /\b(?:construct\s+(?:a\s+)?(?:(?:\d+|two|three|four|five)-?leg\s+)?parlay|build\s+(?:a\s+)?(?:(?:\d+|two|three|four|five)-?leg\s+)?parlay|place\s+(?:a|the)\s+(?:(?:\d+|two|three|four|five)-?leg\s+)?(?:parlay|bet|wager)|proceed\s+with\s+(?:a\s+)?(?:\d+|two|three|four|five)\s*-?\s*leg|recommend(?:ed|ing|s)?\s+(?:a\s+)?(?:\d+|two|three|four|five)\s*-?\s*leg|risk\s+critic\s+approved\s+(?:all|every|both|the))\b/i;
 
 const FEEDBACK_REJECTION_CUE_REGEX =
-    /\b(?:reject(?:ed|s|ing)?|veto(?:ed|s|ing)?|fail(?:ed|s|ing)?|invalid|disqualif(?:y|ied|ies)|contradict(?:s|ed|ing)?|ungrounded|misread|disadvantaged|away_advantage|home_advantage|symmetric|uncertain_questionable|remove|drop|strip|exclude|cannot\s+recommend|do\s+not\s+recommend|out\b)\b/i;
+    /\b(?:reject(?:ed|s|ing)?|veto(?:ed|s|ing)?|fail(?:ed|s|ing)?|invalid|disqualif(?:y|ied|ies)|contradict(?:s|ed|ing)?|ungrounded|misread|disadvantaged|away_advantage|home_advantage|symmetric|uncertain_questionable|not\s+in\s+ALLOWED_PROPOSER_ROWS|remove|drop|strip|exclude|cannot\s+recommend|do\s+not\s+recommend|out\b)\b/i;
 
 const FEEDBACK_APPROVAL_ONLY_CUE_REGEX =
     /\b(?:approved?|valid|clean|pass(?:ed|es)?|keep|sound|grounded|fine|solid|good)\b/i;
@@ -433,8 +433,14 @@ export function extractRejectedLegTargetsFromFeedback(
     const rowMap = extractRowOptions([slateText], headers);
     const pickInfos = picks.map(pk => ({ pk, info: buildPickIdentifierInfo(pk, rowMap) }));
 
+    // Strip ALLOWED_PROPOSER_ROWS lists first so valid unvetoed rows inside Correction feedback are never matched as rejected.
+    const sanitizedFeedbackText = stripAllowedProposerRowsDirective(feedbackText);
+    if (!sanitizedFeedbackText) {
+        return [];
+    }
+
     // Split feedback into clauses (sentence boundaries, semicolons, and contrasting conjunctions)
-    const rawClauses = splitSentencesSafe(feedbackText).flatMap(s =>
+    const rawClauses = splitSentencesSafe(sanitizedFeedbackText).flatMap(s =>
         s.split(/;\s+|,\s+(?:but|however|while|whereas|except)\s+|\s+\b(?:but|however)\b\s+/i)
     );
 
@@ -766,9 +772,12 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
                 ? lifecycleResult.criticFeedback.trim()
                 : '';
 
-            // S1.3: Deterministic fallback hydration when Manager still omits picks[] on final attempt
-            // while criticApproved === true and Pass 1 specialists supplied matching structured picks.
-            const nonSchemaVetoTexts = combinedVetoTexts.filter(t => !isMissingPicksSchemaViolationFeedback(t));
+            // S1.3: Deterministic fallback hydration when Manager omits picks[] on final attempt
+            // (including panic-passing after a PROPOSER ROW LOCK retry) while criticApproved === true
+            // and Pass 1 specialists supplied matching structured picks.
+            const nonSchemaVetoTexts = combinedVetoTexts.filter(
+                t => !isMissingPicksSchemaViolationFeedback(t) && !isProposerRowLockFeedback(t)
+            );
             const canAttemptHydrationRecovery =
                 (!Array.isArray(finalAnalysis.picks) || finalAnalysis.picks.length === 0) &&
                 p.criticVerdictApproved !== false &&
@@ -776,12 +785,13 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
                 combinedVetoedLegs.length === 0 &&
                 combinedVetoedClaims.length === 0 &&
                 (isMissingPicksSchemaViolationFeedback(lastAttemptFeedback) ||
+                    isProposerRowLockFeedback(lastAttemptFeedback) ||
                     p.criticVerdictApproved === true ||
                     finalAnalysis.criticApproved === true);
 
             if (canAttemptHydrationRecovery) {
                 const candidate = JSON.parse(JSON.stringify(finalAnalysis));
-                const hydration = hydrateMissingPicksFromSpecialists(candidate, {
+                let hydration = hydrateMissingPicksFromSpecialists(candidate, {
                     specialistPicks: p.specialistPicks,
                     compiledReportsText: effectiveCompiledReports,
                     headers: parsedHeaders,
@@ -790,6 +800,48 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
                     coveredEventIds: p.coveredEventIds,
                     criticVerdictApproved: p.criticVerdictApproved
                 });
+                if (!hydration.hydrated && isProposerRowLockFeedback(lastAttemptFeedback) && Array.isArray(p.specialistPicks) && p.specialistPicks.length > 0) {
+                    const rowLockPool = extractUnvetoedProposerRowSet({
+                        specialistPicks: p.specialistPicks,
+                        analystReports: effectiveCompiledReports,
+                        vetoedLegs: combinedVetoedLegs,
+                        headers: parsedHeaders,
+                        boardSource: boardSourceForSanitize
+                    });
+                    const unvetoedSet = new Set(rowLockPool.unvetoedRows);
+                    const rawPool = p.specialistPicks.filter((pk: any) => {
+                        const r = String(pk?.row || pk?.rowId || pk?.id || '').trim().toUpperCase();
+                        return Boolean(r && unvetoedSet.has(r));
+                    });
+                    const coveredPool = p.coveredEventIds && p.coveredEventIds.length > 0
+                        ? filterPicksByCoverage(rawPool, p.coveredEventIds, parsedHeaders)
+                        : rawPool;
+                    const dedupedPool = coveredPool.length > 1
+                        ? dedupePicksByDistinctEventId(coveredPool, parsedHeaders, boardSourceForSanitize)
+                        : coveredPool;
+                    if (dedupedPool.length > 0) {
+                        candidate.picks = JSON.parse(JSON.stringify(dedupedPool));
+                        candidate.wageringPass = false;
+                        candidate.pass = false;
+                        candidate.criticApproved = true;
+                        if (candidate.status === 'no_play') delete candidate.status;
+                        if (typeof candidate.summary === 'string' && /\b(?:pass|no\s+playable|no\s+bets?|insufficient\s+data)\b/i.test(candidate.summary)) {
+                            candidate.summary = `Proceed with unvetoed proposer selections: ${dedupedPool.map((pk: any) => `${pk.side || pk.pick || pk.team || pk.row} (${pk.row})`).join(', ')}.`;
+                        }
+                        if (Array.isArray(candidate.scorecards)) {
+                            candidate.scorecards = candidate.scorecards.map((sc: any) =>
+                                sc && /risk|critic/i.test(String(sc.seat || '')) && sc.verdict === 'veto'
+                                    ? { ...sc, verdict: 'approve', notes: 'Approved unvetoed proposer pool.' }
+                                    : sc
+                            );
+                        }
+                        hydration = {
+                            hydrated: true,
+                            hydratedPicks: candidate.picks,
+                            citedRows: candidate.picks.map((pk: any) => String(pk.row || '')).filter(Boolean)
+                        };
+                    }
+                }
                 if (hydration.hydrated && Array.isArray(candidate.picks) && candidate.picks.length > 0) {
                     sanitizeCompilerProposalOddsAndSummary(candidate);
                     const injuryOk = combinedVerifiedToolResults
@@ -1129,7 +1181,9 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
             finalAnalysis.picks.length > 0 &&
             finalAnalysis.verified === true
         );
-        const nonSchemaVetoTextsForSync = vetoTextsForSync.filter(t => !isMissingPicksSchemaViolationFeedback(t));
+        const nonSchemaVetoTextsForSync = vetoTextsForSync.filter(
+            t => !isMissingPicksSchemaViolationFeedback(t) && !isProposerRowLockFeedback(t)
+        );
         const finalDetVetoes = [
             ...(isHydratedPassRecovery ? nonSchemaVetoTextsForSync : vetoTextsForSync),
             ...vetoLegsForSync,
