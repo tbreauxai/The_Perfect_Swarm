@@ -75,9 +75,9 @@ export function resolveSwarmAgents(
     // Morning runs (morning_judge): judge on Groq, no OpenRouter seat (see morningProviders.ts). Other runs unchanged.
     const isMorningRun = (settings as any)?.responseSchema === 'morning_judge';
     const rawAgents = isMorningRun ? applyMorningProviderPolicy(requestedAgents, settings) : requestedAgents;
-    let managerConfig = rawAgents.find((a: AgentConfig) => a.id === 'manager' || a.role === 'Manager Node');
+    let managerConfig = rawAgents.find((a: AgentConfig) => a.id === 'manager' || a.role === 'Manager Node' || a.role === 'GodView Compiler');
     const dedicatedCriticConfig = rawAgents.find((a: AgentConfig) => a.id === 'critic' || a.role?.toLowerCase().includes('critic') || a.role?.toLowerCase().includes('verifier')) || settings?.critic;
-    const analystConfigs = rawAgents.filter((a: AgentConfig) => a.id !== 'manager' && a.provider !== 'none');
+    const analystConfigs = rawAgents.filter((a: AgentConfig) => a !== managerConfig && a.id !== 'manager' && a.provider !== 'none');
 
     const hasUserGemini = !!settings?.geminiApiKey;
     if (!managerConfig) {

@@ -2072,6 +2072,31 @@ export function auditMarketCoverageAndRowBinding(
       }
     }
 
+    // 1a. Reject placeholder reasonSource values (e.g. "n/a", "none", "") on structured pick objects
+    if (item.pick && typeof item.pick === 'object') {
+      const reasonSourceCheck = validatePickReasonSource(item.pick);
+      if (!reasonSourceCheck.valid) {
+        flags.push('invalid_reason_source');
+        const msg = `Veto (INVALID REASON SOURCE): ${reasonSourceCheck.reason}`;
+        const rowEntry = item.rowId ? rowMap.get(item.rowId) : undefined;
+        const target: MarketVetoLegTarget | undefined = item.rowId
+          ? {
+              rowId: item.rowId,
+              ...(rowEntry?.eventId ? { eventId: rowEntry.eventId } : (item.eventId ? { eventId: item.eventId } : {})),
+              ...(rowEntry?.text ? { teamLabel: rowEntry.text } : {}),
+              teamAliases: [],
+              reason: msg.slice(0, 140)
+            }
+          : undefined;
+        return {
+          pass: false,
+          feedback: msg,
+          flags,
+          ...(target ? { vetoedLegs: [target] } : {})
+        };
+      }
+    }
+
     // 1b. Spread side, sign & value check for rowless or role-contradicted picks
     if (authoritativeSpreads.size > 0) {
       const pickViolation = findSpreadSideViolationInClause(item.sideText, authoritativeSpreads, { allowedVenueEventIds: pickedEventIds, pickedTeamCanonicals });
@@ -2528,3 +2553,432 @@ export function sanitizeRowMismatchedPicks<T extends Record<string, any>>(
 
   return report;
 }
+
+const PLACEHOLDER_REASON_SOURCES = new Set([
+  'n/a',
+  'na',
+  'n.a.',
+  'none',
+  'null',
+  'undefined',
+  'unknown',
+  'tbd',
+  'tba',
+  'todo',
+  'pending',
+  'missing',
+  'empty',
+  'placeholder',
+  'nil',
+  'nothing',
+  'not applicable',
+  'not available',
+  'no source',
+  'no data',
+  'no tool',
+  'unavailable',
+  'unspecified',
+  'unverified',
+  'default',
+  'other',
+  'general',
+  'inference',
+  'guess',
+  'estimate',
+  'memory',
+  'prior knowledge',
+  'general knowledge'
+]);
+
+/**
+ * Validates `pick.reasonSource` / `pick.reason_source` whenever present on a structured pick object.
+ * Rejects placeholder strings ("n/a", "none", "", etc.) and requires a real tool field/name or slate row ID.
+ * When a legacy pick fixture omits the `reasonSource` property entirely, returns valid: true.
+ */
+export function validatePickReasonSource(pk: any): { valid: boolean; reason?: string } {
+  if (!pk || typeof pk !== 'object') return { valid: true };
+  const hasKey = 'reasonSource' in pk || 'reason_source' in pk;
+  if (!hasKey) return { valid: true };
+
+  const raw = 'reasonSource' in pk ? pk.reasonSource : pk.reason_source;
+  const rowHint = typeof pk.row === 'string' && pk.row.trim()
+    ? pk.row.trim().toUpperCase()
+    : (typeof pk.rowId === 'string' && pk.rowId.trim() ? pk.rowId.trim().toUpperCase() : 'pick');
+
+  if (typeof raw !== 'string') {
+    return {
+      valid: false,
+      reason: `${rowHint} has non-string reasonSource (${String(raw)}) — must cite a real tool field/name or slate row ID.`
+    };
+  }
+
+  const trimmed = raw.trim();
+  const normalized = trimmed.toLowerCase().replace(/\s+/g, ' ');
+  if (
+    !trimmed ||
+    normalized.length < 2 ||
+    !/[a-z0-9]/i.test(trimmed) ||
+    PLACEHOLDER_REASON_SOURCES.has(normalized)
+  ) {
+    return {
+      valid: false,
+      reason: `${rowHint} has invalid placeholder reasonSource "${raw}" — cite a real tool field/name (e.g. "matchup_fundamentals", "market_movement", "injury_and_roster_delta") or slate row ID.`
+    };
+  }
+
+  return { valid: true };
+}
+
+export interface ProposerRowLockOptions {
+  specialistPicks?: any[];
+  analystReports?: unknown;
+  vetoedLegs?: Array<{
+    rowId?: string;
+    row?: string;
+    eventId?: string;
+    teamLabel?: string;
+    teamAliases?: string[];
+  }>;
+  headers?: GameHeader[];
+  boardSource?: unknown;
+}
+
+export interface UnvetoedProposerRowsResult {
+  proposerRows: string[];
+  vetoedProposerRows: string[];
+  unvetoedRows: string[];
+  sideByRow: Map<string, string>;
+}
+
+export interface ProposerRowLockAuditResult {
+  pass: boolean;
+  feedback?: string;
+  flags: string[];
+  proposerRows: string[];
+  unvetoedRows: string[];
+  rejectedRows: string[];
+  rejectedTargets: MarketVetoLegTarget[];
+}
+
+function extractRowIdFromAnyPick(pk: any): string | undefined {
+  if (!pk) return undefined;
+  if (typeof pk === 'string') {
+    const m = pk.match(/\b(R\d+)\b/i);
+    return m ? m[1].toUpperCase() : undefined;
+  }
+  if (typeof pk === 'object') {
+    for (const rawRow of [pk.row, pk.rowId, pk.row_id, pk.Row, pk.id]) {
+      if (typeof rawRow === 'string' && /^R\d+$/i.test(rawRow.trim())) {
+        return rawRow.trim().toUpperCase();
+      }
+    }
+    const sideText = extractStructuredPickSideText(pk);
+    if (sideText) {
+      const m = sideText.match(/\b(R\d+)\b/i);
+      if (m) return m[1].toUpperCase();
+    }
+  }
+  return undefined;
+}
+
+function extractProposerPickMetaList(
+  specialistPicks?: any[],
+  analystReports?: unknown
+): Array<{ rowId: string; eventId?: string; sideText: string }> {
+  const out: Array<{ rowId: string; eventId?: string; sideText: string }> = [];
+
+  const pushCandidate = (pk: any) => {
+    if (!pk) return;
+    if (typeof pk === 'object') {
+      if (pk.vetoed === true || /^veto/i.test(String(pk.verdict || pk.status || ''))) return;
+    }
+    const rowId = extractRowIdFromAnyPick(pk);
+    if (!rowId) return;
+    const eventId = typeof pk === 'object'
+      ? (typeof pk.event_id === 'string' && pk.event_id.trim()
+          ? pk.event_id.trim()
+          : (typeof pk.eventId === 'string' && pk.eventId.trim() ? pk.eventId.trim() : undefined))
+      : undefined;
+    const sideText = extractStructuredPickSideText(pk);
+    out.push({ rowId, ...(eventId ? { eventId } : {}), sideText });
+  };
+
+  const inspectReportObj = (rep: any) => {
+    if (!rep || typeof rep !== 'object' || rep._placeholder === true) return;
+    const label = String(rep.seat || rep.role || '').toLowerCase();
+    if (label && (label.includes('critic') || label.includes('risk'))) return;
+    if (Array.isArray(rep.picks)) {
+      for (const pk of rep.picks) pushCandidate(pk);
+    }
+    if (rep.scorecard?.pick) pushCandidate(rep.scorecard.pick);
+    if (rep.scorecard && Array.isArray(rep.scorecard.picks)) {
+      for (const pk of rep.scorecard.picks) pushCandidate(pk);
+    }
+    if (Array.isArray(rep.scorecards)) {
+      for (const sc of rep.scorecards) {
+        if (!sc || typeof sc !== 'object') continue;
+        if (sc.pick) pushCandidate(sc.pick);
+        if (Array.isArray(sc.picks)) {
+          for (const pk of sc.picks) pushCandidate(pk);
+        }
+      }
+    }
+  };
+
+  if (Array.isArray(specialistPicks)) {
+    for (const pk of specialistPicks) pushCandidate(pk);
+  }
+
+  if (Array.isArray(analystReports)) {
+    for (const rep of analystReports) inspectReportObj(rep);
+  } else if (analystReports && typeof analystReports === 'object') {
+    inspectReportObj(analystReports);
+  } else if (typeof analystReports === 'string' && analystReports.trim()) {
+    const trimmed = analystReports.trim();
+    let parsedWhole: unknown;
+    try {
+      parsedWhole = JSON.parse(trimmed);
+    } catch {
+      parsedWhole = undefined;
+    }
+    if (Array.isArray(parsedWhole)) {
+      for (const rep of parsedWhole) inspectReportObj(rep);
+    } else if (parsedWhole && typeof parsedWhole === 'object') {
+      inspectReportObj(parsedWhole);
+    } else {
+      // Split compiled reports text into per-seat sections (`[Quant Specialist Report]:`)
+      const sections = trimmed.split(/(?=^\[[^\]]+\]:?)/m).filter(s => s.trim().length > 0);
+      for (const sec of sections) {
+        const headerMatch = sec.match(/^\[([^\]]+)\]/);
+        const headerLabel = headerMatch ? headerMatch[1].toLowerCase() : '';
+        if (headerLabel.includes('critic') || headerLabel.includes('risk')) continue;
+
+        // Parse any embedded JSON blocks inside the section
+        let foundStructuredJson = false;
+        const braceStarts: number[] = [];
+        for (let i = 0; i < sec.length; i++) {
+          if (sec[i] === '{') braceStarts.push(i);
+        }
+        let cursor = -1;
+        for (const startIdx of braceStarts) {
+          if (startIdx < cursor) continue;
+          let depth = 0;
+          let inStr = false;
+          let esc = false;
+          for (let j = startIdx; j < sec.length; j++) {
+            const ch = sec[j];
+            if (inStr) {
+              if (esc) esc = false;
+              else if (ch === '\\') esc = true;
+              else if (ch === '"') inStr = false;
+              continue;
+            }
+            if (ch === '"') inStr = true;
+            else if (ch === '{') depth++;
+            else if (ch === '}') {
+              depth--;
+              if (depth === 0) {
+                const jsonSlice = sec.slice(startIdx, j + 1);
+                try {
+                  const obj = JSON.parse(jsonSlice);
+                  if (obj && typeof obj === 'object' && ('picks' in obj || 'scorecard' in obj || 'scorecards' in obj)) {
+                    inspectReportObj(obj);
+                    foundStructuredJson = true;
+                  }
+                } catch {
+                  // Ignore non-JSON brace blocks
+                }
+                cursor = j + 1;
+                break;
+              }
+            }
+          }
+        }
+
+        // Fallback if picks JSON inside report was truncated before closing brace
+        if (!foundStructuredJson) {
+          const picksBlockMatch = sec.match(/"picks"\s*:\s*\[([\s\S]*?)(?:\]|$)/i);
+          if (picksBlockMatch) {
+            const rowMatches = picksBlockMatch[1].matchAll(/"row(?:Id)?"\s*:\s*"(R\d+)"/gi);
+            for (const rm of rowMatches) {
+              out.push({ rowId: rm[1].toUpperCase(), sideText: '' });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Extracts all row IDs proposed by non-critic specialists (a1/a2) and subtracts vetoed legs
+ * (matching exact rowId first so opposite-side vetoes do not strip the valid side's row).
+ */
+export function extractUnvetoedProposerRowSet(options?: ProposerRowLockOptions): UnvetoedProposerRowsResult {
+  const proposerMeta = extractProposerPickMetaList(options?.specialistPicks, options?.analystReports);
+  const headers = options?.headers && options.headers.length > 0
+    ? options.headers
+    : (options?.boardSource ? parseGameHeaders(options.boardSource) : []);
+  const rowMap = options?.boardSource || headers.length > 0
+    ? extractRowOptions(options?.boardSource ? [options.boardSource] : [], headers)
+    : new Map<string, RowOptionEntry>();
+
+  const proposerRowSet = new Set<string>();
+  const vetoedProposerRowSet = new Set<string>();
+  const sideByRow = new Map<string, string>();
+  const eventByRow = new Map<string, string>();
+
+  for (const m of proposerMeta) {
+    proposerRowSet.add(m.rowId);
+    if (m.sideText && !sideByRow.has(m.rowId)) sideByRow.set(m.rowId, m.sideText);
+    const ev = m.eventId || rowMap.get(m.rowId)?.eventId;
+    if (ev && !eventByRow.has(m.rowId)) eventByRow.set(m.rowId, ev);
+  }
+
+  const vetoedLegs = Array.isArray(options?.vetoedLegs) ? options!.vetoedLegs! : [];
+  for (const rowId of proposerRowSet) {
+    const rowEntry = rowMap.get(rowId);
+    const rowEventId = eventByRow.get(rowId) || rowEntry?.eventId;
+    const rowTextLower = `${sideByRow.get(rowId) || ''} ${rowEntry?.text || ''}`.toLowerCase();
+
+    const isVetoed = vetoedLegs.some((v) => {
+      if (!v) return false;
+      const vRow = String(v.rowId || v.row || '').trim().toUpperCase();
+      if (vRow) {
+        return vRow === rowId;
+      }
+      const vEv = String(v.eventId || '').trim().toLowerCase();
+      const evMatch = Boolean(vEv && rowEventId && vEv === rowEventId.toLowerCase());
+      const aliases = Array.from(new Set([
+        ...(Array.isArray(v.teamAliases) ? v.teamAliases : []),
+        ...(v.teamLabel ? [v.teamLabel] : [])
+      ]))
+        .map(a => String(a || '').trim().toLowerCase())
+        .filter(a => a.length >= 2);
+      const aliasMatch = aliases.length > 0 && aliases.some(a =>
+        new RegExp(`(?<![a-z0-9])${escapeRegex(a)}(?![a-z0-9])`, 'i').test(rowTextLower)
+      );
+      if (vEv && aliases.length > 0) return evMatch && aliasMatch;
+      if (vEv) return evMatch;
+      if (aliases.length > 0) return aliasMatch;
+      return false;
+    });
+
+    if (isVetoed) {
+      vetoedProposerRowSet.add(rowId);
+    }
+  }
+
+  const unvetoedRowSet = new Set<string>(
+    Array.from(proposerRowSet).filter(r => !vetoedProposerRowSet.has(r))
+  );
+
+  return {
+    proposerRows: Array.from(proposerRowSet),
+    vetoedProposerRows: Array.from(vetoedProposerRowSet),
+    unvetoedRows: Array.from(unvetoedRowSet),
+    sideByRow
+  };
+}
+
+/**
+ * Deterministic Proposer Row Lock:
+ * When non-critic proposers (a1/a2) supplied row-bound picks, every pick emitted by Manager MUST
+ * match an unvetoed proposer row ID. Never lists allowed rows inside `feedback` so downstream
+ * `extractVetoedLegTargets` cannot poison valid unvetoed rows.
+ */
+export function auditProposerRowLock(
+  proposal: any,
+  options?: ProposerRowLockOptions
+): ProposerRowLockAuditResult {
+  const rowSetInfo = extractUnvetoedProposerRowSet(options);
+  if (rowSetInfo.proposerRows.length === 0) {
+    return {
+      pass: true,
+      flags: [],
+      proposerRows: [],
+      unvetoedRows: [],
+      rejectedRows: [],
+      rejectedTargets: []
+    };
+  }
+
+  const picks = proposal && typeof proposal === 'object' && Array.isArray(proposal.picks)
+    ? proposal.picks
+    : [];
+  if (picks.length === 0) {
+    return {
+      pass: true,
+      flags: [],
+      proposerRows: rowSetInfo.proposerRows,
+      unvetoedRows: rowSetInfo.unvetoedRows,
+      rejectedRows: [],
+      rejectedTargets: []
+    };
+  }
+
+  const headers = options?.headers && options.headers.length > 0
+    ? options.headers
+    : (options?.boardSource ? parseGameHeaders(options.boardSource) : []);
+  const rowMap = options?.boardSource || headers.length > 0
+    ? extractRowOptions(options?.boardSource ? [options.boardSource] : [], headers)
+    : new Map<string, RowOptionEntry>();
+
+  const unvetoedSet = new Set(rowSetInfo.unvetoedRows);
+  const rejectedRows: string[] = [];
+  const rejectedTargets: MarketVetoLegTarget[] = [];
+
+  for (const pk of picks) {
+    const rowId = extractRowIdFromAnyPick(pk);
+    if (rowId && unvetoedSet.has(rowId)) continue;
+
+    const sideText = extractStructuredPickSideText(pk);
+    const label = rowId || (sideText ? sideText.slice(0, 40) : 'unmatched pick');
+    rejectedRows.push(label);
+    const rowEntry = rowId ? rowMap.get(rowId) : undefined;
+    const explicitEv = typeof pk === 'object' && pk
+      ? (typeof pk.event_id === 'string' && pk.event_id.trim()
+          ? pk.event_id.trim()
+          : (typeof pk.eventId === 'string' && pk.eventId.trim() ? pk.eventId.trim() : undefined))
+      : undefined;
+    const evId = rowEntry?.eventId || explicitEv;
+    rejectedTargets.push({
+      ...(rowId ? { rowId } : {}),
+      ...(evId ? { eventId: evId } : {}),
+      ...(rowEntry?.text ? { teamLabel: rowEntry.text } : (sideText ? { teamLabel: sideText } : {})),
+      teamAliases: [],
+      reason: rowId
+        ? `Pick ${rowId} was not in the unvetoed a1/a2 proposer row set.`
+        : 'Pick omitted a valid unvetoed a1/a2 proposer row ID.'
+    });
+  }
+
+  if (rejectedTargets.length === 0) {
+    return {
+      pass: true,
+      flags: [],
+      proposerRows: rowSetInfo.proposerRows,
+      unvetoedRows: rowSetInfo.unvetoedRows,
+      rejectedRows: [],
+      rejectedTargets: []
+    };
+  }
+
+  const rejectedList = Array.from(new Set(rejectedRows)).join(', ');
+  const feedback = rowSetInfo.unvetoedRows.length === 0
+    ? `Veto (PROPOSER ROW LOCK): All proposed a1/a2 rows were vetoed, so ${rejectedList} cannot be emitted. Output "picks": [] with "wageringPass": true.`
+    : `Veto (PROPOSER ROW LOCK): Pick ${rejectedList} is not in the unvetoed a1/a2 proposer row set. Assemble final picks strictly from the unvetoed proposer rows without inventing new rows or flipping sides.`;
+
+  return {
+    pass: false,
+    feedback,
+    flags: ['proposer_row_lock'],
+    proposerRows: rowSetInfo.proposerRows,
+    unvetoedRows: rowSetInfo.unvetoedRows,
+    rejectedRows,
+    rejectedTargets
+  };
+}
+

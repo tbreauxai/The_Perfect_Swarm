@@ -360,7 +360,7 @@ export class Agent {
             const baseMaxBudgetWait = config?.interactive
                 ? INTERACTIVE_MAX_BUDGET_WAIT_MS
                 : (config?.maxBudgetWaitMs ?? DEFAULT_STRICT_BUDGET_WAIT_MS);
-            const hasFastBackup = hasHealthyFastAlternative(
+            const hasFastBackup = isFallback && hasHealthyFastAlternative(
                 targetChain,
                 targetIdx,
                 String(this.provider),
@@ -450,7 +450,10 @@ export class Agent {
 
                 const waitMs = Math.min(
                     maxBudgetWait,
-                    globalProviderLimiter.budgetWaitMs(String(currentTarget.provider), preCheck.estimatedTokens, preCheck.targetModel)
+                    Math.max(
+                        globalProviderLimiter.budgetWaitMs(String(currentTarget.provider), preCheck.estimatedTokens, preCheck.targetModel),
+                        preCheck.estimatedWaitMs || 0
+                    )
                 );
                 if (Number.isFinite(waitMs) && waitMs > 0) {
                     await new Promise(resolve => setTimeout(resolve, waitMs));

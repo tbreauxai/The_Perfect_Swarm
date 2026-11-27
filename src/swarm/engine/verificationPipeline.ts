@@ -11,7 +11,7 @@ import { getManagerContextTokenCeiling } from './synthesisPipeline.ts';
 import { formatRunDebugOutputDigest, recordRunDebugSeat } from './runDebugRecord.ts';
 import { parseGameHeaders, renderHeaders, filterPicksByCoverage, type GameHeader } from '../context/gameHeaders.ts';
 import { INJURY_ATTRIBUTION_RULE, auditInjuryAttribution, matchTeamByLabel, sanitizeMisattributedPicksAndText } from '../tools/injuryAttribution.ts';
-import { MARKET_AND_ROW_RULES, SPREAD_SIDE_RULE, auditMarketCoverageAndRowBinding, extractRowOptions, sanitizeRowMismatchedPicks, type MarketToolRecord } from '../tools/marketRowBinding.ts';
+import { MARKET_AND_ROW_RULES, SPREAD_SIDE_RULE, auditMarketCoverageAndRowBinding, auditProposerRowLock, validatePickReasonSource, extractRowOptions, sanitizeRowMismatchedPicks, type MarketToolRecord } from '../tools/marketRowBinding.ts';
 import {
     GROUNDING_RULE,
     FORM_GROUNDING_BULLETS,
@@ -646,6 +646,7 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
             ...(p.criticVetoes && p.criticVetoes.length > 0 ? { criticVetoes: p.criticVetoes } : {}),
             ...(p.vetoedLegs && p.vetoedLegs.length > 0 ? { vetoedLegs: p.vetoedLegs } : {}),
             ...(p.vetoedClaims && p.vetoedClaims.length > 0 ? { vetoedClaims: p.vetoedClaims } : {}),
+            ...(Array.isArray(p.specialistPicks) && p.specialistPicks.length > 0 ? { specialistPicks: p.specialistPicks } : {}),
             ...((p as any).appComputedCounts ? { appComputedCounts: (p as any).appComputedCounts } : {})
         },
         context,
@@ -815,7 +816,15 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
                         boardSourceForSanitize,
                         { headers: parsedHeaders }
                     ).pass;
-                    if (injuryOk && marketOk && groundingOk && premiseOk && Array.isArray(candidate.picks) && candidate.picks.length > 0) {
+                    const rowLockOk = auditProposerRowLock(candidate, {
+                        specialistPicks: p.specialistPicks,
+                        analystReports: effectiveCompiledReports,
+                        vetoedLegs: combinedVetoedLegs,
+                        headers: parsedHeaders,
+                        boardSource: boardSourceForSanitize
+                    }).pass;
+                    const reasonSourceOk = candidate.picks.every((pk: any) => validatePickReasonSource(pk).valid);
+                    if (injuryOk && marketOk && groundingOk && premiseOk && rowLockOk && reasonSourceOk && Array.isArray(candidate.picks) && candidate.picks.length > 0) {
                         Object.assign(finalAnalysis, candidate);
                         hydratedMissingPicksRecovery = true;
                         finalAnalysis.verified = true;
@@ -918,8 +927,16 @@ ${FORM_GROUNDING_BULLETS}\n\n${VETO_STICKS_RULE}\n\n${PULL_BEFORE_PASS_RULE}`);
                             boardSourceForSanitize,
                             { headers: parsedHeaders }
                         ).pass;
+                        const rowLockOk = auditProposerRowLock(candidate, {
+                            specialistPicks: p.specialistPicks,
+                            analystReports: effectiveCompiledReports,
+                            vetoedLegs: rescueRejectedTargets,
+                            headers: parsedHeaders,
+                            boardSource: boardSourceForSanitize
+                        }).pass;
+                        const reasonSourceOk = candidate.picks.every((pk: any) => validatePickReasonSource(pk).valid);
 
-                        if (injuryOk && marketOk && groundingOk && premiseOk && Array.isArray(candidate.picks) && candidate.picks.length >= 1) {
+                        if (injuryOk && marketOk && groundingOk && premiseOk && rowLockOk && reasonSourceOk && Array.isArray(candidate.picks) && candidate.picks.length >= 1) {
                             Object.assign(finalAnalysis, candidate);
                             rescued = true;
                         }

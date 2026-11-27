@@ -22,7 +22,9 @@ import { parseGameHeaders, renderHeaders, filterPicksByCoverage } from '../conte
 import { formatRunDebugOutputDigest, recordRunDebugAgreement, recordRunDebugSeat, recordRunDebugDrop, recordRunDebugEdit } from './runDebugRecord.ts';
 import { partitionTaskAndContract, formatUserTaskSection } from './analystExecution.ts';
 import { sanitizeMisattributedPicksAndText } from '../tools/injuryAttribution.ts';
-import { sanitizeRowMismatchedPicks, type MarketToolRecord } from '../tools/marketRowBinding.ts';
+import { sanitizeRowMismatchedPicks, auditProposerRowLock, type MarketToolRecord } from '../tools/marketRowBinding.ts';
+import { estimateTokens } from '../providers/limiter.ts';
+import { GROQ_CHAT_PROMPT_CHARS, GROQ_CHAT_TPM_BUDGET, GROQ_CHAT_MIN_TOKENS } from '../providers/groq.ts';
 import {
     mergeVetoedClaims,
     mergeVetoedLegTargets,
@@ -85,6 +87,75 @@ export function getManagerContextTokenCeiling(provider?: string): number {
     if (p === 'nvidia') return 16000;
     if (p === 'cloudflare') return 12000;
     return 8000;
+}
+
+const TRIM_MARKER = '\n\n[trimmed for manager context ceiling]';
+
+/**
+ * Fits a Manager prompt inside both the provider's character ceiling and (for Groq)
+ * the combined systemInstruction + prompt token budget so primary groq/openai/gpt-oss-120b
+ * calls never trip PROMPT_EXCEEDS_LIMIT_REASON or GroqAdapter < 800 max_tokens skip.
+ */
+export function fitManagerPromptToProviderCeiling(
+    promptText: string,
+    systemInstruction: string | undefined,
+    provider: string | undefined,
+    baseMaxChars: number,
+    onDropSection?: (sectionName: string) => void
+): { prompt: string; maxChars: number } {
+    const prov = String(provider || '').toLowerCase().trim();
+    const sysLen = systemInstruction?.length || 0;
+    // Groq chat mode caps prompt at 18,000 and requires sysLen + promptLen <= (7000 - 800) * 4 = 24,800
+    const groqMaxCharsByChat = Math.max(1500, (GROQ_CHAT_TPM_BUDGET - GROQ_CHAT_MIN_TOKENS) * 4 - sysLen - 400);
+    const effectiveMaxChars = prov === 'groq'
+        ? Math.min(baseMaxChars, GROQ_CHAT_PROMPT_CHARS, groqMaxCharsByChat)
+        : baseMaxChars;
+    const maxTotalTokens = prov === 'groq' ? 6400 : Number.POSITIVE_INFINITY;
+
+    let result = promptText;
+    const isOverBudget = (txt: string): boolean => {
+        if (txt.length > effectiveMaxChars) return true;
+        if (Number.isFinite(maxTotalTokens)) {
+            const combined = systemInstruction ? `${systemInstruction}\n${txt}` : txt;
+            if (estimateTokens(combined) > maxTotalTokens) return true;
+        }
+        return false;
+    };
+
+    if (!isOverBudget(result)) {
+        return { prompt: result, maxChars: effectiveMaxChars };
+    }
+
+    if (result.includes('Cluster Digests:')) {
+        result = result.replace(/Cluster Digests:[\s\S]*?(?=\n\n(?:Analyst Reports|Raw Board|Critic Result|Task:|$))/i, '');
+        onDropSection?.('Cluster Digests');
+    }
+    if (isOverBudget(result) && result.includes('Historical Baselines:')) {
+        result = result.replace(/Historical Baselines:[\s\S]*?(?=\n\n(?:Analyst Reports|Raw Board|Critic Result|Task:|$))/i, '');
+        onDropSection?.('Historical Baselines');
+    }
+    if (result.length > effectiveMaxChars) {
+        const trimTarget = Math.max(200, effectiveMaxChars - 120);
+        const lastBreak = Math.max(result.lastIndexOf('\n\n', trimTarget), result.lastIndexOf('\n', trimTarget));
+        const cut = lastBreak > (effectiveMaxChars * 0.5) ? lastBreak : trimTarget;
+        result = result.slice(0, cut) + TRIM_MARKER;
+        onDropSection?.('manager prompt tail');
+    }
+
+    if (Number.isFinite(maxTotalTokens)) {
+        let guard = 0;
+        while (guard++ < 6) {
+            const combined = systemInstruction ? `${systemInstruction}\n${result}` : result;
+            const est = estimateTokens(combined);
+            if (est <= maxTotalTokens || result.length <= 800) break;
+            const targetLen = Math.max(400, Math.floor(result.length * (maxTotalTokens / Math.max(1, est)) * 0.9) - TRIM_MARKER.length);
+            const lastBreak = Math.max(result.lastIndexOf('\n\n', targetLen), result.lastIndexOf('\n', targetLen));
+            const cut = lastBreak > (targetLen * 0.5) ? lastBreak : targetLen;
+            result = result.slice(0, cut) + TRIM_MARKER;
+        }
+    }
+
+    return { prompt: result, maxChars: effectiveMaxChars };
 }
 
 export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPipelineResult {
@@ -738,6 +809,14 @@ export function compileSynthesisPrompt(p: SynthesisPipelineParams): SynthesisPip
     if (isHierarchicalTreeReduction && TokenEstimator.estimatePayloadTokens(effectiveDynamicPrompt) >= 4000) {
         effectiveDynamicPrompt = TokenEstimator.truncateToTokens(effectiveDynamicPrompt, 3900);
     }
+    if (String(managerAgent.provider || '').toLowerCase() === 'groq') {
+        effectiveDynamicPrompt = fitManagerPromptToProviderCeiling(
+            effectiveDynamicPrompt,
+            managerInstruction,
+            managerAgent.provider,
+            maxChars
+        ).prompt;
+    }
 
     context.addEvent({
         agentRole: managerAgent.role,
@@ -849,30 +928,22 @@ export async function executeManagerSynthesis(
         : ((settings as any)?.zodSchema || (settings as any)?.responseSchema || ManagerResponseSchema);
 
     const ceilingTokens = getManagerContextTokenCeiling(managerAgent.provider);
-    const maxChars = ceilingTokens * 4;
-    let safeDynamicPrompt = effectiveDynamicPrompt;
+    const baseMaxChars = ceilingTokens * 4;
+    let rawDynamicPrompt = effectiveDynamicPrompt;
 
     if (coveredEventIds && coveredEventIds.length > 0) {
-        safeDynamicPrompt += `\n\nSpecialist Coverage: Analyst tools only covered event ID(s): ${coveredEventIds.join(', ')}. Only recommend picks from covered games.`;
+        rawDynamicPrompt += `\n\nSpecialist Coverage: Analyst tools only covered event ID(s): ${coveredEventIds.join(', ')}. Only recommend picks from covered games.`;
     }
 
-    if (safeDynamicPrompt.length > maxChars) {
-        if (safeDynamicPrompt.includes('Cluster Digests:')) {
-            safeDynamicPrompt = safeDynamicPrompt.replace(/Cluster Digests:[\s\S]*?(?=\n\n(?:Analyst Reports|Raw Board|Critic Result|Task:|$))/i, '');
-            recordRunDebugDrop((context as any)?.id, 'manager', 'Cluster Digests');
-        }
-        if (safeDynamicPrompt.length > maxChars && safeDynamicPrompt.includes('Historical Baselines:')) {
-            safeDynamicPrompt = safeDynamicPrompt.replace(/Historical Baselines:[\s\S]*?(?=\n\n(?:Analyst Reports|Raw Board|Critic Result|Task:|$))/i, '');
-            recordRunDebugDrop((context as any)?.id, 'manager', 'Historical Baselines');
-        }
-        if (safeDynamicPrompt.length > maxChars) {
-            const trimTarget = maxChars - 120;
-            const lastBreak = Math.max(safeDynamicPrompt.lastIndexOf('\n\n', trimTarget), safeDynamicPrompt.lastIndexOf('\n', trimTarget));
-            const cut = lastBreak > (maxChars * 0.5) ? lastBreak : trimTarget;
-            safeDynamicPrompt = safeDynamicPrompt.slice(0, cut) + '\n\n[trimmed for manager context ceiling]';
-            recordRunDebugDrop((context as any)?.id, 'manager', 'manager prompt tail');
-        }
-    }
+    const fitted = fitManagerPromptToProviderCeiling(
+        rawDynamicPrompt,
+        managerInstruction,
+        managerAgent.provider,
+        baseMaxChars,
+        (section) => recordRunDebugDrop((context as any)?.id, 'manager', section)
+    );
+    const maxChars = fitted.maxChars;
+    const safeDynamicPrompt = fitted.prompt;
 
     recordRunDebugSeat((context as any)?.id, 'manager', {
         role: managerAgent.role,
@@ -912,6 +983,23 @@ export async function executeManagerSynthesis(
         });
         const criticVetoes = groundingContext?.criticVetoes || [];
         const vetoedLegs = mergeVetoedLegTargets(groundingContext?.vetoedLegs);
+        if (Array.isArray(finalResult.picks) && finalResult.picks.length > 0 && Array.isArray(groundingContext?.specialistPicks) && groundingContext.specialistPicks.length > 0) {
+            const rowLockAudit = auditProposerRowLock(finalResult, {
+                specialistPicks: groundingContext.specialistPicks,
+                vetoedLegs,
+                headers: parsedHeaders,
+                boardSource: slateSourceForGrounding
+            });
+            if (!rowLockAudit.pass) {
+                const allowedSet = new Set(rowLockAudit.unvetoedRows);
+                finalResult.picks = finalResult.picks.filter((pk: any) => {
+                    const r = typeof pk === 'string'
+                        ? (pk.match(/\b(R\d+)\b/i)?.[1]?.toUpperCase() || '')
+                        : String(pk?.row || pk?.rowId || pk?.id || '').trim().toUpperCase();
+                    return Boolean(r && allowedSet.has(r));
+                });
+            }
+        }
         const vetoedClaims = mergeVetoedClaims(groundingContext?.vetoedClaims);
         if (
             parsedHeaders.length > 0 ||

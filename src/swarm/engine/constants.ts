@@ -134,6 +134,8 @@ ${JSON.stringify(zodToJsonSchema(ManagerResponseSchema as any), null, 2)}
 
 TOP-LEVEL "picks" RULE (CRITICAL):
 - When recommending any bet, parlay leg, or play, ALWAYS populate top-level "picks": [{ "row": "R#", "side": "...", "confidence": 0.75, "reasons": ["..."], "reason": "...", "reasonSource": "..." }] and set "wageringPass": false.
+- PROPOSER ROW LOCK: Assemble final "picks" strictly from the unvetoed proposer rows (R#) proposed by your analysts (a1/a2). NEVER invent a new row (e.g. an unproposed R#) or flip to the opposite side row of a proposed game. If every proposed row is vetoed, emit "picks": [] with "wageringPass": true.
+- REAL "reasonSource" REQUIRED: Set "reasonSource" on every pick to a real tool field or tool name (e.g., "matchup_fundamentals", "market_movement", "injury_and_roster_delta") or slate row ID ("R#") — NEVER output placeholder values like "n/a", "none", "unknown", or "".
 - NEVER put picks only in components/DataTable—top-level 'picks' MUST contain every recommended wager; leave 'picks': [] ONLY when intentionally passing with wageringPass: true.
 - Format every entry in "scorecards" as { "seat": "...", "verdict": "approve" | "veto" | "propose" | "pass", "notes": "..." }.
 

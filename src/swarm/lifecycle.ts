@@ -2,7 +2,8 @@ import { Agent } from './agent.ts';
 import { SwarmContext } from './context.ts';
 import { parseJsonSafe, guardVerificationResult } from './parser.ts';
 import { redactForLog, sanitizeCompilerProposalOddsAndSummary } from './parser/responseGuards.ts';
-import { groqPromptCharCap } from './providers/groq.ts';
+import { groqPromptCharCap, GROQ_CHAT_PROMPT_CHARS, GROQ_CHAT_TPM_BUDGET, GROQ_CHAT_MIN_TOKENS } from './providers/groq.ts';
+import { estimateTokens } from './providers/limiter.ts';
 import { seatBudget } from './context/promptBudget.ts';
 import { formatRunDebugOutputDigest, recordRunDebugSeat, recordRunDebugDrop, recordRunDebugEdit } from './engine/runDebugRecord.ts';
 import { parseGameHeaders, renderHeaders, filterPicksByCoverage, type GameHeader } from './context/gameHeaders.ts';
@@ -27,6 +28,8 @@ import {
 import {
     sanitizeRowMismatchedPicks,
     auditMarketCoverageAndRowBinding,
+    auditProposerRowLock,
+    extractUnvetoedProposerRowSet,
     extractRowOptions,
     isFalseMissingMarketCritique,
     isFalseMissingMoneylineCritique,
@@ -218,13 +221,25 @@ export class AnalysisLifecycle {
             // 1. Proposer executes (incorporating feedback if this is a retry)
             let executePrompt: string;
             if (feedback) {
-                const feedbackSummary = feedback.length > 2000 ? `${feedback.slice(0, 2000)}...` : feedback;
+                const feedbackSummary = feedback.length > 1600 ? `${feedback.slice(0, 1600)}...` : feedback;
                 const freshBlock = freshRetryEvidenceParts.length > 0
-                    ? `\n\n[Fresh Tool Evidence Pulled Before Retry]:\n${freshRetryEvidenceParts.join('\n\n').slice(0, 2400)}`
+                    ? `\n\n[Fresh Tool Evidence Pulled Before Retry]:\n${freshRetryEvidenceParts.join('\n\n').slice(0, 2000)}`
+                    : '';
+                const retryRowLockInfo = extractUnvetoedProposerRowSet({
+                    specialistPicks: (rawData as any)?.specialistPicks,
+                    analystReports: (rawData as any)?.analystReports,
+                    vetoedLegs: accumulatedVetoedLegs,
+                    headers: initHeaders,
+                    boardSource: (rawData as any)?.fullBoard || rawData
+                });
+                const allowedRowsDirective = retryRowLockInfo.proposerRows.length > 0
+                    ? (retryRowLockInfo.unvetoedRows.length > 0
+                        ? `\n\n[ALLOWED UNVETOED PROPOSER ROWS (a1/a2 ONLY)]: ${retryRowLockInfo.unvetoedRows.join(', ')}\nAssemble final "picks" strictly from these unvetoed rows. NEVER invent new rows or flip sides.`
+                        : `\n\n[ALLOWED UNVETOED PROPOSER ROWS (a1/a2 ONLY)]: NONE (all proposed rows were vetoed). Output "picks": [] with "wageringPass": true.`)
                     : '';
                 const vetoLines: string[] = [];
                 if (accumulatedVetoedLegs.length > 0) {
-                    vetoLines.push('- Vetoed legs (DO NOT put back into picks, Recommended Bets, or summary; keep remaining grounded legs, swap in another grounded leg from the slate, or pass if every leg is vetoed):');
+                    vetoLines.push('- Vetoed legs (DO NOT put back into picks, Recommended Bets, or summary; keep remaining unvetoed proposer legs, or pass if every leg is vetoed):');
                     for (const leg of accumulatedVetoedLegs) {
                         const label = [leg.rowId, leg.teamLabel].filter(Boolean).join(' ') || 'vetoed leg';
                         vetoLines.push(`  * ${label} (${leg.reason})`);
@@ -239,9 +254,44 @@ export class AnalysisLifecycle {
                 const vetoBlock = vetoLines.length > 0
                     ? `\n\n[VETOED LEGS & CLAIMS — DO NOT INCLUDE]:\n${vetoLines.join('\n')}`
                     : '';
-                executePrompt = `${proposerPrompt}\n\n[Previous Verification Critique & Corrections Required (Attempt ${attempt - 1})]:\n${feedbackSummary}${vetoBlock}${freshBlock}\n\nCRITICAL RETRY RULES:\n1. Output a clean, standalone final JSON response as if writing it for the first time. NEVER mention "a previous error", "this correction", or prior attempts in your summary or analysis.\n2. Fix any factual misstatements (such as Away vs. Home team status in "Away @ Home" headers, or references to teams not in the selected legs) so they strictly match the Game Slate headers and Analyst Reports.\n3. Do NOT flip an analyst's recommended pick side (e.g. keep the analyst's selected team/spread and simply describe its Away/Home status accurately) unless the critic identified a fatal injury on that team.\n4. INJURY ATTRIBUTION RULE: Every injury citation must match the team_id or team name in the tool result or board. Never assign a player to the opposing team.\n5. MARKET AND ROW RULES: Cite the exact row ID matching the picked team, market, and line; never assign a row to the opposite team or opposite side.\n6. GROUNDING: Do not cite a score, goals-allowed, or health claim unless it is in a successful tool result. If key players on that team are OUT, do not call the team relatively healthy. A vetoed leg is removed from picks. Do not rewrite it as a recommended single bet. Do not cite a record, L2, or score unless it is in a successful tool result for that team. If you did not call the form tool, do not invent the record. If a tool returned data, do not say fundamentals or market data are missing. A pass is fine. Do not pad it with ungrounded form.\n7. PULL BEFORE PASS: Before saying a game has no fundamentals, injuries, or market data, call the tool for that game. If the tool returns data, use it and do not say it was not fetched. If the tool returns empty or errors, then you may say that game has no data. Do not cite a record, score, or L5 form unless it is in a successful tool result. A pass is allowed only after the relevant tools were called, or the tool result was empty.\n8. VETO STICKS: A Critic veto for ungrounded form, missing market, or fatal injury removes that leg. Do not repeat the vetoed claim in a later attempt or in the final analysis. Do not put a vetoed leg back into picks. If every leg is vetoed, the result is a pass.\n9. SPREAD SIDE: Read the sign from the row or the tool. A negative spread is the favorite. A positive spread is the underdog. Do not flip the sign when naming the other team. Portland +10.5 is not Portland -10.5.\n10. ${CRITIC_AUDIT_RULE}`;
+                const retrySuffix = `\n\n[Previous Verification Critique & Corrections Required (Attempt ${attempt - 1})]:\n${feedbackSummary}${allowedRowsDirective}${vetoBlock}${freshBlock}\n\nCRITICAL RETRY RULES:\n1. Output a clean, standalone final JSON response as if writing it for the first time. NEVER mention "a previous error", "this correction", or prior attempts in your summary or analysis.\n2. Fix any factual misstatements (such as Away vs. Home team status in "Away @ Home" headers, or references to teams not in the selected legs) so they strictly match the Game Slate headers and Analyst Reports.\n3. Do NOT flip an analyst's recommended pick side (keep the analyst's selected row/team/spread) unless the critic identified a fatal injury on that team.\n4. INJURY ATTRIBUTION RULE: Every injury citation must match the team_id or team name in the tool result or board. Never assign a player to the opposing team.\n5. MARKET AND ROW RULES: Cite the exact row ID matching the picked team, market, and line; never assign a row to the opposite team or opposite side.\n6. GROUNDING: Do not cite a score, goals-allowed, or health claim unless it is in a successful tool result. If key players on that team are OUT, do not call the team relatively healthy. Do not invent records or form. If a tool returned data, do not say fundamentals or market data are missing.\n7. PULL BEFORE PASS: Before saying a game has no fundamentals, injuries, or market data, call the tool for that game.\n8. VETO STICKS: A Critic veto removes that leg permanently. Never put a vetoed leg back into picks. If every leg is vetoed, emit "picks": [] with "wageringPass": true.\n9. SPREAD SIDE: Read the sign from the row or tool (- = favorite, + = underdog); never flip signs.\n10. ${CRITIC_AUDIT_RULE}\n11. PROPOSER ROW LOCK & REAL reasonSource: Assemble picks strictly from unvetoed a1/a2 proposer rows (never invent rows or flip sides), and set reasonSource on every pick to a real tool field/name (e.g. "matchup_fundamentals", "market_movement") or slate row ID ("R#") — NEVER "n/a", "none", or "".`;
+                executePrompt = `${proposerPrompt}${retrySuffix}`;
             } else {
                 executePrompt = proposerPrompt;
+            }
+
+            if (String((this.proposer as any).provider || '').toLowerCase() === 'groq') {
+                const sysLen = this.proposer.getSystemInstruction()?.length || 0;
+                const sysPrefix = this.proposer.getSystemInstruction() || '';
+                const safeCharCeiling = Math.min(
+                    GROQ_CHAT_PROMPT_CHARS,
+                    Math.max(1500, (GROQ_CHAT_TPM_BUDGET - GROQ_CHAT_MIN_TOKENS) * 4 - sysLen - 400)
+                );
+                const trimToBudget = (text: string, targetPromptLen: number): string => {
+                    if (text.length <= targetPromptLen) return text;
+                    const critiqueIdx = text.indexOf('\n\n[Previous Verification Critique');
+                    if (critiqueIdx > 400) {
+                        const suffix = text.slice(critiqueIdx);
+                        const baseBudget = Math.max(300, targetPromptLen - suffix.length - 30);
+                        if (baseBudget >= 300) {
+                            return `${text.slice(0, baseBudget)}\n[context trimmed]${suffix}`;
+                        }
+                    }
+                    return `${text.slice(0, Math.max(200, targetPromptLen - 20))}\n[context trimmed]`;
+                };
+                if (executePrompt.length > safeCharCeiling) {
+                    executePrompt = trimToBudget(executePrompt, safeCharCeiling);
+                    recordRunDebugDrop((context as any)?.id, 'manager', 'groq lifecycle prompt char ceiling');
+                }
+                let guard = 0;
+                while (guard++ < 5) {
+                    const combined = sysPrefix ? `${sysPrefix}\n${executePrompt}` : executePrompt;
+                    const est = estimateTokens(combined);
+                    if (est <= 6400 || executePrompt.length <= 1000) break;
+                    const targetChars = Math.max(800, Math.floor(executePrompt.length * (6200 / Math.max(1, est)) * 0.92));
+                    executePrompt = trimToBudget(executePrompt, targetChars);
+                    recordRunDebugDrop((context as any)?.id, 'manager', 'groq lifecycle token ceiling');
+                }
             }
 
             context.addEvent({
@@ -901,7 +951,10 @@ export class AnalysisLifecycle {
                         injuryVetoTriggered = true;
                         effectiveInjuryVetoedLegs = pickInjuryAudit.vetoedLegs ?? injuryAudit.vetoedLegs;
                         verification.pass = false;
-                        verification.feedback = pickInjuryAudit.feedback || injuryAudit.feedback || 'Veto: Proposal attributed an injury to the wrong team.';
+                        const injMsg = pickInjuryAudit.feedback || injuryAudit.feedback || 'Veto: Proposal attributed an injury to the wrong team.';
+                        verification.feedback = !missingPicksVetoTriggered
+                            ? injMsg
+                            : dedupeVetoMessages([verification.feedback, injMsg]).join(' ') || injMsg;
                     } else if (currentProposal && typeof currentProposal === 'object') {
                         sanitizeMisattributedPicksAndText(currentProposal, injuryEvidence, injurySlate);
                         if (hasEmptyPicks) {
@@ -911,6 +964,23 @@ export class AnalysisLifecycle {
                 }
 
                 const boardSourceForAudit = (rawData as any)?.fullBoard || rawData || slateHeaders || fallbackBoardText;
+                const proposerRowLockAudit = auditProposerRowLock(currentProposal, {
+                    specialistPicks: (rawData as any)?.specialistPicks,
+                    analystReports: (rawData as any)?.analystReports,
+                    vetoedLegs: accumulatedVetoedLegs,
+                    headers: allParsedHeaders,
+                    boardSource: boardSourceForAudit
+                });
+                let proposerRowLockVetoTriggered = false;
+                if (!proposerRowLockAudit.pass) {
+                    proposerRowLockVetoTriggered = true;
+                    verification.pass = false;
+                    const lockMsg = proposerRowLockAudit.feedback || 'Veto (PROPOSER ROW LOCK): Manager pick is not in the unvetoed a1/a2 proposer row set.';
+                    verification.feedback = (!missingPicksVetoTriggered && !injuryVetoTriggered)
+                        ? lockMsg
+                        : dedupeVetoMessages([verification.feedback, lockMsg]).join(' ') || lockMsg;
+                }
+
                 const marketRowAudit = auditMarketCoverageAndRowBinding(
                     currentProposal,
                     combinedToolSummary,
@@ -929,7 +999,10 @@ export class AnalysisLifecycle {
                     } else {
                         marketVetoTriggered = true;
                         verification.pass = false;
-                        verification.feedback = marketRowAudit.feedback || 'Veto: Row side mismatch or missing market coverage.';
+                        const mMsg = marketRowAudit.feedback || 'Veto: Row side mismatch or missing market coverage.';
+                        verification.feedback = (!missingPicksVetoTriggered && !injuryVetoTriggered && !proposerRowLockVetoTriggered)
+                            ? mMsg
+                            : dedupeVetoMessages([verification.feedback, mMsg]).join(' ') || mMsg;
                     }
                 }
 
@@ -967,7 +1040,7 @@ export class AnalysisLifecycle {
                         verification.pass = false;
                         const gMsg = groundingAudit.feedback || 'Veto (GROUNDING): Ungrounded claim or vetoed leg rewrite.';
                         const mergedFeedback = dedupeVetoMessages(
-                            (!injuryVetoTriggered && !marketVetoTriggered && !missingPicksVetoTriggered)
+                            (!injuryVetoTriggered && !marketVetoTriggered && !missingPicksVetoTriggered && !proposerRowLockVetoTriggered)
                                 ? [gMsg]
                                 : [verification.feedback, gMsg]
                         );
@@ -1006,10 +1079,11 @@ export class AnalysisLifecycle {
                     !hasPermanentMarketVeto;
 
                 // Merge structured veto targets from deterministic audits immediately into the cumulative ledger
-                // (do NOT poison vetoedLegs on Attempt 1 for repairable spread/venue prose mismatches).
+                // (do NOT poison vetoedLegs on Attempt 1 for repairable spread/venue prose mismatches or invalid_reason_source).
                 accumulatedVetoedLegs = mergeVetoedLegTargets(
                     accumulatedVetoedLegs,
                     effectiveInjuryVetoedLegs,
+                    proposerRowLockVetoTriggered ? proposerRowLockAudit.rejectedTargets : undefined,
                     marketVetoTriggered && (!isRepairableMarketProseMismatch || attempt >= this.maxRetries)
                         ? marketRowAudit.vetoedLegs
                         : undefined,
@@ -1146,12 +1220,13 @@ export class AnalysisLifecycle {
                     const pullNote = newlyPulledCount > 0
                         ? ' Missing tools were just pulled; use the [Fresh Tool Evidence Pulled Before Retry] above.'
                         : '';
-                    const allPriorPassed = !injuryVetoTriggered && !marketVetoTriggered && !groundingVetoTriggered && !missingPicksVetoTriggered;
+                    const allPriorPassed = !injuryVetoTriggered && !marketVetoTriggered && !groundingVetoTriggered && !missingPicksVetoTriggered && !proposerRowLockVetoTriggered;
                     verification.feedback = allPriorPassed
                         ? `${pMsg}${pullNote}`
                         : [verification.feedback, `${pMsg}${pullNote}`].filter(Boolean).join(' ');
                 } else if (
                     !missingPicksVetoTriggered &&
+                    !proposerRowLockVetoTriggered &&
                     !injuryVetoTriggered &&
                     !marketVetoTriggered &&
                     !groundingVetoTriggered &&
@@ -1188,6 +1263,7 @@ export class AnalysisLifecycle {
                 } else if (
                     !verification.pass &&
                     !missingPicksVetoTriggered &&
+                    !proposerRowLockVetoTriggered &&
                     !injuryVetoTriggered &&
                     !marketVetoTriggered &&
                     !groundingVetoTriggered &&
@@ -1217,6 +1293,7 @@ export class AnalysisLifecycle {
                 } else if (
                     !verification.pass &&
                     !missingPicksVetoTriggered &&
+                    !proposerRowLockVetoTriggered &&
                     !injuryVetoTriggered &&
                     !marketVetoTriggered &&
                     !groundingVetoTriggered &&
@@ -1306,6 +1383,17 @@ export class AnalysisLifecycle {
                     const isMissingPicksOnlyFeedback =
                         missingPicksVetoTriggered &&
                         isMissingPicksSchemaViolationFeedback(verification.feedback) &&
+                        !proposerRowLockVetoTriggered &&
+                        !injuryVetoTriggered &&
+                        !groundingVetoTriggered &&
+                        !pullVetoTriggered &&
+                        !hasPermanentMarketVeto;
+
+                    const isRepairableReasonSourceOnly =
+                        attempt < this.maxRetries &&
+                        marketVetoTriggered &&
+                        marketAuditFlags.includes('invalid_reason_source') &&
+                        !proposerRowLockVetoTriggered &&
                         !injuryVetoTriggered &&
                         !groundingVetoTriggered &&
                         !pullVetoTriggered &&
@@ -1318,6 +1406,7 @@ export class AnalysisLifecycle {
                         !pullVetoTriggered &&
                         !hasPermanentMarketVeto &&
                         (isMissingPicksOnlyFeedback ||
+                            isRepairableReasonSourceOnly ||
                             /\b(?:spread(?:\s+(?:value|sign|side))?|venue|role)\s+mismatch\b|described\s+as\s+(?:home|away|road)/i.test(verification.feedback) ||
                             isRepairableRowSignFlip) &&
                         !/\b(?:contra_steam_misread|symmetric_injury_misread|sharp_contra_steam|missing_(?:moneyline|total|spread)_coverage)\b/i.test(verification.feedback) &&
@@ -1346,6 +1435,7 @@ export class AnalysisLifecycle {
                 const verifierFlags = Array.from(
                     new Set<string>([
                         ...(missingPicksVetoTriggered ? ['missing_picks_array'] : []),
+                        ...(proposerRowLockVetoTriggered ? (proposerRowLockAudit.flags || ['proposer_row_lock']) : []),
                         ...(injuryVetoTriggered ? ['injury_misattribution'] : []),
                         ...(marketVetoTriggered ? (marketRowAudit.flags || ['market_row_mismatch']) : []),
                         ...(groundingVetoTriggered ? (groundingAudit.flags || ['ungrounded_claim']) : []),
