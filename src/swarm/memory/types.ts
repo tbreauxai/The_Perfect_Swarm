@@ -61,6 +61,7 @@ export interface RetrievalOptions {
     sparseWeight?: number;
     profile?: RrfProfile | RrfWeights;
     rrfProfile?: RrfProfile | RrfWeights;
+    allowParlay?: boolean;
 }
 
 export interface ConsolidationOptions {

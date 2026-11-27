@@ -1817,7 +1817,7 @@ const HEALTH_ADVANTAGE_CLAIM_REGEX =
   /\b(?:health\s+(?:advantage|edge)|injury\s+(?:advantage|edge)|(?:health|injury)\s+balance\s+(?:favors?|supports?|backs?)|asymmetric\s+(?:roster\s+)?(?:health|injur(?:y|ies))|clean(?:\s*\/\s*asymmetric)?\s+(?:roster\s+)?health|opponent\s+injury\s+(?:edge|advantage|asymmetry)|pillar\s*3(?:\s*\([^)]*health[^)]*\))?|healthier\s+(?:side|team|roster|squad)|cleaner\s+injury\s+report|relatively\s+healthy|availability\s+(?:advantage|edge)|roster\s+(?:health\s+)?(?:advantage|edge)|fewer\s+injuries)\b/i;
 
 const HEALTH_CLAIM_NEGATION_OR_DISCLAIMER_REGEX =
-  /\b(?:no|not|without|lacks?|neither|disqualif\w*|cannot\s+claim|does\s+not\s+(?:hold|have|provide|offer|grant)|do\s+not|uncertain_questionable|symmetric|neutral|caution|risk|flag|caveat|voids?|negat\w*|ruled\s+out\s+as)\b/i;
+  /\b(?:no|not|without|lacks?|neither|zero|disqualif\w*|cannot\s+claim|(?:does|do|did|is|are|was|were)\s+not\s+(?:hold|have|provide|offer|grant)|(?:doesn't|don't|isn't|aren't|won't|can't)|uncertain_questionable|symmetric|balanced|neutral|comparable|caution|risk|flag|caveat|voids?|negat\w*|ruled\s+out\s+as)\b/i;
 
 const BLANKET_MULTI_LEG_SUBJECT_REGEX =
   /\b(?:each\s+(?:leg|pick|play|selection|game|side)|all\s+(?:(?:two|three|four|five|\d+)\s+)?(?:legs?|picks?|plays?|selections?|sides?)|every\s+(?:leg|pick|play|selection|side)|both\s+(?:legs?|picks?|plays?|selections?|sides?)|(?:the\s+)?(?:2|3|4)-leg\s+parlay|parlay\s+legs?)\b/i;
@@ -1829,7 +1829,7 @@ const GENERIC_PILLAR_FRAMEWORK_REGEX =
   /\b(?:at\s+least\s+(?:2|two)\s+of\s+(?:the\s+)?(?:3|three)\s+pillars?|form\s*\/\s*diff\s+edge,?\s+(?:and\s+)?steam\s+or\s+model[_\s-]?signal|clean\s*\/\s*asymmetric\s+health|based\s+on\s+form,\s*health,?\s+and\s+steam|3-pillar\s+(?:framework|criteria|filter|rubric|threshold)|three-pillar\s+(?:framework|criteria|filter|rubric|threshold))\b/i;
 
 const HEALTH_BALANCED_ACK_REGEX =
-  /\b(?:no\s+(?:health|injury)\s+(?:advantage|edge)|without\s+(?:a|an)\s+(?:health|injury)\s+(?:advantage|edge)|not\s+(?:a|an)\s+(?:health|injury)\s+(?:advantage|edge)|neither\s+team\s+(?:is\s+healthier|has\s+an?\s+(?:injury|health)\s+(?:advantage|edge))|symmetric|evenly\s+(?:matched|depleted)|equally\s+(?:depleted|banged\s+up|short-?handed)|offsetting\s+injuries|both\s+(?:teams|[A-Za-z .'-]{2,35}\s+and\s+[A-Za-z .'-]{2,35})\s+(?:have|are\s+(?:missing|dealing\s+with|down|without)|miss(?:ing)?))\b/i;
+  /\b(?:no\s+(?:asymmetric\s+)?(?:roster\s+)?(?:health|injury|injuries)\s*(?:advantage|edge|asymmetry)?|zero\s+(?:health|injury|roster)\s+(?:advantage|edge|asymmetry)|without\s+(?:an?\s+)?(?:health|injury|roster)\s+(?:advantage|edge|asymmetry)|not\s+(?:an?\s+)?(?:health|injury|roster)\s+(?:advantage|edge|asymmetry)|neither\s+(?:team|side)\s+(?:is\s+healthier|holds?\s+an?\s+(?:injury|health|roster)\s+(?:advantage|edge)|has\s+an?\s+(?:injury|health|roster)\s+(?:advantage|edge))|(?:health|injury)\s+balances?\s+(?:is|are|remain)\s+(?:symmetric|balanced|even|equal|comparable|neutral)|symmetric(?:\s+(?:for|across|between|health|injury))?|evenly\s+(?:matched|depleted)|equally\s+(?:depleted|banged\s+up|short-?handed)|offsetting\s+injuries|both\s+(?:teams|[A-Za-z .'-]{2,35}\s+and\s+[A-Za-z .'-]{2,35})\s+(?:have|are\s+(?:missing|dealing\s+with|down|without)|miss(?:ing)?))\b/i;
 
 const DEPLETION_MENTION_REGEX =
   /\b(?:missing|out|injured|depleted|decimated|shorthanded|short-?handed|banged\s+up|availability|without|scratches|players?\s+out|rotation\s+players?|starters?\s+out)\b/i;
@@ -2622,17 +2622,86 @@ export function auditCriticPremiseContradictions(
         }
 
         // S1: Also inspect seat-level analysis/summary for blanket multi-leg health/pillar claims
-        // or targeted health claims mentioning this pick, even when pk.reason is non-empty.
+        // or targeted health claims mentioning THIS specific pick, without bleeding across other legs.
         if (!flaggedInjuryMisreadForLeg && combinedSeatContext) {
           const seatClauses = combinedSeatContext
-            .split(/(?<=[.!?])\s+|\n+|;\s+|\s*\|\s*/)
+            .split(/(?<=[.!?])\s+|\n+|;\s+|\s*\|\s*|(?<=\))\s*(?:,\s*(?:and|but|while|whereas)\s*|,\s+|\s+\b(?:and|but|while|whereas)\b\s+)|,\s+(?:and|but|while|whereas)\s+|\s+\b(?:while|whereas)\b\s+|,\s+(?=R\d+\b)/i)
             .map(c => c.trim())
             .filter(Boolean);
 
-          const clauseTargetsThisLeg = (clause: string): boolean => {
-            if (rowId && new RegExp(`\\b${escapeRegex(rowId)}\\b`, 'i').test(clause)) return true;
-            if (pickedDesc && findTeamMentionsInText(clause, pool).some(m => m.team.key === pickedDesc.key)) {
-              return true;
+          const extractClauseRowIds = (clause: string): string[] => {
+            const matches = clause.match(/\bR\d+\b/gi) || [];
+            return Array.from(new Set(matches.map(r => r.toUpperCase())));
+          };
+
+          const targetsLeg = (clause: string, scRowIds: string[], scTeams: Array<{ team: TeamDescriptor }>): boolean => {
+            if (rowId && scRowIds.includes(rowId)) return true;
+            if (pickedDesc && scTeams.some(m => m.team.key === pickedDesc.key)) return true;
+            return false;
+          };
+
+          const legDisclaimsHealth =
+            HEALTH_BALANCED_ACK_REGEX.test(combinedReasons) ||
+            (HEALTH_CLAIM_NEGATION_OR_DISCLAIMER_REGEX.test(combinedReasons) &&
+              /\b(?:health|injur(?:y|ies)|roster|availability)\b/i.test(combinedReasons)) ||
+            seatClauses.some(sc => {
+              const scRowIds = extractClauseRowIds(sc);
+              const scTeams = findTeamMentionsInText(sc, candidates);
+              return (
+                targetsLeg(sc, scRowIds, scTeams) &&
+                (HEALTH_BALANCED_ACK_REGEX.test(sc) ||
+                  (HEALTH_CLAIM_NEGATION_OR_DISCLAIMER_REGEX.test(sc) &&
+                    /\b(?:health|injur(?:y|ies)|roster|availability)\b/i.test(sc)))
+              );
+            });
+
+          const localClaimMatchesThisLeg = (clause: string, claimRegex: RegExp): boolean => {
+            const subClauses = clause
+              .split(/,\s*|\s+\b(?:but|while|whereas)\b\s+|\s+\band\b\s+(?=[^,;]*?(?:\bR\d+\b|\b(?:ML|spread|over|under|has|have|holds?|carries|enjoys|claims|backs?|edge|advantage|pillar)\b))/i)
+              .map(s => s.trim())
+              .filter(Boolean);
+            if (subClauses.length <= 1) return true;
+
+            for (let idx = 0; idx < subClauses.length; idx++) {
+              const sub = subClauses[idx];
+              if (!claimRegex.test(sub)) continue;
+              if (
+                HEALTH_BALANCED_ACK_REGEX.test(sub) ||
+                HEALTH_CLAIM_NEGATION_OR_DISCLAIMER_REGEX.test(sub) ||
+                GENERIC_PILLAR_FRAMEWORK_REGEX.test(sub)
+              ) {
+                continue;
+              }
+              const subRowIds = extractClauseRowIds(sub);
+              const subTeams = findTeamMentionsInText(sub, candidates);
+              const subHasTargets = subRowIds.length > 0 || subTeams.length > 0;
+              if (!subHasTargets) {
+                // Predicate-only sub-clause inherits nearest preceding subject sub-clause(s)
+                if (idx > 0) {
+                  const prev = subClauses[idx - 1];
+                  const prevRowIds = extractClauseRowIds(prev);
+                  const prevTeams = findTeamMentionsInText(prev, candidates);
+                  if (prevRowIds.length > 0 || prevTeams.length > 0) {
+                    if (targetsLeg(prev, prevRowIds, prevTeams)) return true;
+                    continue;
+                  }
+                }
+                return true;
+              }
+              if (targetsLeg(sub, subRowIds, subTeams)) return true;
+              // Allow shared compound subject ("TeamA and TeamB both hold asymmetric health")
+              // only when preceding sub-clause was a bare team label without its own rationale/predicate.
+              if (idx > 0) {
+                const prev = subClauses[idx - 1];
+                const prevRowIds = extractClauseRowIds(prev);
+                const prevTeams = findTeamMentionsInText(prev, candidates);
+                const prevHasOwnPredicateOrReason =
+                  /[():]/.test(prev) ||
+                  /\b(?:form|steam|diff|margin|edge|l5|pf|pa|model|line|move|record|streak|rest|is|are|has|have|backs?|relies|carries|holds?|leans?|fits?|grades?|scores?)\b/i.test(prev);
+                if (!prevHasOwnPredicateOrReason && targetsLeg(prev, prevRowIds, prevTeams)) {
+                  return true;
+                }
+              }
             }
             return false;
           };
@@ -2643,11 +2712,16 @@ export function auditCriticPremiseContradictions(
               HEALTH_CLAIM_NEGATION_OR_DISCLAIMER_REGEX.test(sc) ||
               GENERIC_PILLAR_FRAMEWORK_REGEX.test(sc)
             ) continue;
-            const isBlanket = BLANKET_MULTI_LEG_SUBJECT_REGEX.test(sc);
-            const targetsLeg = clauseTargetsThisLeg(sc);
-            if (!isBlanket && !targetsLeg) continue;
+            const scRowIds = extractClauseRowIds(sc);
+            const scTeams = findTeamMentionsInText(sc, candidates);
+            const scHasExplicitTargets = scRowIds.length > 0 || scTeams.length > 0;
+            // Only apply blanket multi-leg phrasing ("Each leg...", "All three legs...") to an unmentioned leg
+            // when the clause names NO specific team/rowId; otherwise scope strictly per named team/rowId.
+            const isUnattributedBlanket = !scHasExplicitTargets && !legDisclaimsHealth && BLANKET_MULTI_LEG_SUBJECT_REGEX.test(sc);
+            const legIsTargeted = targetsLeg(sc, scRowIds, scTeams);
+            if (!isUnattributedBlanket && !legIsTargeted) continue;
 
-            if (HEALTH_ADVANTAGE_CLAIM_REGEX.test(sc)) {
+            if (HEALTH_ADVANTAGE_CLAIM_REGEX.test(sc) && (!legIsTargeted || localClaimMatchesThisLeg(sc, HEALTH_ADVANTAGE_CLAIM_REGEX))) {
               const msg = `symmetric_injury_misread: Pick "${pickDisplay}" is covered by seat analysis health-advantage claim ("${sc.slice(0, 120)}") when Health Balance is ${injBal.healthBalance} (${injBal.homeTeam || 'Home'} ${injBal.homeOut} OUT/${injBal.homeQ} Q vs ${injBal.awayTeam || 'Away'} ${injBal.awayOut} OUT/${injBal.awayQ} Q).`;
               flagInjuryMisread(msg, sc);
               break;
@@ -2656,7 +2730,8 @@ export function auditCriticPremiseContradictions(
             if (
               !hasFavorableDirectionalSteam &&
               BLANKET_TWO_PILLAR_CLAIM_REGEX.test(sc) &&
-              !/\bmodel[_\s-]?signal\b/i.test(sc)
+              !/\bmodel[_\s-]?signal\b/i.test(sc) &&
+              (!legIsTargeted || localClaimMatchesThisLeg(sc, BLANKET_TWO_PILLAR_CLAIM_REGEX))
             ) {
               const msg = `symmetric_injury_misread: Pick "${pickDisplay}" is covered by seat analysis 2-pillar claim ("${sc.slice(0, 120)}") with neutral/non-favorable steam when Health Balance is ${injBal.healthBalance} (${injBal.homeTeam || 'Home'} ${injBal.homeOut} OUT/${injBal.homeQ} Q vs ${injBal.awayTeam || 'Away'} ${injBal.awayOut} OUT/${injBal.awayQ} Q).`;
               flagInjuryMisread(msg, sc);

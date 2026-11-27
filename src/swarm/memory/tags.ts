@@ -109,7 +109,8 @@ export function computeBlendWeight(
     requestedDomain: string | undefined,
     queryEntityIds: string[],
     includeShared: boolean = true,
-    requestedDomains?: string[]
+    requestedDomains?: string[],
+    allowParlay?: boolean
 ): number {
     const isSameOriginApp = pointTags.originApp.toLowerCase() === readerApp.toLowerCase();
     const effectiveReaderDomain = requestedDomain ? requestedDomain.toLowerCase() : 'general';
@@ -118,14 +119,17 @@ export function computeBlendWeight(
         Array.isArray(requestedDomains) && requestedDomains.length > 0
             ? new Set([
                   ...requestedDomains.map((d) => String(d || '').toLowerCase()),
+                  'multi',
                   'multi-sport',
                   'odds',
                   'general'
               ])
-            : null;
+            : (allowParlay === true
+                ? new Set([effectiveReaderDomain, 'multi', 'multi-sport', 'odds', 'general'])
+                : null);
     const isSameDomain = domainSet
         ? domainSet.has(pointDomain)
-        : effectiveReaderDomain === 'multi-sport'
+        : (effectiveReaderDomain === 'multi-sport' || effectiveReaderDomain === 'multi')
             ? true
             : requestedDomain
                 ? (pointDomain === effectiveReaderDomain)
@@ -202,7 +206,15 @@ export function rankAndFilterCandidates(
 
     for (const c of candidates) {
         const tags = normalizeMemoryPayload(c.payload, defaultAppId);
-        const weight = computeBlendWeight(tags, readerApp, requestedDomain, queryEntities, includeShared, options.domains);
+        const weight = computeBlendWeight(
+            tags,
+            readerApp,
+            requestedDomain,
+            queryEntities,
+            includeShared,
+            options.domains,
+            options.allowParlay === true
+        );
         if (weight <= 0) continue;
 
         if (options.minRating !== undefined && (c.payload.qualityRating ?? 0) < options.minRating) continue;

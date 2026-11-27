@@ -375,7 +375,12 @@ export async function executeSwarmWorkflow(params: SwarmWorkflowParams): Promise
                 retrievalScope: params.retrievalScope,
                 preloadedGameContext: params.preloadedGameContext,
                 triageMode: params.triageMode || (isTwoHopSlateRun ? 'two-hop' : undefined),
-                curatedDossierActive: Boolean(params.curatedDossier || params.seedManifest || isTwoHopSlateRun)
+                curatedDossierActive: Boolean(params.curatedDossier || params.seedManifest || isTwoHopSlateRun),
+                allowParlay: Boolean(
+                    params.allowParlay === true ||
+                        (settings as any)?.allowParlay === true ||
+                        (typeof data === 'string' && /"allowParlay"\s*:\s*true\b/i.test(data))
+                )
             });
 
             const mathBlock = profilingResult.mathGroundingReport?.promptBlock;

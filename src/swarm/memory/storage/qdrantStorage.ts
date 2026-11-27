@@ -507,6 +507,7 @@ export class QdrantStorageAdapter implements StorageBackend {
                 const domainValues = Array.from(
                     new Set([
                         ...options.domains.map((d) => normalizeDomain(d)),
+                        'multi',
                         'multi-sport',
                         'odds',
                         'general'
@@ -518,8 +519,19 @@ export class QdrantStorageAdapter implements StorageBackend {
                         match: { value: d }
                     }))
                 });
-            } else if (options.domain && normalizeDomain(options.domain) !== 'multi-sport') {
-                filterMust.push({ key: 'domain', match: { value: normalizeDomain(options.domain) } });
+            } else if (options.domain && normalizeDomain(options.domain) !== 'multi-sport' && normalizeDomain(options.domain) !== 'multi') {
+                const normDom = normalizeDomain(options.domain);
+                if ((options as any).allowParlay === true) {
+                    const domainValues = Array.from(new Set([normDom, 'multi', 'multi-sport', 'odds', 'general']));
+                    filterMust.push({
+                        should: domainValues.map((d) => ({
+                            key: 'domain',
+                            match: { value: d }
+                        }))
+                    });
+                } else {
+                    filterMust.push({ key: 'domain', match: { value: normDom } });
+                }
             }
             if (options.agentRole) {
                 filterMust.push({ key: 'agentRole', match: { value: options.agentRole } });

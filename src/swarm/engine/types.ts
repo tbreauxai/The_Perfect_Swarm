@@ -74,6 +74,7 @@ export interface SwarmWorkflowParams {
     hop1Plan?: any;
     triageMode?: 'two-hop' | 'legacy';
     domains?: string[];
+    allowParlay?: boolean;
 }
 
 export interface SwarmWorkflowResult {

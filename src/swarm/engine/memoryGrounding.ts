@@ -54,6 +54,7 @@ export interface MemoryGroundingParams {
     preloadedGameContext?: GameContextStoreReadResult;
     triageMode?: 'two-hop' | 'legacy';
     curatedDossierActive?: boolean;
+    allowParlay?: boolean;
 }
 
 export interface MemoryGroundingResult {
@@ -184,6 +185,32 @@ export async function resolveMemoryGrounding(
         inferredDomainsFromEvents && inferredDomainsFromEvents.length > 1
             ? 'multi-sport'
             : readDomain;
+    const isAllowParlay = Boolean(
+        p.allowParlay === true ||
+            (p.settings as any)?.allowParlay === true ||
+            scope?.purpose === 'parlay' ||
+            (p.data && typeof p.data === 'object' && (p.data as any).allowParlay === true) ||
+            (typeof p.data === 'string' && /"allowParlay"\s*:\s*true\b/i.test(p.data))
+    );
+    const isMultiDomainOrParlay = Boolean(
+        isAllowParlay ||
+            (inferredDomainsFromEvents && inferredDomainsFromEvents.length > 1) ||
+            (Array.isArray(p.domains) && p.domains.length > 1) ||
+            String(readDomain || '').trim().toLowerCase() === 'multi-sport' ||
+            String(effectiveDomain || '').trim().toLowerCase() === 'multi-sport'
+    );
+    const appliedDomains = (() => {
+        const base =
+            inferredDomainsFromEvents && inferredDomainsFromEvents.length > 0
+                ? [...inferredDomainsFromEvents]
+                : effectiveDomain
+                  ? [String(effectiveDomain).trim().toLowerCase()]
+                  : [];
+        if (isMultiDomainOrParlay && !base.includes('multi')) {
+            base.push('multi');
+        }
+        return base;
+    })();
     const effectiveSport = scope?.sport || p.sport;
     const effectiveAsOf = scope?.asOf;
     const disableMemoryRetrieval = Boolean(
@@ -305,12 +332,20 @@ export async function resolveMemoryGrounding(
                     prompt: `Retrieving historical baseline constraints (appId='${trustedAppId}', includeShared=${effectiveIncludeShared})...`
                 });
 
+                const scopedDomains =
+                    inferredDomainsFromEvents && inferredDomainsFromEvents.length > 0
+                        ? appliedDomains
+                        : isAllowParlay &&
+                            effectiveDomain &&
+                            String(effectiveDomain).trim().toLowerCase() !== 'multi-sport'
+                          ? appliedDomains
+                          : undefined;
+
                 const scopedQueryOpts = {
                     appId: trustedAppId,
                     domain: effectiveDomain,
-                    ...(inferredDomainsFromEvents && inferredDomainsFromEvents.length > 0
-                        ? { domains: inferredDomainsFromEvents }
-                        : {}),
+                    ...(scopedDomains && scopedDomains.length > 0 ? { domains: scopedDomains } : {}),
+                    ...(isAllowParlay ? { allowParlay: true } : {}),
                     sport: effectiveSport,
                     entityIds: explicitEntities,
                     eventIds: explicitEvents,
@@ -499,9 +534,6 @@ export async function resolveMemoryGrounding(
                 const collectionPointCount = typeof (memoryCortex as any).getCollectionPointCount === 'function'
                     ? await (memoryCortex as any).getCollectionPointCount(trustedAppId).catch(() => null)
                     : null;
-                const appliedDomains = inferredDomainsFromEvents && inferredDomainsFromEvents.length > 0
-                    ? inferredDomainsFromEvents
-                    : (effectiveDomain ? [effectiveDomain] : []);
                 const embedError = telemetryState.embedError || null;
                 const qdrantError = telemetryState.qdrantError || null;
                 const cortexStatus: 'Success' | 'Empty' | 'Error' = (embedError || qdrantError)

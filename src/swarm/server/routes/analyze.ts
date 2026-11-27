@@ -435,6 +435,9 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
                     scorecardMode: body.scorecardMode === true,
                     triageMode: body.triageMode,
                     domains: Array.isArray(body.domains) ? body.domains : undefined,
+                    ...(typeof body.allowParlay === 'boolean' || scopeCheck.scope.purpose === 'parlay'
+                        ? { allowParlay: body.allowParlay ?? scopeCheck.scope.purpose === 'parlay' }
+                        : {}),
                     eventIds: isSeedManifest ? [body.game_id] : (scopeCheck.scope.eventIds.length > 0 ? scopeCheck.scope.eventIds : slimMeta.eventIds),
                     date: scopeCheck.scope.date ?? slimMeta.date,
                     sport: isSeedManifest ? body.sport : (scopeCheck.scope.sport ?? slimMeta.sport),
@@ -727,6 +730,9 @@ export function registerAnalyzeRoutes(app: Hono, ctx: ServerRouteContext): void 
                 scorecardMode: body.scorecardMode === true,
                 triageMode: body.triageMode,
                 domains: Array.isArray(body.domains) ? body.domains : undefined,
+                ...(typeof body.allowParlay === 'boolean' || scopeCheck.scope.purpose === 'parlay'
+                    ? { allowParlay: body.allowParlay ?? scopeCheck.scope.purpose === 'parlay' }
+                    : {}),
                 eventIds: isSeedManifest ? [body.game_id] : (scopeCheck.scope.eventIds.length > 0 ? scopeCheck.scope.eventIds : slimMeta.eventIds),
                 date: scopeCheck.scope.date ?? slimMeta.date,
                 sport: isSeedManifest ? body.sport : (scopeCheck.scope.sport ?? slimMeta.sport),

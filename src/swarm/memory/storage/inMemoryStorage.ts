@@ -159,11 +159,14 @@ export class InMemoryStorageAdapter implements StorageBackend {
             Array.isArray(options.domains) && options.domains.length > 0
                 ? new Set([
                       ...options.domains.map((d) => normalizeDomain(d)),
+                      'multi',
                       'multi-sport',
                       'odds',
                       'general'
                   ])
-                : null;
+                : (requestedDomain && (options as any).allowParlay === true
+                    ? new Set([requestedDomain, 'multi', 'multi-sport', 'odds', 'general'])
+                    : null);
 
         const filterPredicate = (pt: StoredMemoryPoint) => {
             if (!matchesScopedMemoryFilter(pt.payload, options)) return false;
@@ -174,7 +177,7 @@ export class InMemoryStorageAdapter implements StorageBackend {
             if (requestedDomains) {
                 const itemDomain = normalizeDomain(pt.payload.domain);
                 if (!requestedDomains.has(itemDomain)) return false;
-            } else if (requestedDomain && requestedDomain !== 'multi-sport') {
+            } else if (requestedDomain && requestedDomain !== 'multi-sport' && requestedDomain !== 'multi') {
                 const itemDomain = normalizeDomain(pt.payload.domain);
                 if (itemDomain !== requestedDomain) return false;
             }
