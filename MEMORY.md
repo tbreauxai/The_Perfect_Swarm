@@ -15,3 +15,7 @@
 
 3. **Zero-Crash Worker Guarding**:
    - Worker analyst responses must be processed via `guardAnalystResponse` to safely handle prose, markdown, or JSON without throwing fatal `SCHEMA_VALIDATION_FAILED` errors.
+
+## Architecture Map Auto-Update Rule (MANDATORY)
+
+- Whenever files are added, deleted, renamed, or routes, tools, providers, or validators change, run `node scripts/generate-architecture-map.mjs` before concluding the task to refresh `docs/ARCHITECTURE_MAP.md` (git-excluded via `.git/info/exclude` for local Google Drive sync).
